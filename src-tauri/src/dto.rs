@@ -65,6 +65,13 @@ pub struct CommitDetail {
     pub summary: CommitSummary,
     pub body: String,
 }
+/// The commit that HEAD points at after a successful `repository_create_commit`,
+/// which is the commit Git created unless a post-commit hook moved HEAD again.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedCommit {
+    pub oid: String,
+}
 #[derive(Debug, Serialize)]
 pub struct HistoryPage {
     pub commits: Vec<CommitSummary>,

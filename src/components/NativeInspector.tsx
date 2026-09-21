@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { CommitDetail, DiffFile, FileDiff, RepositorySession, RepositoryStatus } from '../model/repository';
 import { errorMessage, inspectorSpec, native, statusGroups, WORKING_ID, type WorkingGroup } from '../model/native';
+import { X } from 'lucide-react';
+import { DiffPreview } from './WorkingChanges';
+import { useSettings } from '../model/settings';
 
-export function NativeInspector({ session, selected, status, revision, base, target, onJump, onBase, onTarget, onSwap, onClear }: {
+export function NativeInspector({ session, selected, status, revision, base, target, onJump, onBase, onTarget, onSwap, onClear, onClose }: {
   session: RepositorySession; selected: string; status: RepositoryStatus | null; revision: number;
   base: string; target: string; onJump: (id: string) => void; onBase: () => void; onTarget: () => void; onSwap: () => void; onClear: () => void;
+  onClose: () => void;
 }) {
   const [detail, setDetail] = useState<CommitDetail | null>(null);
   const [parent, setParent] = useState('');
@@ -18,7 +22,9 @@ export function NativeInspector({ session, selected, status, revision, base, tar
   const [retry, setRetry] = useState(0);
   const [busy, setBusy] = useState(false);
   const [diffBusy, setDiffBusy] = useState(false);
-  const [split, setSplit] = useState(false);
+  const { settings } = useSettings();
+  const [split, setSplit] = useState(settings.diffView === 'split');
+  useEffect(() => setSplit(settings.diffView === 'split'), [settings.diffView]);
   const [expanded, setExpanded] = useState(false);
   const working = selected === WORKING_ID;
   const groups = statusGroups(status?.entries ?? []);
@@ -47,7 +53,7 @@ export function NativeInspector({ session, selected, status, revision, base, tar
     return () => { live = false; };
   }, [session.handle, spec, path, files, busy, retry, scope, filesScope]);
   return <aside className={`native-inspector ${expanded ? 'expanded' : ''}`} aria-label="Change inspector">
-    <div className="native-actions"><strong>{working ? 'Working changes' : comparing ? 'Commit comparison' : 'Commit inspector'}</strong><button onClick={() => setExpanded(!expanded)} aria-pressed={expanded}>{expanded ? 'Reduce width' : 'Expand diff'}</button></div>
+    <div className="native-actions"><strong>{working ? 'Working changes' : comparing ? 'Commit comparison' : 'Commit inspector'}</strong><button onClick={() => setExpanded(!expanded)} aria-pressed={expanded}>{expanded ? 'Reduce width' : 'Expand diff'}</button><button className="icon-button" aria-label="Close commit inspector" onClick={onClose}><X size={17} /></button></div>
     {(error || diffError) && <div role="alert">{error || diffError} <button onClick={() => setRetry(retry + 1)}>Retry inspection</button></div>}
     {busy && <p role="status">Loading details and files…</p>}
     {!working && selected && <><h2>{detail?.subject}</h2><code className="native-sha">{selected}</code><p>{detail?.author} {detail && new Date(detail.timestamp * 1000).toLocaleString()}</p><pre className="commit-body">{detail?.body}</pre>
@@ -63,8 +69,6 @@ export function NativeInspector({ session, selected, status, revision, base, tar
     {!busy && !files.length && <p>No changed files in this comparison.</p>}
     {path && filesScope === scope && <div className="native-actions"><strong>{path}</strong><button aria-pressed={split} onClick={() => setSplit(!split)}>{split ? 'Unified diff' : 'Side-by-side diff'}</button></div>}
     {diffBusy && <p role="status">Loading diff…</p>}
-    {diff && <><div role="status">{diff.binary && <p>Binary file · textual preview unavailable.</p>}{diff.truncated && <p>Diff truncated · only the available preview is shown.</p>}{diff.message && <p>{diff.message}</p>}{!diff.hunks.length && !diff.binary && <p>No textual hunks · metadata-only or empty file change.</p>}</div><div className={`native-diff ${split ? 'split' : ''}`} tabIndex={0} aria-label={`${split ? 'Side-by-side' : 'Unified'} diff for ${path}`}>
-      {diff.hunks.map((hunk, index) => <section key={index}><div className="hunk-header">{hunk.header}</div>{hunk.lines.map((line, i) => split && line.kind !== 'meta' ? <div className="split-row" key={i}><pre className={line.kind === 'remove' ? 'remove' : ''}>{line.kind !== 'add' ? `${line.oldLine ?? ''} ${line.content}` : ''}</pre><pre className={line.kind === 'add' ? 'add' : ''}>{line.kind !== 'remove' ? `${line.newLine ?? ''} ${line.content}` : ''}</pre></div> : <pre key={i} className={line.kind}><span className="line-number">{line.oldLine ?? ''}</span><span className="line-number">{line.newLine ?? ''}</span>{line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ' '}{line.content}</pre>)}</section>)}
-    </div></>}
+    {diff && <DiffPreview diff={diff} split={split} />}
   </aside>;
 }

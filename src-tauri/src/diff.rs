@@ -163,7 +163,7 @@ impl Repository {
         // Patch bodies may contain arbitrary blob bytes, unlike paths. Replacement characters are display-only.
         let mut diff = parse_patch(path, &String::from_utf8_lossy(&bytes))?;
         if matches!(spec, DiffSpec::Conflict) {
-            let note = "Unmerged file: showing the working tree against stage 2 (ours). Conflict resolution is read-only.";
+            let note = "Unmerged file: showing the working tree against stage 2 (ours). This diff is read-only; use the conflict editor to resolve the full file.";
             diff.message = Some(match diff.message {
                 Some(m) => format!("{note}\n{m}"),
                 None => note.into(),

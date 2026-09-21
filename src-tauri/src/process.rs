@@ -13,6 +13,11 @@ use std::{
 
 const MAX_OUTPUT: usize = 32 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(30);
+/// Index mutations run outside the read request budget: hooks and signing are
+/// interactive-speed work, and an abandoned mutation cannot be reasoned about.
+pub const MUTATION_TIMEOUT: Duration = Duration::from_secs(120);
+/// Checks around a mutation share the mutation lock, not the read deadline.
+pub const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 thread_local! { static REQUEST_DEADLINE: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) }; }
 pub fn request<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     struct Reset;
@@ -23,6 +28,18 @@ pub fn request<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     }
     REQUEST_DEADLINE.with(|d| d.set(Some(Instant::now() + Duration::from_secs(60))));
     let _reset = Reset;
+    f()
+}
+
+/// A slow hook must not consume the budget for post-write reconciliation.
+pub(crate) fn without_read_deadline<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    struct Restore(Option<Instant>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            REQUEST_DEADLINE.with(|d| d.set(self.0));
+        }
+    }
+    let _restore = Restore(REQUEST_DEADLINE.with(|d| d.replace(None)));
     f()
 }
 
@@ -115,6 +132,10 @@ pub(crate) fn remaining_timeout() -> Result<Duration> {
 }
 pub fn run(mut command: Command) -> Result<Output> {
     run_with_timeout(&mut command, remaining_timeout()?)
+}
+/// Runs with an explicit deadline instead of the shared per-request budget.
+pub fn run_for(mut command: Command, timeout: Duration) -> Result<Output> {
+    run_with_timeout(&mut command, timeout)
 }
 fn run_with_timeout(command: &mut Command, timeout: Duration) -> Result<Output> {
     run_with_stdin(command, timeout, Stdio::null())
@@ -236,7 +257,25 @@ pub fn text_ref(bytes: &[u8]) -> Result<&str> {
 pub fn git(location: &RepositoryLocation, args: &[String]) -> Result<Output> {
     run(git_command(location, args)?)
 }
+/// Read commands add safety overrides that must never apply to a write: optional
+/// locks and diff/textconv suppression are read-only conveniences, and a mutation
+/// has to be able to take the index lock and run the user's configured hooks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Contract {
+    Read,
+    Mutation,
+}
 pub(crate) fn git_command(location: &RepositoryLocation, args: &[String]) -> Result<Command> {
+    command(location, args, Contract::Read)
+}
+pub(crate) fn git_mutation_command(
+    location: &RepositoryLocation,
+    args: &[String],
+) -> Result<Command> {
+    command(location, args, Contract::Mutation)
+}
+fn command(location: &RepositoryLocation, args: &[String], contract: Contract) -> Result<Command> {
+    let read = contract == Contract::Read;
     let mut cmd = match location {
         RepositoryLocation::Native { path } => {
             if path.to_ascii_lowercase().starts_with("\\\\wsl") {
@@ -258,18 +297,17 @@ pub(crate) fn git_command(location: &RepositoryLocation, args: &[String]) -> Res
             }
             validate_distribution(distribution)?;
             let mut c = Command::new("wsl.exe");
+            c.args(["--distribution", distribution, "--exec", "env"]);
+            if read {
+                // A write needs the index lock, and hooks deserve the user's locale.
+                c.args(["GIT_OPTIONAL_LOCKS=0", "LC_ALL=C"]);
+            }
             c.args([
-                "--distribution",
-                distribution,
-                "--exec",
-                "env",
-                "GIT_OPTIONAL_LOCKS=0",
                 "GIT_NO_LAZY_FETCH=1",
                 "GIT_TERMINAL_PROMPT=0",
                 "GIT_NO_REPLACE_OBJECTS=1",
                 "GIT_LITERAL_PATHSPECS=1",
                 "GIT_PAGER=cat",
-                "LC_ALL=C",
                 "git",
                 "-C",
                 path,
@@ -290,12 +328,18 @@ pub(crate) fn git_command(location: &RepositoryLocation, args: &[String]) -> Res
             cmd.env_remove(key);
         }
     }
-    cmd.env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GIT_NO_LAZY_FETCH", "1")
+    cmd.env("GIT_NO_LAZY_FETCH", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_NO_REPLACE_OBJECTS", "1")
-        .env("GIT_LITERAL_PATHSPECS", "1")
-        .env("LC_ALL", "C");
+        // Literal pathspecs are the reason explicit file arguments cannot become
+        // magic (`:(exclude)…`, globs) in either contract.
+        .env("GIT_LITERAL_PATHSPECS", "1");
+    if read {
+        cmd.env("GIT_OPTIONAL_LOCKS", "0").env("LC_ALL", "C");
+    } else {
+        // Hooks inherit this environment; leave the locale as the user configured it.
+        cmd.env_remove("GIT_OPTIONAL_LOCKS");
+    }
     cmd.args([
         "--no-pager",
         "-c",
@@ -307,16 +351,22 @@ pub(crate) fn git_command(location: &RepositoryLocation, args: &[String]) -> Res
         "-c",
         "gc.auto=0",
         "-c",
-        "diff.external=",
-        "-c",
-        "core.quotePath=true",
-        "-c",
         "core.pager=cat",
         "-c",
         "protocol.allow=never",
-        "-c",
-        "diff.submodule=short",
     ]);
+    if read {
+        // Display-only suppressions. A mutation must not impose them on hooks,
+        // which inherit these overrides through GIT_CONFIG_PARAMETERS.
+        cmd.args([
+            "-c",
+            "diff.external=",
+            "-c",
+            "core.quotePath=true",
+            "-c",
+            "diff.submodule=short",
+        ]);
+    }
     cmd.args(args);
     Ok(cmd)
 }
@@ -328,8 +378,27 @@ pub fn checked_with_input(
     args: &[String],
     input: &[u8],
 ) -> Result<Vec<u8>> {
-    if input.len() > 32 * 1024 {
-        return Err(Error::new("inputLimit", "Git batch input exceeded 32 KiB"));
+    checked_output(run_with_input_for(
+        git_command(location, args)?,
+        input,
+        remaining_timeout()?,
+        32 * 1024,
+    )?)
+}
+/// Feeds bounded input on stdin under an explicit deadline. Each caller states
+/// its own limit: batch reads stay small, while a write's pathspec list or commit
+/// message is bounded by policy rather than by any command-line length.
+pub fn run_with_input_for(
+    mut command: Command,
+    input: &[u8],
+    timeout: Duration,
+    max_input: usize,
+) -> Result<Output> {
+    if input.len() > max_input {
+        return Err(Error::new(
+            "inputLimit",
+            format!("Git stdin input exceeded {max_input} bytes"),
+        ));
     }
     // A bounded anonymous file supplies EOF without a pipe writer that could
     // deadlock against full stdout/stderr pipes. WSL requests pass this stdin
@@ -337,12 +406,7 @@ pub fn checked_with_input(
     let mut file = tempfile::tempfile()?;
     file.write_all(input)?;
     file.seek(SeekFrom::Start(0))?;
-    let mut command = git_command(location, args)?;
-    checked_output(run_with_stdin(
-        &mut command,
-        remaining_timeout()?,
-        file.into(),
-    )?)
+    run_with_stdin(&mut command, timeout, file.into())
 }
 fn checked_output(o: Output) -> Result<Vec<u8>> {
     if !o.success {

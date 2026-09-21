@@ -1,5 +1,7 @@
 # Milestone 2 — real repository exploration
 
+> Historical scope of the read-only exploration milestone. The current app adds an editorial redesign, file staging/unstaging, and ordinary commits; see [redesign and workflow notes](redesign-notes.md) and [backend write semantics](../src-tauri/BACKEND.md).
+
 ## Scope
 
 Implemented: native/recent repository opening, linked-worktree detection, real paged

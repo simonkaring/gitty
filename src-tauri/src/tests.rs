@@ -1132,3 +1132,788 @@ fn non_utf8_paths_report_unsupported_without_lossy_aliasing() {
         "unsupportedEncoding"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Staging, unstaging and committing. Every case runs against a real repository.
+// ---------------------------------------------------------------------------
+
+fn paths(values: &[&str]) -> Vec<String> {
+    values.iter().map(|s| s.to_string()).collect()
+}
+fn tracked_files(path: &Path) -> Vec<String> {
+    git(path, &["ls-tree", "-r", "--name-only", "-z", "HEAD"])
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
+}
+fn service_for(repository: &Path) -> (Service, TempDir, String) {
+    let data = tempfile::tempdir().unwrap();
+    let mut service = Service::new(data.path().into());
+    let handle = open(&mut service, repository).session.handle;
+    (service, data, handle)
+}
+
+#[test]
+fn unborn_stage_unstage_and_initial_commit_keep_unusual_names_literal() {
+    let d = init();
+    std::fs::create_dir(d.path().join("sub dir")).unwrap();
+    let names = [
+        "plain.txt",
+        "-dash file.txt",
+        "star*[a-b]?.txt",
+        "úñí çodé 工作.txt",
+        "sub dir/nested\tfile.txt",
+    ];
+    for name in names {
+        std::fs::write(d.path().join(name), format!("{name}\n")).unwrap();
+    }
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    // Explicit paths only: an empty request is never "everything".
+    assert_eq!(
+        service.stage(&handle, &[]).unwrap_err().code,
+        "invalidRequest"
+    );
+    assert_eq!(
+        service.unstage(&handle, &[]).unwrap_err().code,
+        "invalidRequest"
+    );
+    for rejected in ["../outside", "/etc/passwd", "sub dir/../../escape", "."] {
+        assert_eq!(
+            service
+                .stage(&handle, &paths(&[rejected]))
+                .unwrap_err()
+                .code,
+            "invalidPath",
+            "{rejected:?} must not reach Git"
+        );
+    }
+    assert_eq!(
+        service.create_commit(&handle, " \n\t ").unwrap_err().code,
+        "invalidRequest"
+    );
+    assert_eq!(
+        service
+            .create_commit(&handle, "nothing yet")
+            .unwrap_err()
+            .code,
+        "nothingStaged"
+    );
+    service.stage(&handle, &paths(&names)).unwrap();
+    let status = repo.status().unwrap();
+    assert_eq!(status.entries.len(), names.len());
+    assert!(status.entries.iter().all(|e| e.index_status == "A"));
+    // Unstaging on an unborn branch empties the index entry again.
+    service
+        .unstage(&handle, &paths(&["star*[a-b]?.txt"]))
+        .unwrap();
+    let status = repo.status().unwrap();
+    assert!(status
+        .entries
+        .iter()
+        .any(|e| e.path == "star*[a-b]?.txt" && e.untracked));
+    assert_eq!(
+        status
+            .entries
+            .iter()
+            .filter(|e| e.index_status == "A")
+            .count(),
+        names.len() - 1
+    );
+    assert!(d.path().join("star*[a-b]?.txt").exists());
+    let created = service
+        .create_commit(&handle, "initial commit\n\nwith a body")
+        .unwrap();
+    assert_eq!(created.oid, git(d.path(), &["rev-parse", "HEAD"]));
+    assert_eq!(
+        serde_json::to_value(&created).unwrap(),
+        serde_json::json!({ "oid": created.oid })
+    );
+    let detail = repo.commit(&created.oid).unwrap();
+    assert_eq!(detail.summary.subject, "initial commit");
+    assert_eq!(detail.body, "initial commit\n\nwith a body\n");
+    assert!(detail.summary.parents.is_empty());
+    let mut committed = tracked_files(d.path());
+    committed.sort();
+    let mut expected: Vec<String> = names
+        .iter()
+        .filter(|n| **n != "star*[a-b]?.txt")
+        .map(|s| s.to_string())
+        .collect();
+    expected.sort();
+    assert_eq!(committed, expected);
+    assert_eq!(
+        repo.state().unwrap().session.head.as_deref(),
+        Some(created.oid.as_str())
+    );
+}
+
+#[test]
+fn partially_staged_and_removed_files_commit_only_the_index() {
+    let d = init();
+    std::fs::write(d.path().join("tracked.txt"), "one\n").unwrap();
+    std::fs::write(d.path().join("removed.txt"), "gone\n").unwrap();
+    commit(d.path(), "root");
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    std::fs::write(d.path().join("tracked.txt"), "two\n").unwrap();
+    service.stage(&handle, &paths(&["tracked.txt"])).unwrap();
+    std::fs::write(d.path().join("tracked.txt"), "three\n").unwrap();
+    std::fs::remove_file(d.path().join("removed.txt")).unwrap();
+    service.stage(&handle, &paths(&["removed.txt"])).unwrap();
+    let status = repo.status().unwrap();
+    let tracked = status
+        .entries
+        .iter()
+        .find(|e| e.path == "tracked.txt")
+        .unwrap();
+    assert_eq!(
+        (
+            tracked.index_status.as_str(),
+            tracked.worktree_status.as_str()
+        ),
+        ("M", "M")
+    );
+    assert_eq!(
+        status
+            .entries
+            .iter()
+            .find(|e| e.path == "removed.txt")
+            .unwrap()
+            .index_status,
+        "D"
+    );
+    let created = service.create_commit(&handle, "staged only").unwrap();
+    assert_eq!(
+        git(d.path(), &["show", &format!("{}:tracked.txt", created.oid)]),
+        "two"
+    );
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("tracked.txt")).unwrap(),
+        "three\n"
+    );
+    assert_eq!(tracked_files(d.path()), vec!["tracked.txt"]);
+    // The unstaged edit survives the commit untouched.
+    let status = repo.status().unwrap();
+    assert_eq!(status.entries.len(), 1);
+    assert_eq!(status.entries[0].worktree_status, "M");
+    assert_eq!(status.entries[0].index_status, ".");
+    // Unstaging a partially staged file restores the index from HEAD only.
+    service.stage(&handle, &paths(&["tracked.txt"])).unwrap();
+    std::fs::write(d.path().join("tracked.txt"), "five\n").unwrap();
+    service.unstage(&handle, &paths(&["tracked.txt"])).unwrap();
+    assert_eq!(git(d.path(), &["show", ":tracked.txt"]), "two");
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("tracked.txt")).unwrap(),
+        "five\n"
+    );
+    // Unstaging a staged deletion leaves the file deleted in the working tree.
+    service.stage(&handle, &paths(&["tracked.txt"])).unwrap();
+    std::fs::remove_file(d.path().join("tracked.txt")).unwrap();
+    service.stage(&handle, &paths(&["tracked.txt"])).unwrap();
+    service.unstage(&handle, &paths(&["tracked.txt"])).unwrap();
+    assert!(!d.path().join("tracked.txt").exists());
+    assert_eq!(git(d.path(), &["show", ":tracked.txt"]), "two");
+    let status = repo.status().unwrap();
+    assert_eq!(status.entries[0].worktree_status, "D");
+    assert_eq!(status.entries[0].index_status, ".");
+}
+
+#[test]
+fn renames_stage_as_their_removed_and_added_paths() {
+    let d = init();
+    std::fs::write(d.path().join("old name.txt"), "first\nsecond\nthird\n").unwrap();
+    commit(d.path(), "root");
+    std::fs::rename(
+        d.path().join("old name.txt"),
+        d.path().join("renamed 工作.txt"),
+    )
+    .unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    service
+        .stage(&handle, &paths(&["old name.txt", "renamed 工作.txt"]))
+        .unwrap();
+    let files = repo.diff_files(&DiffSpec::Staged).unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].status, "R");
+    assert_eq!(files[0].path, "renamed 工作.txt");
+    assert_eq!(files[0].old_path.as_deref(), Some("old name.txt"));
+    let created = service.create_commit(&handle, "rename").unwrap();
+    assert_eq!(tracked_files(d.path()), vec!["renamed 工作.txt"]);
+    assert_eq!(repo.commit(&created.oid).unwrap().summary.subject, "rename");
+    assert!(repo.status().unwrap().entries.is_empty());
+}
+
+#[test]
+fn commits_are_refused_for_bare_repositories_conflicts_and_other_operations() {
+    let d = init();
+    std::fs::write(d.path().join("file"), "base\n").unwrap();
+    commit(d.path(), "root");
+    git(d.path(), &["checkout", "-qb", "side"]);
+    std::fs::write(d.path().join("file"), "side\n").unwrap();
+    commit(d.path(), "side");
+    git(d.path(), &["checkout", "-q", "main"]);
+    std::fs::write(d.path().join("file"), "main\n").unwrap();
+    commit(d.path(), "main");
+    let others = tempfile::tempdir().unwrap();
+    let bare = others.path().join("bare.git");
+    git(
+        d.path(),
+        &[
+            "clone",
+            "--bare",
+            d.path().to_str().unwrap(),
+            bare.to_str().unwrap(),
+        ],
+    );
+    let (service, _data, handle) = service_for(d.path());
+    let bare_handle = service
+        .open(RepositoryLocation::Native {
+            path: bare.to_str().unwrap().into(),
+        })
+        .unwrap()
+        .session
+        .handle;
+    for code in [
+        service
+            .stage(&bare_handle, &paths(&["file"]))
+            .unwrap_err()
+            .code,
+        service
+            .unstage(&bare_handle, &paths(&["file"]))
+            .unwrap_err()
+            .code,
+        service
+            .create_commit(&bare_handle, "message")
+            .unwrap_err()
+            .code,
+    ] {
+        assert_eq!(code, "bareRepository");
+    }
+    // A conflicted merge: writing underneath it would change what the merge means.
+    let merge = Command::new("git")
+        .arg("-C")
+        .arg(d.path())
+        .args(["merge", "side"])
+        .output()
+        .unwrap();
+    assert!(!merge.status.success());
+    for code in [
+        service.stage(&handle, &paths(&["file"])).unwrap_err().code,
+        service
+            .unstage(&handle, &paths(&["file"]))
+            .unwrap_err()
+            .code,
+        service.create_commit(&handle, "message").unwrap_err().code,
+    ] {
+        assert_eq!(code, "operationInProgress");
+    }
+    assert!(
+        d.path().join(".git/MERGE_HEAD").exists(),
+        "state is never cleaned up"
+    );
+    git(d.path(), &["merge", "--abort"]);
+    // Directory-shaped states are detected as well.
+    std::fs::create_dir(d.path().join(".git/rebase-merge")).unwrap();
+    assert_eq!(
+        service.stage(&handle, &paths(&["file"])).unwrap_err().code,
+        "operationInProgress"
+    );
+    std::fs::remove_dir(d.path().join(".git/rebase-merge")).unwrap();
+    service.stage(&handle, &paths(&["file"])).unwrap();
+}
+
+#[test]
+fn unresolved_conflicts_without_operation_state_are_reported_not_flattened() {
+    let d = init();
+    std::fs::create_dir(d.path().join("work dir")).unwrap();
+    let file = d.path().join("work dir/file");
+    std::fs::write(&file, "one\ntwo\nthree\n").unwrap();
+    commit(d.path(), "root");
+    std::fs::write(&file, "one\nstashed\nthree\n").unwrap();
+    git(d.path(), &["stash", "-q"]);
+    std::fs::write(&file, "one\nconflicting\nthree\n").unwrap();
+    commit(d.path(), "conflicting");
+    let popped = Command::new("git")
+        .arg("-C")
+        .arg(d.path())
+        .args(["stash", "pop"])
+        .output()
+        .unwrap();
+    assert!(!popped.status.success());
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    assert!(repo.status().unwrap().entries[0].conflicted);
+    assert!(!d.path().join(".git/MERGE_HEAD").exists());
+    for code in [
+        service
+            .stage(&handle, &paths(&["work dir/file"]))
+            .unwrap_err()
+            .code,
+        service
+            .unstage(&handle, &paths(&["work dir/file"]))
+            .unwrap_err()
+            .code,
+        // A directory-shaped selection that contains the conflict is refused too.
+        service
+            .stage(&handle, &paths(&["work dir/"]))
+            .unwrap_err()
+            .code,
+        service.create_commit(&handle, "message").unwrap_err().code,
+    ] {
+        assert_eq!(code, "unresolvedConflict");
+    }
+    // A sibling whose name merely starts with the same characters is unaffected.
+    std::fs::write(d.path().join("work dirty"), "unrelated\n").unwrap();
+    service.stage(&handle, &paths(&["work dirty"])).unwrap();
+    // The conflicted stages are still intact for Git to resolve.
+    assert_eq!(
+        git(d.path(), &["ls-files", "--unmerged"]).lines().count(),
+        3
+    );
+}
+
+#[test]
+fn a_held_index_lock_is_respected_and_never_removed() {
+    let d = init();
+    std::fs::write(d.path().join("file"), "one\n").unwrap();
+    commit(d.path(), "root");
+    std::fs::write(d.path().join("file"), "two\n").unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    let lock = d.path().join(".git/index.lock");
+    std::fs::write(&lock, b"pid 1234").unwrap();
+    for code in [
+        service.stage(&handle, &paths(&["file"])).unwrap_err().code,
+        service
+            .unstage(&handle, &paths(&["file"]))
+            .unwrap_err()
+            .code,
+        service.create_commit(&handle, "message").unwrap_err().code,
+    ] {
+        assert_eq!(code, "indexLocked");
+    }
+    assert_eq!(std::fs::read(&lock).unwrap(), b"pid 1234");
+    std::fs::remove_file(&lock).unwrap();
+    service.stage(&handle, &paths(&["file"])).unwrap();
+    assert!(!lock.exists());
+}
+
+#[test]
+fn a_missing_identity_is_reported_without_touching_the_index() {
+    let d = init();
+    std::fs::write(d.path().join("file"), "one\n").unwrap();
+    commit(d.path(), "root");
+    git(d.path(), &["config", "user.name", ""]);
+    git(d.path(), &["config", "user.email", ""]);
+    std::fs::write(d.path().join("file"), "two\n").unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    service.stage(&handle, &paths(&["file"])).unwrap();
+    let head = git(d.path(), &["rev-parse", "HEAD"]);
+    let error = service.create_commit(&handle, "message").unwrap_err();
+    assert_eq!(error.code, "git");
+    assert!(
+        error.message.to_lowercase().contains("ident"),
+        "identity failures must be explained: {}",
+        error.message
+    );
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), head);
+    assert_eq!(git(d.path(), &["show", ":file"]), "two");
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("file")).unwrap(),
+        "two\n"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn configured_hooks_and_signing_run_and_their_failures_preserve_the_index() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = init();
+    std::fs::write(d.path().join("file"), "one\n").unwrap();
+    commit(d.path(), "root");
+    let head = git(d.path(), &["rev-parse", "HEAD"]);
+    let hook = d.path().join(".git/hooks/pre-commit");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(&hook, "#!/bin/sh\necho 'gitty hook refusal' >&2\nexit 1\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(d.path().join("file"), "two\n").unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    service.stage(&handle, &paths(&["file"])).unwrap();
+    let error = service.create_commit(&handle, "blocked").unwrap_err();
+    assert_eq!(error.code, "git");
+    assert!(
+        error.message.contains("gitty hook refusal"),
+        "hook output must reach the user: {}",
+        error.message
+    );
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), head);
+    assert_eq!(git(d.path(), &["show", ":file"]), "two");
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("file")).unwrap(),
+        "two\n"
+    );
+    // Signing is honored too: a broken signer fails the commit, never bypasses it.
+    std::fs::remove_file(&hook).unwrap();
+    git(d.path(), &["config", "commit.gpgsign", "true"]);
+    git(
+        d.path(),
+        &["config", "gpg.program", "/nonexistent/gitty-signer"],
+    );
+    let error = service.create_commit(&handle, "unsigned").unwrap_err();
+    assert_eq!(error.code, "git");
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), head);
+    assert_eq!(git(d.path(), &["show", ":file"]), "two");
+    git(d.path(), &["config", "commit.gpgsign", "false"]);
+    let created = service.create_commit(&handle, "signed off").unwrap();
+    assert_eq!(created.oid, git(d.path(), &["rev-parse", "HEAD"]));
+    // The post-commit hook runs after the commit; the reported ID is what HEAD is.
+    assert_ne!(created.oid, head);
+}
+
+#[test]
+fn writes_serialize_per_repository_across_sessions_and_linked_worktrees() {
+    use std::sync::Arc;
+    let d = init();
+    std::fs::write(d.path().join("root"), "root\n").unwrap();
+    commit(d.path(), "root");
+    let others = tempfile::tempdir().unwrap();
+    let linked = others.path().join("linked");
+    git(
+        d.path(),
+        &["worktree", "add", "-b", "side", linked.to_str().unwrap()],
+    );
+    let data = tempfile::tempdir().unwrap();
+    let service = Arc::new(Service::new(data.path().into()));
+    let location = |path: &Path| RepositoryLocation::Native {
+        path: path.to_str().unwrap().into(),
+    };
+    let first = service.open(location(d.path())).unwrap().session.handle;
+    let second = service.open(location(d.path())).unwrap().session.handle;
+    let worktree = service.open(location(&linked)).unwrap().session.handle;
+    for i in 0..8 {
+        std::fs::write(d.path().join(format!("file {i}")), format!("{i}\n")).unwrap();
+        std::fs::write(linked.join(format!("linked {i}")), format!("{i}\n")).unwrap();
+    }
+    let workers: Vec<_> = (0..8)
+        .map(|i| {
+            let service = service.clone();
+            let handle = if i % 2 == 0 {
+                first.clone()
+            } else {
+                second.clone()
+            };
+            let shared = worktree.clone();
+            std::thread::spawn(move || {
+                service.stage(&handle, &paths(&[&format!("file {i}")]))?;
+                service.stage(&shared, &paths(&[&format!("linked {i}")]))
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker
+            .join()
+            .unwrap()
+            .expect("concurrent writes must not fight over the index lock");
+    }
+    let staged: Vec<String> = git(d.path(), &["diff", "--cached", "--name-only", "-z"])
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
+    assert_eq!(staged.len(), 8);
+    assert!(!d.path().join(".git/index.lock").exists());
+    let main_commit = service.create_commit(&first, "eight files").unwrap();
+    let linked_commit = service
+        .create_commit(&worktree, "eight linked files")
+        .unwrap();
+    assert_eq!(
+        main_commit.oid,
+        git(d.path(), &["rev-parse", "refs/heads/main"])
+    );
+    assert_eq!(
+        linked_commit.oid,
+        git(&linked, &["rev-parse", "refs/heads/side"])
+    );
+    assert_eq!(tracked_files(d.path()).len(), 9);
+    assert_eq!(tracked_files(&linked).len(), 9);
+}
+
+#[test]
+#[cfg(unix)]
+fn a_slow_hook_blocks_only_its_own_repository() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+    use std::time::{Duration, Instant};
+    let slow = init();
+    let other = init();
+    for d in [&slow, &other] {
+        std::fs::write(d.path().join("file"), "one\n").unwrap();
+        commit(d.path(), "root");
+        std::fs::write(d.path().join("file"), "two\n").unwrap();
+    }
+    let started = slow.path().join("hook-started");
+    let hook = slow.path().join(".git/hooks/pre-commit");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\ntouch '{}'\nsleep 3\n",
+            started.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let service = Arc::new(Service::new(data.path().into()));
+    let location = |path: &Path| RepositoryLocation::Native {
+        path: path.to_str().unwrap().into(),
+    };
+    let committing = service.open(location(slow.path())).unwrap().session.handle;
+    let same_repository = service.open(location(slow.path())).unwrap().session.handle;
+    let unrelated = service.open(location(other.path())).unwrap().session.handle;
+    service.stage(&committing, &paths(&["file"])).unwrap();
+    let finished = Arc::new(AtomicBool::new(false));
+    let worker = {
+        let service = service.clone();
+        let finished = finished.clone();
+        std::thread::spawn(move || {
+            let result = service.create_commit(&committing, "slow hook");
+            finished.store(true, Ordering::SeqCst);
+            result
+        })
+    };
+    while !started.exists() {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let at = Instant::now();
+    service.stage(&unrelated, &paths(&["file"])).unwrap();
+    assert!(
+        !finished.load(Ordering::SeqCst) && at.elapsed() < Duration::from_secs(2),
+        "an unrelated repository must not wait behind another repository's hook"
+    );
+    let at = Instant::now();
+    service.stage(&same_repository, &paths(&["file"])).unwrap();
+    assert!(
+        at.elapsed() >= Duration::from_secs(1),
+        "a second session for the same repository must wait for the running write"
+    );
+    assert!(worker.join().unwrap().is_ok());
+    std::fs::remove_file(&hook).unwrap();
+}
+
+#[test]
+fn in_progress_detection_does_not_depend_on_the_reference_backend() {
+    let parent = tempfile::tempdir().unwrap();
+    let d = parent.path().join("reftable");
+    let created = Command::new("git")
+        .args(["init", "-b", "main", "--ref-format=reftable"])
+        .arg(&d)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env(
+            "GIT_CONFIG_GLOBAL",
+            if cfg!(windows) { "NUL" } else { "/dev/null" },
+        )
+        .output()
+        .unwrap();
+    if !created.status.success() {
+        eprintln!("skipping: this Git has no reftable backend");
+        return;
+    }
+    git(&d, &["config", "user.name", "Test Author"]);
+    git(&d, &["config", "user.email", "test@example.com"]);
+    std::fs::write(d.join("file"), "base\n").unwrap();
+    commit(&d, "root");
+    git(&d, &["checkout", "-qb", "side"]);
+    std::fs::write(d.join("file"), "side\n").unwrap();
+    commit(&d, "side");
+    git(&d, &["checkout", "-q", "main"]);
+    std::fs::write(d.join("file"), "main\n").unwrap();
+    commit(&d, "main");
+    let conflicted = Command::new("git")
+        .arg("-C")
+        .arg(&d)
+        .args(["cherry-pick", "side"])
+        .output()
+        .unwrap();
+    assert!(!conflicted.status.success());
+    // A reftable repository keeps CHERRY_PICK_HEAD out of the Git directory.
+    assert!(!d.join(".git/CHERRY_PICK_HEAD").exists());
+    let (service, _data, handle) = service_for(&d);
+    assert_eq!(
+        service.stage(&handle, &paths(&["file"])).unwrap_err().code,
+        "operationInProgress"
+    );
+    assert_eq!(
+        service.create_commit(&handle, "message").unwrap_err().code,
+        "operationInProgress"
+    );
+    git(&d, &["cherry-pick", "--abort"]);
+    std::fs::write(d.join("file"), "resolved\n").unwrap();
+    service.stage(&handle, &paths(&["file"])).unwrap();
+    let created = service
+        .create_commit(&handle, "resolved outside Gitty")
+        .unwrap();
+    assert_eq!(created.oid, git(&d, &["rev-parse", "HEAD"]));
+}
+
+#[test]
+fn directory_entries_from_status_stage_as_the_single_path_they_represent() {
+    let d = init();
+    std::fs::write(d.path().join("root"), "root\n").unwrap();
+    commit(d.path(), "root");
+    let nested = d.path().join("embedded repo");
+    std::fs::create_dir(&nested).unwrap();
+    git(&nested, &["init", "-b", "main"]);
+    git(&nested, &["config", "user.name", "Test Author"]);
+    git(&nested, &["config", "user.email", "test@example.com"]);
+    std::fs::write(nested.join("inner"), "inner\n").unwrap();
+    commit(&nested, "inner");
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    // Status reports an embedded repository as one directory entry.
+    let entry = repo
+        .status()
+        .unwrap()
+        .entries
+        .into_iter()
+        .find(|e| e.path.starts_with("embedded repo"))
+        .unwrap();
+    assert_eq!(entry.path, "embedded repo/");
+    service
+        .stage(&handle, std::slice::from_ref(&entry.path))
+        .unwrap();
+    assert_eq!(
+        git(
+            d.path(),
+            &["ls-files", "--stage", "-z", "--", "embedded repo"]
+        )
+        .split(' ')
+        .next()
+        .unwrap(),
+        "160000"
+    );
+    service.unstage(&handle, &[entry.path]).unwrap();
+    assert!(repo
+        .status()
+        .unwrap()
+        .entries
+        .iter()
+        .any(|e| e.path == "embedded repo/" && e.untracked));
+}
+
+#[test]
+fn large_path_batches_and_messages_do_not_travel_on_the_command_line() {
+    let d = init();
+    std::fs::write(d.path().join("root"), "root\n").unwrap();
+    commit(d.path(), "root");
+    // Windows caps an entire command line near 32767 UTF-16 units, so this batch
+    // could not be expressed as arguments on every platform.
+    let names: Vec<String> = (0..400)
+        .map(|i| format!("{i:04} staged file with spaces -[*?] {}", "n".repeat(60)))
+        .collect();
+    for name in &names {
+        std::fs::write(d.path().join(name), "content\n").unwrap();
+    }
+    let total: usize = names.iter().map(|n| n.len() + 1).sum();
+    assert!(
+        total > 32_767,
+        "fixture must exceed the Windows limit: {total}"
+    );
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    service.stage(&handle, &names).unwrap();
+    let staged: Vec<String> = git(d.path(), &["diff", "--cached", "--name-only", "-z"])
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect();
+    assert_eq!(staged.len(), names.len());
+    // A commit message far past any argument limit, with characters that a shell
+    // or an option parser would otherwise be tempted to interpret.
+    let message = format!(
+        "--not-an-option: 工作 \"quoted\" 'single' $(echo no) `no`\n\n{}",
+        "Ünicode body line with a trailing period.\n".repeat(1000)
+    );
+    assert!(message.len() > 40_000);
+    let created = service.create_commit(&handle, &message).unwrap();
+    assert_eq!(created.oid, git(d.path(), &["rev-parse", "HEAD"]));
+    let detail = repo.commit(&created.oid).unwrap();
+    assert_eq!(
+        detail.summary.subject,
+        "--not-an-option: 工作 \"quoted\" 'single' $(echo no) `no`"
+    );
+    assert_eq!(detail.body, message);
+    assert_eq!(tracked_files(d.path()).len(), names.len() + 1);
+    // The same batch size unstages in one request.
+    std::fs::write(d.path().join(&names[0]), "changed\n").unwrap();
+    service.stage(&handle, &names).unwrap();
+    service.unstage(&handle, &names).unwrap();
+    assert!(repo
+        .status()
+        .unwrap()
+        .entries
+        .iter()
+        .all(|e| e.index_status == "."));
+}
+
+#[test]
+#[cfg(unix)]
+fn hooks_cannot_consume_the_commit_message_from_shared_stdin() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = init();
+    std::fs::write(d.path().join("file"), "one\n").unwrap();
+    commit(d.path(), "root");
+    let capture = d.path().join("hook-stdin");
+    let hook = d.path().join(".git/hooks/pre-commit");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(
+        &hook,
+        format!("#!/bin/sh\ncat > '{}'\n", capture.to_str().unwrap()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(d.path().join("file"), "two\n").unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    service.stage(&handle, &paths(&["file"])).unwrap();
+    let created = service
+        .create_commit(&handle, "subject read by Git\n\nbody read by Git\n")
+        .unwrap();
+    assert_eq!(
+        service
+            .repo(&handle)
+            .unwrap()
+            .commit(&created.oid)
+            .unwrap()
+            .body,
+        "subject read by Git\n\nbody read by Git\n"
+    );
+    // Git consumes the message before hooks run, so a hook reading stdin sees EOF
+    // rather than the message, and can never block waiting for input.
+    assert_eq!(std::fs::read(&capture).unwrap(), b"");
+    std::fs::remove_file(&hook).unwrap();
+}
+
+#[test]
+fn a_broken_head_is_reported_instead_of_being_treated_as_an_unborn_branch() {
+    let d = init();
+    std::fs::write(d.path().join("file"), "one\n").unwrap();
+    commit(d.path(), "root");
+    let head = std::fs::read_to_string(d.path().join(".git/HEAD")).unwrap();
+    std::fs::write(d.path().join("file"), "two\n").unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    service.stage(&handle, &paths(&["file"])).unwrap();
+    // Detached at an object that does not exist: `rev-parse --verify --quiet`
+    // reports exactly what an unborn branch reports.
+    std::fs::write(d.path().join(".git/HEAD"), format!("{}\n", "0".repeat(40))).unwrap();
+    let error = service.create_commit(&handle, "message").unwrap_err();
+    assert_eq!(error.code, "unresolvedHead");
+    assert_eq!(git(d.path(), &["show", ":file"]), "two");
+    std::fs::write(d.path().join(".git/HEAD"), &head).unwrap();
+    let created = service.create_commit(&handle, "message").unwrap();
+    assert_eq!(created.oid, git(d.path(), &["rev-parse", "HEAD"]));
+}

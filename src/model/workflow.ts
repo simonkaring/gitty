@@ -1,0 +1,64 @@
+import { errorMessage, native, statusGroups } from './native';
+import type { CreateCommitResult, RepositoryMutation, RepositorySession, StatusEntry } from './repository';
+
+export interface MutationOutcome { oid?: string; error?: string; refreshError?: string; superseded?: boolean }
+/** One attempt only. Even a failed write can have changed the index or HEAD. */
+export async function writeAndRefresh(handle: string, mutation: RepositoryMutation, reload: () => Promise<void>, current: () => boolean, invoke = native): Promise<MutationOutcome> {
+  const outcome: MutationOutcome = {};
+  try {
+    if (!current()) return { superseded: true };
+    if (mutation.kind === 'commit') {
+      const result = await invoke<CreateCommitResult>('repository_create_commit', { handle, message: mutation.message });
+      outcome.oid = result.oid;
+    } else {
+      if (!mutation.paths.length) throw new Error('Select at least one path.');
+      await invoke(`repository_${mutation.kind}`, { handle, paths: [...new Set(mutation.paths)] });
+    }
+  } catch (error) { outcome.error = errorMessage(error); }
+  if (!current()) return { ...outcome, superseded: true };
+  try { await reload(); } catch (error) { outcome.refreshError = errorMessage(error); }
+  return current() ? outcome : { ...outcome, superseded: true };
+}
+
+export function operationPaths(entries: StatusEntry[], kind: 'stage' | 'unstage'): string[] {
+  const groups = statusGroups(entries);
+  const eligible = kind === 'stage' ? [...groups.unstaged, ...groups.untracked] : groups.staged;
+  return [...new Set(eligible.flatMap(entry => {
+    // oldPath belongs to the indexed rename/copy when X is R/C. It is not
+    // an index path to git-add again when staging remaining working-tree edits.
+    // Reset both sides of an indexed rename, but never reset a copy's source:
+    // that path may have independent staged edits of its own.
+    const includeOrigin = kind === 'unstage'
+      ? entry.indexStatus === 'R'
+      : entry.worktreeStatus === 'R' && !['R', 'C'].includes(entry.indexStatus);
+    return includeOrigin && entry.oldPath ? [entry.oldPath, entry.path] : [entry.path];
+  }))];
+}
+
+export interface CommitDraft { subject: string; body: string }
+const memory = new Map<string, CommitDraft>();
+export function draftKey(session: RepositorySession): string {
+  // Handles expire. Include WSL distribution and worktree root, not just repo name.
+  return `gitty:commit-draft:${JSON.stringify([session.location.kind, session.location.kind === 'wsl' ? session.location.distribution : '', session.root])}`;
+}
+export function readDraft(key: string): CommitDraft {
+  if (memory.has(key)) return memory.get(key)!;
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(key) ?? 'null');
+    if (value && typeof value === 'object' && 'subject' in value && 'body' in value && typeof value.subject === 'string' && typeof value.body === 'string') return value as CommitDraft;
+  } catch { /* Malformed or unavailable storage must not prevent composing. */ }
+  return { subject: '', body: '' };
+}
+export function saveDraft(key: string, draft: CommitDraft): boolean {
+  memory.set(key, draft);
+  try { localStorage.setItem(key, JSON.stringify(draft)); return true; } catch { return false; }
+}
+export function clearSubmittedDraft(key: string, submitted: CommitDraft): boolean {
+  const current = readDraft(key);
+  if (current.subject !== submitted.subject || current.body !== submitted.body) return false;
+  saveDraft(key, { subject: '', body: '' });
+  return true;
+}
+export function commitMessage(draft: CommitDraft): string {
+  return `${draft.subject.trim()}${draft.body.trim() ? `\n\n${draft.body.trim()}` : ''}`;
+}

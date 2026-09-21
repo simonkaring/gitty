@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const server = await createServer({ server: { host: '127.0.0.1', port: 0 }, logLevel: 'error' });
+const server = await createServer({ server: { host: '127.0.0.1', port: 5186, strictPort: false }, logLevel: 'error' });
 await server.listen();
 const browser = await chromium.launch({ headless: true });
 const errors = [];
@@ -36,6 +36,7 @@ try {
       if (command === 'repository_pick') return '/fixture';
       if (command === 'repository_open' || command === 'repository_state') return state();
       if (command === 'repository_close') return;
+      if (command === 'repository_operation_state') return { kind: 'none', label: '', current: null, incoming: null, step: null, total: null, conflicts: [], canContinue: false, canSkip: false, fingerprint: f.mode };
       if (command === 'repository_status') {
         if (f.raceOnce) { f.raceOnce = false; f.mode = 'new'; }
         if (f.delayStatus) { f.statusWaiting = true; await new Promise(resolve => { f.releaseStatus = resolve; }); f.statusWaiting = false; }
@@ -79,11 +80,12 @@ try {
   await page.getByRole('button', { name: 'Set as target', exact: true }).click();
   await page.getByText('Changes that turn the base commit into the target commit.', { exact: false }).waitFor();
   await page.getByRole('option', { name: /^Working changes/ }).click();
-  await page.getByRole('button', { name: 'staged (1)', exact: true }).click();
-  await page.getByText('Staged: changes from HEAD to the index (staging area).', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Staged: file.txt', exact: true }).click();
+  await page.getByText('HEAD → index · included in your next commit', { exact: true }).waitFor();
   await page.waitForFunction(() => window.fixture.calls.filter(c => c.command === 'repository_diff').at(-1)?.args.spec.kind === 'staged');
-  await page.getByRole('button', { name: 'unstaged (1)', exact: true }).click();
-  await page.getByText('Unstaged: changes from the index to the working tree.', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Unstaged: file.txt', exact: true }).click();
+  await page.getByText('Index → working tree · not yet staged', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'History', exact: true }).click();
   await page.getByRole('option', { name: /^Commit c0,/ }).click();
   await page.getByRole('button', { name: 'Clear comparison', exact: true }).click();
 
@@ -93,7 +95,7 @@ try {
   await page.evaluate(() => { window.fixture.raceOnce = true; });
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.statusbar')?.textContent.includes('400 commits loaded'));
-  assert.equal(await page.locator('.history-scroll').evaluate(el => el.scrollTop), 250 * 44 + 453);
+  assert.equal(await page.locator('.history-scroll').evaluate(el => el.scrollTop), 250 * 48 + 453);
   assert.equal(await page.locator('.native-sha').textContent(), 'c0');
 
   // Reject a stale pending diff after selecting a commit with no changed files.
@@ -101,7 +103,8 @@ try {
   await page.evaluate(() => { window.fixture.holdDiff = true; });
   await page.getByRole('option', { name: /^Commit n1,/ }).click();
   await page.waitForFunction(() => !!window.fixture.rejectDiff);
-  await page.getByRole('button', { name: 'tag empty', exact: true }).click();
+  await page.locator('summary').filter({ hasText: 'Tags' }).click();
+  await page.getByRole('button', { name: 'empty', exact: true }).click();
   await page.getByText('No changed files in this comparison.', { exact: true }).waitFor();
   await page.evaluate(() => { window.fixture.holdDiff = false; window.fixture.rejectDiff(new Error('Stale diff failure')); });
   assert.equal(await page.getByText('Loading diff…', { exact: true }).count(), 0);
@@ -111,10 +114,19 @@ try {
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await page.getByText('no longer reachable from the current references', { exact: false }).waitFor();
   assert.equal(await page.locator('.native-sha').textContent(), 'c219');
-  await page.getByRole('button', { name: 'Use light theme', exact: true }).click();
-  assert.equal(await page.evaluate(() => localStorage.getItem('gitty:theme')), 'light');
+   await page.getByRole('button', { name: 'Open settings', exact: true }).click();
+   await page.getByRole('dialog', { name: 'Settings', exact: true }).waitFor();
+   await page.getByRole('combobox', { name: 'Theme', exact: true }).selectOption('gitty-light');
+   await page.getByRole('button', { name: 'Close settings', exact: true }).click();
+   assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
+   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('gitty:settings')).themeId), 'gitty-light');
+   assert.equal(await page.evaluate(() => window.fixture.calls.filter(call => call.command === 'repository_operation_state').every(call => call.args.handle === 's')), true);
+   assert.ok(await page.evaluate(() => window.fixture.calls.filter(call => call.command === 'repository_operation_state').length >= 2));
+   await page.reload();
+   await page.getByRole('button', { name: 'Open repository', exact: true }).waitFor();
+   assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
   assert.deepEqual(errors, []);
-  console.log('Browser smoke passed: demo; native snapshot race; silent polling; selection/anchor preservation; comparison modes; stale diff cleanup; unreachable inspector; theme.');
+   console.log('Browser smoke passed (mocked native IPC): demo; operation-state snapshots; native snapshot race; silent polling; selection/anchor preservation; comparison modes; stale diff cleanup; unreachable inspector; Settings theme migration and reload persistence.');
 } finally {
   await browser.close();
   await server.close();

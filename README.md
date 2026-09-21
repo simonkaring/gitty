@@ -2,7 +2,13 @@
 
 **A little clarity for your Git history.**
 
-A graph-first desktop Git client built with **Tauri 2, React 19, TypeScript, and Rust**. The desktop app now supports read-only exploration of real repositories: paged history, working changes, diffs, comparisons, search, and automatic refresh. The browser preview retains the clearly labeled synthetic demo.
+A graph-first desktop Git client built with **Tauri 2, React 19, TypeScript, and Rust**. Explore history, compose commits, manage branches, merge/rebase/cherry-pick, and resolve conflicts in a customizable workspace. The browser preview provides a clearly labeled synthetic demo with simulated staging and commits; graph mutations require a real desktop repository.
+
+## The redesigned workspace
+
+Warm paper and charcoal themes, teal accents, and locally bundled **Fraunces**, **Inter**, and **Geist Mono** give Gitty a consistent visual language. Interface text defaults to 15px, history/file rows use 14px text, and diffs and meaningful metadata use 13px text. The graph uses aligned 48px rows.
+
+Use **History** to explore commits and **Working changes** to review files and compose a commit. Both views share the same navigation and controls. Sidebar and inspector widths persist; narrow windows use collapsible/overlay panes rather than reducing text size. Date and path filters are available from the history toolbar.
 
 ## Run it
 
@@ -33,7 +39,7 @@ npm run check:rust              # Cargo check (build the frontend first)
 
 ## Explore a real repository
 
-Run `npm run desktop`, choose **Open repository**, then use the native folder picker or a recent location. On Windows, the picker also offers WSL distribution discovery and Linux-directory browsing. WSL Git runs inside the selected distribution. Windows/WSL runtime validation is still pending.
+Run `npm run desktop`, choose **Open repository**, then use the native folder picker or a recent location. On Windows, the picker also offers WSL distribution discovery and Linux-directory browsing. WSL Git runs inside the selected distribution; its conflict editor filesystem helper also requires Python 3. Windows/WSL runtime validation is still pending.
 
 - **Repository identity:** native/WSL location, current branch or detached HEAD, linked worktree, shallow, and bare states.
 - **Live graph:** local branches, remote-tracking branches, commit-pointing tags, and HEAD; 200-commit cursor pages with original parent relationships. Remote information reflects locally stored refs, without fetching.
@@ -43,7 +49,40 @@ Run `npm run desktop`, choose **Open repository**, then use the native folder pi
 - **Search/filter:** messages, authors/emails, full/prefix hashes, and reference labels across reachable history; optional branch, date, and literal-path scope. Matches are highlighted while nonmatching ancestry stays visible. Results are capped at 500 and explicitly labeled when truncated.
 - **Refresh:** every five seconds while visible, on window focus, or manually. Coherence checks reject mixed history snapshots; selection and the viewport's commit/pixel anchor are preserved where available. No filesystem watcher is installed yet.
 
-Exploration does not stage, commit, switch branches, fetch, or change repository files. The backend uses the installed Git with structured arguments and targeted read-only configuration. Missing objects, unsupported encodings, partial/promisor clones, and process limits return explicit errors. See [M2 architecture and release validation](docs/milestone-2.md) for scope and remaining checks.
+History reads, search, and inspection remain read-only. **Working changes** provides staging and commits; graph and sidebar action controls provide explicit branch operations. The backend uses the installed Git with separate read/write command contracts and shell-free arguments. Missing objects, unsupported encodings, partial/promisor clones, and process limits return explicit errors.
+
+## Stage, review, and commit
+
+1. Open a repository and select **Working changes**.
+2. Select an unstaged or untracked file to inspect its diff, then use its **+** control or **Stage all**.
+3. Review the **Staged** group. Use **−** or **Unstage all** to remove changes from the index without changing working files.
+4. Enter a summary and optional description, then choose **Commit staged changes**. Gitty refreshes status and history after the operation.
+
+A partially staged file appears in both lists. Staging it adds its remaining working changes; unstaging it removes its indexed changes. Renames are handled as both source and destination where required. All actions operate on whole files.
+
+Commit drafts persist per repository/worktree and survive failed operations. Configured hooks, identity, and signing are honored. Failed or uncertain writes trigger a refresh; Gitty does not automatically retry a commit. Bare repositories, unresolved conflicts, and in-progress Git operations produce explicit errors. A failed refresh blocks further writes in the composer until repository state can be refreshed.
+
+The browser demo simulates the same workflow without modifying repository files. Its working contents reset when the demo repository is reopened.
+
+## Branches, drag/drop, and conflicts
+
+- Use **New branch…** or **Switch branch…**, or open a reference/commit's action menu with its button, right-click, or **Shift+F10**.
+- Drag a branch onto the **outlined current branch** in the graph or sidebar to review a merge. Drag a commit subject onto that target to review a cherry-pick. Dropping opens the action dialog; execution follows an explicit review.
+- Other actions include rebasing the current branch onto a selected source, ordered multi-commit cherry-picks, comparison, and lightweight/annotated tags. Merge commits require an explicit cherry-pick mainline parent.
+- The operation banner provides **Continue**, **Skip** where applicable, **Abort**, and conflict links. The built-in conflict editor shows full base/current/incoming versions, editable results, block acceptance, and whole-file/deletion choices. External edits are detected before saving.
+- **Create pull request…** opens GitHub, GitLab.com, or Azure DevOps in your browser with source/base branches filled in. Choose a local source branch and remote; publish commits separately when needed. Gitty does not fetch or push automatically.
+
+New graph mutations currently require a clean index/worktree, including no untracked files. Rebase ranges containing merge commits and special-file conflicts have explicit limitations. See [Milestone 3](docs/milestone-3.md) for semantics and validation.
+
+## Settings and themes
+
+Open the gear button or **Cmd/Ctrl+,** from either workspace, including the native welcome screen.
+
+- **Presets:** Gitty Light/Dark, Gruvbox Light/Dark, Dracula, Nord, Catppuccin Latte/Mocha.
+- **System appearance:** choose separate light and dark themes, or use one fixed theme.
+- **Custom themes:** duplicate a preset, edit UI/diff/graph colors with a live preview and contrast feedback, then save a named theme. Import/export versioned local JSON; edits can be reset or canceled.
+- **Editor preferences:** bundled code font, code size, line wrapping, and default unified/side-by-side diffs.
+- **Workspace reset:** restore pane sizes. Resizing and settings persist across reloads and native/demo switching within the app.
 
 ## Explore the demo
 
@@ -69,21 +108,25 @@ Exploration does not stage, commit, switch branches, fetch, or change repository
 | `Enter` in history | Open commit inspector |
 | `Esc` | Clear search / dismiss menu or dialog |
 | `?` | Show shortcut reference |
+| `Cmd/Ctrl ,` | Open settings |
+| `Shift F10` in native history | Open selected commit actions |
 | `←` / `→` on inspector divider | Resize by 20 px |
 | `Home` / `End` on inspector divider | Minimum / maximum width |
 
-Single-letter shortcuts are disabled while editing an input. Reference controls **navigate**, rather than checkout or filter. `All branches` intentionally keeps the complete graph visible.
+Single-letter shortcuts are disabled while editing an input. Sidebar reference names navigate; their action buttons and graph badges open explicit operations. `All branches` intentionally keeps the complete graph visible.
 
 ## Project map
 
 ```text
 src/
   App.tsx                       Workspace state, search, navigation, layout controls
-  styles.css                    Light/dark tokens and responsive visual system
+  styles.css                    Editorial typography, themes, responsive workspace
   components/
     HistoryGraph.tsx             Canvas renderer + virtualized accessible rows
     NativeWorkspace.tsx          Repository sessions, search, paging, coherent refresh
     NativeInspector.tsx          Real changes, parent selection, commit comparisons
+    WorkingChanges.tsx           File staging, shared diff viewer, commit composer
+    WorkspaceControls.tsx        Shared navigation, branding, pane resizing
     RepositoryPicker.tsx         Native/recent/WSL repository opening
     Sidebar.tsx                  Repository and reference navigation
     Inspector.tsx                Commit metadata, files, mock diff
@@ -94,6 +137,8 @@ src/
     types.ts                     Commit/ref/file models and provider boundary
     repository.ts                Native/WSL IPC data contract
     native.ts                    Typed data helpers and coherent snapshot loading
+    workflow.ts                  Write/refresh lifecycle, explicit paths, saved drafts
+    demoWorkflow.ts              In-memory HEAD/index/worktree for demo operations
     demo.ts                      Deterministic synthetic history/provider
     diff.ts                      Small LCS diff for synthetic text fixtures
     diff.test.ts                 Diff reconstruction and line-number invariants
@@ -101,6 +146,7 @@ src-tauri/
   src/lib.rs                     Tauri command registration and blocking-worker dispatch
   src/repository.rs              Sessions, streaming history, status, search, metadata
   src/diff.rs                    Git change lists and structured patches
+  src/mutate.rs                  Staging, unstaging, commits, write preflight checks
   src/process.rs                 Bounded shell-free process execution
   src/stream.rs                  Backpressured Git streams and lifecycle cleanup
   src/wsl.rs                     Windows distribution discovery and Linux browsing
@@ -109,6 +155,8 @@ src-tauri/
   tauri.conf.json                Tauri 2 app/build/bundle configuration
 docs/architecture.md             Layout decisions, native Git and future WSL boundary
 docs/milestone-2.md               Implemented exploration architecture and validation
+docs/redesign-notes.md            Redesign, workflow lifecycle, browser validation
+docs/milestone-3.md               Graph operations, conflict editor, settings and themes
 ```
 
 ## Checks
@@ -125,6 +173,13 @@ npm run test:rust               # Real temporary repository integration tests
 
 The CI workflow defines a macOS / Windows / Ubuntu matrix for frontend tests/builds, Rust tests, and native compilation. The matrix is not evidence that Windows or Linux runtime behavior has been verified locally.
 
+### Milestone 3 verification
+
+- **68 frontend tests** and **74 Rust tests** passed; Rust tests use real temporary repositories.
+- Production TypeScript/Vite build, Rust formatting and Clippy checks passed.
+- Native, workflow, operations, and settings Chromium smoke suites passed. Settings covers 13 scenario groups, including actual canvas theme colors, JSON round trips, pane reset/persistence, and narrow layouts.
+- The integrated macOS debug `Gitty.app` bundle built successfully. Browser native coverage uses mocked IPC; packaged native GUI end-to-end and Windows/WSL/Linux runtime checks remain open.
+
 ### Milestone 2 verification
 
 - **22 frontend tests passed**, including asynchronous refresh races and graph clipping invariants.
@@ -132,6 +187,13 @@ The CI workflow defines a macOS / Windows / Ubuntu matrix for frontend tests/bui
 - Strict TypeScript/Vite production build and Rust check/format checks passed.
 - Browser smoke passed for the demo and native workspace using mocked Tauri IPC, including refresh races, scroll preservation, comparisons, stale responses, and themes.
 - A macOS debug application bundle built successfully with `npm run desktop:build -- --debug --bundles app`. Native GUI repository interaction, Windows/WSL, Linux runtime, signed installers, and screen-reader validation remain release checks.
+
+### Redesign and staging/commit verification
+
+- **45 frontend tests** and **49 Rust tests** passed.
+- TypeScript/Vite build, Rust check, formatting, and Clippy checks passed.
+- Chromium history and workflow smoke checks passed, including draft persistence, partial staging, rename/copy paths, duplicate-write protection, failed refresh recovery, themes, and narrow layouts. Native browser checks use mocked Tauri IPC.
+- The integrated macOS debug application bundle built successfully at `src-tauri/target/debug/bundle/macos/Gitty.app`. Native GUI end-to-end and other-platform runtime validation remain open.
 
 ### Milestone 1 verification
 
@@ -142,8 +204,8 @@ The CI workflow defines a macOS / Windows / Ubuntu matrix for frontend tests/bui
 
 ## Scope and next steps
 
-The next functional milestone is everyday Git workflows: staging, commits, branches, remotes, and stashes. WSL runtime verification and broader desktop validation should precede claiming the exploration release is platform-complete.
+File-level staging, commits, branch creation/switching, merge/rebase/cherry-pick, tags, regular-file conflict resolution, and settings/custom themes are implemented. Next functional work includes hunk/line staging, amend, stashes, broader rebase/conflict support, and authenticated remote operations/cloning. WSL runtime verification and broader desktop validation remain platform release work.
 
 The demo snapshot remains materialized once per repository. Native history uses a pinned Git walk with bounded read-ahead and a temporary replay spool, batched metadata reads, and lazy diffs. Canvas and DOM rendering are viewport bounded; an interval index accelerates edge visibility queries. Layout still runs on the main thread for the loaded prefix; worker-based/incremental layout remains performance follow-up work.
 
-See the [M1 architecture record](docs/architecture.md), [M2 implementation](docs/milestone-2.md), and [backend details](src-tauri/BACKEND.md).
+See the [M3 implementation](docs/milestone-3.md), [redesign and workflow notes](docs/redesign-notes.md), [M1 architecture record](docs/architecture.md), [M2 implementation](docs/milestone-2.md), and [backend details](src-tauri/BACKEND.md).

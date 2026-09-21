@@ -33,6 +33,18 @@ export interface SearchResult { commits: CommitSummary[]; truncated: boolean }
 export interface RepositoryState { session: RepositorySession; refs: RepositoryRef[]; remotes: string[]; fingerprint: string }
 export interface WslDistribution { name: string; running: boolean }
 export interface DirectoryEntry { name: string; path: string }
+export interface RepositoryError { code: string; message: string }
+export interface CreateCommitResult { oid: string }
+/** Writes use explicit repository-relative paths; an empty array never means all.
+ * Stage/unstage affect whole paths, including the remainder of partially staged
+ * files. Conflicted paths cannot be mutated here. The service is authoritative
+ * for bare repositories, in-progress merges, identity, hooks, and other checks.
+ * A rejected commit can have an ambiguous outcome: refresh, preserve the draft,
+ * and never automatically retry. repository_commit is still a read operation.
+ */
+export type RepositoryMutation =
+  | { kind: 'stage' | 'unstage'; paths: string[] }
+  | { kind: 'commit'; message: string };
 
 /* Tauri commands (all argument names camelCase):
  * repository_pick() -> string | null
@@ -46,6 +58,9 @@ export interface DirectoryEntry { name: string; path: string }
  * repository_diff_files({handle, spec: DiffSpec}) -> DiffFile[]
  * repository_diff({handle, spec: DiffSpec, path}) -> FileDiff
  * repository_search({handle, query: SearchQuery}) -> SearchResult
+ * repository_stage({handle, paths: string[]}) -> void
+ * repository_unstage({handle, paths: string[]}) -> void
+ * repository_create_commit({handle, message: string}) -> CreateCommitResult
  * wsl_distributions() -> WslDistribution[]
  * wsl_directories({distribution, path}) -> DirectoryEntry[]
  * Errors: {code: string, message: string}

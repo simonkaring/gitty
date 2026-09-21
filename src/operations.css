@@ -1,0 +1,19 @@
+.operation-dialog { width: min(720px, 94vw); max-height: 90vh; overflow: auto; }
+.operation-dialog label { display: block; margin: 12px 0; }
+.operation-dialog input:not([type=checkbox]), .operation-dialog select, .operation-dialog textarea { display: block; width: 100%; padding: 8px; color: inherit; background: var(--surface, transparent); border: 1px solid var(--border, #8886); border-radius: 5px; }
+.operation-dialog button, .operation-banner button, .branch-actions button { margin: 4px; padding: 5px 9px; }
+.operation-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+.operation-buttons, .operation-banner, .branch-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.operation-banner { padding: 10px 20px; border-bottom: 1px solid var(--border, #8886); }
+.operation-order { display: inline-flex; }
+.conflict-versions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.conflict-versions pre { font-size: 12px; min-height: 70px; }
+.operation-dialog .conflict-result { min-height: 240px; font-family: monospace; white-space: pre; tab-size: 4; }
+.ref-action-row { display: flex; align-items: center; }
+.ref-action-row .ref-item { min-width: 0; flex: 1; }
+.ref-action-row > button:last-child { flex: 0 0 28px; }
+.graph-action-button { margin-left: 8px; padding: 2px 5px; }
+.graph-pick { margin-right: 7px; }
+.ref-pill[draggable=true] { cursor: grab; }
+.ref-pill[data-current=true] { outline: 1px solid currentColor; }
+@media (max-width: 700px) { .conflict-versions { grid-template-columns: 1fr; } }

@@ -1,0 +1,73 @@
+import { describe, expect, it } from 'vitest';
+import { DEFAULT_SETTINGS, SETTINGS_KEY, persistSettings, readSettings, resolveTheme, validateSettings } from './settings';
+import { BUILTIN_THEMES, COLOR_KEYS, contrastRatio, exportTheme, importTheme, themeTokens, validateTheme } from './themes';
+
+const custom = () => ({ ...BUILTIN_THEMES[0], id: 'custom-test', name: 'My theme', colors: { ...BUILTIN_THEMES[0].colors } });
+function storage(entries: Record<string, string> = {}) {
+  const values = new Map(Object.entries(entries));
+  return { values, getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
+}
+describe('local preferences', () => {
+  it('migrates legacy appearance and clamps existing pane sizes without altering old keys', () => {
+    const store = storage({ 'gitty:theme': 'dark', 'gitty:sidebar-width': '900', 'gitty:inspector-width': '510' });
+    const { settings, error } = readSettings(store);
+    expect(error).toBeNull();
+    expect(settings).toMatchObject({ themeMode: 'fixed', themeId: 'gitty-dark', paneWidths: { sidebar: 400, inspector: 510 } });
+    expect(persistSettings(store, settings)).toBeNull();
+    expect(readSettings(store).settings).toEqual(settings);
+    expect(store.getItem('gitty:theme')).toBe('dark');
+  });
+  it('keeps corrupt and future stored data untouched and reports fallback', () => {
+    for (const value of ['{broken', JSON.stringify({ ...DEFAULT_SETTINGS, version: 2 }), JSON.stringify({ ...DEFAULT_SETTINGS, diffWrap: 'yes' })]) {
+      const store = storage({ [SETTINGS_KEY]: value });
+      expect(readSettings(store).error).toBeTruthy();
+      expect(readSettings(store).settings).toEqual(DEFAULT_SETTINGS);
+      expect(store.getItem(SETTINGS_KEY)).toBe(value);
+    }
+  });
+  it('handles storage access and quota failures', () => {
+    const broken = { getItem: () => { throw Error('denied'); }, setItem: () => { throw Error('quota'); } };
+    expect(readSettings(broken).error).toBeTruthy();
+    expect(persistSettings(broken, DEFAULT_SETTINGS)).toContain('session');
+  });
+  it('rejects invalid ranges, references, modes, fonts and duplicates', () => {
+    for (const patch of [{ fontSize: 10 }, { fontSize: 13.5 }, { monoFont: 'https://font' }, { paneWidths: { sidebar: Infinity, inspector: 400 } }, { themeId: 'missing' }, { lightThemeId: 'gitty-dark' }, { customThemes: [custom(), custom()] }, { customThemes: Array(31).fill(custom()) }]) expect(() => validateSettings({ ...DEFAULT_SETTINGS, ...patch })).toThrow();
+  });
+  it('resolves system pairs and fixed themes independently of OS appearance', () => {
+    const settings = { ...DEFAULT_SETTINGS, lightThemeId: 'catppuccin-latte', darkThemeId: 'nord' };
+    expect(resolveTheme(settings, false).id).toBe('catppuccin-latte');
+    expect(resolveTheme(settings, true).id).toBe('nord');
+    expect(resolveTheme({ ...settings, themeMode: 'fixed', themeId: 'dracula' }, false).id).toBe('dracula');
+  });
+});
+describe('theme files and render tokens', () => {
+  it('round trips a complete versioned custom theme', () => { expect(importTheme(exportTheme(custom()))).toEqual(custom()); });
+  it('rejects missing or unknown tokens, CSS injection, oversized files and future versions', () => {
+    const missing = custom(); delete missing.colors.graphHead;
+    const unknown = custom(); unknown.colors.remote = '#ffffff';
+    const invalid = custom(); invalid.colors.bg = 'url(https://example.org)';
+    const translucent = custom(); translucent.colors.text = '#ffffff88';
+    for (const theme of [missing, unknown, invalid, translucent, { ...custom(), name: 'x'.repeat(61) }, { ...custom(), id: 'gitty-light' }]) expect(() => validateTheme(theme)).toThrow();
+    expect(() => importTheme(JSON.stringify({ version: 2, theme: custom() }))).toThrow();
+    expect(() => importTheme(' '.repeat(100_001))).toThrow();
+  });
+  it('renders complete semantic and graph tokens for all builtins', () => {
+    expect(BUILTIN_THEMES).toHaveLength(8);
+    for (const theme of BUILTIN_THEMES) {
+      expect(Object.keys(theme.colors)).toEqual([...COLOR_KEYS]);
+      expect(() => validateTheme({ ...theme, id: 'custom-check' })).not.toThrow();
+      const tokens = themeTokens(theme);
+      expect(tokens['--accent-text']).toBe(theme.colors.accentText);
+      expect(tokens['--button-foreground']).toBe(theme.colors.buttonForeground);
+      expect(tokens['--graph-lane8']).toBe(theme.colors.graphLane8);
+      expect(tokens['--shadow']).toBe(`0 12px 40px ${theme.colors.shadow}`);
+    }
+  });
+  it('computes WCAG luminance contrast with symmetry and known endpoints', () => {
+    expect(contrastRatio('#000000', '#ffffff')).toBe(21);
+    expect(contrastRatio('#ffffff', '#ffffff')).toBe(1);
+    expect(contrastRatio('#777777', '#ffffff')).toBeCloseTo(4.478, 3);
+    expect(contrastRatio('#ffffff', '#777777')).toBe(contrastRatio('#777777', '#ffffff'));
+    expect(() => contrastRatio('red', '#ffffff')).toThrow();
+  });
+});

@@ -2,7 +2,7 @@ import type { ChangedFile, Commit, HistoryProvider, RepositorySnapshot } from '.
 
 const authors = ['Alex Morgan', 'Jamie Chen', 'Sam Rivera', 'Taylor Kim', 'Jordan Lee'];
 const subjects = [
-  'Give the command palette a little more room',
+  'Improve command palette spacing',
   'Keep your place when switching branches',
   'Polish the empty state for new repositories',
   'Add keyboard shortcuts to the history view',
@@ -35,7 +35,7 @@ function filesFor(index: number): ChangedFile[] {
       ? [':root {', '  --panel-radius: 8px;', '  --focus-color: #8890a0;', '  --row-height: 40px;', '}']
       : ['export const viewOptions = {', '  preserveSelection: false,', '  overscan: 4,', '  keyboardNavigation: true,', '};'];
     const after = path.endsWith('.css')
-      ? [':root {', '  --panel-radius: 12px;', '  --focus-color: #6d78d5;', '  --row-height: 44px;', '  --motion-duration: 120ms;', '}']
+      ? [':root {', '  --panel-radius: 4px;', '  --focus-color: #277c6f;', '  --row-height: 48px;', '  --motion-duration: 120ms;', '}']
       : ['export const viewOptions = {', '  preserveSelection: true,', '  overscan: 12,', '  keyboardNavigation: true,', '  restoreScrollPosition: true,', '};'];
     const status = (index + n) % 13 === 0 ? 'added' : (index + n) % 17 === 0 ? 'deleted' : 'modified';
     const oldLines = status === 'added' ? [] : before;
@@ -58,7 +58,7 @@ export function createDemoHistory(seed = 1, rounds = 140): RepositorySnapshot {
       id, parents, subject: subject ?? subjects[(index + Math.floor(index / 12) + seed) % subjects.length],
       body: parents.length > 1
         ? 'Bring the latest work together while preserving the full branch history.\n\nReviewed with the team and ready for the next release.'
-        : 'A small improvement to make the everyday workflow feel more considered.\n\nPreserves selection and keeps the interface predictable across repositories.',
+        : 'Improve readability in the history workspace and commit inspector.\n\nPreserve selection and scroll position when repository state changes.',
       author, email: `${author.toLowerCase().replace(' ', '.')}@example.com`,
       timestamp: Date.UTC(2026, 8, 18, 16, 42) - (rounds * 12 - index) * 37 * 60_000,
       branch, files: filesFor(index + seed),
@@ -66,14 +66,14 @@ export function createDemoHistory(seed = 1, rounds = 140): RepositorySnapshot {
     tips.set(branch, id);
     return id;
   }
-  commit('main', 'Plant the first seed');
+  commit('main', 'Initialize the repository');
   for (let i = 0; i < rounds; i++) {
     const base = tips.get('main')!;
     tips.set('feature/command-palette', base);
     tips.set('docs/getting-started', base);
     commit('feature/command-palette');
     commit('main');
-    commit('docs/getting-started', 'Document a calmer way to work with Git');
+    commit('docs/getting-started', 'Document the repository workflow');
     commit('feature/command-palette');
     const hotfixBase = tips.get('main')!;
     tips.set('fix/focus-ring', hotfixBase);
@@ -88,8 +88,8 @@ export function createDemoHistory(seed = 1, rounds = 140): RepositorySnapshot {
   }
   const release = tips.get('main')!;
   commit('feature/command-palette', 'Add recent repositories to the command palette');
-  commit('docs/getting-started', 'A friendlier guide to your first repository');
-  const head = commit('main', 'Make a little space for the details');
+  commit('docs/getting-started', 'Update the repository setup guide');
+  const head = commit('main', 'Make commit details easier to read');
   commit('feature/command-palette', 'Fine-tune search results and keyboard hints');
   return {
     commits: chronological.reverse(), head,

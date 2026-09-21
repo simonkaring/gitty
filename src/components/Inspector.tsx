@@ -2,10 +2,15 @@ import { useEffect, useState } from 'react';
 import { ArrowUpRight, Check, ChevronDown, Copy, FileCode2, GitCommitHorizontal, GitMerge, X } from 'lucide-react';
 import type { Commit } from '../model/types';
 import { diffLines } from '../model/diff';
+import { useSettings } from '../model/settings';
+import { DiffPreview } from './WorkingChanges';
 
 interface Props { commit: Commit; head: string; onJump: (id: string) => void; onClose: () => void; notify: (message: string) => void }
 
 export function Inspector({ commit, head, onJump, onClose, notify }: Props) {
+  const { settings } = useSettings();
+  const [split, setSplit] = useState(settings.diffView === 'split');
+  useEffect(() => setSplit(settings.diffView === 'split'), [settings.diffView]);
   const [tab, setTab] = useState<'overview' | 'diff'>('overview');
   const [fileIndex, setFileIndex] = useState(0);
   const [copied, setCopied] = useState(false);
@@ -47,13 +52,13 @@ export function Inspector({ commit, head, onJump, onClose, notify }: Props) {
         </button>)}
       </section>
       {tab === 'diff' ? <section className="diff-section" aria-label={`Mock diff for ${file.path}`}>
-        <div className="diff-heading"><span>{file.path.split('/').at(-1)}</span><span className="mock-badge">MOCK DIFF</span></div>
-        <div className="diff-code" tabIndex={0} aria-label="Scrollable unified diff">
+        <div className="diff-heading"><span>{file.path.split('/').at(-1)}</span><button aria-pressed={split} onClick={() => setSplit(!split)}>{split ? 'Unified' : 'Side by side'}</button><span className="mock-badge">MOCK DIFF</span></div>
+        {split ? <DiffPreview split diff={{ path: file.path, binary: false, truncated: false, message: null, hunks: [{ header: `@@ −${file.before.length ? 1 : 0},${file.before.length} +${file.after.length ? 1 : 0},${file.after.length} @@`, lines: diffLines(file.before, file.after).map(line => ({ kind: line.kind, content: line.text, oldLine: line.oldLine ?? null, newLine: line.newLine ?? null })) }] }} /> : <div className="diff-code" tabIndex={0} aria-label="Scrollable unified diff">
           <div className="diff-hunk">@@ −{file.before.length ? 1 : 0},{file.before.length} +{file.after.length ? 1 : 0},{file.after.length} @@</div>
           {diffLines(file.before, file.after).map((line, index) => <div key={index} className={`diff-line ${line.kind}`}><span className="line-number">{line.oldLine ?? ''}</span><span className="line-number">{line.newLine ?? ''}</span><span className="diff-sign">{line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ' '}</span><code>{line.text || ' '}</code></div>)}
-        </div>
+        </div>}
         <p className="diff-note">Illustrative file contents from the demo repository.</p>
-      </section> : <div className="inspector-tip"><FileCode2 size={17} /><p>A closer look, one file at a time.<br /><span>Select a file to explore its changes.</span></p></div>}
+      </section> : <div className="inspector-tip"><FileCode2 size={17} /><p>Select a file to inspect its changes.</p></div>}
     </div>
     <div className="inspector-footer"><span className="live-dot" /> Synthetic history <span>Read-only preview</span></div>
   </aside>;

@@ -1,0 +1,41 @@
+import { native, errorMessage, readNativeSnapshot } from './native';
+import type { GitAction, OperationRequest, OperationState } from './operations';
+import type { RepositoryState } from './repository';
+import { actionReason } from './operationUi';
+import type { MutationOutcome } from './workflow';
+
+/** Install history, status and operation state together. A read-only retry is
+ * safe when another Git process changes the operation during the snapshot. */
+export async function readOperationSnapshot(handle: string, options: Parameters<typeof readNativeSnapshot>[1], invoke = native, read = readNativeSnapshot) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (options?.current && !options.current()) throw new Error('Repository session changed.');
+    const before = await invoke<OperationState>('repository_operation_state', { handle });
+    const snapshot = await read(handle, options);
+    const operation = await invoke<OperationState>('repository_operation_state', { handle });
+    if (options?.current && !options.current()) throw new Error('Repository session changed.');
+    if (before.fingerprint === operation.fingerprint) return { ...snapshot, operation };
+  }
+  throw new Error('Repository operation kept changing during refresh. Refresh again.');
+}
+
+/** Capture once at review. Execute must pass this request verbatim. */
+export async function captureOperation(handle: string, action: GitAction, invoke = native): Promise<OperationRequest> {
+  const before = await invoke<OperationState>('repository_operation_state', { handle });
+  const fresh = await invoke<RepositoryState>('repository_state', { handle });
+  const after = await invoke<OperationState>('repository_operation_state', { handle });
+  if (before.fingerprint !== after.fingerprint) throw new Error('Repository changed during review. Review again.');
+  const blocked = actionReason(action, fresh.session, after);
+  if (blocked) throw new Error(blocked);
+  return { action: structuredClone(action), expectedHead: fresh.session.head, expectedHeadRef: fresh.session.headRef, expectedOperation: after.fingerprint };
+}
+
+/** Caller holds the shared mutation lock through the awaited reload, including
+ * when a write failed or timed out: its outcome may be uncertain. */
+export async function operationAndRefresh(handle: string, command: string, args: Record<string, unknown>, reload: () => Promise<void>, current: () => boolean, invoke = native): Promise<MutationOutcome> {
+  if (!current()) return { superseded: true };
+  const outcome: MutationOutcome = {};
+  try { await invoke(command, { ...args, handle }); } catch (e) { outcome.error = errorMessage(e); }
+  if (!current()) return { ...outcome, superseded: true };
+  try { await reload(); } catch (e) { outcome.refreshError = errorMessage(e); }
+  return current() ? outcome : { ...outcome, superseded: true };
+}

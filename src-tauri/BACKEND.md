@@ -1,8 +1,16 @@
-# M2 native repository service
+# Native repository service
 
-All commands in `src/model/repository.ts` are registered by `src/lib.rs`. The
+All commands in `src/model/repository.ts` and `src/model/operations.ts` are registered by `src/lib.rs`. The
 Rust DTOs serialize the same camelCase fields and `{code, message}` errors.
 `backend_info` remains available and reports native capability.
+
+Ordinary index/commit writes use these three commands:
+
+- `repository_stage({handle, paths: string[]}) -> void`
+- `repository_unstage({handle, paths: string[]}) -> void`
+- `repository_create_commit({handle, message: string}) -> {oid: string}`
+
+`repository_commit({handle, oid})` is unchanged and remains a read.
 
 ## Read semantics
 
@@ -81,6 +89,217 @@ Rust DTOs serialize the same camelCase fields and `{code, message}` errors.
   UTF-16 output; browsing invokes Linux `find` directly, NUL-delimited, one directory
   level at a time. WSL requires Windows and Linux Git, `env`, and GNU `find`.
 
+## Write semantics
+
+This section describes the ordinary staging/commit API. Graph operations and
+targeted conflict resolutions have the additional contract documented below.
+
+- Every write names its files. `paths` is required and an empty array is an
+  `invalidRequest` error: **empty never means "all changes"**, and there is no
+  whole-tree form. Paths are repository-relative, rejected when absolute, empty,
+  longer than 4096 bytes, or containing `..`, `.`, or empty segments. A single
+  trailing `/` (how status reports untracked directories and embedded
+  repositories) is trimmed, so such an entry stages as the one path it displays.
+  Requests are capped at 1000 paths and 1 MiB of path bytes; duplicates are
+  merged. Names with spaces, tabs, newlines, Unicode, a leading `-`, or pathspec
+  metacharacters (`*`, `[`, `?`, `:`) stay literal: `GIT_LITERAL_PATHSPECS=1`
+  disables pathspec magic and globbing, and `--pathspec-file-nul` disables
+  C-quoting.
+- **Nothing variable travels on the command line.** Paths are sent to Git on
+  stdin with `--pathspec-from-file=- --pathspec-file-nul`, and the commit message
+  with `--file=-` (both available since Git 2.25; the read path already requires
+  2.37). Windows caps an entire command line near 32767 UTF-16 units and Unix
+  caps both the total and each single argument, so no argument-shaped request
+  could honor the limits above on every platform. Git arguments are now a short
+  fixed set. Stdin is a bounded anonymous temp file, so there is no pipe writer
+  that could deadlock against full output pipes, and the same handle is what WSL
+  forwards into the distribution. Conflict pre-checks query the whole index
+  (`ls-files --unmerged -z`) and are filtered in the backend for the same reason;
+  a selected directory also covers conflicts inside it. An empty
+  `--pathspec-from-file` payload would mean *every file* to Git, so the write path
+  re-checks for a non-empty pathspec immediately before the process starts, and
+  the payload is NUL-**separated**, never NUL-terminated (a trailing NUL would be
+  an empty pathspec element).
+- Git reads the commit message from stdin before it runs any hook, so hooks still
+  see an immediately closed stdin: they cannot consume the message and cannot
+  block waiting for input.
+- Writes use a separate command contract from reads. They keep
+  `GIT_LITERAL_PATHSPECS`, `GIT_NO_LAZY_FETCH`, `GIT_NO_REPLACE_OBJECTS`,
+  `GIT_TERMINAL_PROMPT=0`, `protocol.allow=never`, `core.fsmonitor=false`,
+  `core.untrackedCache=false`, `maintenance.auto=false` and `gc.auto=0`, and are
+  still launched with explicit arguments and no shell. They drop the read-only
+  overrides: `GIT_OPTIONAL_LOCKS=0` (a write must take the index lock),
+  `LC_ALL=C`, and the diff display suppressions, because `git -c` settings reach
+  hooks through `GIT_CONFIG_PARAMETERS` and hooks deserve the user's own
+  environment. Repository/index/object-store and identity `GIT_*` variables are
+  removed exactly as for reads, so an inherited `GIT_INDEX_FILE` or
+  `GIT_AUTHOR_NAME` cannot redirect a write; native config-file selectors are
+  preserved. Configured hooks, `commit.gpgsign`/`gpg.program`, `commit.cleanup`,
+  identity and templates are honored, and their failures are surfaced verbatim
+  (stderr and stdout, capped at 4000 characters). **No `--no-verify`,
+  `--no-gpg-sign`, `--force`, `--amend`, `--all`, or `-a` is ever passed**, and
+  no global Git configuration is written. Hooks run with stdin closed, so a hook
+  that expects a terminal fails instead of hanging.
+- Writes for the same underlying repository are serialized by one mutation lock
+  keyed by `kind + common directory`, so additional sessions on the same
+  repository — and linked worktrees, which share refs and objects — queue behind
+  each other. Different repositories never share a lock, and the registry lock is
+  only held while looking the key up, never across a subprocess. Validation runs
+  inside the lock, so checks and the write are one unit. Reads are never blocked.
+- Before an ordinary stage/unstage/commit write: bare repositories are rejected (`bareRepository`); an
+  in-progress merge, rebase, `am`, cherry-pick, revert, sequencer run or bisect is
+  rejected (`operationInProgress`), detected from this worktree's Git directory
+   *and* by resolving `MERGE_HEAD`/`CHERRY_PICK_HEAD`/`REVERT_HEAD`
+  through Git in one `cat-file --batch-check`, because the reftable backend keeps
+  some of those outside the Git directory; an existing `index.lock` is reported as
+  `indexLocked`. Gitty never removes a lock manually; dedicated graph commands
+  delegate explicit continuation/abort to Git. A branch literally named like a pseudo-ref fails
+  closed as an operation in progress.
+- Unmerged paths are refused (`unresolvedConflict`) for stage and unstage, and
+   any unmerged path refuses an ordinary commit; the ordinary diff stays read-only and the
+  conflict stages are left intact (`git reset -- path` would silently discard
+  them).
+- Stage runs `git add --all`, so deletions stage as deletions and a rename staged
+  as its old and new path becomes a rename in the index.
+- Unstage runs `git reset --quiet`, which restores those index entries
+  from HEAD — or empties them on an unborn branch — and **never reads or writes
+  the working tree**. Partially staged files keep their working-tree content.
+  Paths that match nothing are a silent no-op in Git, so a stale selection
+  resolves on the frontend's next refresh rather than failing.
+- Commit runs `git commit --quiet --file=-`: the staged index only, never `-a`.
+  The message must contain non-whitespace, be under 64 KiB and contain no NUL;
+  Git's configured `commit.cleanup` then applies as usual. With nothing staged the
+  commit is refused as `nothingStaged` before Git runs (compared against HEAD, or
+  against the computed empty tree on an unborn branch, without writing objects).
+  An unborn branch is confirmed with `symbolic-ref`: `rev-parse --verify --quiet`
+  exits 1 for a detached HEAD at a missing object exactly as it does for an unborn
+  branch, and committing a root commit on top of a broken HEAD would be wrong, so
+  that case is reported as `unresolvedHead`. The returned `oid` is HEAD read back
+  after the command, so it is accurate even if a post-commit hook moved HEAD
+  again. If Git fails but HEAD moved anyway, or if HEAD cannot be confirmed, the
+  result is `mutationUnverified` rather than a plain failure.
+- Writes get a 120-second deadline of their own (hooks and signing are
+  interactive-speed work) instead of the 60-second read request budget; checks
+  around them get 30 seconds. A write that is abandoned — timeout, output limit,
+  or a lost process — returns `mutationUnverified`, whose message says the
+  repository may already have changed and to refresh and check before retrying.
+  **The backend never retries a mutation**, and the frontend is expected to
+  reconcile from `repository_state`/`repository_status` after every outcome.
+- Error codes for writes: `invalidHandle`, `invalidRequest`, `invalidPath`,
+  `tooManyPaths`, `bareRepository`, `operationInProgress`, `indexLocked`,
+  `unresolvedConflict`, `unresolvedHead`, `nothingStaged`, `git` (Git exited
+  non-zero: hook rejection, missing identity, signing failure, ignored or
+  unmatched paths), `mutationUnverified`, plus the shared `unsupportedEncoding`,
+  `inputLimit`, `worker` and process codes.
+- Mutations do not invalidate history generations themselves; committing changes
+  refs, so the existing state fingerprint already forces the frontend to start a
+  new walk.
+
+## Graph operations and full conflict editor
+
+The exact additional IPC contract is `src/model/operations.ts`. All six commands
+are registered as application commands (no broad filesystem or opener plugin
+capability is exposed):
+
+- `repository_operation_state({handle}) -> OperationState`
+- `repository_run_operation({handle, request}) -> OperationResult`
+- `repository_conflict_file({handle, path}) -> ConflictFile`
+- `repository_resolve_conflict({handle, path, fingerprint, resolution}) -> void`
+- `repository_remotes({handle}) -> RemoteInfo[]`
+- `open_external_url({url}) -> void`
+
+Rust serde names, nullability and tagged unions match that contract. No frontend
+contract changes are required. `currentUpstream` is the remote-qualified short
+name, such as `origin/main`. The singular fetch/push URL fields report Git's
+effective first URL; all locally known remote branches are included, except the
+remote's symbolic `HEAD` alias. These reads do not fetch or contact remotes.
+
+### Operation safety and semantics
+
+- The common-directory mutation lock also covers graph actions and conflict
+  resolution. `expectedHead`, `expectedHeadRef` and `expectedOperation` are
+  revalidated under that lock. The operation fingerprint includes all refs,
+  status/content fingerprints, index stages, operation metadata and conflict
+  working bytes. Changed expectations return `staleOperation` before writing.
+  This serializes Gitty sessions, not external Git processes: Git's own locks
+  remain authoritative and an external change can still race a subprocess.
+- New actions require a clean worktree/index, including no untracked files, and
+  no in-progress operation. Bare repositories are rejected. Gitty never forces,
+  automatically stashes, removes locks or automatically retries writes.
+- Branch creation resolves the start point to a commit; checkout is optional.
+  Switching accepts local branches only (`switch --no-guess`). Merges target the
+  current local branch with explicit `--ff` or `--no-ff`, and `--no-edit`.
+  Switch/merge refuse ignored-file overwrites. Rebase/cherry-pick preflight
+  destination/replay trees, including queued continuation steps, for obstructing
+  ignored or untracked files.
+- Rebase is noninteractive, uses the merge backend and disables autostash,
+  autosquash and update-refs. A range containing merge commits is rejected with
+  `mergeHistory` rather than silently flattening it. Detached merge/rebase
+  requests are rejected. Ordered cherry-picks accept 1–100 concrete commits and
+  validate the optional 1-based mainline against every merge commit first.
+- Tags never overwrite existing refs. A supplied message creates an annotated
+  tag and honors signing configuration; no message creates a lightweight tag
+  (explicit `--no-sign` avoids `tag.gpgSign` changing its type).
+- Continue/skip/abort use Git's existing operation state, so application restart
+  is not special. Merge cannot skip. Rebase/cherry-pick/revert can skip. Rebase
+  progress reads Git's step/total; sequencer progress combines completed commits
+  and its remaining todo. A stale `REBASE_HEAD` alone is not an active rebase.
+  Apply-backend rebases, `git am`, bisect and unknown sequencers are explicitly
+  unsupported. Non-pick interactive/merge-preserving rebase todo commands must
+  be continued in Git; they can still be aborted here.
+  Rebase abort/skip conservatively refuses non-conflicted staged/unstaged changes
+  it cannot distinguish from unrelated work, including some staged resolutions.
+- Hook and signing settings remain active. Constant editor overrides make
+  continuation noninteractive. Git receives explicit argv and bounded stdin;
+  no user text is interpolated into a shell. Git's configured hooks, signing
+  programs and filters are still allowed to run as configured by the user.
+- A conflict-producing Git exit returns `OperationResult` with output, actual
+  HEAD and refreshed operation state. Other Git failures return `{code,message}`.
+  The frontend must refresh repository/status/operation state in `finally` on
+  **every** mutation outcome, including errors. Timeout/capture failures are
+  `mutationUnverified` and must not be blindly retried. Post-write reads do not
+  inherit an already-expired read-request budget from a slow hook.
+
+### Conflict data and writes
+
+- The editor reads full stage 1/2/3 blobs by object ID, independently of the
+  truncated diff viewer. Strict UTF-8 and NUL checks determine editability.
+  Missing stages are `null`; binary/non-UTF-8 stage content is `null` with an
+  explanation. Each blob/working result is limited to 16 MiB; oversize content
+  returns an explicit error, never a truncated editable string.
+- The opaque fingerprint covers stage modes/OIDs, actual working bytes/type,
+  HEAD and relevant operation refs. Resolution re-reads it under the mutation
+  lock. Changes are rejected before writing. Selecting a missing side fails
+  with `missingStage`; deletion must be chosen explicitly.
+- Text replaces the working bytes exactly (including CRLF and final-newline
+  choice), then `git add` applies the repository's usual clean/EOL rules.
+  Working stages the existing regular file. Delete removes only that regular
+  file and stages its deletion. Ours/theirs write the selected blob's exact bytes
+  and install its exact OID/mode with `update-index --index-info`; binary bytes
+  are never decoded or filtered through a text representation. Side selection
+  therefore uses repository blob line endings, not smudged worktree endings.
+- Native editing uses capability-rooted directory handles (`cap-std`), validates
+  every ancestor and rejects symlinks. Replacement writes are temporary files
+  renamed within the pinned parent directory. WSL uses a fixed Python 3 program
+  via `wsl.exe --exec python3 -c`, with JSON/binary stdin and `openat`-style pinned
+  directory descriptors plus `O_NOFOLLOW`. **WSL conflict filesystem access
+  requires Python 3**; Git operations otherwise use the existing WSL Git transport.
+- Ordinary add/add and modify/delete conflicts work, as do independent regular
+  file paths in rename conflicts. Git still determines rename relationships
+  after staging. Symlink, submodule, directory/file and special-file conflicts,
+  missing parent directories, and ambiguous path spellings receive explicit
+  unsupported errors rather than unsafe editing. Conflict paths cannot traverse
+  `.git`, `..`, symlink ancestors, Windows alternate streams or path separators.
+- A Git staging/index failure after the working replacement can leave an edited
+  but unresolved file. It returns `mutationUnverified` without rollback or retry; refresh
+  and review before the next action. Ordinary stage/unstage/commit still reject
+  all in-progress operations and unmerged paths.
+
+The external opener is invoked only by its explicit IPC command. URLs are parsed,
+must use HTTPS with a host, and must not contain credentials, whitespace, control
+characters or backslashes. `open` uses the platform opener with a separate URL
+argument; there is no general-purpose shell command or URL-handler capability.
+
 ## Verification
 
 `cargo fmt`, `cargo test`, and `cargo check` run on macOS. Tests create real Git
@@ -94,7 +313,38 @@ stream cancellation/reaping, driver suppression and unchanged index bytes/mtime,
 output limits, persistence, and invalid handles/cursors. The non-UTF-8 filename
 integration test is Linux-only (APFS rejects those filenames).
 
+Write tests also use real repositories: staging, unstaging and the initial commit
+on an unborn branch with spaces, tabs, Unicode, a leading dash and pathspec
+metacharacters in file names; rejected empty requests and escaping paths; a
+partially staged file committing only its index content while the working tree
+keeps its newer content; unstaging a partially staged file, a staged deletion and
+a rename; committing a rename as one `R` entry; refusal on bare repositories, on
+a conflicted merge (with `MERGE_HEAD` left untouched), on a directory-shaped
+rebase state, and on a conflicted `stash pop` that has no operation state at all;
+detection of a conflicted cherry-pick in a `--ref-format=reftable` repository
+(skipped automatically if Git has no reftable backend); a held `index.lock` that
+is respected and left on disk; an empty identity and a failing `gpg.program`
+reported without moving HEAD; a rejecting `pre-commit` hook whose output reaches
+the caller with the index and working tree preserved; eight concurrent stages
+from three sessions across a repository and its linked worktree, followed by a
+commit in each; and a sleeping hook that proves a second session for the same
+repository waits while an unrelated repository does not. A 400-path request and a
+40 KiB message, both larger than a Windows command line, are staged, committed
+and unstaged in single requests; a `pre-commit` hook that reads stdin receives
+nothing while the message arrives intact; a directory selection covering a
+conflict is refused while a sibling with a shared prefix is not; and a HEAD
+detached at a missing object is reported as `unresolvedHead` instead of becoming
+a second root commit. The unverified-outcome mapping for abandoned writes and the
+non-empty NUL-separated pathspec payload are unit-tested rather than by a
+120-second timeout. Hook tests are Unix-only.
+
 Windows Job Objects, WSL execution, and the graphical picker require platform/UI
 integration testing; they are not exercised by the macOS unit test suite. Killing
 the Windows WSL launcher cannot promise termination of every Linux descendant
 inside the distribution. The app does not terminate an entire WSL distribution.
+Under WSL, the Git-directory listing used for lock and operation detection runs
+`find -maxdepth 1` in the distribution and therefore needs the same GNU `find`
+the browser already requires; it is not covered by the macOS suite. Graph
+operations and regular-file conflict resolution are described above. Amend,
+hunk/line staging, stashes, authenticated remote operations and cloning remain
+future work. The current suite includes 74 passing tests on macOS.

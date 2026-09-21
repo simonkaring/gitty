@@ -125,6 +125,11 @@ pub struct Service {
     repositories: Mutex<HashMap<String, Arc<Repository>>>,
     pub recent_path: PathBuf,
     recent_lock: Mutex<()>,
+    /// One mutation lock per underlying repository, keyed by common directory so
+    /// linked worktrees — which share refs and objects — serialize with the main
+    /// worktree. The registry lock itself is only held while looking the key up;
+    /// no global lock is ever held across a Git subprocess.
+    mutation_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>> {
     mutex
@@ -137,6 +142,7 @@ impl Service {
             repositories: Mutex::new(HashMap::new()),
             recent_path: data_dir.join("recent-repositories.json"),
             recent_lock: Mutex::new(()),
+            mutation_locks: Mutex::new(HashMap::new()),
         }
     }
     pub fn recent(&self) -> Result<Vec<RepositoryLocation>> {
@@ -267,6 +273,43 @@ impl Service {
             .get(handle)
             .cloned()
             .ok_or_else(|| Error::new("invalidHandle", "Repository session is closed or unknown"))
+    }
+    /// Distinct repositories must not share a lock, and the same repository opened
+    /// twice — or through a linked worktree — must.
+    fn mutation_lock(&self, repo: &Repository) -> Result<Arc<Mutex<()>>> {
+        let key = match &repo.session.location {
+            RepositoryLocation::Native { .. } => format!("native\0{}", repo.session.common_dir),
+            RepositoryLocation::Wsl { distribution, .. } => {
+                format!("wsl\0{distribution}\0{}", repo.session.common_dir)
+            }
+        };
+        let mut locks = lock(&self.mutation_locks)?;
+        if locks.len() > 64 {
+            // Only locks nobody is waiting on or holding can be forgotten.
+            locks.retain(|_, l| Arc::strong_count(l) > 1);
+        }
+        Ok(locks.entry(key).or_default().clone())
+    }
+    /// Serializes a write against every other session for the same repository.
+    /// Validation runs inside the lock so checks and the write are one unit.
+    pub(crate) fn mutate<T>(
+        &self,
+        handle: &str,
+        f: impl FnOnce(&Repository) -> Result<T>,
+    ) -> Result<T> {
+        let repo = self.repo(handle)?;
+        let mutation = self.mutation_lock(&repo)?;
+        let _guard = lock(&mutation)?;
+        process::without_read_deadline(|| f(&repo))
+    }
+    pub fn stage(&self, handle: &str, paths: &[String]) -> Result<()> {
+        self.mutate(handle, |repo| repo.stage(paths))
+    }
+    pub fn unstage(&self, handle: &str, paths: &[String]) -> Result<()> {
+        self.mutate(handle, |repo| repo.unstage(paths))
+    }
+    pub fn create_commit(&self, handle: &str, message: &str) -> Result<CreatedCommit> {
+        self.mutate(handle, |repo| repo.create_commit(message))
     }
     pub fn close(&self, handle: &str) -> Result<()> {
         let removed = lock(&self.repositories)?.remove(handle);
