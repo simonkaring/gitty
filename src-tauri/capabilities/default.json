@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Minimal window capability for the read-only M1 prototype",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
