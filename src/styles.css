@@ -166,7 +166,7 @@ kbd { font-family: var(--mono); font-size: 12px; display: inline-grid; place-ite
 .merge-icon { color: var(--muted); }
 .ref-pill { font-size: 13px; padding: 3px 6px; border-radius: 3px; line-height: 1.3; display: inline-flex; align-items: center; gap: 4px; color: var(--green); background: var(--green-wash); flex-shrink: 0; min-width: 34px; max-width: 170px; overflow: hidden; white-space: nowrap; border: 1px solid color-mix(in srgb, var(--green) 20%, transparent); }
 .ref-pill.main-ref { color: var(--accent-text); background: var(--accent-wash); }
-.ref-pill.tag-ref { background: var(--subtle); color: var(--secondary); }
+.ref-pill.tag-ref, .ref-pill.remote-ref { background: var(--subtle); color: var(--secondary); border-color: var(--border-strong); }
 .boundary-label { flex-shrink: 0; color: var(--secondary); font-size: 13px; border: 1px dashed var(--border-strong); padding: 2px 5px; border-radius: 3px; }
 .row-author { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--secondary); overflow: hidden; }
 .avatar { width: 34px; height: 34px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 550; flex-shrink: 0; background: var(--accent-wash); color: var(--accent-text); }

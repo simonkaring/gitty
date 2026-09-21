@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { GitBranch, GitMerge, Tag } from 'lucide-react';
+import { GitBranch, GitMerge, Globe2, Tag } from 'lucide-react';
 import { indexEdges, laneX, LANE_WIDTH, ROW_HEIGHT, type GraphLayout } from '../graph/layout';
 import { WORKING_ID } from '../model/native';
 import type { Commit, GitRef } from '../model/types';
@@ -162,7 +162,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
         <div className="history-spacer" style={{ height: loaded * ROW_HEIGHT }}>
           {commits.slice(start, end).map((commit, offset) => {
             const row = start + offset;
-            const badges = refs.filter(ref => ref.commitId === commit.id && ref.kind !== 'remote');
+            const badges = refs.filter(ref => ref.commitId === commit.id);
             return <div key={commit.id} id={`commit-${commit.id}`} role="option" aria-selected={commit.id === selectedId}
               aria-posinset={row + 1} aria-setsize={commits.length}
               aria-label={`${commit.subject}, ${commit.author}, ${commit.id.slice(0, 7)}${commit.parents.length > 1 ? ', merge commit' : ''}${commit.id === head ? ', HEAD' : ''}${badges.length ? `, ${badges.map(b => b.name).join(', ')}` : ''}`}
@@ -170,7 +170,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
               style={{ top: row * ROW_HEIGHT, height: ROW_HEIGHT }} onContextMenu={event => { if (onActions && commit.id !== WORKING_ID) { event.preventDefault(); onActions({ oid: commit.id }); } }} onClick={() => { onSelect(commit.id); scroller.current?.focus(); }} onDoubleClick={onOpenDetails}>
               <div className="commit-message">
                 {onTogglePick && commit.id !== WORKING_ID && <input className="graph-pick" type="checkbox" aria-label={`Cherry-pick ${commit.id.slice(0, 7)}`} checked={pickOrder?.includes(commit.id) ?? false} onClick={event => event.stopPropagation()} onChange={() => onTogglePick(commit.id)} />}
-                {badges.map(ref => <span key={ref.fullName ?? ref.name} className={`ref-pill ${ref.kind === 'tag' ? 'tag-ref' : ref.name === 'main' ? 'main-ref' : ''}`}
+                {badges.map(ref => <span key={ref.fullName ?? ref.name} className={`ref-pill ${ref.kind === 'tag' ? 'tag-ref' : ref.kind === 'remote' ? 'remote-ref' : ref.name === 'main' ? 'main-ref' : ''}`}
                   role={onActions && ref.fullName ? 'button' : undefined} tabIndex={onActions && ref.fullName ? 0 : undefined} aria-label={onActions && ref.fullName ? `Graph actions for ${ref.name}` : undefined}
                   onKeyDown={event => { if (onActions && ref.fullName && (event.key === 'Enter' || event.key === ' ' || event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) { event.preventDefault(); event.stopPropagation(); onActions({ oid: commit.id, ref: ref.fullName }); } }}
                   data-current={!!headRef && ref.fullName === headRef} draggable={!!onActions && !!ref.fullName && ref.kind !== 'tag'}
@@ -178,7 +178,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                   onDragOver={event => { if (ref.fullName === headRef && [REF_DRAG_TYPE, COMMIT_DRAG_TYPE].some(type => event.dataTransfer.types.includes(type))) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
                   onDrop={event => { event.preventDefault(); event.stopPropagation(); stopDrag(); const action = graphDropAction(event.dataTransfer, ref.fullName, headRef, commits.slice(0, loaded), refs); if (action) onActions?.(action); }}
                   onContextMenu={event => { if (onActions && ref.fullName) { event.preventDefault(); event.stopPropagation(); onActions({ oid: commit.id, ref: ref.fullName }); } }} onClick={event => { if (onActions && ref.fullName) { event.stopPropagation(); onActions({ oid: commit.id, ref: ref.fullName }); } }}>
-                  {ref.kind === 'tag' ? <Tag size={10} /> : <GitBranch size={10} />}{ref.name}
+                  {ref.kind === 'tag' ? <Tag size={10} /> : ref.kind === 'remote' ? <Globe2 size={10} /> : <GitBranch size={10} />}{ref.name}
                 </span>)}
                 {commit.parents.length > 1 && <GitMerge size={13} className="merge-icon" />}
                 <span className="subject" title={commit.subject} draggable={!!onActions && commit.id !== WORKING_ID}
