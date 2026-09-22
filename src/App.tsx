@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { ArrowDown, ArrowUp, ArrowUpRight, Check, ChevronDown, CircleHelp, Command, Download, FileCode2, FolderGit2, GitBranch, GitCommitHorizontal, Github, LocateFixed, PanelLeft, PanelRight, Search, Upload, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpRight, Check, CircleHelp, Command, Download, FileCode2, FolderGit2, GitBranch, Github, PanelLeft, PanelRight, Upload, X } from 'lucide-react';
 import { createDemoHistory } from './model/demo';
 import { layoutHistory } from './graph/layout';
 import { HistoryGraph, type GraphHandle } from './components/HistoryGraph';
@@ -66,7 +66,9 @@ interface WorkspaceProps {
 function Workspace({ repository, theme, sidebarOpen, inspectorOpen, inspectorWidth, setInspectorWidth, setInspectorOpen, setModal, notify, onDirty }: WorkspaceProps) {
   const [snapshot] = useState(() => createDemoHistory(repository === 'gitty' ? 1 : repository === 'orbit-design' ? 7 : 13));
   const [activeDiff, setActiveDiff] = useState<ActiveDiffState | null>(null);
-  const [split, setSplit] = useState(false);
+  const { settings } = useSettings();
+  const [split, setSplit] = useState(() => settings.diffView !== 'unified');
+  useEffect(() => setSplit(settings.diffView !== 'unified'), [settings.diffView]);
   const [sidebarWidth, setSidebarWidth] = usePaneWidth('sidebar', 240, 210, 340);
   useEffect(() => { onDirty(false); }, [onDirty]);
   const layout = useMemo(() => layoutHistory(snapshot.commits), [snapshot]);
@@ -121,7 +123,21 @@ function Workspace({ repository, theme, sidebarOpen, inspectorOpen, inspectorWid
     jump(results[index].id);
   }
   return <main className="workspace" style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
-    {sidebarOpen && <><Sidebar repository={repository} refs={snapshot.refs} onJump={jump} activeRef={activeRef} /><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
+    {sidebarOpen && <><Sidebar
+      repository={repository}
+      refs={snapshot.refs}
+      onJump={jump}
+      activeRef={activeRef}
+      commitCount={snapshot.commits.length}
+      query={query}
+      setQuery={setQuery}
+      searchRef={searchRef}
+      nextResult={nextResult}
+      onHead={() => { setQuery(''); jump(snapshot.head, 'main'); graphRef.current?.focus(); }}
+      refMenu={refMenu}
+      setRefMenu={setRefMenu}
+      refMenuRef={refMenuRef}
+    /><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
     <div className="workspace-main">
       <div className="history-workspace">
         {activeDiff ? (
@@ -154,17 +170,20 @@ function Workspace({ repository, theme, sidebarOpen, inspectorOpen, inspectorWid
           </section>
         ) : (
           <section className="history-pane" aria-label="Repository history">
-            <div className="repository-heading"><div className="repository-heading-main"><div className="repo-title-icon"><FolderGit2 size={23} strokeWidth={1.6} /></div><div><div className="repo-title-line"><h1>{repository}</h1><span className="local-badge">DEMO</span></div><p>{repositories.find(repo => repo.id === repository)?.path}</p></div></div><span className="branch-heading"><GitBranch size={14} /> main <span className="live-dot" /></span></div>
-            <div className="history-title"><span><GitCommitHorizontal size={18} /><h2>History</h2><span className="count">{snapshot.commits.length.toLocaleString()}</span></span><span className="history-subtitle">The full picture of your work.</span></div>
-            <div className="history-toolbar"><div className="ref-menu-wrapper" ref={refMenuRef}><button className={`branch-filter ${refMenu ? 'active' : ''}`} onClick={() => setRefMenu(value => !value)} aria-expanded={refMenu} aria-controls="branch-jump-menu"><GitBranch size={14} /><span>All branches</span><ChevronDown size={12} /></button>
-              {refMenu && <div className="ref-menu" id="branch-jump-menu"><span className="menu-label">JUMP TO A REFERENCE</span>{snapshot.refs.map(ref => <button key={ref.name} onClick={() => jump(ref.commitId, ref.name)}><GitBranch size={13} /><span>{ref.name}</span></button>)}<p>All branches stay visible to preserve the graph.</p></div>}
-            </div><div className="search-field"><Search size={14} /><input ref={searchRef} aria-label="Search commits, authors, branches, or SHA" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search commits…" onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); nextResult(event.shiftKey ? -1 : 1); } }} />{query ? <button className="icon-button" aria-label="Clear search" onClick={() => { setQuery(''); searchRef.current?.focus(); }}><X size={13} /></button> : <kbd>/</kbd>}</div><button className="head-button" title="Jump to HEAD (H)" onClick={() => { setQuery(''); jump(snapshot.head, 'main'); graphRef.current?.focus(); }}><LocateFixed size={15} /><span>HEAD</span></button></div>
             {normalized && <div className="search-results" role="status"><span>{results.length ? `${matchIndex >= 0 ? `${matchIndex + 1} of ` : ''}${results.length} matches` : `No commits match “${query}”`}<span className="search-preserve"> · Full graph preserved</span></span><span><button className="icon-button" disabled={!results.length} aria-label="Previous search result" onClick={() => nextResult(-1)}><ArrowUp size={14} /></button><button className="icon-button" disabled={!results.length} aria-label="Next search result" onClick={() => nextResult(1)}><ArrowDown size={14} /></button></span></div>}
             <HistoryGraph ref={graphRef} commits={snapshot.commits} layout={layout} refs={snapshot.refs} selectedId={selectedId} head={snapshot.head} loaded={loaded} matches={matches} onSelect={id => { setActiveDiff(null); setSelectedId(id); setActiveRef(null); }} onLoadMore={() => setLoaded(value => Math.min(value + 240, snapshot.commits.length))} onOpenDetails={() => setInspectorOpen(true)} onActions={() => notify('Branch, merge, cherry-pick, tag and pull request actions require a desktop repository.')} theme={theme} />
           </section>
         )}
         {inspectorOpen && <><PaneResizer label="Resize commit inspector" width={inspectorWidth} onChange={setInspectorWidth} max={520} />
-          <Inspector commit={selected} head={snapshot.head} onJump={jump} onClose={() => setInspectorOpen(false)} notify={notify} />
+          <Inspector
+            commit={selected}
+            head={snapshot.head}
+            onJump={jump}
+            onClose={() => setInspectorOpen(false)}
+            notify={notify}
+            activePath={activeDiff?.path ?? null}
+            onActiveDiffChange={setActiveDiff}
+          />
         </>}
       </div>
     </div>

@@ -144,7 +144,30 @@ summary { cursor: pointer; }
 .search-field input:focus-visible { outline: none; }
 kbd { font-family: var(--mono); font-size: 12px; display: inline-grid; place-items: center; min-width: 20px; min-height: 21px; padding: 1px 5px; border: 1px solid var(--border-strong); border-radius: 3px; color: var(--secondary); background: var(--raised); }
 .head-button { display: flex; align-items: center; gap: 6px; color: var(--secondary); font: 13px var(--mono); padding: 10px 7px; border-radius: 4px; }
+.sidebar .workspace-label.repository-heading,
+.sidebar:not(.native-sidebar) .repository-heading { margin: 0; padding: 16px 14px 12px; display: flex; flex-direction: column; align-items: stretch; gap: 10px; }
+.sidebar .repository-heading-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.sidebar .repo-title-icon { width: 36px; height: 36px; flex-shrink: 0; }
+.sidebar .repo-title-icon svg { width: 18px; height: 18px; }
+.sidebar .repo-title-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sidebar .repo-title-line h1 { font-size: 15px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar .repository-heading p { color: var(--muted); margin: 2px 0 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar .repository-heading .branch-heading { align-self: flex-start; font-size: 12px; gap: 6px; padding: 2px 7px; background: var(--subtle); border: 1px solid var(--border); border-radius: 4px; }
+.sidebar .sidebar-divider { margin: 6px 14px 12px; }
+.sidebar .history-toolbar { padding: 0 12px 14px; display: grid; grid-template-columns: 1fr auto; gap: 7px; }
+.sidebar .history-toolbar .search-field { grid-column: 1 / -1; order: -1; height: 34px; }
+.sidebar .history-toolbar .ref-menu-wrapper { min-width: 0; }
+.sidebar .history-toolbar .branch-filter { width: 100%; height: 32px; padding: 0 8px; font-size: 13px; gap: 6px; justify-content: space-between; }
+.sidebar .history-toolbar .branch-filter > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar .history-toolbar .ref-menu { top: 36px; left: 0; width: max(100%, 220px); max-width: 280px; }
+.sidebar .history-toolbar .head-button { height: 32px; border: 1px solid var(--border-strong); background: var(--raised); padding: 0 8px; }
+.sidebar .history-title { margin-top: auto; padding: 14px 14px 6px; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.sidebar .history-title > span:first-child { display: flex; align-items: center; gap: 7px; }
+.sidebar .history-title h2 { font-size: 15px; margin: 0; }
+.sidebar .history-title .history-subtitle { font-size: 12px; color: var(--muted); }
+.sidebar .history-title + .sidebar-bottom { margin-top: 6px; padding-top: 10px; border-top: 1px solid var(--border); }
 .search-results { display: flex; align-items: center; justify-content: space-between; padding: 5px 24px; font-size: 13px; border-top: 1px solid var(--border); background: var(--accent-wash); color: var(--accent-text); min-height: 40px; }
+.history-pane > .search-results { border-top: 0; border-bottom: 1px solid var(--border); }
 .search-preserve { color: var(--secondary); }
 .search-results > span:last-child { display: flex; }
 .history-body { display: flex; flex-direction: column; flex: 1; min-height: 0; }

@@ -1,33 +1,101 @@
 import { useEffect, useState } from 'react';
 import { ArrowUpRight, Check, ChevronDown, Copy, FileCode2, GitCommitHorizontal, GitMerge, X } from 'lucide-react';
-import type { Commit } from '../model/types';
+import type { ChangedFile, Commit } from '../model/types';
+import type { FileDiff } from '../model/repository';
 import { diffLines } from '../model/diff';
 import { useSettings } from '../model/settings';
-import { DiffPreview } from './WorkingChanges';
+import { DiffPreview, type ActiveDiffState } from './WorkingChanges';
 
-interface Props { commit: Commit; head: string; onJump: (id: string) => void; onClose: () => void; notify: (message: string) => void }
+interface Props {
+  commit: Commit;
+  head: string;
+  onJump: (id: string) => void;
+  onClose: () => void;
+  notify: (message: string) => void;
+  activePath?: string | null;
+  onActiveDiffChange?: (diff: ActiveDiffState | null) => void;
+}
 
-export function Inspector({ commit, head, onJump, onClose, notify }: Props) {
+function toFileDiff(f: ChangedFile): FileDiff {
+  return {
+    path: f.path,
+    binary: false,
+    truncated: false,
+    message: null,
+    hunks: [{
+      header: `@@ −${f.before.length ? 1 : 0},${f.before.length} +${f.after.length ? 1 : 0},${f.after.length} @@`,
+      lines: diffLines(f.before, f.after).map(line => ({
+        kind: line.kind,
+        content: line.text,
+        oldLine: line.oldLine ?? null,
+        newLine: line.newLine ?? null,
+      })),
+    }],
+  };
+}
+
+export function Inspector({ commit, head, onJump, onClose, notify, activePath, onActiveDiffChange }: Props) {
   const { settings } = useSettings();
   const [split, setSplit] = useState(settings.diffView === 'split');
   useEffect(() => setSplit(settings.diffView === 'split'), [settings.diffView]);
   const [tab, setTab] = useState<'overview' | 'diff'>('overview');
   const [fileIndex, setFileIndex] = useState(0);
   const [copied, setCopied] = useState(false);
+
   useEffect(() => { setFileIndex(0); setCopied(false); }, [commit.id]);
+
+  useEffect(() => {
+    if (!activePath) return;
+    const index = commit.files.findIndex(f => f.path === activePath);
+    if (index >= 0) {
+      setFileIndex(index);
+      setTab('diff');
+    }
+  }, [activePath, commit.files]);
+
   const file = commit.files[Math.min(fileIndex, commit.files.length - 1)];
   const additions = commit.files.reduce((n, f) => n + f.additions, 0);
   const deletions = commit.files.reduce((n, f) => n + f.deletions, 0);
   const date = new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }).format(commit.timestamp);
+
   async function copy() {
     try { await navigator.clipboard.writeText(commit.id); setCopied(true); notify('Full commit SHA copied'); }
     catch { notify('Clipboard unavailable. Select and copy the SHA in commit details.'); }
   }
+
+  function selectFile(index: number, f: ChangedFile) {
+    setFileIndex(index);
+    setTab('diff');
+    if (onActiveDiffChange) {
+      onActiveDiffChange({
+        path: f.path,
+        diff: toFileDiff(f),
+        loading: false,
+      });
+    }
+  }
+
+  function handleDiffTab() {
+    setTab('diff');
+    const targetFile = commit.files[Math.min(fileIndex, commit.files.length - 1)];
+    if (targetFile && onActiveDiffChange) {
+      onActiveDiffChange({
+        path: targetFile.path,
+        diff: toFileDiff(targetFile),
+        loading: false,
+      });
+    }
+  }
+
+  function handleOverviewTab() {
+    setTab('overview');
+  }
+
   return <aside className="inspector" aria-label="Commit inspector">
     <div className="pane-heading"><span><GitCommitHorizontal size={17} /> Commit details</span><button className="icon-button" aria-label="Close commit inspector" onClick={onClose}><X size={15} /></button></div>
     <div className="inspector-tabs" role="tablist" aria-label="Commit detail view">
-      {(['overview', 'diff'] as const).map((name, index) => <button key={name} id={`tab-${name}`} role="tab" aria-selected={tab === name} aria-controls={`panel-${name}`} tabIndex={tab === name ? 0 : -1} className={tab === name ? 'active' : ''} onClick={() => setTab(name)}
-        onKeyDown={event => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const next = event.key === 'Home' ? 'overview' : event.key === 'End' ? 'diff' : index === 0 ? 'diff' : 'overview'; setTab(next); document.getElementById(`tab-${next}`)?.focus(); } }}>
+      {(['overview', 'diff'] as const).map((name, index) => <button key={name} id={`tab-${name}`} role="tab" aria-selected={tab === name} aria-controls={`panel-${name}`} tabIndex={tab === name ? 0 : -1} className={tab === name ? 'active' : ''} onClick={() => name === 'diff' ? handleDiffTab() : handleOverviewTab()}
+        onKeyDown={event => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const next = event.key === 'Home' ? 'overview' : event.key === 'End' ? 'diff' : index === 0 ? 'diff' : 'overview'; if (next === 'diff') handleDiffTab(); else handleOverviewTab(); document.getElementById(`tab-${next}`)?.focus(); } }}>
         {name === 'overview' ? 'Overview' : <>Diff <span className="count">{commit.files.length}</span></>}
       </button>)}
     </div>
@@ -47,18 +115,35 @@ export function Inspector({ commit, head, onJump, onClose, notify }: Props) {
       </>}
       <section className="changed-files" aria-label="Changed files">
         <div className="section-heading"><span><ChevronDown size={13} /> Changed files <span className="count">{commit.files.length}</span></span><span className="change-totals"><span className="added">+{additions}</span><span className="removed">−{deletions}</span></span></div>
-        {commit.files.map((f, index) => <button key={f.path} className={`file-row ${tab === 'diff' && index === fileIndex ? 'active' : ''}`} onClick={() => { setFileIndex(index); setTab('diff'); }} title={`View mock diff for ${f.path}`}>
-          <FileCode2 size={15} /><span className="file-name"><strong>{f.path.split('/').at(-1)}</strong><span>{f.path.split('/').slice(0, -1).join('/')}/</span></span><span className={`file-status ${f.status}`}>{f.status[0].toUpperCase()}</span>
-        </button>)}
+        {commit.files.map((f, index) => {
+          const isSelected = activePath ? f.path === activePath : (tab === 'diff' && index === fileIndex);
+          return <button key={f.path} className={`file-row ${isSelected ? 'active' : ''}`} onClick={() => selectFile(index, f)} title={`View diff for ${f.path}`}>
+            <FileCode2 size={15} /><span className="file-name"><strong>{f.path.split('/').at(-1)}</strong><span>{f.path.split('/').slice(0, -1).join('/')}/</span></span><span className={`file-status ${f.status}`}>{f.status[0].toUpperCase()}</span>
+          </button>;
+        })}
       </section>
-      {tab === 'diff' ? <section className="diff-section" aria-label={`Mock diff for ${file.path}`}>
-        <div className="diff-heading"><span>{file.path.split('/').at(-1)}</span><button aria-pressed={split} onClick={() => setSplit(!split)}>{split ? 'Unified' : 'Side by side'}</button><span className="mock-badge">MOCK DIFF</span></div>
-        {split ? <DiffPreview split diff={{ path: file.path, binary: false, truncated: false, message: null, hunks: [{ header: `@@ −${file.before.length ? 1 : 0},${file.before.length} +${file.after.length ? 1 : 0},${file.after.length} @@`, lines: diffLines(file.before, file.after).map(line => ({ kind: line.kind, content: line.text, oldLine: line.oldLine ?? null, newLine: line.newLine ?? null })) }] }} /> : <div className="diff-code" tabIndex={0} aria-label="Scrollable unified diff">
-          <div className="diff-hunk">@@ −{file.before.length ? 1 : 0},{file.before.length} +{file.after.length ? 1 : 0},{file.after.length} @@</div>
-          {diffLines(file.before, file.after).map((line, index) => <div key={index} className={`diff-line ${line.kind}`}><span className="line-number">{line.oldLine ?? ''}</span><span className="line-number">{line.newLine ?? ''}</span><span className="diff-sign">{line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ' '}</span><code>{line.text || ' '}</code></div>)}
-        </div>}
-        <p className="diff-note">Illustrative file contents from the demo repository.</p>
-      </section> : <div className="inspector-tip"><FileCode2 size={17} /><p>Select a file to inspect its changes.</p></div>}
+      {onActiveDiffChange ? (
+        activePath ? (
+          <div className="inspector-tip">
+            <FileCode2 size={17} />
+            <p>Viewing <strong>{activePath.split('/').at(-1)}</strong> in the main pane.</p>
+          </div>
+        ) : (
+          <div className="inspector-tip">
+            <FileCode2 size={17} />
+            <p>Select a file above to inspect its diff in the main pane.</p>
+          </div>
+        )
+      ) : (
+        tab === 'diff' ? <section className="diff-section" aria-label={`Mock diff for ${file.path}`}>
+          <div className="diff-heading"><span>{file.path.split('/').at(-1)}</span><button aria-pressed={split} onClick={() => setSplit(!split)}>{split ? 'Unified' : 'Side by side'}</button><span className="mock-badge">MOCK DIFF</span></div>
+          {split ? <DiffPreview split diff={toFileDiff(file)} /> : <div className="diff-code" tabIndex={0} aria-label="Scrollable unified diff">
+            <div className="diff-hunk">@@ −{file.before.length ? 1 : 0},{file.before.length} +{file.after.length ? 1 : 0},{file.after.length} @@</div>
+            {diffLines(file.before, file.after).map((line, index) => <div key={index} className={`diff-line ${line.kind}`}><span className="line-number">{line.oldLine ?? ''}</span><span className="line-number">{line.newLine ?? ''}</span><span className="diff-sign">{line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ' '}</span><code>{line.text || ' '}</code></div>)}
+          </div>}
+          <p className="diff-note">Illustrative file contents from the demo repository.</p>
+        </section> : <div className="inspector-tip"><FileCode2 size={17} /><p>Select a file to inspect its changes.</p></div>
+      )}
     </div>
     <div className="inspector-footer"><span className="live-dot" /> Synthetic history <span>Read-only preview</span></div>
   </aside>;
