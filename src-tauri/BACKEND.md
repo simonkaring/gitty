@@ -1,14 +1,15 @@
 # Native repository service
 
-All commands in `src/model/repository.ts` and `src/model/operations.ts` are registered by `src/lib.rs`. The
+All commands in `src/model/repository.ts`, `src/model/clone.ts`, and `src/model/operations.ts` are registered by `src/lib.rs`. The
 Rust DTOs serialize the same camelCase fields and `{code, message}` errors.
 `backend_info` remains available and reports native capability.
 
-Ordinary index/commit writes use these three commands:
+Ordinary index/commit writes use these four commands:
 
 - `repository_stage({handle, paths: string[]}) -> void`
 - `repository_unstage({handle, paths: string[]}) -> void`
 - `repository_create_commit({handle, message: string}) -> {oid: string}`
+- `repository_amend_commit({handle, message: string, expectedHead: string, expectedHeadRef: string | null, expectedStatusFingerprint: string}) -> {oid: string}`
 
 `repository_commit({handle, oid})` is unchanged and remains a read.
 
@@ -137,15 +138,18 @@ targeted conflict resolutions have the additional contract documented below.
   preserved. Configured hooks, `commit.gpgsign`/`gpg.program`, `commit.cleanup`,
   identity and templates are honored, and their failures are surfaced verbatim
   (stderr and stdout, capped at 4000 characters). **No `--no-verify`,
-  `--no-gpg-sign`, `--force`, `--amend`, `--all`, or `-a` is ever passed**, and
-  no global Git configuration is written. Hooks run with stdin closed, so a hook
+  `--no-gpg-sign`, `--force`, `--all`, or `-a` is ever passed**; `--amend` is used
+  only by the explicit amend command. No global Git configuration is written.
+  Hooks run with stdin closed, so a hook
   that expects a terminal fails instead of hanging.
 - Writes for the same underlying repository are serialized by one mutation lock
   keyed by `kind + common directory`, so additional sessions on the same
   repository — and linked worktrees, which share refs and objects — queue behind
   each other. Different repositories never share a lock, and the registry lock is
   only held while looking the key up, never across a subprocess. Validation runs
-  inside the lock, so checks and the write are one unit. Reads are never blocked.
+  inside the lock, so checks and the write are one unit relative to other Gitty
+  sessions. External Git can still change the repository before the subprocess
+  acquires Git's own index/ref locks. Reads are never blocked.
 - Before an ordinary stage/unstage/commit write: bare repositories are rejected (`bareRepository`); an
   in-progress merge, rebase, `am`, cherry-pick, revert, sequencer run or bisect is
   rejected (`operationInProgress`), detected from this worktree's Git directory
@@ -175,9 +179,18 @@ targeted conflict resolutions have the additional contract documented below.
   exits 1 for a detached HEAD at a missing object exactly as it does for an unborn
   branch, and committing a root commit on top of a broken HEAD would be wrong, so
   that case is reported as `unresolvedHead`. The returned `oid` is HEAD read back
-  after the command, so it is accurate even if a post-commit hook moved HEAD
-  again. If Git fails but HEAD moved anyway, or if HEAD cannot be confirmed, the
-  result is `mutationUnverified` rather than a plain failure.
+   after the command, so it is accurate even if a post-commit hook moved HEAD
+   again. If Git fails but HEAD moved anyway, or if HEAD cannot be confirmed, the
+   result is `mutationUnverified` rather than a plain failure.
+- Amend runs `git commit --quiet --amend --file=-`. It permits a message-only
+  rewrite or includes the current staged index, but never unstaged content. It
+  requires an existing HEAD and revalidates the expected HEAD OID, symbolic ref,
+  and status fingerprint under the common-directory mutation lock immediately
+  before Git runs. A mismatch already visible then returns `staleOperation`; the
+  check is not an atomic compare-and-swap against external Git before the commit
+  subprocess acquires Git's own locks. Hooks, signing, cleanup,
+  message limits, uncertain outcomes, and the no-retry rule are the same as for a
+  new commit.
 - Writes get a 120-second deadline of their own (hooks and signing are
   interactive-speed work) instead of the 60-second read request budget; checks
   around them get 30 seconds. A write that is abandoned — timeout, output limit,
@@ -194,6 +207,41 @@ targeted conflict resolutions have the additional contract documented below.
 - Mutations do not invalidate history generations themselves; committing changes
   refs, so the existing state fingerprint already forces the frontend to start a
   new walk.
+
+## Repository cloning
+
+Cloning is workspace-owned because no repository session exists yet. Its IPC
+contract is:
+
+- `repository_clone({operationId, request, onProgress}) -> RepositoryLocation`
+- `repository_cancel_clone({operationId}) -> void`
+- `repository_pick_clone_parent() -> string | null`
+
+`request` contains a source, a native/WSL parent location, and one new directory
+name. `onProgress` is a bounded Tauri channel. At most four clones run at once;
+operation IDs are UUIDs, and closing the main window cancels registered clones.
+
+- Clone runs installed Git without a shell, outside repository context, with a
+  30-minute deadline. It performs a full, non-bare clone of the remote's default
+  branch and passes `--no-recurse-submodules`; no partial filter is used. Local
+  sources retain Git's local clone behavior but use `--no-hardlinks`, so object
+  files are copied rather than sharing inodes with the source.
+- Credential helpers, system/global Git configuration, SSH agent/configuration,
+  and configured filters remain available. Prompts, askpass, recursive submodules,
+  and external transport helpers are disabled. HTTP(S) URLs containing credentials
+  are rejected; Gitty does not retain credentials.
+- The destination must not exist. Git clones into an operation-owned hidden sibling
+  and publishes it with a no-replace rename only after success. Failure, timeout,
+  and cancellation remove only that owned temporary directory; an existing or
+  concurrently created destination is never overwritten or deleted.
+- Progress records and total progress output are bounded and updates are throttled.
+  Cancellation and publication use one atomic lifecycle transition: cancellation
+  accepted before publication prevents the destination rename and cleans the owned
+  temporary directory; after publication begins, cancellation is rejected and the
+  clone reports its actual completion result. Native cancellation terminates the
+  process group. Windows uses a kill-on-close
+  Job Object for the `wsl.exe` launcher, but cannot guarantee every Linux descendant
+  is terminated; Gitty never terminates an entire WSL distribution.
 
 ## Graph operations and full conflict editor
 
@@ -292,7 +340,7 @@ remote's symbolic `HEAD` alias. These reads do not fetch or contact remotes.
   `.git`, `..`, symlink ancestors, Windows alternate streams or path separators.
 - A Git staging/index failure after the working replacement can leave an edited
   but unresolved file. It returns `mutationUnverified` without rollback or retry; refresh
-  and review before the next action. Ordinary stage/unstage/commit still reject
+  and review before the next action. Ordinary stage/unstage/commit/amend still reject
   all in-progress operations and unmerged paths.
 
 The external opener is invoked only by its explicit IPC command. URLs are parsed,
@@ -338,6 +386,13 @@ a second root commit. The unverified-outcome mapping for abandoned writes and th
 non-empty NUL-separated pathspec payload are unit-tested rather than by a
 120-second timeout. Hook tests are Unix-only.
 
+Amend tests cover message-only and staged rewrites while preserving unstaged
+content, stale HEAD/ref/status rejection under the mutation lock, hooks, and
+signing failures. Clone tests use local bare remotes and cover an openable result,
+default-branch/full-clone behavior, no recursive submodule initialization,
+progress, cancellation, timeout/error cleanup, and preservation of existing and
+concurrently created destinations.
+
 Windows Job Objects, WSL execution, and the graphical picker require platform/UI
 integration testing; they are not exercised by the macOS unit test suite. Killing
 the Windows WSL launcher cannot promise termination of every Linux descendant
@@ -345,6 +400,7 @@ inside the distribution. The app does not terminate an entire WSL distribution.
 Under WSL, the Git-directory listing used for lock and operation detection runs
 `find -maxdepth 1` in the distribution and therefore needs the same GNU `find`
 the browser already requires; it is not covered by the macOS suite. Graph
-operations and regular-file conflict resolution are described above. Amend,
-hunk/line staging, stashes, authenticated remote operations and cloning remain
-future work. The current suite includes 74 passing tests on macOS.
+operations, regular-file conflict resolution, hunk staging, stashes, remote
+operations, amend, and cloning are described above. Line staging and richer
+authentication setup remain future work. The current suite includes 113 passing
+tests on macOS.

@@ -46,7 +46,8 @@ export type RepositoryMutation =
   | { kind: 'stage' | 'unstage'; paths: string[] }
   | { kind: 'stage_hunk'; path: string; hunkIndex: number; fingerprint: string }
   | { kind: 'unstage_hunk'; path: string; hunkIndex: number; fingerprint: string }
-  | { kind: 'commit'; message: string };
+  | { kind: 'commit'; message: string }
+  | { kind: 'amend'; message: string; expectedHead: string; expectedHeadRef: string | null; expectedStatusFingerprint: string };
 
 /* Tauri commands (all argument names camelCase):
  * repository_pick() -> string | null
@@ -69,6 +70,7 @@ export type RepositoryMutation =
  * Unsupported/truncated previews have no actionable fingerprint. No patch text
  * is accepted from the client. Both commands leave the working tree untouched.
  * repository_create_commit({handle, message: string}) -> CreateCommitResult
+ * repository_amend_commit({handle, message, expectedHead, expectedHeadRef, expectedStatusFingerprint}) -> CreateCommitResult
  * wsl_distributions() -> WslDistribution[]
  * wsl_directories({distribution, path}) -> DirectoryEntry[]
  * Errors: {code: string, message: string}

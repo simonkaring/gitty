@@ -78,16 +78,16 @@ try {
         return { head: f.head, headRef: 'refs/heads/main', fingerprint: String(f.version), entries: [...f.entries, ...(f.conflict ? [entry('conflict.ts', 'U', 'U', false, true)] : [])] };
       }
       if (command === 'repository_history') return { commits: f.head === 'c0' ? [commit('c0')] : [commit(f.head, ['c0']), commit('c0')], cursor: null, generation: `g:${f.head}`, shallow: false };
-      if (command === 'repository_commit') return commit(args.oid);
+      if (command === 'repository_commit') { const detail = commit(args.oid); return { ...detail, body: `${detail.subject}\n\nReview the changes in context.\n` }; }
       if (command === 'repository_diff_files') return [{ path: 'src/partial.ts', oldPath: null, status: 'M', additions: 2, deletions: 1, binary: false }];
       if (command === 'repository_diff') {
         if (f.holdDiff === args.path) { f.diffWaiting = true; await new Promise(resolve => { f.releaseDiff = resolve; }); f.diffWaiting = false; }
         return { path: args.path, binary: false, truncated: false, message: null, hunks: [{ header: '@@ -1,3 +1,4 @@', lines: [{ kind: 'context', content: `// ${args.path}`, oldLine: 1, newLine: 1 }, { kind: 'remove', content: 'const rowHeight = 44;', oldLine: 2, newLine: null }, { kind: 'add', content: `const rowHeight = 48; // ${args.spec.kind}`, oldLine: null, newLine: 2 }, { kind: 'add', content: 'const preserveSelection = true;', oldLine: null, newLine: 3 }] }] };
       }
       if (command === 'repository_search') return { commits: [], truncated: false };
-      if (['repository_stage', 'repository_unstage', 'repository_create_commit'].includes(command)) {
+      if (['repository_stage', 'repository_unstage', 'repository_create_commit', 'repository_amend_commit'].includes(command)) {
         if (f.holdWrite) { f.writeWaiting = true; await new Promise(resolve => { f.releaseWrite = resolve; }); f.writeWaiting = false; }
-        if (command === 'repository_create_commit') {
+        if (command === 'repository_create_commit' || command === 'repository_amend_commit') {
           if (f.commitMode === 'merge') throw { code: 'merge_in_progress', message: 'Merge in progress. Complete it with another Git tool.' };
           f.head = `commit${++f.version}`;
           f.entries = f.entries.map(item => ({ ...item, indexStatus: '.' })).filter(item => !['.', ' '].includes(item.worktreeStatus));
@@ -122,6 +122,12 @@ try {
   await page.getByRole('button', { name: /Working changes/ }).click();
   assert.equal(await page.getByRole('textbox', { name: /Summary/ }).inputValue(), 'feat: commit staged changes');
   assert.equal(await page.getByRole('textbox', { name: /Description/ }).inputValue(), 'Keep my draft through failures.');
+  await page.getByRole('checkbox', { name: 'Amend last commit' }).check();
+  await page.getByRole('textbox', { name: /Summary/ }).waitFor();
+  await page.waitForFunction(() => document.querySelector('input[name="subject"]')?.value === 'feat: readable repository history');
+  await page.getByRole('textbox', { name: /Summary/ }).fill('reworded last commit');
+  await page.getByRole('checkbox', { name: 'Amend last commit' }).uncheck();
+  assert.equal(await page.getByRole('textbox', { name: /Summary/ }).inputValue(), 'feat: commit staged changes', 'ordinary draft is restored after leaving amend mode');
   await page.getByRole('button', { name: 'Staged: src/partial.ts', exact: true }).click();
   await page.getByText('HEAD → index · included in your next commit', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Unstaged: src/partial.ts', exact: true }).click();

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { clearSubmittedDraft, commitMessage, draftKey, operationPaths, readDraft, saveDraft, writeAndRefresh } from './workflow';
+import { clearSubmittedDraft, commitMessage, draftFromCommitMessage, draftKey, operationPaths, readDraft, saveDraft, writeAndRefresh } from './workflow';
 import type { RepositorySession, StatusEntry } from './repository';
 import type { native } from './native';
 import { demoCommittedFiles, demoFileDiff, demoStatus, demoWorkingFiles } from './demoWorkflow';
@@ -53,6 +53,21 @@ describe('write lifecycle', () => {
     const invoke = vi.fn().mockResolvedValue({ oid: 'new-head' }) as typeof native;
     const result = await writeAndRefresh('s', { kind: 'commit', message: 'Title\n\nBody' }, async () => { throw new Error('Snapshot unavailable'); }, () => true, invoke);
     expect(result).toEqual({ oid: 'new-head', refreshError: 'Snapshot unavailable' });
+  });
+  it('routes amend expectations once and refreshes after success', async () => {
+    const invoke = vi.fn().mockResolvedValue({ oid: 'rewritten-head' }) as typeof native;
+    const reload = vi.fn().mockResolvedValue(undefined);
+    const mutation = { kind: 'amend', message: 'Reworded', expectedHead: 'old-head', expectedHeadRef: 'refs/heads/main', expectedStatusFingerprint: 'status-1' } as const;
+    expect(await writeAndRefresh('s', mutation, reload, () => true, invoke)).toEqual({ oid: 'rewritten-head' });
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('repository_amend_commit', { handle: 's', message: 'Reworded', expectedHead: 'old-head', expectedHeadRef: 'refs/heads/main', expectedStatusFingerprint: 'status-1' });
+    expect(reload).toHaveBeenCalledOnce();
+  });
+  it('does not retry a stale amend and still reconciles', async () => {
+    const invoke = vi.fn().mockRejectedValue({ code: 'staleOperation', message: 'HEAD changed.' }) as typeof native;
+    const reload = vi.fn().mockResolvedValue(undefined);
+    const outcome = await writeAndRefresh('s', { kind: 'amend', message: 'Reworded', expectedHead: 'old', expectedHeadRef: null, expectedStatusFingerprint: 'status' }, reload, () => true, invoke);
+    expect(outcome).toEqual({ error: 'HEAD changed.' });
+    expect(invoke).toHaveBeenCalledOnce(); expect(reload).toHaveBeenCalledOnce();
   });
   it('does not refresh or publish a late response into another session', async () => {
     let resolve!: (result: { oid: string }) => void;
@@ -108,6 +123,8 @@ describe('draft durability', () => {
     expect(clearSubmittedDraft('race-draft', submitted)).toBe(true);
     expect(readDraft('race-draft')).toEqual({ subject: '', body: '' });
     expect(commitMessage({ subject: ' Subject ', body: ' Why\n\nDetails ' })).toBe('Subject\n\nWhy\n\nDetails');
+    expect(draftFromCommitMessage('Subject\n\nWhy\nDetails\n')).toEqual({ subject: 'Subject', body: 'Why\nDetails' });
+    expect(draftFromCommitMessage('Subject only')).toEqual({ subject: 'Subject only', body: '' });
   });
 });
 describe('whole-file staging', () => {

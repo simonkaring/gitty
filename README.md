@@ -2,7 +2,7 @@
 
 **A little clarity for your Git history.**
 
-A graph-first desktop Git client built with **Tauri 2, React 19, TypeScript, and Rust**. Switch between repository tabs, explore history, stage files or individual hunks, compose commits, sync branches, manage stashes, and resolve conflicts in a customizable workspace. The browser preview provides a clearly labeled synthetic demo with simulated file staging and commits; native Git actions require a real desktop repository.
+A graph-first desktop Git client built with **Tauri 2, React 19, TypeScript, and Rust**. Switch between repository tabs, clone repositories, explore history, stage files or individual hunks, create or amend commits, sync branches, manage stashes, and resolve conflicts in a customizable workspace. The browser preview provides a clearly labeled synthetic demo with simulated file staging and commits; native Git actions require a real desktop repository.
 
 ## The redesigned workspace
 
@@ -19,7 +19,7 @@ npm ci
 npm run dev
 ```
 
-Open **http://127.0.0.1:1420**. The browser preview demonstrates the workspace without a Rust toolchain. Fonts and icons are bundled locally. Repository browsing and automatic refresh stay offline; only explicitly requested fetch, pull, and push actions connect to configured remotes.
+Open **http://127.0.0.1:1420**. The browser preview demonstrates the workspace without a Rust toolchain. Fonts and icons are bundled locally. Repository browsing and automatic refresh stay offline; only explicitly requested clone, fetch, pull, and push actions connect to configured remotes.
 
 ### Desktop
 
@@ -39,7 +39,7 @@ npm run check:rust              # Cargo check (build the frontend first)
 
 ## Explore a real repository
 
-Run `npm run desktop`, choose **Open repository**, then use the native folder picker or a recent location. On Windows, the picker also offers WSL distribution discovery and Linux-directory browsing. WSL Git runs inside the selected distribution; its conflict editor filesystem helper also requires Python 3. Windows/WSL runtime validation is still pending.
+Run `npm run desktop`, choose **Open repository**, then use the native folder picker, a recent location, or the clone form. A clone targets a selected native folder or the currently browsed WSL folder, reports progress, can be cancelled, and opens the completed repository in a new tab. Clones are full, use the remote's default branch, do not initialize submodules, and copy local-source objects instead of hardlinking them. On Windows, the picker also offers WSL distribution discovery and Linux-directory browsing. WSL Git runs inside the selected distribution; its conflict editor filesystem helper also requires Python 3. Windows/WSL runtime validation is still pending.
 
 - **Repository identity:** native/WSL location, current branch or detached HEAD, linked worktree, shallow, and bare states.
 - **Live graph:** local branches, remote-tracking branches, commit-pointing tags, and HEAD; 200-commit cursor pages with original parent relationships. Remote information reflects locally stored refs, without fetching.
@@ -63,7 +63,7 @@ The toolbar beneath the tabs stays available in both views:
 - **Stash…:** save tracked changes with an optional message and optional untracked files, then browse/apply/pop/drop stashes. Pop retains the stash when application conflicts.
 - **Refresh:** update local repository state. Ahead/behind counts reflect locally known remote-tracking refs; fetching updates that information.
 
-Remote authentication uses configured Git credentials and an OpenSSH agent in noninteractive mode. If authentication is unavailable, the operation reports an error rather than waiting for terminal input. Browser demo sync/stash controls are labeled desktop-only; simultaneous repository sessions are a native feature.
+Clone and remote authentication use configured Git credential helpers and an OpenSSH agent in noninteractive mode. Embedded HTTP(S) credentials are rejected; if authentication is unavailable, the operation reports an error rather than waiting for terminal input. Browser demo sync/stash controls are labeled desktop-only; simultaneous repository sessions are a native feature.
 
 History reads, search, and inspection remain read-only. **Working changes** provides staging and commits; graph and sidebar action controls provide explicit branch operations. The backend uses the installed Git with separate read/write command contracts and shell-free arguments. Missing objects, unsupported encodings, partial/promisor clones, and process limits return explicit errors.
 
@@ -72,7 +72,7 @@ History reads, search, and inspection remain read-only. **Working changes** prov
 1. Open a repository and select **Working changes**.
 2. Select an unstaged or untracked file to inspect its diff, then use its **+** control or **Stage all**.
 3. Review the **Staged** group. Use **−** or **Unstage all** to remove changes from the index without changing working files.
-4. Enter a summary and optional description, then choose **Commit staged changes**. Gitty refreshes status and history after the operation.
+4. Enter a summary and optional description, then choose **Commit staged changes**. To replace HEAD instead, enable **Amend the previous commit** after reviewing the rewrite warning. Gitty refreshes status and history after either operation.
 
 A partially staged file appears in both lists. File-level controls stage its remaining working changes or unstage its indexed changes. Renames are handled as both source and destination where required.
 
@@ -81,6 +81,8 @@ For modified regular text files, use **Stage hunk** in an unstaged diff or **Uns
 Hunk actions currently fall back to whole-file controls for new/deleted files, renames, binary files, mode changes, symlinks/submodules, and truncated or oversized previews. Line-level staging is not yet implemented. The browser demo simulates whole-file staging only.
 
 Commit drafts persist per repository/worktree and survive failed operations. Configured hooks, identity, and signing are honored. Failed or uncertain writes trigger a refresh; Gitty does not automatically retry a commit. Bare repositories, unresolved conflicts, and in-progress Git operations produce explicit errors. A failed refresh blocks further writes in the composer until repository state can be refreshed.
+
+Amend supports message-only rewrites and staged changes. It never includes unstaged content. HEAD, its symbolic ref, and the working-state fingerprint are revalidated under Gitty's mutation lock immediately before Git runs, so changes already visible at preflight reject a stale review. This serializes Gitty sessions, not external Git: an external process can still race before `git commit` acquires Git's own index/ref locks. Amend is unavailable in the synthetic demo.
 
 The browser demo simulates the same workflow without modifying repository files. Its working contents reset when the demo repository is reopened.
 
@@ -149,7 +151,7 @@ src/
     NativeInspector.tsx          Real changes, parent selection, commit comparisons
     WorkingChanges.tsx           File staging, shared diff viewer, commit composer
     WorkspaceControls.tsx        Shared navigation, branding, pane resizing
-    RepositoryPicker.tsx         Native/recent/WSL repository opening
+    RepositoryPicker.tsx         Native/recent/WSL opening and clone form
     Sidebar.tsx                  Repository and reference navigation
     Inspector.tsx                Commit metadata, files, mock diff
   graph/
@@ -160,6 +162,7 @@ src/
     repository.ts                Native/WSL IPC data contract
     native.ts                    Typed data helpers and coherent snapshot loading
     workflow.ts                  Write/refresh lifecycle, explicit paths, saved drafts
+    clone.ts                     Clone request, progress and cancellation state
     demoWorkflow.ts              In-memory HEAD/index/worktree for demo operations
     demo.ts                      Deterministic synthetic history/provider
     diff.ts                      Small LCS diff for synthetic text fixtures
@@ -169,6 +172,7 @@ src-tauri/
   src/repository.rs              Sessions, streaming history, status, search, metadata
   src/diff.rs                    Git change lists and structured patches
   src/mutate.rs                  Staging, unstaging, commits, write preflight checks
+  src/clone.rs                   Safe cancellable native/WSL repository cloning
   src/hunk.rs                    Byte-preserving, fingerprint-checked hunk staging
   src/remote.rs                  Local sync metadata and explicit fetch/pull/push
   src/stash.rs                   Stash management with stable object identities
@@ -198,10 +202,10 @@ npm run test:rust               # Real temporary repository integration tests
 
 The CI workflow defines a macOS / Windows / Ubuntu matrix for frontend tests/builds, Rust tests, and native compilation. The matrix is not evidence that Windows or Linux runtime behavior has been verified locally.
 
-### Tabs, sync, stashes, and hunk staging verification
+### Tabs, sync, stashes, hunk staging, amend, and clone verification
 
-- **131 frontend tests** and **104 Rust tests** passed. Rust integration tests use real temporary repositories and local bare remotes, including selected-hunk commits, stale previews, stash conflicts, divergent pulls, and single-branch publication.
-- All six Chromium smoke suites passed: `native`, `workflow`, `settings`, `tabs`, `operations`, and `hunks`. These use mocked Tauri IPC; tab coverage includes retained drafts/filters/scroll, active-only refresh, and operations completing or failing after switching tabs.
+- **139 frontend tests** and **113 Rust tests** passed. Rust integration tests use real temporary repositories and local bare remotes, including selected-hunk commits, amend freshness/hooks/signing, clone cancellation/publication linearization, independent local object files and cleanup, stash conflicts, divergent pulls, and single-branch publication.
+- All six Chromium smoke suites passed: `native`, `workflow`, `settings`, `tabs`, `operations`, and `hunks`. These use mocked Tauri IPC; coverage includes amend draft restoration and clone request/progress/open-tab behavior as well as retained per-tab state, active-only refresh, and operations completing or failing after switching tabs.
 - Production TypeScript/Vite build, Rust checks, formatting, and Clippy passed. The integrated macOS debug app built with `npm run desktop:build -- --debug --bundles app`.
 - Live remote authentication, packaged native GUI end-to-end interaction, and Windows/WSL/Linux runtime checks remain unverified.
 
@@ -243,7 +247,7 @@ PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/hun
 
 ## Scope and next steps
 
-Repository tabs, file/hunk staging, commits, branch creation/switching, merge/rebase/cherry-pick, tags, stashes, explicit fetch/pull/push, regular-file conflict resolution, and settings/custom themes are implemented. Next functional work includes line staging, amend, cloning, broader rebase/conflict support, and richer authentication setup. Live remote authentication, WSL runtime verification, and broader packaged-desktop validation remain platform release work.
+Repository tabs, native/WSL cloning, file/hunk staging, commits and amend, branch creation/switching, merge/rebase/cherry-pick, tags, stashes, explicit fetch/pull/push, regular-file conflict resolution, and settings/custom themes are implemented. Next functional work includes line staging, broader rebase/conflict support, and richer authentication setup. Live remote authentication, WSL runtime verification, and broader packaged-desktop validation remain platform release work.
 
 The demo snapshot remains materialized once per repository. Native history uses a pinned Git walk with bounded read-ahead and a temporary replay spool, batched metadata reads, and lazy diffs. Canvas and DOM rendering are viewport bounded; an interval index accelerates edge visibility queries. Layout still runs on the main thread for the loaded prefix; worker-based/incremental layout remains performance follow-up work.
 

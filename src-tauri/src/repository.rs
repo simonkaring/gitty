@@ -130,8 +130,9 @@ pub struct Service {
     /// worktree. The registry lock itself is only held while looking the key up;
     /// no global lock is ever held across a Git subprocess.
     mutation_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    pub(crate) clone_operations: Mutex<HashMap<String, Arc<crate::clone::CloneControl>>>,
 }
-fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>> {
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>> {
     mutex
         .lock()
         .map_err(|_| Error::new("worker", "Repository lock poisoned"))
@@ -143,6 +144,7 @@ impl Service {
             recent_path: data_dir.join("recent-repositories.json"),
             recent_lock: Mutex::new(()),
             mutation_locks: Mutex::new(HashMap::new()),
+            clone_operations: Mutex::new(HashMap::new()),
         }
     }
     pub fn recent(&self) -> Result<Vec<RepositoryLocation>> {
@@ -290,8 +292,9 @@ impl Service {
         }
         Ok(locks.entry(key).or_default().clone())
     }
-    /// Serializes a write against every other session for the same repository.
-    /// Validation runs inside the lock so checks and the write are one unit.
+    /// Serializes a write against every Gitty session for the same repository.
+    /// Validation runs inside this lock, but external Git can still race before
+    /// the subprocess acquires Git's own index and ref locks.
     pub(crate) fn mutate<T>(
         &self,
         handle: &str,
@@ -310,6 +313,23 @@ impl Service {
     }
     pub fn create_commit(&self, handle: &str, message: &str) -> Result<CreatedCommit> {
         self.mutate(handle, |repo| repo.create_commit(message))
+    }
+    pub fn amend_commit(
+        &self,
+        handle: &str,
+        message: &str,
+        expected_head: &str,
+        expected_head_ref: Option<&str>,
+        expected_status_fingerprint: &str,
+    ) -> Result<CreatedCommit> {
+        self.mutate(handle, |repo| {
+            repo.amend_commit(
+                message,
+                expected_head,
+                expected_head_ref,
+                expected_status_fingerprint,
+            )
+        })
     }
     pub fn stage_hunk(
         &self,

@@ -25,12 +25,13 @@ try {
     const commitsFor = prefix => Array.from({ length: 60 }, (_, i) => commit(`${prefix}${i}`, i === 59 ? [] : [`${prefix}${i + 1}`]));
     const commitsByPath = { '/repo-a': commitsFor('a'), '/repo-b': commitsFor('b') };
     const pathByHandle = Object.fromEntries(Object.entries(repoDefs).map(([path, def]) => [def.handle, path]));
-    const f = window.fixture = { calls: [], closes: [], holdRemote: false, remoteWaiting: false };
+    const f = window.fixture = { calls: [], closes: [], holdRemote: false, remoteWaiting: false, cloneWaiting: false };
     const stateFor = path => {
       const def = repoDefs[path], commits = commitsByPath[path];
       return { session: { handle: def.handle, name: def.name, root: path, gitDir: `${path}/.git`, commonDir: `${path}/.git`, location: { kind: 'native', path }, head: commits[0].id, headRef: 'refs/heads/main', shallow: false, bare: false, linkedWorktree: false }, refs: [{ name: 'main', fullName: 'refs/heads/main', commitId: commits[0].id, kind: 'local' }], remotes: ['origin'], fingerprint: def.handle };
     };
-    window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
+    let callbackId = 0;
+    window.__TAURI_INTERNALS__ = { transformCallback: () => ++callbackId, unregisterCallback: () => {}, invoke: async (command, args) => {
       f.calls.push({ command, args: args ? { ...args } : args, at: Date.now() });
       if (command === 'repository_recent') return Object.keys(repoDefs).map(path => ({ kind: 'native', path }));
       if (command === 'wsl_distributions') return [];
@@ -43,6 +44,19 @@ try {
       if (command === 'repository_sync_info') return { branch: 'main', upstream: 'origin/main', ahead: 0, behind: 0, remotes: ['origin'] };
       if (command === 'repository_stashes') return [];
       if (command === 'repository_search') return { commits: [], truncated: false };
+      if (command === 'repository_pick_clone_parent') return '/clones';
+      if (command === 'repository_clone') {
+        const path = `${args.request.parent.path}/${args.request.directoryName}`;
+        repoDefs[path] = { handle: 'handle-clone', name: args.request.directoryName };
+        commitsByPath[path] = commitsFor('c');
+        pathByHandle['handle-clone'] = path;
+        args.onProgress.onmessage({ phase: 'receiving_objects', percent: 42, message: 'Receiving objects: 42%' });
+        f.cloneWaiting = true;
+        await new Promise(resolve => { f.releaseClone = resolve; });
+        f.cloneWaiting = false;
+        return { kind: 'native', path };
+      }
+      if (command === 'repository_cancel_clone') throw { code: 'invalidCloneOperation', message: 'Clone publication has already started' };
       if (command === 'repository_remote_action') {
         if (f.holdRemote) { f.remoteWaiting = true; await new Promise(resolve => { f.releaseRemote = resolve; }); f.remoteWaiting = false; }
         return { output: `synced ${args.handle}` };
@@ -79,6 +93,35 @@ try {
   assert.deepEqual(opens, ['/repo-a', '/repo-b'], 'each tab opened its own location');
   const handleCalls = await page.evaluate(() => [...new Set(window.fixture.calls.filter(c => c.command === 'repository_state').map(c => c.args.handle))].sort());
   assert.deepEqual(handleCalls, ['handle-a', 'handle-b'], 'the two tabs are backed by different session handles');
+
+  // --- A clone reports progress, then opens in a new tab -------------------
+  await page.getByRole('button', { name: 'Open another repository in a new tab', exact: true }).click();
+  const picker = page.getByRole('dialog', { name: 'Open repository', exact: true });
+  await picker.getByLabel('Repository URL or path').fill('https://example.test/team/repo-c.git');
+  await picker.getByLabel('Repository URL or path').blur();
+  assert.equal(await picker.getByLabel('New directory name').inputValue(), 'repo-c', 'the clone directory is suggested from the source');
+  await picker.getByRole('button', { name: 'Choose destination folder…', exact: true }).click();
+  await picker.getByText('/clones', { exact: true }).waitFor();
+  await picker.getByRole('button', { name: 'Clone repository', exact: true }).click();
+  await page.waitForFunction(() => window.fixture.cloneWaiting);
+  const cloneStatus = page.getByRole('status');
+  await cloneStatus.getByText('Cloning repo-c', { exact: true }).waitFor();
+  await cloneStatus.getByText('Receiving objects: 42%', { exact: true }).waitFor();
+  assert.equal(await cloneStatus.locator('progress').getAttribute('value'), '42', 'clone progress is streamed into the workspace');
+  const cloneRequest = await page.evaluate(() => window.fixture.calls.find(c => c.command === 'repository_clone').args.request);
+  assert.deepEqual(cloneRequest, { source: 'https://example.test/team/repo-c.git', parent: { kind: 'native', path: '/clones' }, directoryName: 'repo-c' });
+  await cloneStatus.getByRole('button', { name: 'Cancel clone', exact: true }).click();
+  await page.getByText('Could not request clone cancellation: Clone publication has already started', { exact: true }).waitFor();
+  await cloneStatus.getByText('Cloning repo-c', { exact: true }).waitFor();
+  assert.equal(await cloneStatus.getByRole('button', { name: 'Cancel clone', exact: true }).isEnabled(), true, 'a rejected late cancellation restores the running clone UI');
+  await page.evaluate(() => window.fixture.releaseClone());
+  await page.waitForFunction(() => !window.fixture.cloneWaiting);
+  await page.locator('.repository-tab[data-selected="true"]').getByText('repo-c', { exact: true }).waitFor();
+  await activePane().getByRole('option', { name: /^Commit c0,/ }).waitFor();
+  assert.equal(await page.locator('.repository-tab').count(), 3, 'a successful clone opens as a third tab');
+  await page.locator('.repository-tab').filter({ hasText: 'repo-c' }).getByRole('button', { name: /Close|Cannot close/ }).click();
+  await page.waitForFunction(() => window.fixture.closes.includes('handle-clone'));
+  assert.equal(await page.locator('.repository-tab').count(), 2, 'the cloned tab can be closed normally');
 
   // --- Selection/filter/scroll/draft are retained per tab on switch --------
   const tabButton = name => page.locator('.repository-tab-select').filter({ hasText: name });
@@ -190,7 +233,7 @@ try {
   assert.equal(stashActionCalls, 0, 'repository_stash_action never ran: no stash action was explicitly requested');
 
   assert.deepEqual(errors, []);
-  console.log('Tabs browser smoke passed (mocked native IPC, two repositories): distinct session handles/canonical identities; per-tab selection/filter/scroll/draft retention; active-only polling with refresh-on-activate; operation completes after switching tabs away; reload restores both tabs and the active one; busy-tab close guard; close cleanup; no passive remote/stash calls.');
+  console.log('Tabs browser smoke passed (mocked native IPC): clone request/progress/rejected-late-cancel/open-tab lifecycle; distinct session handles/canonical identities; per-tab selection/filter/scroll/draft retention; active-only polling with refresh-on-activate; operation completes after switching tabs away; reload restores both tabs and the active one; busy-tab close guard; close cleanup; no passive remote/stash calls.');
 } finally {
   await browser.close();
   await server.close();

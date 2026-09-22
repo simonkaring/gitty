@@ -25,6 +25,28 @@ const MAX_REPORTED: usize = 4000;
 const UNVERIFIED: &str =
     "The repository may already have changed. Refresh and check the status before retrying.";
 
+fn validate_message(message: &str) -> Result<()> {
+    if message.trim().is_empty() {
+        return Err(Error::new(
+            "invalidRequest",
+            "Enter a commit message; blank messages are rejected.",
+        ));
+    }
+    if message.len() > MAX_MESSAGE_BYTES {
+        return Err(Error::new(
+            "invalidRequest",
+            "Commit messages are limited to 64 KiB.",
+        ));
+    }
+    if message.contains('\0') {
+        return Err(Error::new(
+            "invalidRequest",
+            "Commit messages cannot contain NUL bytes.",
+        ));
+    }
+    Ok(())
+}
+
 /// Operations the ordinary staging/commit API must not modify. Mutating underneath them
 /// would silently change their meaning (a commit during a merge is a merge
 /// commit), so every write is refused while one is in progress.
@@ -374,24 +396,7 @@ impl Repository {
     /// Commits exactly what is staged, with the configured identity, hooks and
     /// signing. No `--no-verify`, `--no-gpg-sign`, `--amend` or `--all`.
     pub(crate) fn create_commit(&self, message: &str) -> Result<CreatedCommit> {
-        if message.trim().is_empty() {
-            return Err(Error::new(
-                "invalidRequest",
-                "Enter a commit message; blank messages are rejected.",
-            ));
-        }
-        if message.len() > MAX_MESSAGE_BYTES {
-            return Err(Error::new(
-                "invalidRequest",
-                "Commit messages are limited to 64 KiB.",
-            ));
-        }
-        if message.contains('\0') {
-            return Err(Error::new(
-                "invalidRequest",
-                "Commit messages cannot contain NUL bytes.",
-            ));
-        }
+        validate_message(message)?;
         self.require_writable()?;
         let conflicted = self.unmerged()?;
         if !conflicted.is_empty() {
@@ -453,6 +458,72 @@ impl Repository {
                 format!("Git reported success but HEAD cannot be resolved. {UNVERIFIED}"),
             )),
         }
+    }
+
+    /// Replaces the current commit with the supplied message and current index.
+    /// The snapshot expectations are checked under Gitty's mutation lock by the
+    /// caller immediately before Git runs. This closes races between app sessions,
+    /// not the final window before Git acquires its own locks from external tools.
+    /// No staged changes are required, so a message-only amend remains possible;
+    /// unstaged changes are never included.
+    pub(crate) fn amend_commit(
+        &self,
+        message: &str,
+        expected_head: &str,
+        expected_head_ref: Option<&str>,
+        expected_status_fingerprint: &str,
+    ) -> Result<CreatedCommit> {
+        validate_message(message)?;
+        self.require_writable()?;
+        let conflicted = self.unmerged()?;
+        if !conflicted.is_empty() {
+            return Err(Error::new(
+                "unresolvedConflict",
+                format!(
+                    "{} still has unresolved conflicts. Resolve them in Git before amending.",
+                    conflicted.join(", ")
+                ),
+            ));
+        }
+        let status = self.status()?;
+        let before = self.head_commit()?.ok_or_else(|| {
+            Error::new(
+                "unresolvedHead",
+                "There is no current commit to amend. Create the initial commit first.",
+            )
+        })?;
+        if before != expected_head
+            || status.head.as_deref() != Some(expected_head)
+            || status.head_ref.as_deref() != expected_head_ref
+            || status.fingerprint != expected_status_fingerprint
+        {
+            return Err(Error::new(
+                "staleOperation",
+                "HEAD or the working changes have changed since this amendment was prepared. Refresh and review the last commit before trying again.",
+            ));
+        }
+        let a = args(&["commit", "--quiet", "--amend", "--file=-"]);
+        let output = self.write(&a, message.as_bytes(), MAX_MESSAGE_BYTES)?;
+        let after = self.head_commit().map_err(unverified)?;
+        if !output.success {
+            let text = report(&output);
+            if after.as_deref() != Some(before.as_str()) {
+                return Err(Error::new(
+                    "mutationUnverified",
+                    format!(
+                        "Git reported a failure but HEAD moved to {}. {UNVERIFIED}\n{text}",
+                        after.unwrap_or_else(|| "an unresolved state".into())
+                    ),
+                ));
+            }
+            return Err(self.failed(&output));
+        }
+        after.map(|oid| CreatedCommit { oid }).ok_or_else(|| {
+            Error::new(
+                "mutationUnverified",
+                format!("Git reported success but HEAD cannot be resolved. {UNVERIFIED}"),
+            )
+        })
     }
 }
 

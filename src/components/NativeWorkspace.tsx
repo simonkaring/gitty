@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type CSSProperties } from 'react';
+import { Channel } from '@tauri-apps/api/core';
 import { PanelLeft, PanelRight, FolderGit2 } from 'lucide-react';
 import type { RepositoryLocation } from '../model/repository';
 import { RepositoryPicker } from './RepositoryPicker';
@@ -8,6 +9,8 @@ import { RepositoryPane } from './RepositoryPane';
 import { RepositoryTabs, type RepositoryTabSummary } from './RepositoryTabs';
 import { loadPersistedTabs, locationLabel, savePersistedTabs, tabsReducer, type TabsState } from '../model/tabs';
 import './workspace-tabs.css';
+import { errorMessage, native } from '../model/native';
+import { cloneReducer, type CloneProgress, type CloneRequest } from '../model/clone';
 
 function initialTabsState(): TabsState {
   const persisted = loadPersistedTabs(window.localStorage);
@@ -34,6 +37,7 @@ export function NativeWorkspace({ onDemo }: { onDemo: () => void }) {
   const [inspectorWidth, setInspectorWidth] = usePaneWidth('inspector', 400, 300, 640);
   const [sidebarWidth, setSidebarWidth] = usePaneWidth('sidebar', 240, 210, 340);
   const [notice, setNotice] = useState('');
+  const [clone, dispatchClone] = useReducer(cloneReducer, { status: 'idle' });
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notify = useCallback((message: string) => {
     setNotice(message);
@@ -48,13 +52,41 @@ export function NativeWorkspace({ onDemo }: { onDemo: () => void }) {
   useEffect(() => { if (pendingNotice) { notify(pendingNotice); dispatch({ type: 'noticeShown' }); } }, [pendingNotice, notify]);
 
   const openLocation = useCallback((location: RepositoryLocation) => { dispatch({ type: 'open', location }); setPicker(false); }, []);
+  const startClone = useCallback((request: CloneRequest) => {
+    if (clone.status === 'running' || clone.status === 'cancelling') return;
+    const operationId = crypto.randomUUID();
+    const onProgress = new Channel<CloneProgress>();
+    onProgress.onmessage = progress => dispatchClone({ type: 'progress', operationId, progress });
+    dispatchClone({ type: 'start', operationId, request });
+    setPicker(false);
+    void native<RepositoryLocation>('repository_clone', { operationId, request, onProgress }).then(location => {
+      dispatchClone({ type: 'finish', operationId });
+      dispatch({ type: 'open', location });
+      notify(`Cloned ${request.directoryName}.`);
+    }).catch(error => {
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'cancelled') {
+        dispatchClone({ type: 'finish', operationId });
+        notify(`Cancelled clone of ${request.directoryName}.`);
+      } else dispatchClone({ type: 'fail', operationId, message: errorMessage(error) });
+    });
+  }, [clone.status, notify]);
+  const cancelClone = useCallback(() => {
+    if (clone.status !== 'running') return;
+    const operationId = clone.operationId;
+    dispatchClone({ type: 'cancel', operationId });
+    void native('repository_cancel_clone', { operationId }).catch(error => {
+      dispatchClone({ type: 'cancelRejected', operationId });
+      notify(`Could not request clone cancellation: ${errorMessage(error)}`);
+    });
+  }, [clone, notify]);
   const handleIdentity = useCallback((tabId: string, key: string | null, title: string | null) => dispatch({ type: 'identity', tabId, key, title }), []);
   const handleBusyChange = useCallback((tabId: string, busy: boolean) => dispatch({ type: 'busy', tabId, busy }), []);
   const handleMeta = useCallback((tabId: string, branch: string | null, dirty: boolean) => dispatch({ type: 'meta', tabId, branch, dirty }), []);
   const selectTab = useCallback((tabId: string) => dispatch({ type: 'select', tabId }), []);
   const closeTab = useCallback((tabId: string) => dispatch({ type: 'close', tabId }), []);
 
-  const anyBusy = tabs.some(tab => tab.busy);
+  const cloneBusy = clone.status === 'running' || clone.status === 'cancelling';
+  const anyBusy = tabs.some(tab => tab.busy) || cloneBusy;
   function requestDemo() {
     // The demo workspace fully unmounts this component (and every tab pane
     // in it, closing their sessions) — never do that while a write is
@@ -78,6 +110,8 @@ export function NativeWorkspace({ onDemo }: { onDemo: () => void }) {
     </header>
     {!!tabs.length && <RepositoryTabs tabs={tabSummaries} activeId={activeId} onSelect={selectTab} onClose={closeTab} onNew={() => setPicker(true)} />}
     {notice && <div className="native-banner" role="status">{notice}</div>}
+    {cloneBusy && <div className="clone-progress" role="status" aria-live="polite"><div><strong>{clone.status === 'cancelling' ? 'Cancelling clone…' : `Cloning ${clone.destinationName}`}</strong><span>{clone.progress?.message ?? 'Starting Git…'}</span>{clone.progress?.percent !== null && clone.progress?.percent !== undefined && <progress max="100" value={clone.progress.percent}>{clone.progress.percent}%</progress>}</div><button disabled={clone.status === 'cancelling'} onClick={cancelClone}>Cancel clone</button></div>}
+    {clone.status === 'error' && <div className="native-banner" role="alert">Clone failed: {clone.message} <button onClick={() => dispatchClone({ type: 'dismiss' })}>Dismiss</button></div>}
     {!tabs.length ? <main className="native-welcome"><span className="eyebrow">A CLEARER VIEW OF YOUR WORK</span><h1>Your history.<br />Your next chapter.</h1><p>Explore the graph, review working changes, and compose your next commit. Built for local repositories. Open more than one repository at once, each in its own tab.</p><button className="primary-button" onClick={() => setPicker(true)}>Open repository</button><button className="text-button" onClick={onDemo}>Explore a demo workspace</button></main>
       : tabs.map(tab => <div key={tab.id} id={`tabpanel-${tab.id}`} role="tabpanel" aria-labelledby={`tab-${tab.id}`} hidden={tab.id !== activeId} className="tab-pane-host">
         <RepositoryPane tabId={tab.id} location={tab.location} active={tab.id === activeId}
@@ -85,6 +119,6 @@ export function NativeWorkspace({ onDemo }: { onDemo: () => void }) {
           setInspectorWidth={setInspectorWidth} setSidebarWidth={setSidebarWidth} setInspectorOpen={setInspectorOpen}
           onIdentity={handleIdentity} onBusyChange={handleBusyChange} onMeta={handleMeta} />
       </div>)}
-    {picker && <RepositoryPicker onOpen={openLocation} onClose={() => setPicker(false)} />}
+    {picker && <RepositoryPicker onOpen={openLocation} onClone={startClone} cloneBusy={cloneBusy} onClose={() => setPicker(false)} />}
   </div>;
 }

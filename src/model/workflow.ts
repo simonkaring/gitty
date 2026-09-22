@@ -10,6 +10,10 @@ export async function writeAndRefresh(handle: string, mutation: RepositoryMutati
     if (mutation.kind === 'commit') {
       const result = await invoke<CreateCommitResult>('repository_create_commit', { handle, message: mutation.message });
       outcome.oid = result.oid;
+    } else if (mutation.kind === 'amend') {
+      if (!mutation.expectedHead || !mutation.expectedStatusFingerprint) throw new Error('Refresh and review the last commit before amending.');
+      const result = await invoke<CreateCommitResult>('repository_amend_commit', { handle, message: mutation.message, expectedHead: mutation.expectedHead, expectedHeadRef: mutation.expectedHeadRef, expectedStatusFingerprint: mutation.expectedStatusFingerprint });
+      outcome.oid = result.oid;
     } else if (mutation.kind === 'stage_hunk' || mutation.kind === 'unstage_hunk') {
       if (!mutation.path || !mutation.fingerprint || !Number.isSafeInteger(mutation.hunkIndex) || mutation.hunkIndex < 0) throw new Error('Select a complete hunk from a current diff.');
       await invoke(`repository_${mutation.kind}`, { handle, path: mutation.path, hunkIndex: mutation.hunkIndex, fingerprint: mutation.fingerprint });
@@ -64,4 +68,13 @@ export function clearSubmittedDraft(key: string, submitted: CommitDraft): boolea
 }
 export function commitMessage(draft: CommitDraft): string {
   return `${draft.subject.trim()}${draft.body.trim() ? `\n\n${draft.body.trim()}` : ''}`;
+}
+
+export function draftFromCommitMessage(message: string): CommitDraft {
+  const newline = message.indexOf('\n');
+  if (newline < 0) return { subject: message, body: '' };
+  return {
+    subject: message.slice(0, newline),
+    body: message.slice(newline + 1).replace(/^\n/, '').trimEnd(),
+  };
 }

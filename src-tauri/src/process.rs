@@ -274,7 +274,25 @@ pub(crate) fn git_mutation_command(
 ) -> Result<Command> {
     command(location, args, Contract::Mutation)
 }
+/// Runs Git using the selected native/WSL transport without requiring an
+/// existing repository. Clone uses this with the mutation environment because
+/// credential helpers, SSH configuration, filters and user locale must remain
+/// available.
+pub(crate) fn git_external_mutation_command(
+    location: &RepositoryLocation,
+    args: &[String],
+) -> Result<Command> {
+    command_inner(location, args, Contract::Mutation, false)
+}
 fn command(location: &RepositoryLocation, args: &[String], contract: Contract) -> Result<Command> {
+    command_inner(location, args, contract, true)
+}
+fn command_inner(
+    location: &RepositoryLocation,
+    args: &[String],
+    contract: Contract,
+    repository_context: bool,
+) -> Result<Command> {
     let read = contract == Contract::Read;
     let mut cmd = match location {
         RepositoryLocation::Native { path } => {
@@ -285,7 +303,9 @@ fn command(location: &RepositoryLocation, args: &[String], contract: Contract) -
                 ));
             }
             let mut c = Command::new("git");
-            c.arg("-C").arg(path);
+            if repository_context {
+                c.arg("-C").arg(path);
+            }
             c
         }
         RepositoryLocation::Wsl { distribution, path } => {
@@ -309,9 +329,10 @@ fn command(location: &RepositoryLocation, args: &[String], contract: Contract) -
                 "GIT_LITERAL_PATHSPECS=1",
                 "GIT_PAGER=cat",
                 "git",
-                "-C",
-                path,
             ]);
+            if repository_context {
+                c.args(["-C", path]);
+            }
             c
         }
     };

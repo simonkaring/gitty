@@ -1321,6 +1321,186 @@ fn partially_staged_and_removed_files_commit_only_the_index() {
 }
 
 #[test]
+fn amend_supports_message_only_and_staged_changes_without_committing_unstaged_content() {
+    let d = init();
+    std::fs::write(d.path().join("file"), "one\n").unwrap();
+    let parent = commit(d.path(), "base");
+    std::fs::write(d.path().join("file"), "original\n").unwrap();
+    let original = commit(d.path(), "original message");
+    let original_tree = git(d.path(), &["rev-parse", "HEAD^{tree}"]);
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+
+    let status = repo.status().unwrap();
+    let reworded = service
+        .amend_commit(
+            &handle,
+            "reworded message\n\nwith context",
+            &original,
+            status.head_ref.as_deref(),
+            &status.fingerprint,
+        )
+        .unwrap();
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD^"]), parent);
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD^{tree}"]), original_tree);
+    assert_eq!(
+        repo.commit(&reworded.oid).unwrap().summary.subject,
+        "reworded message"
+    );
+
+    std::fs::write(d.path().join("file"), "staged\n").unwrap();
+    service.stage(&handle, &paths(&["file"])).unwrap();
+    std::fs::write(d.path().join("file"), "unstaged\n").unwrap();
+    let status = repo.status().unwrap();
+    let amended = service
+        .amend_commit(
+            &handle,
+            "staged amendment",
+            &reworded.oid,
+            status.head_ref.as_deref(),
+            &status.fingerprint,
+        )
+        .unwrap();
+    assert_eq!(
+        git(d.path(), &["show", &format!("{}:file", amended.oid)]),
+        "staged"
+    );
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("file")).unwrap(),
+        "unstaged\n"
+    );
+    assert_eq!(repo.status().unwrap().entries[0].worktree_status, "M");
+}
+
+#[test]
+fn amend_revalidates_head_symbolic_ref_and_status_under_the_mutation_lock() {
+    let d = init();
+    std::fs::write(d.path().join("file"), "one\n").unwrap();
+    let head = commit(d.path(), "original");
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    let status = repo.status().unwrap();
+
+    std::fs::write(d.path().join("file"), "changed after review\n").unwrap();
+    assert_eq!(
+        service
+            .amend_commit(
+                &handle,
+                "must be stale",
+                &head,
+                status.head_ref.as_deref(),
+                &status.fingerprint,
+            )
+            .unwrap_err()
+            .code,
+        "staleOperation"
+    );
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), head);
+
+    git(d.path(), &["restore", "file"]);
+    let status = repo.status().unwrap();
+    git(d.path(), &["checkout", "--detach"]);
+    assert_eq!(
+        service
+            .amend_commit(
+                &handle,
+                "wrong ref",
+                &head,
+                status.head_ref.as_deref(),
+                &status.fingerprint,
+            )
+            .unwrap_err()
+            .code,
+        "staleOperation"
+    );
+    git(d.path(), &["checkout", "main"]);
+
+    let status = repo.status().unwrap();
+    std::fs::write(d.path().join("other"), "new\n").unwrap();
+    let moved = commit(d.path(), "external commit");
+    assert_eq!(
+        service
+            .amend_commit(
+                &handle,
+                "wrong head",
+                &head,
+                status.head_ref.as_deref(),
+                &status.fingerprint,
+            )
+            .unwrap_err()
+            .code,
+        "staleOperation"
+    );
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), moved);
+
+    let unborn = init();
+    let (service, _data, handle) = service_for(unborn.path());
+    let status = service.repo(&handle).unwrap().status().unwrap();
+    assert_eq!(
+        service
+            .amend_commit(
+                &handle,
+                "no commit",
+                "missing",
+                status.head_ref.as_deref(),
+                &status.fingerprint,
+            )
+            .unwrap_err()
+            .code,
+        "unresolvedHead"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn amend_honors_hooks_and_signing_configuration() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = init();
+    std::fs::write(d.path().join("file"), "one\n").unwrap();
+    let head = commit(d.path(), "original");
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    let hook = d.path().join(".git/hooks/pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\necho 'amend hook refusal' >&2\nexit 1\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let status = repo.status().unwrap();
+    let error = service
+        .amend_commit(
+            &handle,
+            "blocked",
+            &head,
+            status.head_ref.as_deref(),
+            &status.fingerprint,
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "git");
+    assert!(error.message.contains("amend hook refusal"));
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), head);
+
+    std::fs::remove_file(&hook).unwrap();
+    git(d.path(), &["config", "commit.gpgsign", "true"]);
+    git(
+        d.path(),
+        &["config", "gpg.program", "/nonexistent/gitty-signer"],
+    );
+    let status = repo.status().unwrap();
+    assert_eq!(
+        service
+            .amend_commit(
+                &handle,
+                "unsigned",
+                &head,
+                status.head_ref.as_deref(),
+                &status.fingerprint,
+            )
+            .unwrap_err()
+            .code,
+        "git"
+    );
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), head);
+}
+
+#[test]
 fn renames_stage_as_their_removed_and_added_paths() {
     let d = init();
     std::fs::write(d.path().join("old name.txt"), "first\nsecond\nthird\n").unwrap();

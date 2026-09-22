@@ -167,37 +167,6 @@ impl Repository {
         Ok(remote.into())
     }
 
-    fn network_args() -> Vec<String> {
-        args(&[
-            "-c",
-            "protocol.file.allow=always",
-            "-c",
-            "protocol.ssh.allow=always",
-            "-c",
-            "protocol.https.allow=always",
-            "-c",
-            "protocol.http.allow=always",
-            "-c",
-            "protocol.git.allow=always",
-            "-c",
-            "protocol.ext.allow=never",
-            "-c",
-            "credential.interactive=false",
-            "-c",
-            "core.askPass=",
-            // Use the existing SSH agent and config, but never prompt for keys,
-            // passwords or unknown hosts. No credentials are retained by Gitty.
-            "-c",
-            "core.sshCommand=ssh -oBatchMode=yes -oStrictHostKeyChecking=yes",
-            "-c",
-            "ssh.variant=ssh",
-            "-c",
-            "fetch.recurseSubmodules=false",
-            "-c",
-            "submodule.recurse=false",
-        ])
-    }
-
     fn remote_action(&self, action: RemoteAction) -> Result<ActionOutput> {
         self.require_writable()?;
         if !self.unmerged()?.is_empty() {
@@ -238,7 +207,7 @@ impl Repository {
 
         match &action {
             RemoteAction::Fetch { .. } => {
-                let mut a = Self::network_args();
+                let mut a = network_args();
                 a.extend(args(&[
                     "fetch",
                     "--no-all",
@@ -295,7 +264,7 @@ impl Repository {
                         "Choose a remote with exactly one push URL.",
                     ));
                 }
-                let mut a = Self::network_args();
+                let mut a = network_args();
                 a.extend(args(&[
                     "push",
                     "--porcelain",
@@ -330,7 +299,7 @@ impl Repository {
                 self.remote_branch_name(branch)?;
                 // Fetch precisely one branch, then integrate its pinned object ID.
                 // No merge/rebase ever runs after an uncertain or failed fetch.
-                let mut fetch = Self::network_args();
+                let mut fetch = network_args();
                 fetch.extend(args(&[
                     "fetch",
                     "--no-all",
@@ -417,6 +386,37 @@ impl Repository {
             }
         }
     }
+}
+
+pub(crate) fn network_args() -> Vec<String> {
+    args(&[
+        "-c",
+        "protocol.file.allow=always",
+        "-c",
+        "protocol.ssh.allow=always",
+        "-c",
+        "protocol.https.allow=always",
+        "-c",
+        "protocol.http.allow=always",
+        "-c",
+        "protocol.git.allow=always",
+        "-c",
+        "protocol.ext.allow=never",
+        "-c",
+        "credential.interactive=false",
+        "-c",
+        "core.askPass=",
+        // Use the existing SSH agent and config, but never prompt for keys,
+        // passwords or unknown hosts. No credentials are retained by Gitty.
+        "-c",
+        "core.sshCommand=ssh -oBatchMode=yes -oStrictHostKeyChecking=yes",
+        "-c",
+        "ssh.variant=ssh",
+        "-c",
+        "fetch.recurseSubmodules=false",
+        "-c",
+        "submodule.recurse=false",
+    ])
 }
 
 /// Nonzero exits can leave fetched refs or conflicts, or can follow a remote

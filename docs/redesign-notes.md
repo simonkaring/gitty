@@ -34,6 +34,28 @@ repository_create_commit({ handle, message: string }): Promise<{ oid: string }>
 
 The demo uses the same composer and diff UI with separate HEAD/index/working contents. Its simulated commits advance demo history and leave unstaged contents intact. Demo repository contents reset when reopened; draft persistence is independent of that in-memory simulation.
 
+## Amend and clone follow-up
+
+The native composer can explicitly amend HEAD. It loads the current message into
+the amend fields without replacing the ordinary commit draft, supports message-only
+or staged rewrites, and labels the history rewrite. The backend revalidates HEAD,
+its symbolic ref, and the status fingerprint under the mutation lock. Hooks,
+signing, refresh-on-every-outcome, uncertain-write handling, and the no-retry rule
+remain unchanged; unstaged content is never included. The lock serializes Gitty
+sessions, but external Git can still race after preflight and before `git commit`
+acquires its own index/ref locks. The demo keeps amend disabled.
+
+The repository picker also starts full native or WSL clones. Clone progress and
+cancellation belong to `NativeWorkspace`, so closing the picker does not abandon
+the operation. Success flows through the existing tab reducer and opens the new
+location. The backend clones into an operation-owned temporary sibling, publishes
+with no replacement, and cleans up only that temporary path on failure or cancel.
+An atomic lifecycle transition decides whether cancellation or publication wins;
+late cancellation is rejected and the UI returns to the running state. Local clone
+objects are copied rather than hardlinked to the source.
+Authentication is noninteractive and uses configured credential helpers or the
+SSH agent; embedded HTTP(S) credentials are rejected.
+
 ## Files
 
 - `src/styles.css`: replacement design system, layout, responsive behavior, local font imports.
@@ -44,12 +66,22 @@ The demo uses the same composer and diff UI with separate HEAD/index/working con
 - `src/components/HistoryGraph.tsx`, `src/graph/layout.ts`: warm graph palette and synchronized 48px rows.
 - `src/components/Inspector.tsx`, `src/components/NativeInspector.tsx`: shared typography/diff presentation, native close control, updated copy.
 - `src/model/repository.ts`, `src/model/workflow.ts`: command contract, write/refresh lifecycle, explicit path selection, durable drafts.
+- `src/model/clone.ts`, `src/components/RepositoryPicker.tsx`: clone request/state contract and native/WSL clone form.
 - `src/model/demo.ts`, `src/model/demoWorkflow.ts`: updated illustrative history and index-aware demo operations.
 - `src/model/workflow.test.ts`: lifecycle, stale-session, draft durability, path selection, and demo partial-staging tests.
 - `src/components/native.smoke.mjs`, `src/components/workflow.smoke.mjs`: browser integration checks.
 - `package.json`, `package-lock.json`: three local Fontsource font packages.
 
-## Verification
+## Current follow-up verification
+
+- `npm test`: **139 tests passed across 13 files**.
+- `npm run test:rust`: **113 tests passed** on macOS, including real-repository amend and local-bare-remote clone coverage.
+- TypeScript/Vite build, Rust check, formatting, Clippy with warnings denied, and `git diff --check` passed.
+- `npm run desktop:build -- --debug --bundles app`: **passed**, producing `src-tauri/target/debug/bundle/macos/Gitty.app`.
+- All six Chromium smoke suites passed. After amend/clone coverage was added, `workflow.smoke.mjs` and `tabs.smoke.mjs` were rerun; they cover amend draft restoration and clone request/progress/open-tab behavior through mocked native IPC.
+- Packaged native GUI interaction, live remote authentication, and Windows/WSL/Linux runtime behavior remain unverified.
+
+## Original redesign verification
 
 - `npm test`: **45 tests passed across 5 files**, including rename/copy command-path semantics.
 - `npm run build`: **passed**, including TypeScript and production Vite bundling.

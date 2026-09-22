@@ -1,8 +1,8 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { AlertTriangle, Check, FileCode2, GitCommitHorizontal, Minus, Plus } from 'lucide-react';
-import type { DiffSpec, FileDiff, RepositoryMutation, RepositorySession, RepositoryStatus } from '../model/repository';
+import type { CommitDetail, DiffSpec, FileDiff, RepositoryMutation, RepositorySession, RepositoryStatus } from '../model/repository';
 import { errorMessage, native, statusGroups, type WorkingGroup } from '../model/native';
-import { clearSubmittedDraft, commitMessage, draftKey, operationPaths, readDraft, saveDraft, type CommitDraft, type MutationOutcome } from '../model/workflow';
+import { clearSubmittedDraft, commitMessage, draftFromCommitMessage, draftKey, operationPaths, readDraft, saveDraft, type CommitDraft, type MutationOutcome } from '../model/workflow';
 import { useSettings } from '../model/settings';
 import './hunk-actions.css';
 
@@ -20,6 +20,10 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   const key = draftKey(session);
   const composerId = useId();
   const [draft, setDraft] = useState(() => readDraft(key));
+  const [amending, setAmending] = useState(false);
+  const [amendDraft, setAmendDraft] = useState<CommitDraft | null>(null);
+  const [amendHead, setAmendHead] = useState('');
+  const [amendError, setAmendError] = useState('');
   const [persisted, setPersisted] = useState(true);
   const [selection, setSelection] = useState<{ group: WorkingGroup; path: string } | null>(null);
   const [preview, setPreview] = useState<{ scope: string; diff?: FileDiff; error?: string } | null>(null);
@@ -32,6 +36,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   const [split, setSplit] = useState(settings.diffView === 'split');
   useEffect(() => setSplit(settings.diffView === 'split'), [settings.diffView]);
   const pending = useRef(false);
+  const amendRequest = useRef(0);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const groups = statusGroups(status?.entries ?? []);
@@ -51,21 +56,44 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   const stagedCount = groups.staged.length;
   const unstagedCount = groups.unstaged.length + groups.untracked.length;
   const blocked = busy || mutationBlocked || !!operation || !status || session.bare || !!outcome?.refreshError;
-  function edit(value: CommitDraft) { setDraft(value); setPersisted(saveDraft(key, value)); }
+  const composerDraft = amending ? amendDraft ?? { subject: '', body: '' } : draft;
+  const amendReady = amending && !!amendDraft && !!session.head && amendHead === session.head && status?.head === session.head && status.headRef === session.headRef;
+  function edit(value: CommitDraft) {
+    if (amending) setAmendDraft(value);
+    else { setDraft(value); setPersisted(saveDraft(key, value)); }
+  }
+  async function toggleAmend(enabled: boolean) {
+    const token = ++amendRequest.current;
+    setAmending(enabled); setAmendDraft(null); setAmendHead(''); setAmendError('');
+    if (!enabled || demo || !session.head) return;
+    try {
+      const detail = await native<CommitDetail>('repository_commit', { handle: session.handle, oid: session.head });
+      if (token !== amendRequest.current) return;
+      setAmendDraft(draftFromCommitMessage(detail.body)); setAmendHead(session.head);
+    } catch (error) { if (token === amendRequest.current) setAmendError(errorMessage(error)); }
+  }
+  useEffect(() => {
+    if (amending && amendHead && amendHead !== session.head) {
+      amendRequest.current++;
+      setAmendDraft(null);
+      setAmendError('HEAD changed after the amend message was loaded. Turn amend off and on to review the new last commit.');
+    }
+  }, [amending, amendHead, session.head]);
   async function perform(mutation: RepositoryMutation, fileCount = 1) {
     if (pending.current || blocked) return;
     pending.current = true;
-    setOperation(mutation.kind === 'commit' ? 'Creating commit and refreshing repository…' : `${mutation.kind === 'stage' || mutation.kind === 'stage_hunk' ? 'Staging' : 'Unstaging'} ${'hunkIndex' in mutation ? 'selected hunk' : `${fileCount} file${fileCount === 1 ? '' : 's'}`} and refreshing…`);
+    setOperation(mutation.kind === 'commit' ? 'Creating commit and refreshing repository…' : mutation.kind === 'amend' ? 'Rewriting last commit and refreshing repository…' : `${mutation.kind === 'stage' || mutation.kind === 'stage_hunk' ? 'Staging' : 'Unstaging'} ${'hunkIndex' in mutation ? 'selected hunk' : `${fileCount} file${fileCount === 1 ? '' : 's'}`} and refreshing…`);
     setOutcome(null); setSuccess('');
     try {
       const result = await onMutation(mutation);
-      if (result.oid) {
+      if (result.oid && mutation.kind === 'commit') {
         // Only a confirmed commit clears the submitted draft, never a failure.
         clearSubmittedDraft(key, draft);
       }
       if (!alive.current || result.superseded) return;
       setOutcome(result);
-      if (result.oid) { setDraft({ subject: '', body: '' }); setSuccess(`Created commit ${result.oid.slice(0, 12)}.`); }
+      if (result.oid && mutation.kind === 'commit') { setDraft({ subject: '', body: '' }); setSuccess(`Created commit ${result.oid.slice(0, 12)}.`); }
+      else if (result.oid && mutation.kind === 'amend') { amendRequest.current++; setAmending(false); setAmendDraft(null); setAmendHead(''); setSuccess(`Rewrote last commit as ${result.oid.slice(0, 12)}.`); }
       else if (!result.error && !result.refreshError) setSuccess(mutation.kind === 'stage' || mutation.kind === 'stage_hunk' ? 'Selected changes staged.' : 'Selected changes unstaged.');
     } catch (error) {
       if (alive.current) setOutcome({ error: errorMessage(error), refreshError: 'Repository state could not be confirmed.' });
@@ -106,11 +134,15 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
           {preview?.scope === scope && preview.diff && <DiffPreview diff={preview.diff} split={split} hunkAction={active?.group === 'staged' ? 'unstage_hunk' : active?.group === 'unstaged' ? 'stage_hunk' : undefined} busy={blocked} unavailable={demo ? 'Hunk staging is unavailable in the demo. Open a desktop repository to stage individual hunks.' : undefined} onHunk={mutation => void perform(mutation)} />}
           {!active && <div className="clean-state"><Check size={32} /><h2>Nothing to review.</h2><p>Edit files in your repository, then return here to stage and commit.</p></div>}
         </section>
-        <form className="commit-composer" aria-label="Commit composer" onSubmit={event => { event.preventDefault(); if (draft.subject.trim() && stagedCount && !groups.conflict.length) void perform({ kind: 'commit', message: commitMessage(draft) }); }}>
-          <div className="composer-heading"><h2><GitCommitHorizontal size={20} />Create a commit</h2><span>{stagedCount} staged {stagedCount === 1 ? 'path' : 'paths'}</span></div>
-          <label htmlFor={`${composerId}-subject`}>Summary <span>required</span></label><input id={`${composerId}-subject`} name="subject" placeholder="Describe what changed" autoComplete="off" value={draft.subject} disabled={!!operation} onChange={event => edit({ ...draft, subject: event.target.value })} />
-          <label htmlFor={`${composerId}-body`}>Description <span>optional</span></label><textarea id={`${composerId}-body`} name="body" placeholder="Add context: why was this change needed?" rows={3} value={draft.body} disabled={!!operation} onChange={event => edit({ ...draft, body: event.target.value })} />
-          <div className="composer-footer"><p>{persisted ? 'Draft saved for this repository.' : 'Storage unavailable. Draft is kept for this session only.'}<br />{!stagedCount ? 'Stage at least one file to commit.' : 'Only staged changes will be committed.'}</p><button className="primary-button" type="submit" disabled={blocked || !stagedCount || !draft.subject.trim() || !!groups.conflict.length}><GitCommitHorizontal size={18} />{operation.startsWith('Creating') ? 'Committing…' : 'Commit staged changes'}</button></div>
+        <form className="commit-composer" aria-label="Commit composer" onSubmit={event => { event.preventDefault(); if (!composerDraft.subject.trim() || groups.conflict.length) return; if (amending && amendReady && status && session.head) void perform({ kind: 'amend', message: commitMessage(composerDraft), expectedHead: session.head, expectedHeadRef: session.headRef, expectedStatusFingerprint: status.fingerprint }); else if (!amending && stagedCount) void perform({ kind: 'commit', message: commitMessage(composerDraft) }); }}>
+          <div className="composer-heading"><h2><GitCommitHorizontal size={20} />{amending ? 'Rewrite last commit' : 'Create a commit'}</h2><span>{stagedCount} staged {stagedCount === 1 ? 'path' : 'paths'}</span></div>
+          <label className="amend-control"><input type="checkbox" checked={amending} disabled={!!operation || demo || !session.head} onChange={event => void toggleAmend(event.target.checked)} /><span>Amend last commit</span></label>
+          <p className="amend-description">{demo ? 'Amending history is available only for desktop repositories.' : amending ? 'This replaces the current HEAD commit. Staged changes will be included; with nothing staged, only its message is rewritten.' : 'Enable this to replace the current HEAD commit instead of creating a new one.'}</p>
+          {amending && !amendDraft && !amendError && <p role="status">Loading the last commit message…</p>}
+          {amendError && <p className="workflow-alert error" role="alert">{amendError}</p>}
+          <label htmlFor={`${composerId}-subject`}>Summary <span>required</span></label><input id={`${composerId}-subject`} name="subject" placeholder="Describe what changed" autoComplete="off" value={composerDraft.subject} disabled={!!operation || (amending && !amendDraft)} onChange={event => edit({ ...composerDraft, subject: event.target.value })} />
+          <label htmlFor={`${composerId}-body`}>Description <span>optional</span></label><textarea id={`${composerId}-body`} name="body" placeholder="Add context: why was this change needed?" rows={3} value={composerDraft.body} disabled={!!operation || (amending && !amendDraft)} onChange={event => edit({ ...composerDraft, body: event.target.value })} />
+          <div className="composer-footer"><p>{amending ? 'Your ordinary commit draft is preserved while amending.' : persisted ? 'Draft saved for this repository.' : 'Storage unavailable. Draft is kept for this session only.'}<br />{amending ? stagedCount ? 'The staged changes and edited message will replace the last commit.' : 'No staged changes; only the last commit message will be rewritten.' : !stagedCount ? 'Stage at least one file to commit.' : 'Only staged changes will be committed.'}</p><button className="primary-button" type="submit" disabled={blocked || (!amending && !stagedCount) || (amending && !amendReady) || !composerDraft.subject.trim() || !!groups.conflict.length}><GitCommitHorizontal size={18} />{operation.startsWith('Rewriting') ? 'Amending…' : operation.startsWith('Creating') ? 'Committing…' : amending ? 'Rewrite last commit' : 'Commit staged changes'}</button></div>
         </form>
       </div>
     </div>

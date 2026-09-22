@@ -1,3 +1,5 @@
+mod clone;
+mod clone_dto;
 mod commit;
 mod conflicts;
 mod diff;
@@ -15,6 +17,7 @@ mod stash;
 mod stream;
 mod wsl;
 
+use clone_dto::*;
 use dto::*;
 use operation_dto::*;
 use remote_dto::*;
@@ -23,6 +26,27 @@ use std::sync::Arc;
 use tauri::Manager;
 
 type Shared = Arc<Service>;
+#[tauri::command]
+async fn repository_clone(
+    state: tauri::State<'_, Shared>,
+    operation_id: String,
+    request: CloneRequest,
+    on_progress: tauri::ipc::Channel<CloneProgress>,
+) -> Result<RepositoryLocation> {
+    with_service(state, move |service| {
+        service.clone_repository(&operation_id, request, move |progress| {
+            let _ = on_progress.send(progress);
+        })
+    })
+    .await
+}
+#[tauri::command]
+async fn repository_cancel_clone(
+    state: tauri::State<'_, Shared>,
+    operation_id: String,
+) -> Result<()> {
+    with_service(state, move |service| service.cancel_clone(&operation_id)).await
+}
 #[tauri::command]
 async fn repository_sync_info(state: tauri::State<'_, Shared>, handle: String) -> Result<SyncInfo> {
     with_service(state, move |s| s.repo(&handle)?.sync_info()).await
@@ -113,6 +137,21 @@ async fn with_service<T: Send + 'static>(
 async fn repository_pick() -> Result<Option<String>> {
     let selection = rfd::AsyncFileDialog::new()
         .set_title("Open Git repository")
+        .pick_folder()
+        .await;
+    selection
+        .map(|f| {
+            f.path()
+                .to_str()
+                .map(String::from)
+                .ok_or_else(|| Error::new("unsupportedEncoding", "Selected path is not UTF-8"))
+        })
+        .transpose()
+}
+#[tauri::command]
+async fn repository_pick_clone_parent() -> Result<Option<String>> {
+    let selection = rfd::AsyncFileDialog::new()
+        .set_title("Choose clone destination folder")
         .pick_folder()
         .await;
     selection
@@ -247,6 +286,26 @@ async fn repository_create_commit(
     with_service(state, move |s| s.create_commit(&handle, &message)).await
 }
 #[tauri::command]
+async fn repository_amend_commit(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    message: String,
+    expected_head: String,
+    expected_head_ref: Option<String>,
+    expected_status_fingerprint: String,
+) -> Result<CreatedCommit> {
+    with_service(state, move |s| {
+        s.amend_commit(
+            &handle,
+            &message,
+            &expected_head,
+            expected_head_ref.as_deref(),
+            &expected_status_fingerprint,
+        )
+    })
+    .await
+}
+#[tauri::command]
 async fn repository_search(
     state: tauri::State<'_, Shared>,
     handle: String,
@@ -293,9 +352,17 @@ pub fn run() {
             app.manage(Arc::new(Service::new(app.path().app_data_dir()?)));
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                window.state::<Shared>().cancel_all_clones();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             backend_info,
+            repository_clone,
+            repository_cancel_clone,
             repository_pick,
+            repository_pick_clone_parent,
             repository_open,
             repository_close,
             repository_recent,
@@ -311,6 +378,7 @@ pub fn run() {
             repository_stage_hunk,
             repository_unstage_hunk,
             repository_create_commit,
+            repository_amend_commit,
             repository_operation_state,
             repository_run_operation,
             repository_conflict_file,

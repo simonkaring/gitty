@@ -87,6 +87,7 @@ function Workspace({ repository, theme, sidebarOpen, inspectorOpen, inspectorWid
   const loadDemoDiff = useCallback(async (_handle: string, spec: DiffSpec, path: string) => demoFileDiff(workingFiles, spec, path), [workingFiles]);
   async function mutate(mutation: RepositoryMutation): Promise<MutationOutcome> {
     if (mutation.kind === 'stage_hunk' || mutation.kind === 'unstage_hunk') return { error: 'Hunk staging is unavailable in the demo. Open a desktop repository to stage individual hunks.' };
+    if (mutation.kind === 'amend') return { error: 'Amending history is unavailable in the demo. Open a desktop repository to rewrite the last commit.' };
     if (mutationLock.current) return { error: 'A demo operation is already running.' };
     mutationLock.current = true; setMutationBusy(true);
     try {
