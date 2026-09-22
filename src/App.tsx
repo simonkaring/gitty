@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { ArrowDown, ArrowUp, ArrowUpRight, Check, ChevronDown, CircleHelp, Command, Download, FolderGit2, GitBranch, GitCommitHorizontal, Github, LocateFixed, PanelLeft, PanelRight, Search, Upload, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpRight, Check, ChevronDown, CircleHelp, Command, Download, FileCode2, FolderGit2, GitBranch, GitCommitHorizontal, Github, LocateFixed, PanelLeft, PanelRight, Search, Upload, X } from 'lucide-react';
 import { createDemoHistory } from './model/demo';
 import { layoutHistory } from './graph/layout';
 import { HistoryGraph, type GraphHandle } from './components/HistoryGraph';
@@ -7,12 +7,9 @@ import { Inspector } from './components/Inspector';
 import { repositories, Sidebar } from './components/Sidebar';
 import { isTauri } from '@tauri-apps/api/core';
 import { NativeWorkspace } from './components/NativeWorkspace';
-import { Brand, PaneResizer, ViewNavigation, usePaneWidth } from './components/WorkspaceControls';
-import { WorkingChanges } from './components/WorkingChanges';
+import { Brand, PaneResizer, usePaneWidth } from './components/WorkspaceControls';
+import { DiffPreview, type ActiveDiffState } from './components/WorkingChanges';
 import { RepositoryTabs } from './components/RepositoryTabs';
-import { demoCommittedFiles, demoFileDiff, demoStatus, demoWorkingFiles } from './model/demoWorkflow';
-import type { DiffSpec, RepositoryMutation, RepositorySession } from './model/repository';
-import type { MutationOutcome } from './model/workflow';
 import { useSettings, type ThemeDefinition } from './model/settings';
 import { SettingsButton } from './components/Settings';
 
@@ -43,16 +40,9 @@ function DemoApp() {
   return <div className={`app-shell ${sidebarOpen ? '' : 'sidebar-hidden'} ${inspectorOpen ? '' : 'inspector-hidden'}`} style={{ '--inspector-width': `${inspectorWidth}px` } as CSSProperties}>
     <header className="titlebar">
       <Brand demo />
-      <div className="titlebar-center"><FolderGit2 size={14} /><button onClick={() => setModal('repositories')}>{repository}<ChevronDown size={12} /></button><span className="titlebar-slash">/</span><span>Workspace</span></div>
-      <div className="titlebar-actions"><button className="icon-button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onClick={() => setModal('help')}><CircleHelp size={17} /></button><SettingsButton /><span className="toolbar-divider" /><button className={`icon-button ${sidebarOpen ? 'toggled' : ''}`} aria-label="Toggle repositories sidebar" aria-pressed={sidebarOpen} onClick={() => setSidebarOpen(value => !value)}><PanelLeft size={17} /></button><button className={`icon-button ${inspectorOpen ? 'toggled' : ''}`} aria-label="Toggle commit inspector" aria-pressed={inspectorOpen} onClick={() => setInspectorOpen(value => !value)}><PanelRight size={17} /></button></div>
+      <RepositoryTabs tabs={[{ id: repository, title: repository, busy: false, branch: 'main', dirty }]} activeId={repository} onSelect={() => {}} onClose={() => notify('Closing tabs requires a desktop repository.')} onNew={() => setModal('repositories')} />
+      <div className="titlebar-actions"><button className="icon-button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onClick={() => setModal('help')}><CircleHelp size={17} /></button><SettingsButton /><span className="toolbar-divider" /><button className={`icon-button ${sidebarOpen ? 'toggled' : ''}`} aria-label="Toggle references sidebar" aria-pressed={sidebarOpen} onClick={() => setSidebarOpen(value => !value)}><PanelLeft size={17} /></button><button className={`icon-button ${inspectorOpen ? 'toggled' : ''}`} aria-label="Toggle working changes and inspector" aria-pressed={inspectorOpen} onClick={() => setInspectorOpen(value => !value)}><PanelRight size={17} /></button></div>
     </header>
-    {/* Visual parity with the desktop tab strip: the demo only ever holds one
-        repository open (switching replaces it, it does not add a tab), so
-        this single tab is not closable and "+" reuses the existing
-        repository picker below rather than pretending to open a second,
-        simultaneous demo session. `branch`/`dirty` reflect real demo state,
-        not placeholders. */}
-    <RepositoryTabs tabs={[{ id: repository, title: repository, busy: false, branch: 'main', dirty }]} activeId={repository} onSelect={() => {}} onClose={() => notify('Closing tabs requires a desktop repository.')} onNew={() => setModal('repositories')} />
     <div className="repository-toolbar" aria-label="Repository actions (desktop only)">
       <div className="repository-toolbar-group"><button disabled title="Requires a desktop repository"><Download size={15} />Pull</button><button disabled title="Requires a desktop repository"><Upload size={15} />Push</button><button disabled title="Requires a desktop repository"><GitBranch size={15} />Branch</button><button disabled title="Requires a desktop repository">Stash…</button></div>
       <span className="repository-sync-badge">Sync and stash actions require a desktop repository</span>
@@ -73,40 +63,12 @@ interface WorkspaceProps {
   setModal: (value: 'help' | 'repositories' | null) => void; notify: (message: string) => void; onDirty: (dirty: boolean) => void;
 }
 
-function Workspace({ repository, theme, sidebarOpen, inspectorOpen, inspectorWidth, setInspectorWidth, onRepository, setInspectorOpen, setModal, notify, onDirty }: WorkspaceProps) {
-  const [snapshot, setSnapshot] = useState(() => createDemoHistory(repository === 'gitty' ? 1 : repository === 'orbit-design' ? 7 : 13));
-  const [view, setView] = useState<'history' | 'working'>('history');
+function Workspace({ repository, theme, sidebarOpen, inspectorOpen, inspectorWidth, setInspectorWidth, setInspectorOpen, setModal, notify, onDirty }: WorkspaceProps) {
+  const [snapshot] = useState(() => createDemoHistory(repository === 'gitty' ? 1 : repository === 'orbit-design' ? 7 : 13));
+  const [activeDiff, setActiveDiff] = useState<ActiveDiffState | null>(null);
+  const [split, setSplit] = useState(false);
   const [sidebarWidth, setSidebarWidth] = usePaneWidth('sidebar', 240, 210, 340);
-  const [workingFiles, setWorkingFiles] = useState(demoWorkingFiles);
-  const [mutationBusy, setMutationBusy] = useState(false);
-  const [revision, setRevision] = useState(0);
-  const mutationLock = useRef(false);
-  const workingStatus = useMemo(() => demoStatus(workingFiles, snapshot.head), [workingFiles, snapshot.head]);
-  useEffect(() => { onDirty(workingStatus.entries.length > 0); }, [workingStatus.entries.length, onDirty]);
-  const demoSession: RepositorySession = { handle: `demo:${repository}`, name: repository, root: `demo://${repository}`, gitDir: '', commonDir: '', location: { kind: 'native', path: `demo://${repository}` }, head: snapshot.head, headRef: 'refs/heads/main', linkedWorktree: false, shallow: false, bare: false };
-  const loadDemoDiff = useCallback(async (_handle: string, spec: DiffSpec, path: string) => demoFileDiff(workingFiles, spec, path), [workingFiles]);
-  async function mutate(mutation: RepositoryMutation): Promise<MutationOutcome> {
-    if (mutation.kind === 'stage_hunk' || mutation.kind === 'unstage_hunk') return { error: 'Hunk staging is unavailable in the demo. Open a desktop repository to stage individual hunks.' };
-    if (mutation.kind === 'amend') return { error: 'Amending history is unavailable in the demo. Open a desktop repository to rewrite the last commit.' };
-    if (mutationLock.current) return { error: 'A demo operation is already running.' };
-    mutationLock.current = true; setMutationBusy(true);
-    try {
-      await new Promise(resolve => setTimeout(resolve, 250));
-      if (mutation.kind === 'commit') {
-        const files = demoCommittedFiles(workingFiles);
-        if (!files.length) return { error: 'Stage changes before committing.' };
-        const oid = crypto.randomUUID().replaceAll('-', '').padEnd(40, '0');
-        const [subject, ...body] = mutation.message.split('\n');
-        setSnapshot(value => ({ ...value, head: oid, refs: value.refs.map(ref => ref.name === 'main' ? { ...ref, commitId: oid } : ref), commits: [{ id: oid, parents: [value.head], subject, body: body.join('\n').trim(), author: 'You', email: 'you@example.test', timestamp: Date.now(), branch: 'main', files }, ...value.commits] }));
-        setWorkingFiles(value => value.map(file => ({ ...file, head: file.index })));
-        setSelectedId(oid); setRevision(value => value + 1);
-        return { oid };
-      }
-      setWorkingFiles(value => value.map(file => mutation.paths.includes(file.path) ? { ...file, index: mutation.kind === 'stage' ? file.working : file.head } : file));
-      setRevision(value => value + 1);
-      return {};
-    } finally { mutationLock.current = false; setMutationBusy(false); }
-  }
+  useEffect(() => { onDirty(false); }, [onDirty]);
   const layout = useMemo(() => layoutHistory(snapshot.commits), [snapshot]);
   const [selectedId, setSelectedId] = useState(snapshot.head);
   const [loaded, setLoaded] = useState(240);
@@ -123,7 +85,7 @@ function Workspace({ repository, theme, sidebarOpen, inspectorOpen, inspectorWid
   const matches = useMemo(() => normalized ? new Set(results.map(commit => commit.id)) : null, [results, normalized]);
   const matchIndex = results.findIndex(commit => commit.id === selectedId);
   const jump = useCallback((id: string, refName?: string) => {
-    setView('history');
+    setActiveDiff(null);
     const row = snapshot.commits.findIndex(commit => commit.id === id);
     if (row < 0) return;
     setSelectedId(id); setActiveRef(refName ?? null); setRefMenu(false);
@@ -159,20 +121,52 @@ function Workspace({ repository, theme, sidebarOpen, inspectorOpen, inspectorWid
     jump(results[index].id);
   }
   return <main className="workspace" style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
-    {sidebarOpen && <><Sidebar repository={repository} refs={snapshot.refs} onRepository={onRepository} onJump={jump} onAdd={() => setModal('repositories')} activeRef={activeRef} view={view} workingCount={workingStatus.entries.length} onView={setView} /><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
-    <div className="workspace-main"><div className="compact-view-nav"><ViewNavigation view={view} count={workingStatus.entries.length} onChange={setView} /></div><div className="history-workspace" hidden={view !== 'history'}>
-    <section className="history-pane" aria-label="Repository history">
-      <div className="repository-heading"><div className="repository-heading-main"><div className="repo-title-icon"><FolderGit2 size={23} strokeWidth={1.6} /></div><div><div className="repo-title-line"><h1>{repository}</h1><span className="local-badge">DEMO</span></div><p>{repositories.find(repo => repo.id === repository)?.path}</p></div></div><span className="branch-heading"><GitBranch size={14} /> main <span className="live-dot" /></span></div>
-      <div className="history-title"><span><GitCommitHorizontal size={18} /><h2>History</h2><span className="count">{snapshot.commits.length.toLocaleString()}</span></span><span className="history-subtitle">The full picture of your work.</span></div>
-      <div className="history-toolbar"><div className="ref-menu-wrapper" ref={refMenuRef}><button className={`branch-filter ${refMenu ? 'active' : ''}`} onClick={() => setRefMenu(value => !value)} aria-expanded={refMenu} aria-controls="branch-jump-menu"><GitBranch size={14} /><span>All branches</span><ChevronDown size={12} /></button>
-        {refMenu && <div className="ref-menu" id="branch-jump-menu"><span className="menu-label">JUMP TO A REFERENCE</span>{snapshot.refs.map(ref => <button key={ref.name} onClick={() => jump(ref.commitId, ref.name)}><GitBranch size={13} /><span>{ref.name}</span></button>)}<p>All branches stay visible to preserve the graph.</p></div>}
-      </div><div className="search-field"><Search size={14} /><input ref={searchRef} aria-label="Search commits, authors, branches, or SHA" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search commits…" onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); nextResult(event.shiftKey ? -1 : 1); } }} />{query ? <button className="icon-button" aria-label="Clear search" onClick={() => { setQuery(''); searchRef.current?.focus(); }}><X size={13} /></button> : <kbd>/</kbd>}</div><button className="head-button" title="Jump to HEAD (H)" onClick={() => { setQuery(''); jump(snapshot.head, 'main'); graphRef.current?.focus(); }}><LocateFixed size={15} /><span>HEAD</span></button></div>
-      {normalized && <div className="search-results" role="status"><span>{results.length ? `${matchIndex >= 0 ? `${matchIndex + 1} of ` : ''}${results.length} matches` : `No commits match “${query}”`}<span className="search-preserve"> · Full graph preserved</span></span><span><button className="icon-button" disabled={!results.length} aria-label="Previous search result" onClick={() => nextResult(-1)}><ArrowUp size={14} /></button><button className="icon-button" disabled={!results.length} aria-label="Next search result" onClick={() => nextResult(1)}><ArrowDown size={14} /></button></span></div>}
-      <HistoryGraph ref={graphRef} commits={snapshot.commits} layout={layout} refs={snapshot.refs} selectedId={selectedId} head={snapshot.head} loaded={loaded} matches={matches} onSelect={id => { setSelectedId(id); setActiveRef(null); }} onLoadMore={() => setLoaded(value => Math.min(value + 240, snapshot.commits.length))} onOpenDetails={() => setInspectorOpen(true)} onActions={() => notify('Branch, merge, cherry-pick, tag and pull request actions require a desktop repository.')} theme={theme} />
-    </section>
-    {inspectorOpen && <><PaneResizer label="Resize commit inspector" width={inspectorWidth} onChange={setInspectorWidth} max={520} />
-      <Inspector commit={selected} head={snapshot.head} onJump={jump} onClose={() => setInspectorOpen(false)} notify={notify} />
-    </>}
-    </div><div className="working-workspace-host" hidden={view !== 'working'}><WorkingChanges session={demoSession} status={workingStatus} revision={revision} busy={mutationBusy} onMutation={mutate} onRefresh={async () => { setRevision(value => value + 1); }} loadDiff={loadDemoDiff} demo /></div></div>
+    {sidebarOpen && <><Sidebar repository={repository} refs={snapshot.refs} onJump={jump} activeRef={activeRef} /><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
+    <div className="workspace-main">
+      <div className="history-workspace">
+        {activeDiff ? (
+          <section className="diff-view-pane" aria-label={`Diff for ${activeDiff.path}`}>
+            <div className="diff-view-header">
+              <div className="diff-view-file">
+                <FileCode2 size={16} />
+                <span className="diff-view-filepath">{activeDiff.path}</span>
+                {activeDiff.group && <span className={`diff-view-group-badge ${activeDiff.group}`}>{activeDiff.group}</span>}
+              </div>
+              <div className="diff-view-actions">
+                {activeDiff.onToggleStage && (
+                  <button className={`secondary-button diff-stage-btn ${activeDiff.isStaged ? 'unstage' : 'stage'}`} disabled={activeDiff.busy} onClick={activeDiff.onToggleStage}>
+                    {activeDiff.isStaged ? 'Unstage File' : 'Stage File'}
+                  </button>
+                )}
+                <button className="secondary-button" aria-pressed={split} onClick={() => setSplit(!split)}>
+                  {split ? 'Unified' : 'Side by side'}
+                </button>
+                <button className="icon-button" aria-label="Close diff and show graph" title="Close diff" onClick={() => setActiveDiff(null)}>
+                  <X size={17} />
+                </button>
+              </div>
+            </div>
+            <div className="diff-view-body">
+              {activeDiff.loading && <p className="diff-placeholder" role="status">Loading diff…</p>}
+              {activeDiff.error && <p className="workflow-alert error" role="alert">{activeDiff.error}</p>}
+              {activeDiff.diff && <DiffPreview diff={activeDiff.diff} split={split} hunkAction={activeDiff.hunkAction} busy={activeDiff.busy} unavailable="Hunk staging is unavailable in the demo." onHunk={activeDiff.onHunk} />}
+            </div>
+          </section>
+        ) : (
+          <section className="history-pane" aria-label="Repository history">
+            <div className="repository-heading"><div className="repository-heading-main"><div className="repo-title-icon"><FolderGit2 size={23} strokeWidth={1.6} /></div><div><div className="repo-title-line"><h1>{repository}</h1><span className="local-badge">DEMO</span></div><p>{repositories.find(repo => repo.id === repository)?.path}</p></div></div><span className="branch-heading"><GitBranch size={14} /> main <span className="live-dot" /></span></div>
+            <div className="history-title"><span><GitCommitHorizontal size={18} /><h2>History</h2><span className="count">{snapshot.commits.length.toLocaleString()}</span></span><span className="history-subtitle">The full picture of your work.</span></div>
+            <div className="history-toolbar"><div className="ref-menu-wrapper" ref={refMenuRef}><button className={`branch-filter ${refMenu ? 'active' : ''}`} onClick={() => setRefMenu(value => !value)} aria-expanded={refMenu} aria-controls="branch-jump-menu"><GitBranch size={14} /><span>All branches</span><ChevronDown size={12} /></button>
+              {refMenu && <div className="ref-menu" id="branch-jump-menu"><span className="menu-label">JUMP TO A REFERENCE</span>{snapshot.refs.map(ref => <button key={ref.name} onClick={() => jump(ref.commitId, ref.name)}><GitBranch size={13} /><span>{ref.name}</span></button>)}<p>All branches stay visible to preserve the graph.</p></div>}
+            </div><div className="search-field"><Search size={14} /><input ref={searchRef} aria-label="Search commits, authors, branches, or SHA" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search commits…" onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); nextResult(event.shiftKey ? -1 : 1); } }} />{query ? <button className="icon-button" aria-label="Clear search" onClick={() => { setQuery(''); searchRef.current?.focus(); }}><X size={13} /></button> : <kbd>/</kbd>}</div><button className="head-button" title="Jump to HEAD (H)" onClick={() => { setQuery(''); jump(snapshot.head, 'main'); graphRef.current?.focus(); }}><LocateFixed size={15} /><span>HEAD</span></button></div>
+            {normalized && <div className="search-results" role="status"><span>{results.length ? `${matchIndex >= 0 ? `${matchIndex + 1} of ` : ''}${results.length} matches` : `No commits match “${query}”`}<span className="search-preserve"> · Full graph preserved</span></span><span><button className="icon-button" disabled={!results.length} aria-label="Previous search result" onClick={() => nextResult(-1)}><ArrowUp size={14} /></button><button className="icon-button" disabled={!results.length} aria-label="Next search result" onClick={() => nextResult(1)}><ArrowDown size={14} /></button></span></div>}
+            <HistoryGraph ref={graphRef} commits={snapshot.commits} layout={layout} refs={snapshot.refs} selectedId={selectedId} head={snapshot.head} loaded={loaded} matches={matches} onSelect={id => { setActiveDiff(null); setSelectedId(id); setActiveRef(null); }} onLoadMore={() => setLoaded(value => Math.min(value + 240, snapshot.commits.length))} onOpenDetails={() => setInspectorOpen(true)} onActions={() => notify('Branch, merge, cherry-pick, tag and pull request actions require a desktop repository.')} theme={theme} />
+          </section>
+        )}
+        {inspectorOpen && <><PaneResizer label="Resize commit inspector" width={inspectorWidth} onChange={setInspectorWidth} max={520} />
+          <Inspector commit={selected} head={snapshot.head} onJump={jump} onClose={() => setInspectorOpen(false)} notify={notify} />
+        </>}
+      </div>
+    </div>
   </main>;
 }

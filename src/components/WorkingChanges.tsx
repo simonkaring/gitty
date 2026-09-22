@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { AlertTriangle, Check, FileCode2, GitCommitHorizontal, Minus, Plus } from 'lucide-react';
+import { AlertTriangle, Check, FileCode2, GitCommitHorizontal, Minus, Plus, RotateCw, X } from 'lucide-react';
 import type { CommitDetail, DiffSpec, FileDiff, RepositoryMutation, RepositorySession, RepositoryStatus } from '../model/repository';
 import { errorMessage, native, statusGroups, type WorkingGroup } from '../model/native';
 import { clearSubmittedDraft, commitMessage, draftFromCommitMessage, draftKey, operationPaths, readDraft, saveDraft, type CommitDraft, type MutationOutcome } from '../model/workflow';
@@ -10,12 +10,30 @@ const labels: Record<WorkingGroup, string> = { staged: 'Staged', unstaged: 'Unst
 const descriptions: Record<WorkingGroup, string> = { staged: 'HEAD → index · included in your next commit', unstaged: 'Index → working tree · not yet staged', untracked: 'New files · not yet tracked by Git', conflict: 'Unresolved paths · open the conflict editor to resolve' };
 const readDiff = (handle: string, spec: DiffSpec, path: string) => native<FileDiff>('repository_diff', { handle, spec, path });
 
-export function WorkingChanges({ session, status, revision, busy, mutationBlocked = false, onMutation, onRefresh, onResolve, loadDiff = readDiff, demo = false }: {
+export interface ActiveDiffState {
+  path: string;
+  group?: WorkingGroup;
+  diff: FileDiff | null;
+  error?: string;
+  loading: boolean;
+  hunkAction?: 'stage_hunk' | 'unstage_hunk';
+  busy?: boolean;
+  unavailable?: string;
+  onHunk?: (mutation: RepositoryMutation) => void;
+  onToggleStage?: () => void;
+  isStaged?: boolean;
+}
+
+export function WorkingChanges({ session, status, revision, busy, mutationBlocked = false, onMutation, onRefresh, onResolve, loadDiff = readDiff, demo = false, sidebarMode = false, activePath, onActiveDiffChange, onClose }: {
   session: RepositorySession; status: RepositoryStatus | null; revision: number; busy: boolean;
   onMutation: (mutation: RepositoryMutation) => Promise<MutationOutcome>; onRefresh: () => Promise<void>;
   loadDiff?: typeof readDiff; demo?: boolean;
   onResolve?: (path: string) => void;
   mutationBlocked?: boolean;
+  sidebarMode?: boolean;
+  activePath?: string | null;
+  onActiveDiffChange?: (diff: ActiveDiffState | null) => void;
+  onClose?: () => void;
 }) {
   const key = draftKey(session);
   const composerId = useId();
@@ -42,7 +60,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   const groups = statusGroups(status?.entries ?? []);
   const chosen = selection && groups[selection.group].some(entry => entry.path === selection.path) ? selection : null;
   const fallbackGroup = (['unstaged', 'untracked', 'staged', 'conflict'] as WorkingGroup[]).find(kind => groups[kind].length);
-  const active = chosen ?? (fallbackGroup ? { group: fallbackGroup, path: groups[fallbackGroup][0].path } : null);
+  const active = sidebarMode ? chosen : (chosen ?? (fallbackGroup ? { group: fallbackGroup, path: groups[fallbackGroup][0].path } : null));
   const scope = JSON.stringify([session.handle, active?.group, active?.path, revision, retry, busy]);
   useEffect(() => {
     let live = true;
@@ -51,11 +69,44 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
     loadDiff(session.handle, { kind: active.group }, active.path).then(diff => { if (live) setPreview({ scope, diff }); }).catch(error => { if (live) setPreview({ scope, error: errorMessage(error) }); });
     return () => { live = false; };
   }, [scope, loadDiff]);
+
+  useEffect(() => {
+    if (sidebarMode && activePath === null && selection !== null) {
+      setSelection(null);
+    }
+  }, [sidebarMode, activePath, selection]);
+
   const stagePaths = operationPaths(status?.entries ?? [], 'stage');
   const stagedPaths = operationPaths(status?.entries ?? [], 'unstage');
   const stagedCount = groups.staged.length;
   const unstagedCount = groups.unstaged.length + groups.untracked.length;
   const blocked = busy || mutationBlocked || !!operation || !status || session.bare || !!outcome?.refreshError;
+
+  useEffect(() => {
+    if (!onActiveDiffChange) return;
+    if (!active) {
+      onActiveDiffChange(null);
+      return;
+    }
+    const isStaged = active.group === 'staged';
+    onActiveDiffChange({
+      path: active.path,
+      group: active.group,
+      diff: preview?.diff ?? null,
+      error: preview?.error,
+      loading: (!preview || preview.scope !== scope) && !busy,
+      hunkAction: isStaged ? 'unstage_hunk' : active.group === 'unstaged' ? 'stage_hunk' : undefined,
+      busy: blocked,
+      unavailable: demo ? 'Hunk staging is unavailable in the demo. Open a desktop repository to stage individual hunks.' : undefined,
+      onHunk: mutation => void perform(mutation),
+      onToggleStage: () => {
+        const operationKind = isStaged ? 'unstage' : 'stage';
+        const entry = groups[active.group].find(e => e.path === active.path);
+        if (entry) void perform({ kind: operationKind, paths: operationPaths([entry], operationKind) });
+      },
+      isStaged,
+    });
+  }, [active, preview, scope, busy, blocked, demo, onActiveDiffChange]);
   const composerDraft = amending ? amendDraft ?? { subject: '', body: '' } : draft;
   const amendReady = amending && !!amendDraft && !!session.head && amendHead === session.head && status?.head === session.head && status.headRef === session.headRef;
   function edit(value: CommitDraft) {
@@ -105,6 +156,75 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
     try { await onRefresh(); if (alive.current) setOutcome(value => value ? { ...value, refreshError: undefined } : null); }
     catch (error) { if (alive.current) setOutcome(value => ({ ...value, refreshError: errorMessage(error) })); }
     finally { pending.current = false; if (alive.current) setOperation(''); }
+  }
+
+  if (sidebarMode) {
+    return <section className="working-inspector" aria-label="Working changes inspector" aria-busy={!!operation}>
+      <div className="working-sidebar-header">
+        <div>
+          <span className="eyebrow">{demo ? 'DEMO WORKSPACE' : session.headRef?.replace('refs/heads/', '') ?? 'DETACHED HEAD'}</span>
+          <h2>Working changes <span className="count">{status?.entries.length ?? 0}</span></h2>
+        </div>
+        <div className="working-sidebar-actions">
+          <button className="icon-button" disabled={busy || !!operation} title="Refresh changes" aria-label="Refresh changes" onClick={() => void refresh()}>
+            <RotateCw size={14} className={busy || !!operation ? 'spin' : ''} />
+          </button>
+          {onClose && <button className="icon-button" aria-label="Close working changes" title="Close" onClick={onClose}><X size={15} /></button>}
+        </div>
+      </div>
+      {session.bare && <div className="workflow-alert" role="status">Bare repository.</div>}
+      {!!groups.conflict.length && <div className="workflow-alert" role="status"><AlertTriangle size={15} />Unresolved conflicts.</div>}
+      {outcome?.error && <div className="workflow-alert error" role="alert">{outcome.error}</div>}
+      {outcome?.refreshError && <div className="workflow-alert error" role="alert">Refresh failed: {outcome.refreshError} <button onClick={() => void refresh()}>Retry</button></div>}
+      {success && <div className="workflow-status" role="status"><Check size={14} />{success}</div>}
+      <div className="working-sidebar-content">
+        <div className="file-list-actions">
+          <button className="secondary-button" disabled={blocked || !unstagedCount} onClick={() => void perform({ kind: 'stage', paths: stagePaths }, unstagedCount)}>
+            <Plus size={13} />Stage all ({unstagedCount})
+          </button>
+          <button className="secondary-button" disabled={blocked || !stagedCount} onClick={() => void perform({ kind: 'unstage', paths: stagedPaths }, stagedCount)}>
+            <Minus size={13} />Unstage all ({stagedCount})
+          </button>
+        </div>
+        <div className="working-files-list">
+          {(['conflict', 'unstaged', 'untracked', 'staged'] as WorkingGroup[]).map(kind => <section className={`working-category ${kind}`} key={kind} aria-label={`${labels[kind]} files`}>
+            <h2>{labels[kind]}<span className="count">{groups[kind].length}</span></h2>
+            {!groups[kind].length && <p className="empty-category">No {labels[kind].toLowerCase()} files</p>}
+            {groups[kind].map(entry => {
+              const partial = groups.staged.some(item => item.path === entry.path) && groups.unstaged.some(item => item.path === entry.path);
+              const isSelected = active?.group === kind && active.path === entry.path;
+              return <div className={`working-file ${isSelected ? 'selected' : ''}`} key={entry.path}>
+                <button className="working-file-select" aria-pressed={isSelected} aria-label={`${labels[kind]}: ${entry.path}`} onClick={() => setSelection({ group: kind, path: entry.path })}>
+                  <FileCode2 size={15} />
+                  <span>
+                    <strong>{entry.path}</strong>
+                    {entry.oldPath && <small>{(entry.indexStatus === 'C' || (entry.indexStatus !== 'R' && entry.worktreeStatus === 'C')) ? 'Copied' : 'Renamed'} from {entry.oldPath}</small>}
+                    {partial && <small>Partially staged</small>}
+                  </span>
+                </button>
+                {kind === 'conflict' && onResolve && <button disabled={busy} onClick={() => onResolve(entry.path)}>Resolve…</button>}
+                {kind !== 'conflict' && <button className="file-stage-button" disabled={blocked} title={partial ? kind === 'staged' ? 'Unstage all indexed changes for this path' : 'Stage the remaining working-tree changes for this path' : undefined} aria-label={`${kind === 'staged' ? 'Unstage' : 'Stage'} ${entry.path}`} onClick={() => { const operationKind = kind === 'staged' ? 'unstage' : 'stage'; void perform({ kind: operationKind, paths: operationPaths([entry], operationKind) }); }}>{kind === 'staged' ? <Minus size={16} /> : <Plus size={16} />}</button>}
+              </div>;
+            })}
+          </section>)}
+        </div>
+        <form className="commit-composer" aria-label="Commit composer" onSubmit={event => { event.preventDefault(); if (!composerDraft.subject.trim() || groups.conflict.length) return; if (amending && amendReady && status && session.head) void perform({ kind: 'amend', message: commitMessage(composerDraft), expectedHead: session.head, expectedHeadRef: session.headRef, expectedStatusFingerprint: status.fingerprint }); else if (!amending && stagedCount) void perform({ kind: 'commit', message: commitMessage(composerDraft) }); }}>
+          <div className="composer-heading"><h2><GitCommitHorizontal size={18} />{amending ? 'Rewrite last commit' : 'Create commit'}</h2><span>{stagedCount} staged</span></div>
+          <label className="amend-control"><input type="checkbox" checked={amending} disabled={!!operation || demo || !session.head} onChange={event => void toggleAmend(event.target.checked)} /><span>Amend last commit</span></label>
+          {amending && !amendDraft && !amendError && <p role="status">Loading last commit…</p>}
+          {amendError && <p className="workflow-alert error" role="alert">{amendError}</p>}
+          <label htmlFor={`${composerId}-subject`}>Summary <span>required</span></label>
+          <input id={`${composerId}-subject`} name="subject" placeholder="Describe what changed" autoComplete="off" value={composerDraft.subject} disabled={!!operation || (amending && !amendDraft)} onChange={event => edit({ ...composerDraft, subject: event.target.value })} />
+          <label htmlFor={`${composerId}-body`}>Description <span>optional</span></label>
+          <textarea id={`${composerId}-body`} name="body" placeholder="Add context: why was this change needed?" rows={3} value={composerDraft.body} disabled={!!operation || (amending && !amendDraft)} onChange={event => edit({ ...composerDraft, body: event.target.value })} />
+          <div className="composer-footer">
+            <button className="primary-button" type="submit" disabled={blocked || (!amending && !stagedCount) || (amending && !amendReady) || !composerDraft.subject.trim() || !!groups.conflict.length}>
+              <GitCommitHorizontal size={16} />{operation.startsWith('Rewriting') ? 'Amending…' : operation.startsWith('Creating') ? 'Committing…' : amending ? 'Rewrite last commit' : 'Commit staged changes'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>;
   }
   return <section className="working-workspace" aria-label="Working changes workspace" aria-busy={!!operation}>
     <header className="working-heading"><div><span className="eyebrow">{demo ? 'DEMO WORKSPACE' : session.headRef?.replace('refs/heads/', '') ?? 'UNBORN / DETACHED HEAD'}</span><h1>Working changes<span className="count">{status?.entries.length ?? 0}</span></h1><p>Review your changes. Shape your next commit.</p></div><button className="secondary-button" disabled={busy || !!operation} onClick={() => void refresh()}>Refresh changes</button></header>

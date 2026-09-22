@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type CSSProperties } from 'react';
 import { Channel } from '@tauri-apps/api/core';
-import { PanelLeft, PanelRight, FolderGit2 } from 'lucide-react';
+import { PanelLeft, PanelRight } from 'lucide-react';
 import type { RepositoryLocation } from '../model/repository';
 import { RepositoryPicker } from './RepositoryPicker';
 import { Brand, usePaneWidth } from './WorkspaceControls';
@@ -99,16 +99,15 @@ export function NativeWorkspace({ onDemo }: { onDemo: () => void }) {
   return <div className="app-shell native-shell" style={{ '--inspector-width': `${inspectorWidth}px`, '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
     <header className="titlebar">
       <Brand />
-      <div className="titlebar-center"><FolderGit2 size={17} /><span>{tabs.length ? `${tabs.length} repositor${tabs.length === 1 ? 'y' : 'ies'} open` : 'Your workspace'}</span></div>
+      <RepositoryTabs tabs={tabSummaries} activeId={activeId} onSelect={selectTab} onClose={closeTab} onNew={() => setPicker(true)} />
       <div className="native-actions">
         <button className="secondary-button" onClick={() => setPicker(true)}>Open repository…</button>
         <button className="text-button" disabled={anyBusy} title={anyBusy ? 'Finish or switch to the tab with a running operation first.' : undefined} onClick={requestDemo}>Demo</button>
         <SettingsButton />
-        <button className="icon-button" aria-label="Toggle repositories sidebar" aria-pressed={sidebarOpen} onClick={() => setSidebarOpen(!sidebarOpen)}><PanelLeft size={18} /></button>
-        <button className="icon-button" aria-label="Toggle commit inspector" aria-pressed={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><PanelRight size={18} /></button>
+        <button className="icon-button" aria-label="Toggle references sidebar" aria-pressed={sidebarOpen} onClick={() => setSidebarOpen(!sidebarOpen)}><PanelLeft size={18} /></button>
+        <button className="icon-button" aria-label="Toggle working changes and inspector" aria-pressed={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><PanelRight size={18} /></button>
       </div>
     </header>
-    {!!tabs.length && <RepositoryTabs tabs={tabSummaries} activeId={activeId} onSelect={selectTab} onClose={closeTab} onNew={() => setPicker(true)} />}
     {notice && <div className="native-banner" role="status">{notice}</div>}
     {cloneBusy && <div className="clone-progress" role="status" aria-live="polite"><div><strong>{clone.status === 'cancelling' ? 'Cancelling clone…' : `Cloning ${clone.destinationName}`}</strong><span>{clone.progress?.message ?? 'Starting Git…'}</span>{clone.progress?.percent !== null && clone.progress?.percent !== undefined && <progress max="100" value={clone.progress.percent}>{clone.progress.percent}%</progress>}</div><button disabled={clone.status === 'cancelling'} onClick={cancelClone}>Cancel clone</button></div>}
     {clone.status === 'error' && <div className="native-banner" role="alert">Clone failed: {clone.message} <button onClick={() => dispatchClone({ type: 'dismiss' })}>Dismiss</button></div>}

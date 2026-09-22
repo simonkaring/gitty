@@ -2,13 +2,15 @@ import { useEffect, useMemo, useState } from 'react';
 import type { CommitDetail, DiffFile, FileDiff, RepositorySession, RepositoryStatus } from '../model/repository';
 import { errorMessage, inspectorSpec, native, statusGroups, WORKING_ID, type WorkingGroup } from '../model/native';
 import { X } from 'lucide-react';
-import { DiffPreview } from './WorkingChanges';
+import { DiffPreview, type ActiveDiffState } from './WorkingChanges';
 import { useSettings } from '../model/settings';
 
-export function NativeInspector({ session, selected, status, revision, base, target, onJump, onBase, onTarget, onSwap, onClear, onClose }: {
+export function NativeInspector({ session, selected, status, revision, base, target, onJump, onBase, onTarget, onSwap, onClear, onClose, activePath, onActiveDiffChange }: {
   session: RepositorySession; selected: string; status: RepositoryStatus | null; revision: number;
   base: string; target: string; onJump: (id: string) => void; onBase: () => void; onTarget: () => void; onSwap: () => void; onClear: () => void;
   onClose: () => void;
+  activePath?: string | null;
+  onActiveDiffChange?: (diff: ActiveDiffState | null) => void;
 }) {
   const [detail, setDetail] = useState<CommitDetail | null>(null);
   const [parent, setParent] = useState('');
@@ -39,10 +41,29 @@ export function NativeInspector({ session, selected, status, revision, base, tar
     Promise.all([
       !working && selected ? native<CommitDetail>('repository_commit', { handle: session.handle, oid: selected }) : Promise.resolve(null),
       selected ? native<DiffFile[]>('repository_diff_files', { handle: session.handle, spec }) : Promise.resolve([]),
-    ]).then(([commit, list]) => { if (live) { setDetail(commit); setFiles(list); setFilesScope(scope); setPath(old => list.some(file => file.path === old) ? old : list[0]?.path ?? ''); } })
+    ]).then(([commit, list]) => { if (live) { setDetail(commit); setFiles(list); setFilesScope(scope); setPath(old => old && list.some(file => file.path === old) ? old : onActiveDiffChange ? '' : list[0]?.path ?? ''); } })
       .catch(e => { if (live) setError(errorMessage(e)); }).finally(() => { if (live) setBusy(false); });
     return () => { live = false; };
-  }, [session.handle, selected, working, spec, revision, retry, scope]);
+  }, [session.handle, selected, working, spec, revision, retry, scope, onActiveDiffChange]);
+
+  useEffect(() => {
+    if (activePath === null && path !== '') setPath('');
+  }, [activePath, path]);
+
+  useEffect(() => {
+    if (!onActiveDiffChange) return;
+    if (!path) {
+      onActiveDiffChange(null);
+      return;
+    }
+    onActiveDiffChange({
+      path,
+      diff,
+      loading: diffBusy,
+      error: diffError,
+    });
+  }, [path, diff, diffBusy, diffError, onActiveDiffChange]);
+
   useEffect(() => {
     let live = true;
     setDiff(null); setDiffBusy(false); setDiffError('');
@@ -67,8 +88,10 @@ export function NativeInspector({ session, selected, status, revision, base, tar
     {working && <div className="working-groups" aria-label="Working change categories">{(Object.keys(groups) as WorkingGroup[]).map(kind => <button key={kind} aria-pressed={group === kind} onClick={() => setGroup(kind)}>{kind} ({groups[kind].length})</button>)}</div>}
     <div className="native-files" aria-label="Changed files">{files.map(file => <button key={file.path} aria-pressed={file.path === path} onClick={() => setPath(file.path)}><span>{file.status} {file.oldPath ? `${file.oldPath} → ` : ''}{file.path}</span><small>{file.binary ? 'Binary' : `+${file.additions ?? '?'} −${file.deletions ?? '?'}`}</small></button>)}</div>
     {!busy && !files.length && <p>No changed files in this comparison.</p>}
-    {path && filesScope === scope && <div className="native-actions"><strong>{path}</strong><button aria-pressed={split} onClick={() => setSplit(!split)}>{split ? 'Unified diff' : 'Side-by-side diff'}</button></div>}
-    {diffBusy && <p role="status">Loading diff…</p>}
-    {diff && <DiffPreview diff={diff} split={split} />}
+    {!onActiveDiffChange && <>
+      {path && filesScope === scope && <div className="native-actions"><strong>{path}</strong><button aria-pressed={split} onClick={() => setSplit(!split)}>{split ? 'Unified diff' : 'Side-by-side diff'}</button></div>}
+      {diffBusy && <p role="status">Loading diff…</p>}
+      {diff && <DiffPreview diff={diff} split={split} />}
+    </>}
   </aside>;
 }
