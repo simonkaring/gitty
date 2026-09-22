@@ -1,0 +1,20 @@
+.native-diff .hunk-action-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  white-space: pre-wrap;
+}
+.hunk-action-header > span { min-width: 0; overflow-wrap: anywhere; }
+.hunk-action-button {
+  flex-shrink: 0;
+  padding: 5px 10px;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  font: inherit;
+  cursor: pointer;
+}
+.hunk-action-button:disabled { opacity: .5; cursor: default; }
+.hunk-action-button:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+.hunk-unavailable { white-space: normal; }

@@ -6,6 +6,41 @@ import { demoCommittedFiles, demoFileDiff, demoStatus, demoWorkingFiles } from '
 
 afterEach(() => vi.unstubAllGlobals());
 describe('write lifecycle', () => {
+  it.each(['stage_hunk', 'unstage_hunk'] as const)('routes %s with only the selected hunk identity and awaits refresh', async kind => {
+    const calls: string[] = [];
+    const invoke = vi.fn(async () => { calls.push('write'); }) as typeof native;
+    let release!: () => void;
+    const reload = vi.fn(() => { calls.push('refresh'); return new Promise<void>(resolve => { release = resolve; }); });
+    let done = false;
+    const pending = writeAndRefresh('repo-tab', { kind, path: '-odd\tfile', hunkIndex: 2, fingerprint: 'raw-diff-token' }, reload, () => true, invoke).then(outcome => { done = true; return outcome; });
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledOnce());
+    expect(done).toBe(false);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith(`repository_${kind}`, { handle: 'repo-tab', path: '-odd\tfile', hunkIndex: 2, fingerprint: 'raw-diff-token' });
+    release(); expect(await pending).toEqual({});
+    expect(calls).toEqual(['write', 'refresh']);
+  });
+  it('refreshes stale hunk failures exactly once and reports failed reconciliation', async () => {
+    const invoke = vi.fn().mockRejectedValue({ code: 'staleDiff', message: 'Refresh the preview and select again.' }) as typeof native;
+    const reload = vi.fn().mockRejectedValue(new Error('Refresh unavailable'));
+    const outcome = await writeAndRefresh('s', { kind: 'stage_hunk', path: 'file', hunkIndex: 0, fingerprint: 'old' }, reload, () => true, invoke);
+    expect(outcome).toEqual({ error: 'Refresh the preview and select again.', refreshError: 'Refresh unavailable' });
+    expect(invoke).toHaveBeenCalledOnce(); expect(reload).toHaveBeenCalledOnce();
+  });
+  it.each([-1, 0.5, NaN, Infinity])('rejects invalid hunk index %s before IPC', async hunkIndex => {
+    const invoke = vi.fn() as typeof native;
+    const reload = vi.fn().mockResolvedValue(undefined);
+    const outcome = await writeAndRefresh('s', { kind: 'unstage_hunk', path: 'file', hunkIndex, fingerprint: 'token' }, reload, () => true, invoke);
+    expect(outcome.error).toMatch(/complete hunk/); expect(invoke).not.toHaveBeenCalled();
+  });
+  it('does not publish a hunk result or refresh into a superseding tab session', async () => {
+    let current = true;
+    let release!: () => void;
+    const invoke = vi.fn(() => new Promise<void>(resolve => { release = resolve; })) as typeof native;
+    const reload = vi.fn();
+    const pending = writeAndRefresh('old', { kind: 'stage_hunk', path: 'file', hunkIndex: 0, fingerprint: 'token' }, reload, () => current, invoke);
+    current = false; release();
+    expect(await pending).toEqual({ superseded: true }); expect(reload).not.toHaveBeenCalled();
+  });
   it('always refreshes after a failed write, without retrying an ambiguous commit', async () => {
     const calls: string[] = [];
     const invoke = vi.fn(async () => { calls.push('write'); throw { code: 'commit_failed', message: 'Hook failed after updating HEAD' }; }) as typeof native;

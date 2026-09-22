@@ -56,6 +56,9 @@ try {
         return { path: 'file.txt', hunks: [{ header: '@@ -1 +1 @@', lines: [{ kind: 'remove', content: 'before', oldLine: 1, newLine: null }, { kind: 'add', content: 'after', oldLine: null, newLine: 1 }] }], binary: false, truncated: false, message: null };
       }
       if (command === 'repository_search') return { commits: list().filter(c => c.id.includes(args.query.text)), truncated: false };
+      if (command === 'repository_sync_info') return { branch: 'main', upstream: 'origin/main', ahead: 0, behind: 0, remotes: ['origin'] };
+      if (command === 'repository_stashes') return [];
+      if (command === 'repository_remote_action' || command === 'repository_stash_action') return { output: '' };
       throw new Error(`Unexpected command: ${command}`);
     } };
   });
@@ -64,6 +67,20 @@ try {
   await page.getByRole('button', { name: 'Native /fixture' }).click();
   await page.getByRole('option', { name: /^Commit c0,/ }).waitFor();
   assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
+  await page.getByText('main → origin/main', { exact: false }).waitFor();
+
+  // Repository tabs: a single open tab, and reopening the same recent
+  // location focuses it instead of creating a duplicate.
+  await page.locator('.repository-tab').getByText('Fixture', { exact: true }).waitFor();
+  assert.equal(await page.locator('.repository-tab').count(), 1);
+  await page.getByRole('button', { name: 'Open repository…', exact: true }).click();
+  await page.getByRole('button', { name: 'Native /fixture' }).click();
+  assert.equal(await page.locator('.repository-tab').count(), 1);
+
+  // Stash dialog reads the (empty) stash list without any network action.
+  await page.getByRole('button', { name: 'Stash…', exact: true }).click();
+  await page.getByText('No stashes.', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Close', exact: true }).click();
 
   // Background work must not add/remove banners or resize the graph viewport.
   const beforeBounds = await page.locator('.history-scroll').boundingBox();
@@ -123,10 +140,16 @@ try {
    assert.equal(await page.evaluate(() => window.fixture.calls.filter(call => call.command === 'repository_operation_state').every(call => call.args.handle === 's')), true);
    assert.ok(await page.evaluate(() => window.fixture.calls.filter(call => call.command === 'repository_operation_state').length >= 2));
    await page.reload();
-   await page.getByRole('button', { name: 'Open repository', exact: true }).waitFor();
+   // The tab (location + active id) persists across reload and reopens the
+   // same repository automatically, without an explicit "Open repository".
+   // (The init script itself resets the fixture's mocked repository state on
+   // each navigation; only the tab/location and the theme are expected to
+   // survive here, not the fixture's in-memory commit graph.)
+   await page.locator('.repository-tab').getByText('Fixture', { exact: true }).waitFor();
+   assert.equal(await page.locator('.repository-tab').count(), 1);
    assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
   assert.deepEqual(errors, []);
-   console.log('Browser smoke passed (mocked native IPC): demo; operation-state snapshots; native snapshot race; silent polling; selection/anchor preservation; comparison modes; stale diff cleanup; unreachable inspector; Settings theme migration and reload persistence.');
+   console.log('Browser smoke passed (mocked native IPC): demo; operation-state snapshots; native snapshot race; silent polling; selection/anchor preservation; comparison modes; stale diff cleanup; unreachable inspector; Settings theme migration; repository tabs (single-tab dedup, stash dialog); reload persistence.');
 } finally {
   await browser.close();
   await server.close();

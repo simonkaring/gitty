@@ -10,6 +10,9 @@ export async function writeAndRefresh(handle: string, mutation: RepositoryMutati
     if (mutation.kind === 'commit') {
       const result = await invoke<CreateCommitResult>('repository_create_commit', { handle, message: mutation.message });
       outcome.oid = result.oid;
+    } else if (mutation.kind === 'stage_hunk' || mutation.kind === 'unstage_hunk') {
+      if (!mutation.path || !mutation.fingerprint || !Number.isSafeInteger(mutation.hunkIndex) || mutation.hunkIndex < 0) throw new Error('Select a complete hunk from a current diff.');
+      await invoke(`repository_${mutation.kind}`, { handle, path: mutation.path, hunkIndex: mutation.hunkIndex, fingerprint: mutation.fingerprint });
     } else {
       if (!mutation.paths.length) throw new Error('Select at least one path.');
       await invoke(`repository_${mutation.kind}`, { handle, paths: [...new Set(mutation.paths)] });

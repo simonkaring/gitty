@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { ArrowDown, ArrowUp, ArrowUpRight, Check, ChevronDown, CircleHelp, Command, FolderGit2, GitBranch, GitCommitHorizontal, Github, LocateFixed, PanelLeft, PanelRight, Search, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpRight, Check, ChevronDown, CircleHelp, Command, Download, FolderGit2, GitBranch, GitCommitHorizontal, Github, LocateFixed, PanelLeft, PanelRight, Search, Upload, X } from 'lucide-react';
 import { createDemoHistory } from './model/demo';
 import { layoutHistory } from './graph/layout';
 import { HistoryGraph, type GraphHandle } from './components/HistoryGraph';
@@ -9,6 +9,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { NativeWorkspace } from './components/NativeWorkspace';
 import { Brand, PaneResizer, ViewNavigation, usePaneWidth } from './components/WorkspaceControls';
 import { WorkingChanges } from './components/WorkingChanges';
+import { RepositoryTabs } from './components/RepositoryTabs';
 import { demoCommittedFiles, demoFileDiff, demoStatus, demoWorkingFiles } from './model/demoWorkflow';
 import type { DiffSpec, RepositoryMutation, RepositorySession } from './model/repository';
 import type { MutationOutcome } from './model/workflow';
@@ -28,6 +29,7 @@ function DemoApp() {
   const [inspectorWidth, setInspectorWidth] = usePaneWidth('inspector', 400, 300, 520);
   const [modal, setModal] = useState<'help' | 'repositories' | null>(null);
   const [notice, setNotice] = useState('');
+  const [dirty, setDirty] = useState(false);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const modalRef = useRef<HTMLDialogElement>(null);
   const notify = useCallback((message: string) => {
@@ -44,7 +46,18 @@ function DemoApp() {
       <div className="titlebar-center"><FolderGit2 size={14} /><button onClick={() => setModal('repositories')}>{repository}<ChevronDown size={12} /></button><span className="titlebar-slash">/</span><span>Workspace</span></div>
       <div className="titlebar-actions"><button className="icon-button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onClick={() => setModal('help')}><CircleHelp size={17} /></button><SettingsButton /><span className="toolbar-divider" /><button className={`icon-button ${sidebarOpen ? 'toggled' : ''}`} aria-label="Toggle repositories sidebar" aria-pressed={sidebarOpen} onClick={() => setSidebarOpen(value => !value)}><PanelLeft size={17} /></button><button className={`icon-button ${inspectorOpen ? 'toggled' : ''}`} aria-label="Toggle commit inspector" aria-pressed={inspectorOpen} onClick={() => setInspectorOpen(value => !value)}><PanelRight size={17} /></button></div>
     </header>
-    <Workspace key={repository} repository={repository} theme={theme} sidebarOpen={sidebarOpen} inspectorOpen={inspectorOpen} inspectorWidth={inspectorWidth} setInspectorWidth={setInspectorWidth} onRepository={setRepository} setInspectorOpen={setInspectorOpen} setModal={setModal} notify={notify} />
+    {/* Visual parity with the desktop tab strip: the demo only ever holds one
+        repository open (switching replaces it, it does not add a tab), so
+        this single tab is not closable and "+" reuses the existing
+        repository picker below rather than pretending to open a second,
+        simultaneous demo session. `branch`/`dirty` reflect real demo state,
+        not placeholders. */}
+    <RepositoryTabs tabs={[{ id: repository, title: repository, busy: false, branch: 'main', dirty }]} activeId={repository} onSelect={() => {}} onClose={() => notify('Closing tabs requires a desktop repository.')} onNew={() => setModal('repositories')} />
+    <div className="repository-toolbar" aria-label="Repository actions (desktop only)">
+      <div className="repository-toolbar-group"><button disabled title="Requires a desktop repository"><Download size={15} />Pull</button><button disabled title="Requires a desktop repository"><Upload size={15} />Push</button><button disabled title="Requires a desktop repository"><GitBranch size={15} />Branch</button><button disabled title="Requires a desktop repository">Stash…</button></div>
+      <span className="repository-sync-badge">Sync and stash actions require a desktop repository</span>
+    </div>
+    <Workspace key={repository} repository={repository} theme={theme} sidebarOpen={sidebarOpen} inspectorOpen={inspectorOpen} inspectorWidth={inspectorWidth} setInspectorWidth={setInspectorWidth} onRepository={setRepository} setInspectorOpen={setInspectorOpen} setModal={setModal} notify={notify} onDirty={setDirty} />
     <footer className="statusbar"><span><span className="live-dot" /> Demo workspace <span className="status-separator">·</span> All changes are illustrative</span><span className="status-shortcuts"><kbd>↑</kbd><kbd>↓</kbd> navigate <span className="status-separator">·</span><kbd>/</kbd> search <span className="status-separator">·</span><kbd>?</kbd> shortcuts</span><span className="version"><GitBranch size={12} /> Gitty <span>0.1.0</span></span></footer>
     <div className={`toast ${notice ? 'visible' : ''}`} role="status" aria-live="polite">{notice && <><Check size={15} />{notice}</>}</div>
     <dialog ref={modalRef} className="dialog" aria-label={modal === 'help' ? 'Keyboard shortcuts' : 'Choose a demo repository'} onCancel={() => setModal(null)} onClick={event => { if (event.target === event.currentTarget) setModal(null); }}>
@@ -57,10 +70,10 @@ function DemoApp() {
 interface WorkspaceProps {
   repository: string; theme: ThemeDefinition; sidebarOpen: boolean; inspectorOpen: boolean; inspectorWidth: number;
   setInspectorWidth: (value: number) => void; onRepository: (id: string) => void; setInspectorOpen: (value: boolean) => void;
-  setModal: (value: 'help' | 'repositories' | null) => void; notify: (message: string) => void;
+  setModal: (value: 'help' | 'repositories' | null) => void; notify: (message: string) => void; onDirty: (dirty: boolean) => void;
 }
 
-function Workspace({ repository, theme, sidebarOpen, inspectorOpen, inspectorWidth, setInspectorWidth, onRepository, setInspectorOpen, setModal, notify }: WorkspaceProps) {
+function Workspace({ repository, theme, sidebarOpen, inspectorOpen, inspectorWidth, setInspectorWidth, onRepository, setInspectorOpen, setModal, notify, onDirty }: WorkspaceProps) {
   const [snapshot, setSnapshot] = useState(() => createDemoHistory(repository === 'gitty' ? 1 : repository === 'orbit-design' ? 7 : 13));
   const [view, setView] = useState<'history' | 'working'>('history');
   const [sidebarWidth, setSidebarWidth] = usePaneWidth('sidebar', 240, 210, 340);
@@ -69,9 +82,11 @@ function Workspace({ repository, theme, sidebarOpen, inspectorOpen, inspectorWid
   const [revision, setRevision] = useState(0);
   const mutationLock = useRef(false);
   const workingStatus = useMemo(() => demoStatus(workingFiles, snapshot.head), [workingFiles, snapshot.head]);
+  useEffect(() => { onDirty(workingStatus.entries.length > 0); }, [workingStatus.entries.length, onDirty]);
   const demoSession: RepositorySession = { handle: `demo:${repository}`, name: repository, root: `demo://${repository}`, gitDir: '', commonDir: '', location: { kind: 'native', path: `demo://${repository}` }, head: snapshot.head, headRef: 'refs/heads/main', linkedWorktree: false, shallow: false, bare: false };
   const loadDemoDiff = useCallback(async (_handle: string, spec: DiffSpec, path: string) => demoFileDiff(workingFiles, spec, path), [workingFiles]);
   async function mutate(mutation: RepositoryMutation): Promise<MutationOutcome> {
+    if (mutation.kind === 'stage_hunk' || mutation.kind === 'unstage_hunk') return { error: 'Hunk staging is unavailable in the demo. Open a desktop repository to stage individual hunks.' };
     if (mutationLock.current) return { error: 'A demo operation is already running.' };
     mutationLock.current = true; setMutationBusy(true);
     try {

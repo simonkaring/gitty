@@ -65,10 +65,22 @@ export function OperationDialog({ state, operation, context, commits, busy, onWr
     <h2>{review ? 'Review Git operation' : 'Git actions'}</h2><p>{review ? 'Reviewed target' : 'Current target'}: <strong>{review ? review.expectedHeadRef?.replace(/^refs\/heads\//, '') ?? 'detached HEAD' : current}</strong></p>
     {error && <p role="alert">{error}</p>}
     {review ? <><OperationSummary request={review} commits={commits} /><details><summary>Raw operation details</summary><pre className="operation-review">{JSON.stringify(review.action, null, 2)}</pre></details><p>Reviewed HEAD: <code>{review.expectedHead ?? 'unborn'}</code></p><p>Execution checks this captured HEAD, branch and operation fingerprint. Changes require a new review.</p><button disabled={pending || busy} onClick={() => setReview(null)}>Back</button><button className="primary-button" disabled={pending || busy} onClick={() => void execute()}>{pending ? 'Executing…' : 'Execute operation'}</button></> : <>
-      <label>Action<select value={kind} disabled={pending} onChange={e => setKind(e.target.value as GitAction['kind'])}>
-        <option value="merge">Merge source into {current}</option><option value="rebase">Rebase {current} onto source</option><option value="switchBranch">Switch branch</option><option value="createBranch">Create branch</option><option value="cherryPick">Cherry-pick commits</option><option value="createTag">Create tag</option>
-        {operation?.kind !== 'none' && <><option value="continue">Continue operation</option><option value="skip">Skip current commit</option><option value="abort">Abort operation</option></>}
-      </select></label>
+      <fieldset className="action-radio-group" disabled={pending} aria-label="Action">
+        <legend>Action</legend>
+        <div className="action-radio-options">
+          <label><input type="radio" name="operation-action" value="merge" checked={kind === 'merge'} onChange={() => setKind('merge')} /> Merge source into {current}</label>
+          <label><input type="radio" name="operation-action" value="rebase" checked={kind === 'rebase'} onChange={() => setKind('rebase')} /> Rebase {current} onto source</label>
+          <label><input type="radio" name="operation-action" value="switchBranch" checked={kind === 'switchBranch'} onChange={() => setKind('switchBranch')} /> Switch branch</label>
+          <label><input type="radio" name="operation-action" value="createBranch" checked={kind === 'createBranch'} onChange={() => setKind('createBranch')} /> Create branch</label>
+          <label><input type="radio" name="operation-action" value="cherryPick" checked={kind === 'cherryPick'} onChange={() => setKind('cherryPick')} /> Cherry-pick commits</label>
+          <label><input type="radio" name="operation-action" value="createTag" checked={kind === 'createTag'} onChange={() => setKind('createTag')} /> Create tag</label>
+          {operation?.kind !== 'none' && <>
+            <label><input type="radio" name="operation-action" value="continue" checked={kind === 'continue'} onChange={() => setKind('continue')} /> Continue operation</label>
+            <label><input type="radio" name="operation-action" value="skip" checked={kind === 'skip'} onChange={() => setKind('skip')} /> Skip current commit</label>
+            <label><input type="radio" name="operation-action" value="abort" checked={kind === 'abort'} onChange={() => setKind('abort')} /> Abort operation</label>
+          </>}
+        </div>
+      </fieldset>
       {['merge', 'rebase', 'createBranch', 'switchBranch'].includes(kind) && <label>{kind === 'switchBranch' ? 'Local branch' : 'Source / starting revision'}<input list="operation-refs" value={source} onChange={e => setSource(e.target.value)} /><datalist id="operation-refs">{state.refs.filter(ref => kind !== 'switchBranch' || ref.kind === 'local').map(ref => <option key={ref.fullName} value={ref.fullName}>{ref.name}</option>)}</datalist></label>}
       {['createBranch', 'createTag'].includes(kind) && <label>Name<input autoFocus value={name} onChange={e => setName(e.target.value)} /></label>}
       {kind === 'createBranch' && <label><input type="checkbox" checked={checkout} onChange={e => setCheckout(e.target.checked)} /> Switch to new branch</label>}

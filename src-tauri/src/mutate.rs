@@ -183,7 +183,7 @@ impl Repository {
     }
     /// Refuses to write while Git owns the index or an unsupported operation is
     /// half-finished. Nothing here removes or repairs Git state.
-    fn require_writable(&self) -> Result<()> {
+    pub(crate) fn require_writable(&self) -> Result<()> {
         self.require_worktree()?;
         let entries = self.git_dir_entries()?;
         let in_progress = IN_PROGRESS_PATHS

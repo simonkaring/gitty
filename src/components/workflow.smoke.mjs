@@ -102,7 +102,17 @@ try {
       throw new Error(`Unexpected command ${command}`);
     } };
   });
-  const open = async () => { await page.getByRole('button', { name: 'Open repository', exact: true }).click(); await page.getByRole('button', { name: 'Native /workspace/gitty', exact: true }).click(); await page.getByRole('listbox', { name: 'Commit history' }).waitFor(); };
+  // Repository tabs persist across reload: after the first `open()`, a
+  // reload reopens the same tab automatically, so the empty-state "Open
+  // repository" welcome button (only rendered with zero tabs) is gone.
+  const open = async () => {
+    const welcomeButton = page.getByRole('button', { name: 'Open repository', exact: true });
+    if (await welcomeButton.count()) {
+      await welcomeButton.click();
+      await page.getByRole('button', { name: 'Native /workspace/gitty', exact: true }).click();
+    }
+    await page.getByRole('listbox', { name: 'Commit history' }).waitFor();
+  };
   await page.goto(url); await open();
   await screenshot(page, 'gitty-native-history');
   await page.getByRole('button', { name: /Working changes/ }).click();
@@ -132,7 +142,10 @@ try {
   await page.getByRole('button', { name: 'Stage all', exact: true }).evaluate(button => { button.click(); button.click(); });
   await page.waitForFunction(() => window.fixture.writeWaiting);
   assert.equal(await page.getByRole('button', { name: 'Commit staged changes' }).isDisabled(), true);
-  assert.equal(await page.getByRole('button', { name: 'Open repository…', exact: true }).isDisabled(), true);
+  // "Open repository…" opens an independent tab (its own session/handle) and
+  // must stay enabled during another tab's in-flight write: opening a new
+  // repository no longer tears down the tab that is mid-mutation.
+  assert.equal(await page.getByRole('button', { name: 'Open repository…', exact: true }).isDisabled(), false);
   assert.equal(await page.evaluate(() => window.fixture.calls.filter(call => call.command === 'repository_stage').length), 1);
   assert.deepEqual(await page.evaluate(() => window.fixture.calls.find(call => call.command === 'repository_stage').args.paths), ['src/partial.ts', 'src/modified.ts', 'new.md']);
   await page.evaluate(() => { window.fixture.holdRefresh = true; window.fixture.holdWrite = false; window.fixture.releaseWrite(); });

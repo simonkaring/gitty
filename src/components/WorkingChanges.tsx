@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { AlertTriangle, Check, FileCode2, GitCommitHorizontal, Minus, Plus } from 'lucide-react';
 import type { DiffSpec, FileDiff, RepositoryMutation, RepositorySession, RepositoryStatus } from '../model/repository';
 import { errorMessage, native, statusGroups, type WorkingGroup } from '../model/native';
 import { clearSubmittedDraft, commitMessage, draftKey, operationPaths, readDraft, saveDraft, type CommitDraft, type MutationOutcome } from '../model/workflow';
 import { useSettings } from '../model/settings';
+import './hunk-actions.css';
 
 const labels: Record<WorkingGroup, string> = { staged: 'Staged', unstaged: 'Unstaged', untracked: 'Untracked', conflict: 'Conflicts' };
 const descriptions: Record<WorkingGroup, string> = { staged: 'HEAD → index · included in your next commit', unstaged: 'Index → working tree · not yet staged', untracked: 'New files · not yet tracked by Git', conflict: 'Unresolved paths · open the conflict editor to resolve' };
@@ -17,6 +18,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   mutationBlocked?: boolean;
 }) {
   const key = draftKey(session);
+  const composerId = useId();
   const [draft, setDraft] = useState(() => readDraft(key));
   const [persisted, setPersisted] = useState(true);
   const [selection, setSelection] = useState<{ group: WorkingGroup; path: string } | null>(null);
@@ -53,7 +55,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   async function perform(mutation: RepositoryMutation, fileCount = 1) {
     if (pending.current || blocked) return;
     pending.current = true;
-    setOperation(mutation.kind === 'commit' ? 'Creating commit and refreshing repository…' : `${mutation.kind === 'stage' ? 'Staging' : 'Unstaging'} ${fileCount} file${fileCount === 1 ? '' : 's'} and refreshing…`);
+    setOperation(mutation.kind === 'commit' ? 'Creating commit and refreshing repository…' : `${mutation.kind === 'stage' || mutation.kind === 'stage_hunk' ? 'Staging' : 'Unstaging'} ${'hunkIndex' in mutation ? 'selected hunk' : `${fileCount} file${fileCount === 1 ? '' : 's'}`} and refreshing…`);
     setOutcome(null); setSuccess('');
     try {
       const result = await onMutation(mutation);
@@ -64,7 +66,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
       if (!alive.current || result.superseded) return;
       setOutcome(result);
       if (result.oid) { setDraft({ subject: '', body: '' }); setSuccess(`Created commit ${result.oid.slice(0, 12)}.`); }
-      else if (!result.error && !result.refreshError) setSuccess(mutation.kind === 'stage' ? 'Selected changes staged.' : 'Selected changes unstaged.');
+      else if (!result.error && !result.refreshError) setSuccess(mutation.kind === 'stage' || mutation.kind === 'stage_hunk' ? 'Selected changes staged.' : 'Selected changes unstaged.');
     } catch (error) {
       if (alive.current) setOutcome({ error: errorMessage(error), refreshError: 'Repository state could not be confirmed.' });
     } finally { pending.current = false; if (alive.current) setOperation(''); }
@@ -95,19 +97,19 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
             {kind !== 'conflict' && <button className="file-stage-button" disabled={blocked} title={partial ? kind === 'staged' ? 'Unstage all indexed changes for this path' : 'Stage the remaining working-tree changes for this path' : undefined} aria-label={`${kind === 'staged' ? 'Unstage' : 'Stage'} ${entry.path}`} onClick={() => { const operationKind = kind === 'staged' ? 'unstage' : 'stage'; void perform({ kind: operationKind, paths: operationPaths([entry], operationKind) }); }}>{kind === 'staged' ? <Minus size={18} /> : <Plus size={18} />}</button>}
           </div>; })}
         </section>)}
-        <p className="working-note">A partially staged file appears in both lists. Stage adds its remaining changes; unstage removes its indexed changes. All actions operate on whole files.</p>
+        <p className="working-note">A partially staged file appears in both lists. File buttons act on whole files. Use the diff’s hunk buttons to stage or unstage a complete text hunk.</p>
       </div>
       <div className="working-review">
         <section className="working-preview" aria-label="Working file diff"><div className="review-heading"><div><strong>{active?.path ?? 'Your working tree is clean'}</strong><p>{active ? descriptions[active.group] : 'New changes will appear here.'}</p></div>{active && <button className="secondary-button" aria-pressed={split} onClick={() => setSplit(!split)}>{split ? 'Unified' : 'Side by side'}</button>}</div>
           {active && (!preview || preview.scope !== scope) && <p className="diff-placeholder" role="status">{busy ? 'Waiting for repository refresh…' : 'Loading diff…'}</p>}
           {preview?.scope === scope && preview.error && <p className="workflow-alert error" role="alert">{preview.error} <button onClick={() => setRetry(value => value + 1)}>Retry diff</button></p>}
-          {preview?.scope === scope && preview.diff && <DiffPreview diff={preview.diff} split={split} />}
+          {preview?.scope === scope && preview.diff && <DiffPreview diff={preview.diff} split={split} hunkAction={active?.group === 'staged' ? 'unstage_hunk' : active?.group === 'unstaged' ? 'stage_hunk' : undefined} busy={blocked} unavailable={demo ? 'Hunk staging is unavailable in the demo. Open a desktop repository to stage individual hunks.' : undefined} onHunk={mutation => void perform(mutation)} />}
           {!active && <div className="clean-state"><Check size={32} /><h2>Nothing to review.</h2><p>Edit files in your repository, then return here to stage and commit.</p></div>}
         </section>
         <form className="commit-composer" aria-label="Commit composer" onSubmit={event => { event.preventDefault(); if (draft.subject.trim() && stagedCount && !groups.conflict.length) void perform({ kind: 'commit', message: commitMessage(draft) }); }}>
           <div className="composer-heading"><h2><GitCommitHorizontal size={20} />Create a commit</h2><span>{stagedCount} staged {stagedCount === 1 ? 'path' : 'paths'}</span></div>
-          <label htmlFor="commit-subject">Summary <span>required</span></label><input id="commit-subject" name="subject" placeholder="Describe what changed" autoComplete="off" value={draft.subject} disabled={!!operation} onChange={event => edit({ ...draft, subject: event.target.value })} />
-          <label htmlFor="commit-body">Description <span>optional</span></label><textarea id="commit-body" name="body" placeholder="Add context: why was this change needed?" rows={3} value={draft.body} disabled={!!operation} onChange={event => edit({ ...draft, body: event.target.value })} />
+          <label htmlFor={`${composerId}-subject`}>Summary <span>required</span></label><input id={`${composerId}-subject`} name="subject" placeholder="Describe what changed" autoComplete="off" value={draft.subject} disabled={!!operation} onChange={event => edit({ ...draft, subject: event.target.value })} />
+          <label htmlFor={`${composerId}-body`}>Description <span>optional</span></label><textarea id={`${composerId}-body`} name="body" placeholder="Add context: why was this change needed?" rows={3} value={draft.body} disabled={!!operation} onChange={event => edit({ ...draft, body: event.target.value })} />
           <div className="composer-footer"><p>{persisted ? 'Draft saved for this repository.' : 'Storage unavailable. Draft is kept for this session only.'}<br />{!stagedCount ? 'Stage at least one file to commit.' : 'Only staged changes will be committed.'}</p><button className="primary-button" type="submit" disabled={blocked || !stagedCount || !draft.subject.trim() || !!groups.conflict.length}><GitCommitHorizontal size={18} />{operation.startsWith('Creating') ? 'Committing…' : 'Commit staged changes'}</button></div>
         </form>
       </div>
@@ -115,8 +117,11 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   </section>;
 }
 
-export function DiffPreview({ diff, split }: { diff: FileDiff; split: boolean }) {
-  return <><div className="diff-messages" role="status">{diff.binary && <p>Binary file · textual preview unavailable.</p>}{diff.truncated && <p>Diff truncated · only the available preview is shown.</p>}{diff.message && <p>{diff.message}</p>}{!diff.hunks.length && !diff.binary && <p>No textual hunks · metadata-only or empty file change.</p>}</div><div className={`native-diff ${split ? 'split' : ''}`} tabIndex={0} aria-label={`${split ? 'Side-by-side' : 'Unified'} diff for ${diff.path}`}>
-    {diff.hunks.map((hunk, index) => <section key={index}><div className="hunk-header">{hunk.header}</div>{hunk.lines.map((line, i) => split && line.kind !== 'meta' ? <div className="split-row" key={i}><pre className={line.kind === 'remove' ? 'remove' : ''}>{line.kind !== 'add' ? `${line.oldLine ?? ''} ${line.content}` : ''}</pre><pre className={line.kind === 'add' ? 'add' : ''}>{line.kind !== 'remove' ? `${line.newLine ?? ''} ${line.content}` : ''}</pre></div> : <pre key={i} className={line.kind}><span className="line-number">{line.oldLine ?? ''}</span><span className="line-number">{line.newLine ?? ''}</span>{line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ' '}{line.content}</pre>)}</section>)}
+export function DiffPreview({ diff, split, hunkAction, busy = false, unavailable, onHunk }: { diff: FileDiff; split: boolean; hunkAction?: 'stage_hunk' | 'unstage_hunk'; busy?: boolean; unavailable?: string; onHunk?: (mutation: RepositoryMutation) => void }) {
+  const reason = hunkAction ? unavailable || (diff.truncated ? 'Hunk actions are unavailable for truncated previews. Use the whole-file buttons or Git.' : diff.binary ? 'Hunk actions are unavailable for binary files. Use the whole-file buttons.' : diff.hunkAction?.reason) || (!diff.hunkAction?.fingerprint ? 'Hunk actions are unavailable for this preview. Use the whole-file buttons or Git.' : undefined) : undefined;
+  const fingerprint = !reason && diff.hunkAction?.fingerprint;
+  const label = hunkAction === 'unstage_hunk' ? 'Unstage hunk' : 'Stage hunk';
+  return <><div className="diff-messages" role="status">{diff.binary && <p>Binary file · textual preview unavailable.</p>}{diff.truncated && <p>Diff truncated · only the available preview is shown.</p>}{diff.message && <p>{diff.message}</p>}{reason && <p className="hunk-unavailable">{reason}</p>}{!diff.hunks.length && !diff.binary && <p>No textual hunks · metadata-only or empty file change.</p>}</div><div className={`native-diff ${split ? 'split' : ''}`} tabIndex={0} aria-label={`${split ? 'Side-by-side' : 'Unified'} diff for ${diff.path}`}>
+    {diff.hunks.map((hunk, index) => <section key={index}><div className="hunk-header hunk-action-header"><span>{hunk.header}</span>{hunkAction && <button className="hunk-action-button" disabled={busy || !fingerprint || !onHunk} title={reason} aria-label={`${label} ${index + 1} in ${diff.path}`} onClick={() => { if (!busy && fingerprint && onHunk) onHunk({ kind: hunkAction, path: diff.path, hunkIndex: index, fingerprint }); }}>{label}</button>}</div>{hunk.lines.map((line, i) => split && line.kind !== 'meta' ? <div className="split-row" key={i}><pre className={line.kind === 'remove' ? 'remove' : ''}>{line.kind !== 'add' ? `${line.oldLine ?? ''} ${line.content}` : ''}</pre><pre className={line.kind === 'add' ? 'add' : ''}>{line.kind !== 'remove' ? `${line.newLine ?? ''} ${line.content}` : ''}</pre></div> : <pre key={i} className={line.kind}><span className="line-number">{line.oldLine ?? ''}</span><span className="line-number">{line.newLine ?? ''}</span>{line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ' '}{line.content}</pre>)}</section>)}
   </div></>;
 }

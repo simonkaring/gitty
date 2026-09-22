@@ -47,6 +47,7 @@ try {
         f.saved = args.resolution; f.conflict = false; f.version++; return;
       }
       if (command === 'repository_remotes') { if (f.failRemotes) throw new Error('Remote read fixture failed'); return [{ name: 'origin', fetchUrl: 'https://github.com/example/repo.git', pushUrl: 'https://github.com/example/repo.git', branches: ['main', 'topic'], currentUpstream: 'main' }]; }
+      if (command === 'repository_sync_info') return { branch: 'main', upstream: 'origin/main', ahead: 0, behind: 0, remotes: ['origin'] };
       if (command === 'open_external_url') { if (f.failExternal) throw new Error('Browser launch fixture failed'); return; }
       throw new Error(`Unexpected command: ${command}`);
     } };
@@ -58,7 +59,11 @@ try {
   const writes = () => page.evaluate(() => window.fixture.calls.filter(call => ['repository_run_operation', 'repository_resolve_conflict'].includes(call.command)));
 
   // Actual reference drag only opens review. Cancel is read-only and preserves scroll.
-  const topic = page.locator('.ref-pill').filter({ hasText: 'topic' });
+  // Local `topic` and remote `origin/topic` both render a ref-pill whose
+  // aria-label contains the substring "topic" (e.g. "Graph actions for
+  // origin/topic"), so an exact accessible-name match is required to isolate
+  // the local branch's pill specifically.
+  const topic = page.getByRole('button', { name: 'Graph actions for topic', exact: true });
   const main = page.locator('.ref-pill[data-current=true]');
   const beforeScroll = await page.locator('.history-scroll').evaluate(el => el.scrollTop);
   const drop = async (target, source, type = 'application/x-gitty-ref') => { const dataTransfer = await page.evaluateHandle(({ value, type }) => { const data = new DataTransfer(); data.setData(type, value); return data; }, { value: source, type }); await target.dispatchEvent('drop', { dataTransfer }); await dataTransfer.dispose(); };
@@ -71,7 +76,7 @@ try {
   assert.equal(await page.getByRole('button', { name: 'Graph actions for v1', exact: true }).getAttribute('draggable'), 'false');
   await topic.dragTo(main);
   await page.getByRole('dialog', { name: 'Git actions' }).waitFor();
-  assert.equal(await page.getByRole('combobox', { name: 'Action', exact: true }).inputValue(), 'merge');
+  assert.equal(await page.locator('input[name="operation-action"]:checked').inputValue(), 'merge');
   assert.equal((await writes()).length, 0);
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   assert.equal(await page.locator('.history-scroll').evaluate(el => el.scrollTop), beforeScroll);
@@ -87,7 +92,7 @@ try {
       assert.equal(await page.getByRole('dialog', { name: 'Git actions' }).count(), 0);
     }
     await commitSubject.dragTo(target);
-    assert.equal(await page.getByRole('combobox', { name: 'Action', exact: true }).inputValue(), 'cherryPick');
+    assert.equal(await page.locator('input[name="operation-action"]:checked').inputValue(), 'cherryPick');
     assert.equal(await page.getByRole('button', { name: 'Remove c1', exact: true }).count(), 1);
     await page.getByRole('button', { name: 'Review operation', exact: true }).click();
     await summary.getByRole('heading', { name: 'Cherry-pick commits', exact: true }).waitFor();
@@ -109,7 +114,7 @@ try {
   assert.deepEqual(await mixed.evaluate(data => [...data.types]), ['application/x-gitty-ref']);
   await main.dispatchEvent('drop', { dataTransfer: mixed });
   await mixed.dispose();
-  assert.equal(await page.getByRole('combobox', { name: 'Action', exact: true }).inputValue(), 'merge');
+  assert.equal(await page.locator('input[name="operation-action"]:checked').inputValue(), 'merge');
   await page.getByRole('button', { name: 'Review operation', exact: true }).click();
   await summary.getByText('Source: Local branch topic', { exact: true }).waitFor();
   await summary.getByText('Destination: Local branch main', { exact: true }).waitFor();
@@ -122,7 +127,7 @@ try {
   assert.equal((await writes()).length, 0);
   for (const target of [main, page.getByRole('button', { name: 'Actions for main', exact: true })]) {
     await target.click();
-    assert.equal(await page.getByRole('combobox', { name: 'Action', exact: true }).inputValue(), 'createBranch');
+    assert.equal(await page.locator('input[name="operation-action"]:checked').inputValue(), 'createBranch');
     assert.equal(await page.getByRole('combobox', { name: 'Source / starting revision', exact: true }).inputValue(), 'refs/heads/main');
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   }
@@ -150,7 +155,7 @@ try {
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   }
   await page.getByRole('option', { name: /^Commit c1,/ }).click({ button: 'right' });
-  assert.equal(await page.getByRole('combobox', { name: 'Action', exact: true }).inputValue(), 'cherryPick');
+  assert.equal(await page.locator('input[name="operation-action"]:checked').inputValue(), 'cherryPick');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
 
   // Tags and remote-tracking refs have explicit PR restrictions; no prefix guessing.
@@ -171,9 +176,14 @@ try {
   await page.keyboard.press('Shift+F10');
   await page.getByRole('dialog', { name: 'Git actions' }).waitFor();
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.getByRole('button', { name: 'Branch', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Start cherry-pick sequence…', exact: true }).click();
   await page.getByRole('checkbox', { name: 'Cherry-pick c2', exact: true }).check();
   await page.getByRole('checkbox', { name: 'Cherry-pick c1', exact: true }).check();
-  await page.getByRole('button', { name: 'Cherry-pick 2 selected…' }).click();
+  // New/Switch branch and cherry-pick are consolidated into a single "Branch"
+  // dropdown menu; cherry-pick only appears there once commits are picked.
+  await page.getByRole('button', { name: 'Branch', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Cherry-pick 2 selected…', exact: true }).click();
   await page.getByRole('button', { name: 'Move c1 earlier', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: 'Review operation', exact: true }).isDisabled(), true);
   await page.getByRole('combobox', { name: 'Mainline parent (applies to each merge in this sequence)', exact: true }).selectOption('2');
@@ -203,10 +213,19 @@ try {
   await page.getByText(/Uncertain write fixture/).waitFor();
   // Cancel stays enabled after refresh blocking so the user can retry refresh outside the dialog.
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
-  assert.equal(await page.getByRole('button', { name: 'New branch…' }).isDisabled(), true);
+  // New branch/Switch branch/Cherry-pick are menu items inside the "Branch"
+  // dropdown and only exist in the DOM while that menu is open; while blocked
+  // the toggle itself is disabled, so the menu can never be opened at all.
+  // Checking the toggle is therefore the equivalent (if anything stronger)
+  // assertion that branch actions are unavailable.
+  assert.equal(await page.getByRole('button', { name: 'Branch', exact: true }).isDisabled(), true);
   await page.evaluate(() => { window.fixture.failRefresh = false; window.fixture.failAfterWrite = false; });
-  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
-  await page.waitForFunction(() => !Array.from(document.querySelectorAll('button')).find(el => el.textContent === 'New branch…')?.disabled);
+  // The toolbar's own "Refresh" convenience button is bundled with the
+  // general busy/blocked state (like the rest of the toolbar) and is
+  // therefore also disabled right now; recovery instead uses the blocked-
+  // state banner's dedicated, always-enabled "Refresh now" action.
+  await page.getByRole('button', { name: 'Refresh now', exact: true }).click();
+  await page.waitForFunction(() => !Array.from(document.querySelectorAll('button')).find(el => el.textContent.trim() === 'Branch')?.disabled);
 
   // Conflict content is read in full. Dirty edits survive focus/polling and external changes.
   await page.evaluate(() => { window.fixture.kind = 'merge'; window.fixture.conflict = true; window.fixture.version++; window.dispatchEvent(new Event('focus')); });
@@ -263,19 +282,21 @@ try {
     await page.getByRole('dialog', { name: 'Git actions' }).waitFor({ state: 'hidden' });
     assert.deepEqual((await writes()).at(-1).args.request.action, expected);
   };
-  await page.getByRole('button', { name: 'New branch…', exact: true }).click();
+  await page.getByRole('button', { name: 'Branch', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'New branch…', exact: true }).click();
   await page.getByLabel('Name', { exact: true }).fill('feature/review');
   await execute({ kind: 'createBranch', name: 'feature/review', startPoint: 'refs/heads/main', checkout: true }, ['Source (starting revision): Local branch main', 'Destination: Local branch feature/review', 'Switch to the new branch after creating it.']);
-  await page.getByRole('button', { name: 'Switch branch…', exact: true }).click();
+  await page.getByRole('button', { name: 'Branch', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Switch branch…', exact: true }).click();
   await page.getByRole('combobox', { name: 'Local branch', exact: true }).fill('refs/heads/missing');
   assert.equal(await page.getByRole('button', { name: 'Review operation', exact: true }).isDisabled(), true);
   await page.getByRole('combobox', { name: 'Local branch', exact: true }).fill('refs/heads/topic');
   await execute({ kind: 'switchBranch', branch: 'refs/heads/topic' }, ['From: Local branch main', 'Destination: Local branch topic']);
   await page.getByRole('button', { name: 'Actions for topic', exact: true }).click();
-  await page.getByRole('combobox', { name: 'Action', exact: true }).selectOption('rebase');
+  await page.getByRole('radio', { name: /Rebase/ }).check();
   await execute({ kind: 'rebase', onto: 'refs/heads/topic' }, ['Source branch to replay: Local branch main', 'Destination (new base): Local branch topic']);
   await page.getByRole('button', { name: 'Actions for c1', exact: true }).click();
-  await page.getByRole('combobox', { name: 'Action', exact: true }).selectOption('createTag');
+  await page.getByRole('radio', { name: 'Create tag', exact: true }).check();
   await page.getByLabel('Name', { exact: true }).fill('reviewed-v1');
   await page.getByLabel('Annotation (empty for lightweight tag)', { exact: true }).fill('Reviewed release');
   await execute({ kind: 'createTag', name: 'reviewed-v1', oid: 'c1', message: 'Reviewed release' }, ['Source commit: c1', 'Destination: Tag reviewed-v1', 'Tag type: Annotated', 'Annotation: Reviewed release']);

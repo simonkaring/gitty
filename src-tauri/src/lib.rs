@@ -3,21 +3,53 @@ mod conflicts;
 mod diff;
 mod dto;
 mod external;
+mod hunk;
 mod mutate;
 mod operation_dto;
 mod operations;
 mod process;
+mod remote;
+mod remote_dto;
 mod repository;
+mod stash;
 mod stream;
 mod wsl;
 
 use dto::*;
 use operation_dto::*;
+use remote_dto::*;
 use repository::Service;
 use std::sync::Arc;
 use tauri::Manager;
 
 type Shared = Arc<Service>;
+#[tauri::command]
+async fn repository_sync_info(state: tauri::State<'_, Shared>, handle: String) -> Result<SyncInfo> {
+    with_service(state, move |s| s.repo(&handle)?.sync_info()).await
+}
+#[tauri::command]
+async fn repository_remote_action(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    action: RemoteAction,
+) -> Result<ActionOutput> {
+    with_service(state, move |s| s.remote_action(&handle, action)).await
+}
+#[tauri::command]
+async fn repository_stashes(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+) -> Result<Vec<StashEntry>> {
+    with_service(state, move |s| s.repo(&handle)?.stashes()).await
+}
+#[tauri::command]
+async fn repository_stash_action(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    action: StashAction,
+) -> Result<ActionOutput> {
+    with_service(state, move |s| s.stash_action(&handle, action)).await
+}
 #[tauri::command]
 async fn repository_operation_state(
     state: tauri::State<'_, Shared>,
@@ -178,6 +210,33 @@ async fn repository_unstage(
 ) -> Result<()> {
     with_service(state, move |s| s.unstage(&handle, &paths)).await
 }
+/// Applies one complete backend-generated hunk to the index.
+#[tauri::command]
+async fn repository_stage_hunk(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    path: String,
+    hunk_index: usize,
+    fingerprint: String,
+) -> Result<()> {
+    with_service(state, move |s| {
+        s.stage_hunk(&handle, &path, hunk_index, &fingerprint)
+    })
+    .await
+}
+#[tauri::command]
+async fn repository_unstage_hunk(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    path: String,
+    hunk_index: usize,
+    fingerprint: String,
+) -> Result<()> {
+    with_service(state, move |s| {
+        s.unstage_hunk(&handle, &path, hunk_index, &fingerprint)
+    })
+    .await
+}
 /// Commits the staged index with the configured identity, hooks and signing.
 #[tauri::command]
 async fn repository_create_commit(
@@ -249,12 +308,18 @@ pub fn run() {
             repository_search,
             repository_stage,
             repository_unstage,
+            repository_stage_hunk,
+            repository_unstage_hunk,
             repository_create_commit,
             repository_operation_state,
             repository_run_operation,
             repository_conflict_file,
             repository_resolve_conflict,
             repository_remotes,
+            repository_sync_info,
+            repository_remote_action,
+            repository_stashes,
+            repository_stash_action,
             open_external_url,
             wsl_distributions,
             wsl_directories
@@ -264,6 +329,10 @@ pub fn run() {
 }
 
 #[cfg(test)]
+mod hunk_tests;
+#[cfg(test)]
 mod operation_tests;
+#[cfg(test)]
+mod remote_tests;
 #[cfg(test)]
 mod tests;

@@ -311,6 +311,28 @@ impl Service {
     pub fn create_commit(&self, handle: &str, message: &str) -> Result<CreatedCommit> {
         self.mutate(handle, |repo| repo.create_commit(message))
     }
+    pub fn stage_hunk(
+        &self,
+        handle: &str,
+        path: &str,
+        hunk_index: usize,
+        fingerprint: &str,
+    ) -> Result<()> {
+        self.mutate(handle, |repo| {
+            repo.change_hunk(path, hunk_index, fingerprint, false)
+        })
+    }
+    pub fn unstage_hunk(
+        &self,
+        handle: &str,
+        path: &str,
+        hunk_index: usize,
+        fingerprint: &str,
+    ) -> Result<()> {
+        self.mutate(handle, |repo| {
+            repo.change_hunk(path, hunk_index, fingerprint, true)
+        })
+    }
     pub fn close(&self, handle: &str) -> Result<()> {
         let removed = lock(&self.repositories)?.remove(handle);
         // Reaping pinned streams must never hold the registry lock. In-flight

@@ -8,12 +8,25 @@ use std::collections::HashMap;
 impl Repository {
     fn diff_args(&self, spec: &DiffSpec) -> Result<Vec<String>> {
         let mut a = args(&[
+            "-c",
+            "diff.suppressBlankEmpty=false",
             "diff",
             "--no-ext-diff",
             "--no-textconv",
             "--no-color",
             "--find-renames",
             "--ignore-submodules=none",
+            "--full-index",
+            "--diff-algorithm=myers",
+            "--no-indent-heuristic",
+            "--inter-hunk-context=0",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "--line-prefix=",
+            "--no-relative",
+            "--output-indicator-new=+",
+            "--output-indicator-old=-",
+            "--output-indicator-context= ",
         ]);
         match spec {
             DiffSpec::Commit { oid, parent } => {
@@ -145,7 +158,27 @@ impl Repository {
         Ok(files)
     }
     pub fn diff(&self, spec: &DiffSpec, path: &str) -> Result<FileDiff> {
+        self.diff_snapshot(spec, path)
+            .map(|(diff, _)| diff)
+            .map_err(|e| {
+                if e.code == "outputLimit" {
+                    Error::new("outputLimit", "The diff exceeds the preview size limit. Hunk actions are unavailable; use the whole-file buttons or Git.")
+                } else {
+                    e
+                }
+            })
+    }
+    pub(crate) fn diff_snapshot(&self, spec: &DiffSpec, path: &str) -> Result<(FileDiff, Vec<u8>)> {
         validate_path(path)?;
+        let actionable = matches!(spec, DiffSpec::Staged | DiffSpec::Unstaged);
+        let index = || {
+            process::checked(
+                self.location(),
+                &args(&["ls-files", "--stage", "-z", "--", path]),
+            )
+        };
+        let before = if actionable { index()? } else { vec![] };
+        let mut modified = false;
         let bytes = if matches!(spec, DiffSpec::Untracked) {
             self.untracked_patch(path, false)?
         } else {
@@ -153,6 +186,7 @@ impl Repository {
             let file = files.iter().find(|f| f.path == path).ok_or_else(|| {
                 Error::new("fileNotInDiff", "File is not part of the selected diff")
             })?;
+            modified = file.status == "M" && file.old_path.is_none() && !file.binary;
             let mut a = self.diff_args(spec)?;
             a.extend(args(&["--patch", "--unified=3", "--", path]));
             if let Some(old_path) = &file.old_path {
@@ -162,6 +196,12 @@ impl Repository {
         };
         // Patch bodies may contain arbitrary blob bytes, unlike paths. Replacement characters are display-only.
         let mut diff = parse_patch(path, &String::from_utf8_lossy(&bytes))?;
+        if actionable {
+            if before != index()? {
+                return Err(crate::hunk::stale());
+            }
+            diff.hunk_action = Some(crate::hunk::action(&diff, &bytes, &before, spec, modified));
+        }
         if matches!(spec, DiffSpec::Conflict) {
             let note = "Unmerged file: showing the working tree against stage 2 (ours). This diff is read-only; use the conflict editor to resolve the full file.";
             diff.message = Some(match diff.message {
@@ -169,7 +209,7 @@ impl Repository {
                 None => note.into(),
             });
         }
-        Ok(diff)
+        Ok((diff, bytes))
     }
 }
 
@@ -322,6 +362,7 @@ pub fn parse_patch(path: &str, raw: &str) -> Result<FileDiff> {
         hunks,
         binary,
         truncated,
+        hunk_action: None,
         message: if metadata.is_empty() {
             None
         } else {

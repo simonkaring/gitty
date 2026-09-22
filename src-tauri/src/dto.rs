@@ -135,12 +135,20 @@ pub struct DiffHunk {
     pub lines: Vec<DiffLine>,
 }
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HunkAction {
+    pub fingerprint: Option<String>,
+    pub reason: Option<String>,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileDiff {
     pub path: String,
     pub hunks: Vec<DiffHunk>,
     pub binary: bool,
     pub truncated: bool,
     pub message: Option<String>,
+    pub hunk_action: Option<HunkAction>,
 }
 #[derive(Debug, Deserialize)]
 pub struct SearchQuery {

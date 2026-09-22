@@ -2,7 +2,7 @@
 
 **A little clarity for your Git history.**
 
-A graph-first desktop Git client built with **Tauri 2, React 19, TypeScript, and Rust**. Explore history, compose commits, manage branches, merge/rebase/cherry-pick, and resolve conflicts in a customizable workspace. The browser preview provides a clearly labeled synthetic demo with simulated staging and commits; graph mutations require a real desktop repository.
+A graph-first desktop Git client built with **Tauri 2, React 19, TypeScript, and Rust**. Switch between repository tabs, explore history, stage files or individual hunks, compose commits, sync branches, manage stashes, and resolve conflicts in a customizable workspace. The browser preview provides a clearly labeled synthetic demo with simulated file staging and commits; native Git actions require a real desktop repository.
 
 ## The redesigned workspace
 
@@ -19,7 +19,7 @@ npm ci
 npm run dev
 ```
 
-Open **http://127.0.0.1:1420**. The browser preview has the same interactions as the desktop frontend and requires no Rust toolchain. Fonts and icons are bundled locally; the application makes no external runtime network requests for assets or repository data.
+Open **http://127.0.0.1:1420**. The browser preview demonstrates the workspace without a Rust toolchain. Fonts and icons are bundled locally. Repository browsing and automatic refresh stay offline; only explicitly requested fetch, pull, and push actions connect to configured remotes.
 
 ### Desktop
 
@@ -49,6 +49,22 @@ Run `npm run desktop`, choose **Open repository**, then use the native folder pi
 - **Search/filter:** messages, authors/emails, full/prefix hashes, and reference labels across reachable history; optional branch, date, and literal-path scope. Matches are highlighted while nonmatching ancestry stays visible. Results are capped at 500 and explicitly labeled when truncated.
 - **Refresh:** every five seconds while visible, on window focus, or manually. Coherence checks reject mixed history snapshots; selection and the viewport's commit/pixel anchor are preserved where available. No filesystem watcher is installed yet.
 
+## Repository tabs and action toolbar
+
+Use **+** or **Open repository…** to add a native or WSL repository tab. Opening the same worktree again focuses its existing tab; different linked worktrees remain separate. Tabs show the branch, uncommitted-change indicator, and operation status. Left/Right/Home/End navigate the focused tab strip.
+
+Each open tab retains its selected commit, graph scroll position, search filters, History/Working changes view, and commit draft while switching. Open locations and the active tab restore on restart; commit drafts also persist per worktree. Inactive tabs pause routine polling and refresh when activated. You can switch repositories while an operation runs; its result belongs to its original tab. A running operation keeps that tab open until completion.
+
+The toolbar beneath the tabs stays available in both views:
+
+- **Pull:** fast-forward-only by default. Its dropdown also offers **Fetch only**, **Pull (merge)**, and **Pull (rebase)**. Pull requires a clean worktree; conflicts use the existing operation banner and editor.
+- **Push / Publish…:** push the current branch to its configured upstream, or select a remote and destination branch to publish and set upstream. Push targets one branch and does not force updates.
+- **Branch:** create or switch a branch. When commits are selected, the menu also offers the ordered cherry-pick workflow.
+- **Stash…:** save tracked changes with an optional message and optional untracked files, then browse/apply/pop/drop stashes. Pop retains the stash when application conflicts.
+- **Refresh:** update local repository state. Ahead/behind counts reflect locally known remote-tracking refs; fetching updates that information.
+
+Remote authentication uses configured Git credentials and an OpenSSH agent in noninteractive mode. If authentication is unavailable, the operation reports an error rather than waiting for terminal input. Browser demo sync/stash controls are labeled desktop-only; simultaneous repository sessions are a native feature.
+
 History reads, search, and inspection remain read-only. **Working changes** provides staging and commits; graph and sidebar action controls provide explicit branch operations. The backend uses the installed Git with separate read/write command contracts and shell-free arguments. Missing objects, unsupported encodings, partial/promisor clones, and process limits return explicit errors.
 
 ## Stage, review, and commit
@@ -58,7 +74,11 @@ History reads, search, and inspection remain read-only. **Working changes** prov
 3. Review the **Staged** group. Use **−** or **Unstage all** to remove changes from the index without changing working files.
 4. Enter a summary and optional description, then choose **Commit staged changes**. Gitty refreshes status and history after the operation.
 
-A partially staged file appears in both lists. Staging it adds its remaining working changes; unstaging it removes its indexed changes. Renames are handled as both source and destination where required. All actions operate on whole files.
+A partially staged file appears in both lists. File-level controls stage its remaining working changes or unstage its indexed changes. Renames are handled as both source and destination where required.
+
+For modified regular text files, use **Stage hunk** in an unstaged diff or **Unstage hunk** in a staged diff. Both unified and side-by-side views support complete hunks. The backend validates the displayed diff fingerprint and builds the patch from Git's original bytes; stale previews require a fresh selection. Only the index changes, preserving working files and other staged edits. Gitty serializes its own writes; Git's index locks and patch validation also apply when external Git processes are active.
+
+Hunk actions currently fall back to whole-file controls for new/deleted files, renames, binary files, mode changes, symlinks/submodules, and truncated or oversized previews. Line-level staging is not yet implemented. The browser demo simulates whole-file staging only.
 
 Commit drafts persist per repository/worktree and survive failed operations. Configured hooks, identity, and signing are honored. Failed or uncertain writes trigger a refresh; Gitty does not automatically retry a commit. Bare repositories, unresolved conflicts, and in-progress Git operations produce explicit errors. A failed refresh blocks further writes in the composer until repository state can be refreshed.
 
@@ -70,7 +90,7 @@ The browser demo simulates the same workflow without modifying repository files.
 - Drag a branch onto the **outlined current branch** in the graph or sidebar to review a merge. Drag a commit subject onto that target to review a cherry-pick. Dropping opens the action dialog; execution follows an explicit review.
 - Other actions include rebasing the current branch onto a selected source, ordered multi-commit cherry-picks, comparison, and lightweight/annotated tags. Merge commits require an explicit cherry-pick mainline parent.
 - The operation banner provides **Continue**, **Skip** where applicable, **Abort**, and conflict links. The built-in conflict editor shows full base/current/incoming versions, editable results, block acceptance, and whole-file/deletion choices. External edits are detected before saving.
-- **Create pull request…** opens GitHub, GitLab.com, or Azure DevOps in your browser with source/base branches filled in. Choose a local source branch and remote; publish commits separately when needed. Gitty does not fetch or push automatically.
+- **Create pull request…** opens GitHub, GitLab.com, or Azure DevOps in your browser with source/base branches filled in. Choose a local source branch and remote; use the toolbar's **Push / Publish…** first when needed. Gitty does not fetch or push automatically.
 
 New graph mutations currently require a clean index/worktree, including no untracked files. Rebase ranges containing merge commits and special-file conflicts have explicit limitations. See [Milestone 3](docs/milestone-3.md) for semantics and validation.
 
@@ -123,7 +143,9 @@ src/
   styles.css                    Editorial typography, themes, responsive workspace
   components/
     HistoryGraph.tsx             Canvas renderer + virtualized accessible rows
-    NativeWorkspace.tsx          Repository sessions, search, paging, coherent refresh
+    NativeWorkspace.tsx          Persistent native repository tabs and shared shell
+    RepositoryPane.tsx           Per-tab sessions, search, paging, coherent refresh
+    RepositoryToolbar.tsx        Pull/push, branch, stash and refresh controls
     NativeInspector.tsx          Real changes, parent selection, commit comparisons
     WorkingChanges.tsx           File staging, shared diff viewer, commit composer
     WorkspaceControls.tsx        Shared navigation, branding, pane resizing
@@ -147,6 +169,9 @@ src-tauri/
   src/repository.rs              Sessions, streaming history, status, search, metadata
   src/diff.rs                    Git change lists and structured patches
   src/mutate.rs                  Staging, unstaging, commits, write preflight checks
+  src/hunk.rs                    Byte-preserving, fingerprint-checked hunk staging
+  src/remote.rs                  Local sync metadata and explicit fetch/pull/push
+  src/stash.rs                   Stash management with stable object identities
   src/process.rs                 Bounded shell-free process execution
   src/stream.rs                  Backpressured Git streams and lifecycle cleanup
   src/wsl.rs                     Windows distribution discovery and Linux browsing
@@ -172,6 +197,20 @@ npm run test:rust               # Real temporary repository integration tests
 ```
 
 The CI workflow defines a macOS / Windows / Ubuntu matrix for frontend tests/builds, Rust tests, and native compilation. The matrix is not evidence that Windows or Linux runtime behavior has been verified locally.
+
+### Tabs, sync, stashes, and hunk staging verification
+
+- **131 frontend tests** and **104 Rust tests** passed. Rust integration tests use real temporary repositories and local bare remotes, including selected-hunk commits, stale previews, stash conflicts, divergent pulls, and single-branch publication.
+- All six Chromium smoke suites passed: `native`, `workflow`, `settings`, `tabs`, `operations`, and `hunks`. These use mocked Tauri IPC; tab coverage includes retained drafts/filters/scroll, active-only refresh, and operations completing or failing after switching tabs.
+- Production TypeScript/Vite build, Rust checks, formatting, and Clippy passed. The integrated macOS debug app built with `npm run desktop:build -- --debug --bundles app`.
+- Live remote authentication, packaged native GUI end-to-end interaction, and Windows/WSL/Linux runtime checks remain unverified.
+
+To run a browser suite with an existing Playwright/Chromium installation:
+
+```sh
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/tabs.smoke.mjs
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/hunks.smoke.mjs
+```
 
 ### Milestone 3 verification
 
@@ -204,7 +243,7 @@ The CI workflow defines a macOS / Windows / Ubuntu matrix for frontend tests/bui
 
 ## Scope and next steps
 
-File-level staging, commits, branch creation/switching, merge/rebase/cherry-pick, tags, regular-file conflict resolution, and settings/custom themes are implemented. Next functional work includes hunk/line staging, amend, stashes, broader rebase/conflict support, and authenticated remote operations/cloning. WSL runtime verification and broader desktop validation remain platform release work.
+Repository tabs, file/hunk staging, commits, branch creation/switching, merge/rebase/cherry-pick, tags, stashes, explicit fetch/pull/push, regular-file conflict resolution, and settings/custom themes are implemented. Next functional work includes line staging, amend, cloning, broader rebase/conflict support, and richer authentication setup. Live remote authentication, WSL runtime verification, and broader packaged-desktop validation remain platform release work.
 
 The demo snapshot remains materialized once per repository. Native history uses a pinned Git walk with bounded read-ahead and a temporary replay spool, batched metadata reads, and lazy diffs. Canvas and DOM rendering are viewport bounded; an interval index accelerates edge visibility queries. Layout still runs on the main thread for the loaded prefix; worker-based/incremental layout remains performance follow-up work.
 

@@ -289,27 +289,64 @@ impl Repository {
         }
         Ok(())
     }
-    fn protect_untracked(&self, targets: &[String]) -> Result<()> {
+    pub(crate) fn protect_untracked(&self, targets: &[String]) -> Result<()> {
         // reset --hard (used internally by rebase) deletes obstructing untracked
         // files, including ignored files that porcelain status does not report.
         // No exclude flags: inspect ignored files too, without reading their data.
-        let others = self.check_text(&["ls-files", "--others", "-z"])?;
-        if others.is_empty() {
+        let started = std::time::Instant::now();
+        let raw_others = self.check_text(&["ls-files", "--others", "-z"])?;
+        if raw_others.is_empty() {
             return Ok(());
         }
+        let mut others: Vec<_> = raw_others
+            .split('\0')
+            .filter(|p| !p.is_empty())
+            .map(|p| p.trim_end_matches('/'))
+            .collect();
+        others.sort_unstable();
+        others.dedup();
+        let remaining = || {
+            process::CHECK_TIMEOUT.checked_sub(started.elapsed())
+                .filter(|d| !d.is_zero())
+                .ok_or_else(|| Error::new("timeout", "Untracked-file protection exceeded its deadline. Narrow this operation or complete it in Git."))
+        };
         for target in targets {
-            let tree = self.check_text(&["ls-tree", "-r", "--name-only", "-z", target])?;
-            for path in others.split('\0').filter(|p| !p.is_empty()) {
-                let path = path.trim_end_matches('/');
-                if tree.split('\0').filter(|p| !p.is_empty()).any(|tracked| {
-                    tracked == path
-                        || tracked
-                            .strip_prefix(path)
-                            .is_some_and(|s| s.starts_with('/'))
-                        || path
-                            .strip_prefix(tracked)
-                            .is_some_and(|s| s.starts_with('/'))
-                }) {
+            let output = process::run_for(
+                process::git_command(
+                    self.location(),
+                    &args(&["ls-tree", "-r", "--name-only", "-z", target]),
+                )?,
+                remaining()?,
+            )?;
+            if !output.success {
+                return Err(self.failed(&output));
+            }
+            let tree = process::text(output.stdout)?;
+            for tracked in tree.split('\0').filter(|p| !p.is_empty()) {
+                remaining()?;
+                // Avoid a quadratic scan of every tracked/untracked pair, and
+                // share a deadline across every tree in a long rebase/replay.
+                let mut ancestor = tracked;
+                let mut collision = None;
+                loop {
+                    if let Ok(i) = others.binary_search(&ancestor) {
+                        collision = Some(others[i]);
+                        break;
+                    }
+                    match ancestor.rsplit_once('/') {
+                        Some((parent, _)) => ancestor = parent,
+                        None => break,
+                    }
+                }
+                let prefix = format!("{tracked}/");
+                let i = others.partition_point(|path| *path < prefix.as_str());
+                collision = collision.or_else(|| {
+                    others
+                        .get(i)
+                        .copied()
+                        .filter(|path| path.starts_with(&prefix))
+                });
+                if let Some(path) = collision {
                     return Err(Error::new("dirtyWorktree", format!("Untracked or ignored path {path:?} could be overwritten by this operation. Move or preserve it in Git first.")));
                 }
             }
