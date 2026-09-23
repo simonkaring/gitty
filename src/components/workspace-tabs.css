@@ -57,7 +57,7 @@
   height: 28px;
 }
 
-.repository-toolbar { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--chrome); }
+.repository-toolbar { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--chrome); }
 .repository-toolbar-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .repository-sync-badge { font-size: 13px; color: var(--secondary); font-variant-numeric: tabular-nums; padding: 4px 2px; }
 .repository-sync-badge[data-error='true'] { color: var(--red); }
