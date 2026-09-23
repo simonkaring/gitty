@@ -1,5 +1,5 @@
 use crate::{
-    dto::{RepositoryLocation, Result},
+    dto::{HistoryQuery, RepositoryLocation, Result},
     operation_dto::OperationKind,
     remote_dto::{ActionOutput, RemoteAction, StashAction},
     repository::{Repository, Service},
@@ -81,7 +81,7 @@ impl Fixture {
     }
     fn remote(&self, action: Value) -> Result<ActionOutput> {
         self.service
-            .remote_action(&self.handle, serde_json::from_value(action).unwrap())
+            .remote_action(&self.handle, serde_json::from_value(action).unwrap(), None)
     }
     fn stash(&self, action: Value) -> Result<ActionOutput> {
         self.service
@@ -178,6 +178,47 @@ fn remote_fetch_counts_fast_forward_pull_and_push() {
     f.remote(json!({"kind":"push"})).unwrap();
     assert_eq!(git(bare.path(), &["rev-parse", "main"]), outgoing);
     assert_eq!(f.repo.sync_info().unwrap().ahead, Some(0));
+}
+
+#[test]
+fn background_fetch_updates_remote_history_without_local_refs_tags_or_worktree() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    let peer = f.peer(bare.path());
+    peer.write("incoming", "new remote commit\n");
+    let incoming = peer.commit("incoming");
+    peer.remote(json!({"kind":"push"})).unwrap();
+    peer.git(&["tag", "remote-only-tag"]);
+    peer.git(&["push", "origin", "refs/tags/remote-only-tag"]);
+
+    f.write("file", "staged\n");
+    f.git(&["add", "file"]);
+    f.write("file", "unstaged\n");
+    let original_head = f.git(&["rev-parse", "HEAD"]);
+    let original_index = f.git(&["ls-files", "--stage"]);
+    let original_status = f.git(&["status", "--porcelain"]);
+    let original_contents = std::fs::read(f.dir.path().join("file")).unwrap();
+
+    f.remote(json!({"kind":"backgroundFetch"})).unwrap();
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), original_head);
+    assert_eq!(f.git(&["rev-parse", "refs/heads/main"]), original_head);
+    assert_eq!(f.git(&["rev-parse", "refs/remotes/origin/main"]), incoming);
+    assert_eq!(f.repo.sync_info().unwrap().behind, Some(1));
+    assert_eq!(f.git(&["ls-files", "--stage"]), original_index);
+    assert_eq!(f.git(&["status", "--porcelain"]), original_status);
+    assert_eq!(
+        std::fs::read(f.dir.path().join("file")).unwrap(),
+        original_contents
+    );
+    assert!(f.git(&["tag", "--list", "remote-only-tag"]).is_empty());
+    assert!(f
+        .repo
+        .history(None, 20, HistoryQuery::default())
+        .unwrap()
+        .commits
+        .iter()
+        .any(|commit| commit.id == incoming));
 }
 
 #[test]

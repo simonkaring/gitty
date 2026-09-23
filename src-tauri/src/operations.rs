@@ -618,7 +618,7 @@ impl Repository {
                 a.extend(args(&[command, flag]));
             }
         }
-        let output = self.write(&a, &input, 65536)?;
+        let output = self.write(&a, &[], &input, 65536)?;
         let operation = self.operation_state().map_err(|e| {
             Error::new(
                 "mutationUnverified",

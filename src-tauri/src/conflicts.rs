@@ -445,6 +445,7 @@ impl Repository {
                 let output = self
                     .write(
                         &args(&["update-index", "-z", "--index-info"]),
+                        &[],
                         input.as_bytes(),
                         8192,
                     )
@@ -482,6 +483,7 @@ impl Repository {
                     "--pathspec-from-file=-",
                     "--pathspec-file-nul",
                 ]),
+                &[],
                 path.as_bytes(),
                 4096,
             )?;

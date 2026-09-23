@@ -1,7 +1,7 @@
 //! Only these explicitly requested actions opt into network protocols. All
 //! discovery, upstream counts and validation use the offline read contract.
 use crate::{
-    dto::{Error, Result},
+    dto::{Error, RepositoryLocation, Result},
     mutate::report,
     process::{self, args, Output},
     remote_dto::{ActionOutput, PullMode, RemoteAction, SyncInfo},
@@ -9,8 +9,15 @@ use crate::{
 };
 
 impl Service {
-    pub fn remote_action(&self, handle: &str, action: RemoteAction) -> Result<ActionOutput> {
-        self.mutate(handle, |repo| repo.remote_action(action))
+    pub fn remote_action(
+        &self,
+        handle: &str,
+        action: RemoteAction,
+        askpass: Option<&crate::askpass::AskpassRegistry>,
+    ) -> Result<ActionOutput> {
+        self.mutate(handle, |repo| {
+            repo.remote_action_with_registry(action, askpass)
+        })
     }
 }
 
@@ -167,7 +174,16 @@ impl Repository {
         Ok(remote.into())
     }
 
-    fn remote_action(&self, action: RemoteAction) -> Result<ActionOutput> {
+    pub(crate) fn remote_action_with_registry(
+        &self,
+        action: RemoteAction,
+        askpass: Option<&crate::askpass::AskpassRegistry>,
+    ) -> Result<ActionOutput> {
+        // Native askpass scripts cannot run inside a WSL distribution. Keep
+        // Linux credential helpers and SSH agents available there, but never
+        // hand Linux Git an unusable Windows script path.
+        let wsl = matches!(self.location(), RepositoryLocation::Wsl { .. });
+        let askpass = if wsl { None } else { askpass };
         self.require_writable()?;
         if !self.unmerged()?.is_empty() {
             return Err(Error::new(
@@ -189,10 +205,12 @@ impl Repository {
             .transpose()?
             .flatten();
         let (remote, branch) = match &action {
+            RemoteAction::BackgroundFetch => (None, None),
             RemoteAction::Fetch { remote, branch }
             | RemoteAction::Pull { remote, branch, .. }
             | RemoteAction::Push { remote, branch, .. } => (remote.as_deref(), branch.as_deref()),
         };
+        let interactive = !matches!(action, RemoteAction::BackgroundFetch);
         let remote = self.choose_remote(remote, configured_remote.as_deref(), &info.remotes)?;
         if let Some(branch) = branch {
             self.remote_branch_name(branch)?;
@@ -206,12 +224,13 @@ impl Repository {
         };
 
         match &action {
-            RemoteAction::Fetch { .. } => {
-                let mut a = network_args();
+            RemoteAction::Fetch { .. } | RemoteAction::BackgroundFetch => {
+                let (mut a, env) = network_args(interactive, askpass);
                 a.extend(args(&[
                     "fetch",
                     "--no-all",
                     "--no-recurse-submodules",
+                    "--no-tags",
                     "--no-prune",
                     "--no-prune-tags",
                     "--refmap=",
@@ -224,8 +243,8 @@ impl Repository {
                     Some(branch) => format!("refs/heads/{branch}:refs/remotes/{remote}/{branch}"),
                     None => format!("refs/heads/*:refs/remotes/{remote}/*"),
                 });
-                let output = self.write(&a, &[], 0)?;
-                action_result(output)
+                let output = self.write(&a, &env, &[], 0)?;
+                network_result(output, wsl && interactive)
             }
             RemoteAction::Push { set_upstream, .. } => {
                 let current = info.branch.as_deref().ok_or_else(|| {
@@ -264,7 +283,7 @@ impl Repository {
                         "Choose a remote with exactly one push URL.",
                     ));
                 }
-                let mut a = network_args();
+                let (mut a, env) = network_args(interactive, askpass);
                 a.extend(args(&[
                     "push",
                     "--porcelain",
@@ -281,7 +300,7 @@ impl Repository {
                     &remote,
                     &format!("refs/heads/{current}:refs/heads/{destination}"),
                 ]));
-                action_result(self.write(&a, &[], 0)?)
+                network_result(self.write(&a, &env, &[], 0)?, wsl && interactive)
             }
             RemoteAction::Pull { pull_mode, .. } => {
                 let current = info.branch.as_ref().ok_or_else(|| {
@@ -299,7 +318,7 @@ impl Repository {
                 self.remote_branch_name(branch)?;
                 // Fetch precisely one branch, then integrate its pinned object ID.
                 // No merge/rebase ever runs after an uncertain or failed fetch.
-                let mut fetch = network_args();
+                let (mut fetch, env) = network_args(interactive, askpass);
                 fetch.extend(args(&[
                     "fetch",
                     "--no-all",
@@ -312,7 +331,8 @@ impl Repository {
                     &remote,
                     &format!("refs/heads/{branch}:refs/remotes/{remote}/{branch}"),
                 ]));
-                let fetched = action_result(self.write(&fetch, &[], 0)?)?;
+                let fetched =
+                    network_result(self.write(&fetch, &env, &[], 0)?, wsl && interactive)?;
                 let incoming = resolve(self.location(), "FETCH_HEAD")?;
                 let mut a = args(&[
                     // Branch mergeOptions can otherwise silently turn this
@@ -375,7 +395,7 @@ impl Repository {
                         ]));
                     }
                 }
-                let integrated = action_result(self.write(&a, &[], 0)?)?;
+                let integrated = action_result(self.write(&a, &env, &[], 0)?)?;
                 Ok(ActionOutput {
                     output: [fetched.output, integrated.output]
                         .into_iter()
@@ -386,37 +406,6 @@ impl Repository {
             }
         }
     }
-}
-
-pub(crate) fn network_args() -> Vec<String> {
-    args(&[
-        "-c",
-        "protocol.file.allow=always",
-        "-c",
-        "protocol.ssh.allow=always",
-        "-c",
-        "protocol.https.allow=always",
-        "-c",
-        "protocol.http.allow=always",
-        "-c",
-        "protocol.git.allow=always",
-        "-c",
-        "protocol.ext.allow=never",
-        "-c",
-        "credential.interactive=false",
-        "-c",
-        "core.askPass=",
-        // Use the existing SSH agent and config, but never prompt for keys,
-        // passwords or unknown hosts. No credentials are retained by Gitty.
-        "-c",
-        "core.sshCommand=ssh -oBatchMode=yes -oStrictHostKeyChecking=yes",
-        "-c",
-        "ssh.variant=ssh",
-        "-c",
-        "fetch.recurseSubmodules=false",
-        "-c",
-        "submodule.recurse=false",
-    ])
 }
 
 /// Nonzero exits can leave fetched refs or conflicts, or can follow a remote
@@ -438,4 +427,80 @@ pub(crate) fn action_result(output: Output) -> Result<ActionOutput> {
             report(&output)
         },
     })
+}
+
+fn network_result(output: Output, wsl: bool) -> Result<ActionOutput> {
+    action_result(output).map_err(|mut error| {
+        if wsl {
+            error.message.push_str("\nInteractive authentication is unavailable for WSL repositories. Configure a credential helper or SSH agent inside the distribution, then retry.");
+        }
+        error
+    })
+}
+
+pub(crate) fn network_args(
+    interactive: bool,
+    askpass_registry: Option<&crate::askpass::AskpassRegistry>,
+) -> (Vec<String>, Vec<(String, String)>) {
+    let mut a = args(&[
+        "-c",
+        "protocol.file.allow=always",
+        "-c",
+        "protocol.ssh.allow=always",
+        "-c",
+        "protocol.https.allow=always",
+        "-c",
+        "protocol.http.allow=always",
+        "-c",
+        "protocol.git.allow=always",
+        "-c",
+        "protocol.ext.allow=never",
+        "-c",
+        "ssh.variant=ssh",
+        "-c",
+        "fetch.recurseSubmodules=false",
+        "-c",
+        "submodule.recurse=false",
+    ]);
+
+    let mut env = Vec::new();
+
+    if interactive && askpass_registry.is_some() {
+        let registry = askpass_registry.unwrap();
+        a.extend(args(&[
+            "-c",
+            "core.sshCommand=ssh -oStrictHostKeyChecking=yes",
+            "-c",
+            "credential.interactive=true",
+            "-c",
+            &format!(
+                "core.askPass={}",
+                crate::askpass::shell_quote(&registry.script_path.to_string_lossy())
+            ),
+        ]));
+
+        let script_path = registry.script_path.display().to_string();
+        env.push((
+            "GIT_ASKPASS".into(),
+            crate::askpass::shell_quote(&script_path),
+        ));
+        env.push(("SSH_ASKPASS".into(), script_path));
+        env.push(("SSH_ASKPASS_REQUIRE".into(), "force".into()));
+        if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
+            env.push(("DISPLAY".into(), ":0".into()));
+        }
+        env.push(("GITTY_ASKPASS_PORT".into(), registry.port.to_string()));
+        env.push(("GITTY_ASKPASS_TOKEN".into(), registry.token.clone()));
+    } else {
+        a.extend(args(&[
+            "-c",
+            "credential.interactive=false",
+            "-c",
+            "core.askPass=",
+            "-c",
+            "core.sshCommand=ssh -oBatchMode=yes -oStrictHostKeyChecking=yes",
+        ]));
+    }
+
+    (a, env)
 }

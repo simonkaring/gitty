@@ -243,6 +243,22 @@ operation IDs are UUIDs, and closing the main window cancels registered clones.
   Job Object for the `wsl.exe` launcher, but cannot guarantee every Linux descendant
   is terminated; Gitty never terminates an entire WSL distribution.
 
+## Remote tracking and authentication
+
+- The native pane schedules a fetch of the selected/configured remote about every
+  five minutes while active and visible. The backend's `backgroundFetch` action
+  uses an explicit `refs/heads/*:refs/remotes/<remote>/*` refspec with `--no-tags`
+  and no pruning; it never moves local heads, checks out, merges, or rebases.
+  The normal mutation lock and post-action refresh apply even on failure.
+- Background fetch and clone remain noninteractive and can use existing credential
+  helpers and SSH agents. Explicit fetch/pull/push on native repositories can use
+  a local per-app askpass bridge when those cannot supply credentials. Gitty
+  keeps answers in memory only. A cancelled or expired prompt fails the helper,
+  and a prompt has a 90-second response deadline within Git's write deadline.
+  WSL Git still uses Linux-side helpers/agents noninteractively: native askpass
+  scripts cannot run inside the distribution, and failed explicit actions explain
+  this limitation. No user credential is embedded in a Git argument or retained.
+
 ## Graph operations and full conflict editor
 
 The exact additional IPC contract is `src/model/operations.ts`. All six commands

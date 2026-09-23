@@ -129,7 +129,7 @@ impl Repository {
                     // Apply the pinned object, not a selector an external Git
                     // process could have renumbered while we checked the tree.
                     a.extend(args(&["apply", "--", oid]));
-                    let applied = action_result(self.write(&a, &[], 0)?)?;
+                    let applied = action_result(self.write(&a, &[], &[], 0)?)?;
                     if verb == "apply" {
                         return Ok(applied);
                     }
@@ -139,7 +139,7 @@ impl Repository {
                     // entry. Re-resolve after success; never drop after conflicts.
                     let dropped = (|| {
                         let selector = self.stash_selector(oid)?;
-                        action_result(self.write(&args(&["stash", "drop", "--", &selector]), &[], 0)?)
+                        action_result(self.write(&args(&["stash", "drop", "--", &selector]), &[], &[], 0)?)
                     })().map_err(|e: Error| Error::new("mutationUnverified", format!(
                         "The stash was applied, but its removal could not be verified: {} Refresh before another action; do not apply it again blindly.", e.message
                     )))?;
@@ -156,6 +156,6 @@ impl Repository {
                 }
             }
         }
-        action_result(self.write(&a, &[], 0)?)
+        action_result(self.write(&a, &[], &[], 0)?)
     }
 }

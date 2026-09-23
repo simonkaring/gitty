@@ -13,9 +13,16 @@ import { RepositoryTabs } from './components/RepositoryTabs';
 import { useSettings, type ThemeDefinition } from './model/settings';
 import { SettingsButton } from './components/Settings';
 
+import { AskPassDialog } from './components/AskPassDialog';
+
 export default function App() {
   const [demo, setDemo] = useState(() => !isTauri());
-  return demo ? <><DemoApp />{isTauri() && <button className="native-switch" onClick={() => setDemo(false)}>Open real repository</button>}</> : <NativeWorkspace onDemo={() => setDemo(true)} />;
+  return (
+    <>
+      {demo ? <><DemoApp />{isTauri() && <button className="native-switch" onClick={() => setDemo(false)}>Open real repository</button>}</> : <NativeWorkspace onDemo={() => setDemo(true)} />}
+      {isTauri() && <AskPassDialog />}
+    </>
+  );
 }
 
 function DemoApp() {

@@ -332,8 +332,17 @@ impl Repository {
     /// Runs the write itself, with its payload on stdin. Anything that ends without
     /// an exit status leaves the outcome unknown, so it is reported as such instead
     /// of inviting a blind retry.
-    pub(crate) fn write(&self, a: &[String], input: &[u8], max_input: usize) -> Result<Output> {
-        let command = process::git_mutation_command(self.location(), a)?;
+    pub(crate) fn write(
+        &self,
+        a: &[String],
+        env: &[(String, String)],
+        input: &[u8],
+        max_input: usize,
+    ) -> Result<Output> {
+        let mut command = process::git_mutation_command(self.location(), a)?;
+        for (k, v) in env {
+            command.env(k, v);
+        }
         process::run_with_input_for(command, input, MUTATION_TIMEOUT, max_input).map_err(unverified)
     }
     /// `--pathspec-from-file=-` with **empty** input means every file to Git, which
@@ -370,7 +379,7 @@ impl Repository {
             "--pathspec-from-file=-",
             "--pathspec-file-nul",
         ]);
-        let output = self.write(&a, &input, MAX_PATHSPEC_BYTES)?;
+        let output = self.write(&a, &[], &input, MAX_PATHSPEC_BYTES)?;
         if !output.success {
             return Err(self.failed(&output));
         }
@@ -387,7 +396,7 @@ impl Repository {
             "--pathspec-from-file=-",
             "--pathspec-file-nul",
         ]);
-        let output = self.write(&a, &input, MAX_PATHSPEC_BYTES)?;
+        let output = self.write(&a, &[], &input, MAX_PATHSPEC_BYTES)?;
         if !output.success {
             return Err(self.failed(&output));
         }
@@ -430,7 +439,7 @@ impl Repository {
         // argument encoding to round-trip. Git reads it before running any hook,
         // so hooks still see an immediately closed stdin.
         let a = args(&["commit", "--quiet", "--file=-"]);
-        let output = self.write(&a, message.as_bytes(), MAX_MESSAGE_BYTES)?;
+        let output = self.write(&a, &[], message.as_bytes(), MAX_MESSAGE_BYTES)?;
         // Read HEAD once, after hooks have run, and report what Git actually left.
         // A commit that cannot be confirmed must not be reported as a failure.
         let after = self.head_commit().map_err(unverified)?;
@@ -503,7 +512,7 @@ impl Repository {
             ));
         }
         let a = args(&["commit", "--quiet", "--amend", "--file=-"]);
-        let output = self.write(&a, message.as_bytes(), MAX_MESSAGE_BYTES)?;
+        let output = self.write(&a, &[], message.as_bytes(), MAX_MESSAGE_BYTES)?;
         let after = self.head_commit().map_err(unverified)?;
         if !output.success {
             let text = report(&output);

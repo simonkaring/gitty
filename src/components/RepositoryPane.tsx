@@ -245,11 +245,18 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
       throw e;
     } finally { if (isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
   }
+  const remoteWriteRef = useRef(remoteWrite);
+  remoteWriteRef.current = remoteWrite;
   useEffect(() => {
     const timer = setInterval(() => { if (!document.hidden && activeRef.current) void refresh(); }, 5000);
+    const fetchTimer = setInterval(() => {
+      if (!document.hidden && activeRef.current && session.current?.remotes.length && !lock.current && !mutationLock.current && !blockedRef.current) {
+        void remoteWriteRef.current('repository_remote_action', { action: { kind: 'backgroundFetch' } }).catch(() => {});
+      }
+    }, 5 * 60 * 1000);
     const focus = () => { if (activeRef.current) void refresh(); };
     window.addEventListener('focus', focus);
-    return () => { clearInterval(timer); window.removeEventListener('focus', focus); };
+    return () => { clearInterval(timer); clearInterval(fetchTimer); window.removeEventListener('focus', focus); };
   }, [refresh]);
   async function load(reveal?: string) {
     if (!session.current || lock.current || mutationLock.current) return;

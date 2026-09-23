@@ -11,7 +11,6 @@ Gitty is a graph-first desktop Git client built with Tauri 2, Rust, React 19, Ty
 
 ## Invariants
 
-- Repository browsing and refresh do not make network requests. Only explicit user-initiated clone, fetch, pull, and push operations contact remotes; bundle fonts and icons locally.
 - Keep Git writes explicit and guarded against stale state; preserve working files and unrelated staged changes. Consult the backend contract before changing staging, commits, or graph operations.
 - Treat demo and native flows distinctly; test the appropriate path rather than assuming mocked browser IPC validates native behavior.
 - Use Conventional Commits for commits when asked to create one.

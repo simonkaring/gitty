@@ -31,7 +31,7 @@ export function PullRequestDialog({ handle, source, onClose }: { handle: string;
     catch (e) { if (alive.current) setError(errorMessage(e)); }
     finally { opening.current = false; if (alive.current) setPending(false); }
   }
-  return <dialog ref={dialog} className="dialog operation-dialog" aria-label="Create pull request" onCancel={event => { if (opening.current) event.preventDefault(); else onClose(); }}><h2>Create pull request</h2><p>Source: <strong>{branch}</strong></p><p>Opens your provider’s draft form. Local remote-tracking references are used; no fetch or push runs automatically.</p>
+  return <dialog ref={dialog} className="dialog operation-dialog" aria-label="Create pull request" onCancel={event => { if (opening.current) event.preventDefault(); else onClose(); }}><h2>Create pull request</h2><p>Source: <strong>{branch}</strong></p><p>Opens your provider’s draft form. Locally known remote-tracking references are used; background fetch may update them, but the source branch is never pushed automatically.</p>
     {loading && <p role="status">Reading repository remotes…</p>}
     {!loading && !remotes.length && <p role="status">{error ? 'Repository remotes could not be read.' : 'No remotes are configured for this repository.'} <button onClick={() => setRetry(value => value + 1)}>Reload remotes</button></p>}
     <label>Destination remote<select value={remote} onChange={e => { setRemote(e.target.value); setTarget(''); }}><option value="">Choose remote…</option>{remotes.map(value => <option key={value.name} value={value.name}>{value.name} — {value.pushUrl || value.fetchUrl}</option>)}</select></label>

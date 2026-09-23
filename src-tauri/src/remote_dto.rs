@@ -37,6 +37,8 @@ pub enum RemoteAction {
         #[serde(default)]
         pull_mode: PullMode,
     },
+    BackgroundFetch,
+
     Push {
         remote: Option<String>,
         branch: Option<String>,

@@ -205,7 +205,7 @@ impl Repository {
             a.push("--reverse".into());
         }
         a.push("-".into());
-        let output = self.write(&a, &patch, 32 * 1024 * 1024)?;
+        let output = self.write(&a, &[], &patch, 32 * 1024 * 1024)?;
         if !output.success {
             return Err(self.failed(&output));
         }

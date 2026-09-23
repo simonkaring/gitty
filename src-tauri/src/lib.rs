@@ -1,3 +1,5 @@
+mod askpass;
+
 mod clone;
 mod clone_dto;
 mod commit;
@@ -54,10 +56,15 @@ async fn repository_sync_info(state: tauri::State<'_, Shared>, handle: String) -
 #[tauri::command]
 async fn repository_remote_action(
     state: tauri::State<'_, Shared>,
+    registry: tauri::State<'_, Arc<crate::askpass::AskpassRegistry>>,
     handle: String,
     action: RemoteAction,
 ) -> Result<ActionOutput> {
-    with_service(state, move |s| s.remote_action(&handle, action)).await
+    let registry = Some(registry.inner().clone());
+    with_service(state, move |s| {
+        s.remote_action(&handle, action, registry.as_deref())
+    })
+    .await
 }
 #[tauri::command]
 async fn repository_stashes(
@@ -350,6 +357,7 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             app.manage(Arc::new(Service::new(app.path().app_data_dir()?)));
+            askpass::init(app.handle().clone())?;
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -389,6 +397,7 @@ pub fn run() {
             repository_stashes,
             repository_stash_action,
             open_external_url,
+            askpass::repository_provide_password,
             wsl_distributions,
             wsl_directories
         ])

@@ -258,7 +258,7 @@ fn clone_repository(
     };
     ensure_absent(&request.parent, &destination)?;
 
-    let mut args = network_args();
+    let (mut args, _) = network_args(false, None);
     args.extend(crate::process::args(&[
         "clone",
         "--progress",

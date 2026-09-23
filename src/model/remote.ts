@@ -7,6 +7,7 @@ export interface SyncInfo { branch: string | null; upstream: string | null; ahea
 export type PullMode = 'ffOnly' | 'merge' | 'rebase';
 export type RemoteActionRequest =
   | { kind: 'fetch'; remote?: string; branch?: string }
+  | { kind: 'backgroundFetch'; remote?: string }
   | { kind: 'pull'; remote?: string; branch?: string; pullMode?: PullMode }
   | { kind: 'push'; remote?: string; branch?: string; setUpstream?: boolean };
 export interface RemoteActionResult { output: string }
@@ -64,6 +65,7 @@ export function sortStashes(entries: StashEntry[]): StashEntry[] {
 
 export function describeRemoteAction(action: RemoteActionRequest): string {
   if (action.kind === 'fetch') return `Fetch${action.remote ? ` ${action.remote}` : ''}`;
+  if (action.kind === 'backgroundFetch') return 'Background fetch';
   if (action.kind === 'pull') return PULL_MODE_LABELS[action.pullMode ?? DEFAULT_PULL_MODE];
   return `Push${action.remote && action.branch ? ` ${action.remote}/${action.branch}` : ''}`;
 }

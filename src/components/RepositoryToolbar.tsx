@@ -43,9 +43,8 @@ function useMenuDismiss(open: boolean, close: () => void, menuRef: RefObject<HTM
 }
 
 /** Compact Pull / Push / Branch / Stash / Refresh toolbar. Sync info is a
- * passive, local-only read (no network) refetched whenever the tab is active
- * and the repository's revision changes; fetch/pull/push only run when the
- * user explicitly clicks an action, matching the offline-first contract. */
+ * passive, local-only read refetched when the active repository changes.
+ * RepositoryPane separately schedules background fetches of remote refs. */
 export function RepositoryToolbar({ handle, active, revision, busy, pickCount, pickMode, onCreateBranch, onSwitchBranch, onCherryPick, onClearPick, onStartPickMode, onOpenStash, onRefresh, onWrite, notify }: RepositoryToolbarProps) {
   const [sync, setSync] = useState<SyncInfo | null>(null);
   const [syncError, setSyncError] = useState('');

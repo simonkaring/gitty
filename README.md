@@ -19,7 +19,7 @@ npm ci
 npm run dev
 ```
 
-Open **http://127.0.0.1:1420**. The browser preview demonstrates the workspace without a Rust toolchain. Fonts and icons are bundled locally. Repository browsing and automatic refresh stay offline; only explicitly requested clone, fetch, pull, and push actions connect to configured remotes.
+Open **http://127.0.0.1:1420**. The browser preview demonstrates the workspace without a Rust toolchain. Fonts and icons are bundled locally.
 
 ### Desktop
 
@@ -42,12 +42,13 @@ npm run check:rust              # Cargo check (build the frontend first)
 Run `npm run desktop`, choose **Open repository**, then use the native folder picker, a recent location, or the clone form. A clone targets a selected native folder or the currently browsed WSL folder, reports progress, can be cancelled, and opens the completed repository in a new tab. Clones are full, use the remote's default branch, do not initialize submodules, and copy local-source objects instead of hardlinking them. On Windows, the picker also offers WSL distribution discovery and Linux-directory browsing. WSL Git runs inside the selected distribution; its conflict editor filesystem helper also requires Python 3. Windows/WSL runtime validation is still pending.
 
 - **Repository identity:** native/WSL location, current branch or detached HEAD, linked worktree, shallow, and bare states.
-- **Live graph:** local branches, remote-tracking branches, commit-pointing tags, and HEAD; 200-commit cursor pages with original parent relationships. Remote information reflects locally stored refs, without fetching.
+- **Live graph:** local branches, remote-tracking branches, commit-pointing tags, and HEAD; 200-commit cursor pages with original parent relationships. Remote information reflects locally stored refs, including those updated by background fetch.
 - **Working changes:** a distinct graph entry attached to HEAD, with staged, unstaged, untracked, and conflicted categories. A partially staged file can appear in both staged and unstaged lists.
 - **Real changes:** lazy file lists and Git-produced unified/side-by-side diffs, including rename/binary/mode metadata and explicit preview limits. Root commits compare against the empty tree; merge commits offer a parent selector.
 - **Compare commits:** select a commit as base and another as target, then swap direction if needed. The heading explains how the base tree becomes the target tree.
 - **Search/filter:** messages, authors/emails, full/prefix hashes, and reference labels across reachable history; optional branch, date, and literal-path scope. Matches are highlighted while nonmatching ancestry stays visible. Results are capped at 500 and explicitly labeled when truncated.
 - **Refresh:** every five seconds while visible, on window focus, or manually. Coherence checks reject mixed history snapshots; selection and the viewport's commit/pixel anchor are preserved where available. No filesystem watcher is installed yet.
+- **Background fetch:** approximately every five minutes while a tab is active and the app is visible. Fetch updates the selected remote's remote-tracking branches and graph; it does not move local branches, merge, pull, push, prune, or import tags. Fetches requiring new credentials fail without showing an unsolicited prompt.
 
 ## Repository tabs and action toolbar
 
@@ -63,7 +64,7 @@ The toolbar beneath the tabs stays available in both views:
 - **Stash…:** save tracked changes with an optional message and optional untracked files, then browse/apply/pop/drop stashes. Pop retains the stash when application conflicts.
 - **Refresh:** update local repository state. Ahead/behind counts reflect locally known remote-tracking refs; fetching updates that information.
 
-Clone and remote authentication use configured Git credential helpers and an OpenSSH agent in noninteractive mode. Embedded HTTP(S) credentials are rejected; if authentication is unavailable, the operation reports an error rather than waiting for terminal input. Browser demo sync/stash controls are labeled desktop-only; simultaneous repository sessions are a native feature.
+Clone and background fetch use configured Git credential helpers and an OpenSSH agent without prompting. Explicit fetch/pull/push can prompt for HTTPS credentials or SSH passphrases in the native desktop app when helpers cannot provide them; cancelling a prompt aborts authentication. Interactive prompts for WSL repositories are not yet supported: configure a credential helper or SSH agent inside the distribution. Embedded HTTP(S) credentials are rejected for clone. Browser demo sync/stash controls are labeled desktop-only; simultaneous repository sessions are a native feature.
 
 History reads, search, and inspection remain read-only. **Working changes** provides staging and commits; graph and sidebar action controls provide explicit branch operations. The backend uses the installed Git with separate read/write command contracts and shell-free arguments. Missing objects, unsupported encodings, partial/promisor clones, and process limits return explicit errors.
 
@@ -92,7 +93,7 @@ The browser demo simulates the same workflow without modifying repository files.
 - Drag a branch onto the **outlined current branch** in the graph or sidebar to review a merge. Drag a commit subject onto that target to review a cherry-pick. Dropping opens the action dialog; execution follows an explicit review.
 - Other actions include rebasing the current branch onto a selected source, ordered multi-commit cherry-picks, comparison, and lightweight/annotated tags. Merge commits require an explicit cherry-pick mainline parent.
 - The operation banner provides **Continue**, **Skip** where applicable, **Abort**, and conflict links. The built-in conflict editor shows full base/current/incoming versions, editable results, block acceptance, and whole-file/deletion choices. External edits are detected before saving.
-- **Create pull request…** opens GitHub, GitLab.com, or Azure DevOps in your browser with source/base branches filled in. Choose a local source branch and remote; use the toolbar's **Push / Publish…** first when needed. Gitty does not fetch or push automatically.
+- **Create pull request…** opens GitHub, GitLab.com, or Azure DevOps in your browser with source/base branches filled in. Choose a local source branch and remote; use the toolbar's **Push / Publish…** first when needed. Background fetch does not push your branch.
 
 New graph mutations currently require a clean index/worktree, including no untracked files. Rebase ranges containing merge commits and special-file conflicts have explicit limitations. See [Milestone 3](docs/milestone-3.md) for semantics and validation.
 
@@ -119,21 +120,21 @@ Open the gear button or **Cmd/Ctrl+,** from either workspace, including the nati
 
 ### Shortcuts
 
-| Key | Action |
-| --- | --- |
-| `/` or `Cmd/Ctrl K` | Focus search |
-| `Enter` / `Shift Enter` in search | Next / previous match |
-| `↑` / `↓` in history | Previous / next commit |
-| `Page Up` / `Page Down` in history | Move one visible page |
-| `Home` / `End` in history | First / last loaded commit |
-| `H` | Jump to HEAD and clear search |
-| `Enter` in history | Open commit inspector |
-| `Esc` | Clear search / dismiss menu or dialog |
-| `?` | Show shortcut reference |
-| `Cmd/Ctrl ,` | Open settings |
-| `Shift F10` in native history | Open selected commit actions |
-| `←` / `→` on inspector divider | Resize by 20 px |
-| `Home` / `End` on inspector divider | Minimum / maximum width |
+| Key                                 | Action                                |
+| ----------------------------------- | ------------------------------------- |
+| `/` or `Cmd/Ctrl K`                 | Focus search                          |
+| `Enter` / `Shift Enter` in search   | Next / previous match                 |
+| `↑` / `↓` in history                | Previous / next commit                |
+| `Page Up` / `Page Down` in history  | Move one visible page                 |
+| `Home` / `End` in history           | First / last loaded commit            |
+| `H`                                 | Jump to HEAD and clear search         |
+| `Enter` in history                  | Open commit inspector                 |
+| `Esc`                               | Clear search / dismiss menu or dialog |
+| `?`                                 | Show shortcut reference               |
+| `Cmd/Ctrl ,`                        | Open settings                         |
+| `Shift F10` in native history       | Open selected commit actions          |
+| `←` / `→` on inspector divider      | Resize by 20 px                       |
+| `Home` / `End` on inspector divider | Minimum / maximum width               |
 
 Single-letter shortcuts are disabled while editing an input. Sidebar reference names navigate; their action buttons and graph badges open explicit operations. `All branches` intentionally keeps the complete graph visible.
 
@@ -247,7 +248,7 @@ PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/hun
 
 ## Scope and next steps
 
-Repository tabs, native/WSL cloning, file/hunk staging, commits and amend, branch creation/switching, merge/rebase/cherry-pick, tags, stashes, explicit fetch/pull/push, regular-file conflict resolution, and settings/custom themes are implemented. Next functional work includes line staging, broader rebase/conflict support, and richer authentication setup. Live remote authentication, WSL runtime verification, and broader packaged-desktop validation remain platform release work.
+Repository tabs, native/WSL cloning, file/hunk staging, commits and amend, branch creation/switching, merge/rebase/cherry-pick, tags, stashes, background fetch, explicit fetch/pull/push, regular-file conflict resolution, and settings/custom themes are implemented. Next functional work includes line staging, broader rebase/conflict support, and WSL interactive authentication. Live remote authentication, WSL runtime verification, and broader packaged-desktop validation remain platform release work.
 
 The demo snapshot remains materialized once per repository. Native history uses a pinned Git walk with bounded read-ahead and a temporary replay spool, batched metadata reads, and lazy diffs. Canvas and DOM rendering are viewport bounded; an interval index accelerates edge visibility queries. Layout still runs on the main thread for the loaded prefix; worker-based/incremental layout remains performance follow-up work.
 
