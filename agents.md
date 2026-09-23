@@ -1,47 +1,23 @@
-# Gitty - Agent Guidelines
+# Gitty agent guide
 
-Welcome, AI Agent! This file contains context and guidelines for working on **Gitty**, a graph-first desktop Git client.
+Gitty is a graph-first desktop Git client built with Tauri 2, Rust, React 19, TypeScript, and Vite. See [README.md](README.md) for features and setup; see [src-tauri/BACKEND.md](src-tauri/BACKEND.md) for the native Git and IPC contracts.
 
-## Project Context
-- **Description:** Gitty is a graph-first desktop Git client prototype.
-- **Core Value:** Providing clarity for Git history with an interactive graph and commit/file inspection.
+## Where changes belong
 
-## Tech Stack
-### Frontend
-- **Framework:** React 19
-- **Language:** TypeScript
-- **Bundler:** Vite
-- **Icons:** lucide-react
-- **Testing:** Vitest
+- `src/components/`, `src/App.tsx`, and `src/styles.css`: client-side workspace, graph, inspection, and UI. Keep interactions keyboard-accessible and responsive.
+- `src/model/` and `src/graph/`: shared types, typed Tauri IPC helpers, demo behavior, and graph layout. Keep the frontend/backend data contracts aligned when changing commands or DTOs.
+- `src-tauri/src/`: native repository reads and mutations. Keep Git and filesystem work in Rust, use explicit shell-free Git arguments, and preserve cross-platform native/WSL behavior where applicable.
+- The browser preview (`npm run dev`) uses synthetic repositories and simulated writes. Real repository access and Git mutations require the Tauri desktop app (`npm run desktop`).
 
-### Desktop / Backend
-- **Framework:** Tauri 2
-- **Language:** Rust
-- **Build Tool:** Cargo
+## Invariants
 
-## Development Guidelines
+- Repository browsing and refresh do not make network requests. Only explicit user-initiated clone, fetch, pull, and push operations contact remotes; bundle fonts and icons locally.
+- Keep Git writes explicit and guarded against stale state; preserve working files and unrelated staged changes. Consult the backend contract before changing staging, commits, or graph operations.
+- Treat demo and native flows distinctly; test the appropriate path rather than assuming mocked browser IPC validates native behavior.
+- Use Conventional Commits for commits when asked to create one.
 
-### General
-- **Offline First:** The application makes no external runtime network requests for assets or repository data. Fonts and icons are bundled locally.
-- **TypeScript & Rust:** Maintain strict typing in both TypeScript and Rust to ensure robustness.
-- **Conventional Commits:** Follow the [Conventional Commits](https://www.conventionalcommits.org/) specification (e.g., `feat:`, `fix:`, `docs:`, `refactor:`, `chore:`) for all commit messages.
+## Checks
 
-### Frontend (React & TypeScript)
-- Use modern React 19 patterns (e.g., Hooks, Server Components if applicable, though primarily client-side here).
-- Ensure components are accessible and responsive.
-- Keep the UI clean, focusing on the three-pane workspace and graph visualization.
-- Run tests using `npm run test` (Vitest).
-
-### Backend (Tauri & Rust)
-- Rust code lives in the `src-tauri` directory.
-- Use Rust for system-level integrations and heavy lifting (e.g., parsing Git history, interacting with the file system).
-- Communicate between the frontend and Rust backend using Tauri commands securely.
-- Ensure cross-platform compatibility when writing native code.
-- Check Rust code with `npm run check:rust` or `cargo check` inside `src-tauri`.
-
-## Scripts Reference
-- `npm run dev`: Start the web-based preview.
-- `npm run desktop`: Start the Tauri desktop application in development mode.
-- `npm run test`: Run frontend unit tests.
-
-Please adhere to these guidelines when suggesting or implementing changes.
+- Frontend: `npm test` (Vitest) and `npm run build` (TypeScript + Vite).
+- Rust or IPC changes: `npm run check:rust` and `npm run test:rust`; run `cargo fmt --manifest-path src-tauri/Cargo.toml --check` for Rust edits. The full cross-platform CI commands are in `.github/workflows/check.yml`.
+- Add or update focused tests for behavior changes. Browser smoke scripts under `src/components/*.smoke.mjs` use mocked Tauri IPC and require a separate Playwright/Chromium installation; see the README for invocation.
