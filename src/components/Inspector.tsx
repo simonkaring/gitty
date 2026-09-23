@@ -38,7 +38,6 @@ export function Inspector({ commit, head, onJump, onClose, notify, activePath, o
   const { settings } = useSettings();
   const [split, setSplit] = useState(settings.diffView === 'split');
   useEffect(() => setSplit(settings.diffView === 'split'), [settings.diffView]);
-  const [tab, setTab] = useState<'overview' | 'diff'>('overview');
   const [fileIndex, setFileIndex] = useState(0);
   const [copied, setCopied] = useState(false);
 
@@ -49,7 +48,6 @@ export function Inspector({ commit, head, onJump, onClose, notify, activePath, o
     const index = commit.files.findIndex(f => f.path === activePath);
     if (index >= 0) {
       setFileIndex(index);
-      setTab('diff');
     }
   }, [activePath, commit.files]);
 
@@ -65,7 +63,6 @@ export function Inspector({ commit, head, onJump, onClose, notify, activePath, o
 
   function selectFile(index: number, f: ChangedFile) {
     setFileIndex(index);
-    setTab('diff');
     if (onActiveDiffChange) {
       onActiveDiffChange({
         path: f.path,
@@ -75,48 +72,30 @@ export function Inspector({ commit, head, onJump, onClose, notify, activePath, o
     }
   }
 
-  function handleDiffTab() {
-    setTab('diff');
-    const targetFile = commit.files[Math.min(fileIndex, commit.files.length - 1)];
-    if (targetFile && onActiveDiffChange) {
-      onActiveDiffChange({
-        path: targetFile.path,
-        diff: toFileDiff(targetFile),
-        loading: false,
-      });
-    }
-  }
-
-  function handleOverviewTab() {
-    setTab('overview');
-  }
-
   return <aside className="inspector" aria-label="Commit inspector">
-    <div className="pane-heading"><span><GitCommitHorizontal size={17} /> Commit details</span><button className="icon-button" aria-label="Close commit inspector" onClick={onClose}><X size={15} /></button></div>
-    <div className="inspector-tabs" role="tablist" aria-label="Commit detail view">
-      {(['overview', 'diff'] as const).map((name, index) => <button key={name} id={`tab-${name}`} role="tab" aria-selected={tab === name} aria-controls={`panel-${name}`} tabIndex={tab === name ? 0 : -1} className={tab === name ? 'active' : ''} onClick={() => name === 'diff' ? handleDiffTab() : handleOverviewTab()}
-        onKeyDown={event => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const next = event.key === 'Home' ? 'overview' : event.key === 'End' ? 'diff' : index === 0 ? 'diff' : 'overview'; if (next === 'diff') handleDiffTab(); else handleOverviewTab(); document.getElementById(`tab-${next}`)?.focus(); } }}>
-        {name === 'overview' ? 'Overview' : <>Diff <span className="count">{commit.files.length}</span></>}
-      </button>)}
-    </div>
-    <div className="inspector-content" role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
+    <div className="inspector-content">
       <div className="commit-summary">
-        <div className="commit-eyebrow"><span>{commit.parents.length > 1 ? <GitMerge size={14} /> : <GitCommitHorizontal size={15} />}{commit.id.slice(0, 7)}</span>{commit.id === head && <span className="head-label">HEAD</span>}<button className="icon-button" aria-label="Copy full commit SHA" title="Copy full commit SHA" onClick={copy}>{copied ? <Check size={14} /> : <Copy size={14} />}</button></div>
+        <div className="commit-eyebrow">
+          <span>{commit.parents.length > 1 ? <GitMerge size={14} /> : <GitCommitHorizontal size={15} />}{commit.id.slice(0, 7)}</span>
+          {commit.id === head && <span className="head-label">HEAD</span>}
+          <div className="commit-actions">
+            <button className="icon-button" aria-label="Copy full commit SHA" title="Copy full commit SHA" onClick={copy}>{copied ? <Check size={14} /> : <Copy size={14} />}</button>
+            <button className="icon-button" aria-label="Close commit inspector" title="Close commit inspector" onClick={onClose}><X size={15} /></button>
+          </div>
+        </div>
         <h2>{commit.subject}</h2>
         <div className="author-block"><span className={`avatar color-${commit.author.charCodeAt(0) % 5}`}>{commit.author.split(' ').map(n => n[0]).join('')}</span><div><strong>{commit.author}</strong><span>{date} UTC</span></div></div>
       </div>
-      {tab === 'overview' && <>
-        <p className="commit-description">{commit.body}</p>
-        <dl className="commit-metadata">
-          <div><dt>Commit</dt><dd className="full-sha" title={commit.id}>{commit.id}</dd></div>
-          <div><dt>{commit.parents.length === 1 ? 'Parent' : 'Parents'}</dt><dd>{commit.parents.length ? commit.parents.map(id => <button className="parent-link" key={id} onClick={() => onJump(id)}>{id.slice(0, 7)}<ArrowUpRight size={11} /></button>) : <span>Initial commit</span>}</dd></div>
-          <div><dt>Author</dt><dd className="email">{commit.email}</dd></div>
-        </dl>
-      </>}
+      <p className="commit-description">{commit.body}</p>
+      <dl className="commit-metadata">
+        <div><dt>Commit</dt><dd className="full-sha" title={commit.id}>{commit.id}</dd></div>
+        <div><dt>{commit.parents.length === 1 ? 'Parent' : 'Parents'}</dt><dd>{commit.parents.length ? commit.parents.map(id => <button className="parent-link" key={id} onClick={() => onJump(id)}>{id.slice(0, 7)}<ArrowUpRight size={11} /></button>) : <span>Initial commit</span>}</dd></div>
+        <div><dt>Author</dt><dd className="email">{commit.email}</dd></div>
+      </dl>
       <section className="changed-files" aria-label="Changed files">
         <div className="section-heading"><span><ChevronDown size={13} /> Changed files <span className="count">{commit.files.length}</span></span><span className="change-totals"><span className="added">+{additions}</span><span className="removed">−{deletions}</span></span></div>
         {commit.files.map((f, index) => {
-          const isSelected = activePath ? f.path === activePath : (tab === 'diff' && index === fileIndex);
+          const isSelected = activePath ? f.path === activePath : index === fileIndex;
           return <button key={f.path} className={`file-row ${isSelected ? 'active' : ''}`} onClick={() => selectFile(index, f)} title={`View diff for ${f.path}`}>
             <FileCode2 size={15} /><span className="file-name"><strong>{f.path.split('/').at(-1)}</strong><span>{f.path.split('/').slice(0, -1).join('/')}/</span></span><span className={`file-status ${f.status}`}>{f.status[0].toUpperCase()}</span>
           </button>;
@@ -135,7 +114,7 @@ export function Inspector({ commit, head, onJump, onClose, notify, activePath, o
           </div>
         )
       ) : (
-        tab === 'diff' ? <section className="diff-section" aria-label={`Mock diff for ${file.path}`}>
+        file ? <section className="diff-section" aria-label={`Mock diff for ${file.path}`}>
           <div className="diff-heading"><span>{file.path.split('/').at(-1)}</span><button aria-pressed={split} onClick={() => setSplit(!split)}>{split ? 'Unified' : 'Side by side'}</button><span className="mock-badge">MOCK DIFF</span></div>
           {split ? <DiffPreview split diff={toFileDiff(file)} /> : <div className="diff-code" tabIndex={0} aria-label="Scrollable unified diff">
             <div className="diff-hunk">@@ −{file.before.length ? 1 : 0},{file.before.length} +{file.after.length ? 1 : 0},{file.after.length} @@</div>

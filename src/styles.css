@@ -182,7 +182,14 @@ kbd { font-family: var(--mono); font-size: 12px; display: inline-grid; place-ite
 /* Height is also supplied from ROW_HEIGHT by HistoryGraph: canvas and text share one source. */
 .commit-row { position: absolute; left: 0; right: 0; display: grid; grid-template-columns: minmax(0, 1fr) 110px 90px; align-items: center; padding-left: var(--graph-width); cursor: default; user-select: none; border-bottom: 1px solid var(--border); font-size: 14px; }
 .commit-row:hover { background: var(--chrome); }
-.commit-row.selected { background: var(--selected); box-shadow: inset 3px 0 var(--accent); }
+.commit-row.selected {
+  background: var(--selected);
+  background: color-mix(in srgb, var(--branch-color, var(--accent)) 16%, transparent);
+  box-shadow: inset 3px 0 var(--branch-color, var(--accent));
+}
+.commit-row.selected:hover {
+  background: color-mix(in srgb, var(--branch-color, var(--accent)) 22%, transparent);
+}
 .commit-row.dimmed .commit-message, .commit-row.dimmed .row-author, .commit-row.dimmed .row-hash { opacity: .45; }
 .commit-message { display: flex; align-items: center; gap: 8px; padding: 0 16px 0 5px; overflow: hidden; }
 .subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.5; }
@@ -204,18 +211,13 @@ kbd { font-family: var(--mono); font-size: 12px; display: inline-grid; place-ite
 .pane-resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: -4px; right: -4px; }
 .pane-resizer:hover, .pane-resizer[data-dragging], .pane-resizer:focus-visible { background: var(--accent); outline: 1px solid var(--accent); }
 .inspector { width: var(--inspector-width); flex-shrink: 0; display: flex; flex-direction: column; min-height: 0; background: var(--raised); }
-.pane-heading { display: flex; justify-content: space-between; align-items: center; min-height: 58px; padding: 10px 18px 10px 22px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
-.pane-heading > span { display: flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 550; }
-.pane-heading svg { color: var(--secondary); }
-.inspector-tabs { display: flex; gap: 24px; padding: 0 22px; height: 46px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
-.inspector-tabs button { position: relative; font-size: 14px; color: var(--secondary); display: flex; align-items: center; gap: 6px; }
-.inspector-tabs button.active { color: var(--accent-text); }
-.inspector-tabs button.active::after { position: absolute; bottom: -1px; left: 0; right: 0; height: 2px; background: var(--accent); content: ''; }
 .inspector-content { overflow: auto; flex: 1; }
-.commit-summary { padding: 24px 24px 0; }
+.commit-summary { padding: 22px 24px 0; }
 .commit-eyebrow { display: flex; align-items: center; gap: 8px; }
 .commit-eyebrow > span:first-child { font-family: var(--mono); font-size: 13px; color: var(--secondary); display: flex; align-items: center; gap: 6px; }
 .commit-eyebrow .icon-button { margin-left: auto; }
+.commit-eyebrow .commit-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.commit-eyebrow .commit-actions .icon-button { margin-left: 0; }
 .head-label { color: var(--accent-text); background: var(--accent-wash); }
 .commit-summary h2 { font-size: 25px; line-height: 1.35; margin: 16px 0 24px; overflow-wrap: anywhere; }
 .author-block { display: flex; align-items: center; gap: 10px; }

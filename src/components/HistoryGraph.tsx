@@ -62,6 +62,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const selectedIndex = commits.findIndex(commit => commit.id === selectedId);
   const loadedIds = useMemo(() => new Set(commits.slice(0, loaded).map(commit => commit.id)), [commits, loaded]);
   const visibleEdges = useMemo(() => indexEdges(layout.edges), [layout.edges]);
+  const colors = useMemo(() => Array.from({ length: 8 }, (_, index) => theme.colors[`graphLane${index + 1}`]), [theme]);
 
   function scrollTo(row: number) {
     const el = scroller.current;
@@ -93,7 +94,6 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     if (!element) return;
     const ctx = element.getContext('2d');
     if (!ctx) return;
-    const colors = Array.from({ length: 8 }, (_, index) => theme.colors[`graphLane${index + 1}`]);
     const dpr = window.devicePixelRatio || 1;
     element.width = graphWidth * dpr;
     element.height = height * dpr;
@@ -135,7 +135,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       }
     }
     ctx.globalAlpha = 1;
-  }, [commits, layout, visibleEdges, start, end, scrollTop, height, graphWidth, selectedId, head, theme, matches, loaded]);
+  }, [commits, layout, visibleEdges, start, end, scrollTop, height, graphWidth, selectedId, head, theme, matches, loaded, colors]);
 
   function navigate(row: number) {
     if (!loaded) return;
@@ -162,12 +162,19 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
         <div className="history-spacer" style={{ height: loaded * ROW_HEIGHT }}>
           {commits.slice(start, end).map((commit, offset) => {
             const row = start + offset;
+            const node = layout.nodes[row];
+            const lane = node?.lane ?? 0;
+            const branchColor = colors[lane % colors.length];
             const badges = refs.filter(ref => ref.commitId === commit.id);
             return <div key={commit.id} id={`commit-${commit.id}`} role="option" aria-selected={commit.id === selectedId}
               aria-posinset={row + 1} aria-setsize={commits.length}
               aria-label={`${commit.subject}, ${commit.author}, ${commit.id.slice(0, 7)}${commit.parents.length > 1 ? ', merge commit' : ''}${commit.id === head ? ', HEAD' : ''}${badges.length ? `, ${badges.map(b => b.name).join(', ')}` : ''}`}
               className={`commit-row ${commit.id === selectedId ? 'selected' : ''} ${matches && !matches.has(commit.id) ? 'dimmed' : ''}`}
-              style={{ top: row * ROW_HEIGHT, height: ROW_HEIGHT }} onContextMenu={event => { if (onActions && commit.id !== WORKING_ID) { event.preventDefault(); onActions({ oid: commit.id }); } }} onClick={() => { onSelect(commit.id); scroller.current?.focus(); }} onDoubleClick={onOpenDetails}>
+              style={{
+                top: row * ROW_HEIGHT,
+                height: ROW_HEIGHT,
+                '--branch-color': branchColor,
+              } as React.CSSProperties} onContextMenu={event => { if (onActions && commit.id !== WORKING_ID) { event.preventDefault(); onActions({ oid: commit.id }); } }} onClick={() => { onSelect(commit.id); scroller.current?.focus(); }} onDoubleClick={onOpenDetails}>
               <div className="commit-message">
                 {onTogglePick && commit.id !== WORKING_ID && <input className="graph-pick" type="checkbox" aria-label={`Cherry-pick ${commit.id.slice(0, 7)}`} checked={pickOrder?.includes(commit.id) ?? false} onClick={event => event.stopPropagation()} onChange={() => onTogglePick(commit.id)} />}
                 {badges.map(ref => <span key={ref.fullName ?? ref.name} className={`ref-pill ${ref.kind === 'tag' ? 'tag-ref' : ref.kind === 'remote' ? 'remote-ref' : ref.name === 'main' ? 'main-ref' : ''}`}
