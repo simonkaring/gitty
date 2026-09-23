@@ -54,6 +54,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   const [split, setSplit] = useState(settings.diffView === 'split');
   useEffect(() => setSplit(settings.diffView === 'split'), [settings.diffView]);
   const pending = useRef(false);
+  const previousActivePath = useRef(activePath);
   const amendRequest = useRef(0);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
@@ -71,10 +72,11 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   }, [scope, loadDiff]);
 
   useEffect(() => {
-    if (sidebarMode && activePath === null && selection !== null) {
+    if (sidebarMode && previousActivePath.current && activePath === null) {
       setSelection(null);
     }
-  }, [sidebarMode, activePath, selection]);
+    previousActivePath.current = activePath;
+  }, [sidebarMode, activePath]);
 
   const stagePaths = operationPaths(status?.entries ?? [], 'stage');
   const stagedPaths = operationPaths(status?.entries ?? [], 'unstage');

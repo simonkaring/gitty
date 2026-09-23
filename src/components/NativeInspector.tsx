@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CommitDetail, DiffFile, FileDiff, RepositorySession, RepositoryStatus } from '../model/repository';
 import { errorMessage, inspectorSpec, native, statusGroups, WORKING_ID, type WorkingGroup } from '../model/native';
 import { X } from 'lucide-react';
@@ -17,6 +17,7 @@ export function NativeInspector({ session, selected, status, revision, base, tar
   const [group, setGroup] = useState<WorkingGroup>('unstaged');
   const [files, setFiles] = useState<DiffFile[]>([]);
   const [path, setPath] = useState('');
+  const previousActivePath = useRef(activePath);
   const [diff, setDiff] = useState<FileDiff | null>(null);
   const [error, setError] = useState('');
   const [diffError, setDiffError] = useState('');
@@ -47,8 +48,9 @@ export function NativeInspector({ session, selected, status, revision, base, tar
   }, [session.handle, selected, working, spec, revision, retry, scope, onActiveDiffChange]);
 
   useEffect(() => {
-    if (activePath === null && path !== '') setPath('');
-  }, [activePath, path]);
+    if (previousActivePath.current && activePath === null) setPath('');
+    previousActivePath.current = activePath;
+  }, [activePath]);
 
   useEffect(() => {
     if (!onActiveDiffChange) return;
