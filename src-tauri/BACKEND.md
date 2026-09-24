@@ -4,14 +4,17 @@ All commands in `src/model/repository.ts`, `src/model/clone.ts`, and `src/model/
 Rust DTOs serialize the same camelCase fields and `{code, message}` errors.
 `backend_info` remains available and reports native capability.
 
-Ordinary index/commit writes use these four commands:
+Ordinary index/commit writes use these commands:
 
 - `repository_stage({handle, paths: string[]}) -> void`
 - `repository_unstage({handle, paths: string[]}) -> void`
+- `repository_stage_hunk({handle, path: string, hunkIndex: number, fingerprint: string, lineIndices?: number[]}) -> void`
+- `repository_unstage_hunk({handle, path: string, hunkIndex: number, fingerprint: string, lineIndices?: number[]}) -> void`
 - `repository_create_commit({handle, message: string}) -> {oid: string}`
 - `repository_amend_commit({handle, message: string, expectedHead: string, expectedHeadRef: string | null, expectedStatusFingerprint: string}) -> {oid: string}`
 
 `repository_commit({handle, oid})` is unchanged and remains a read.
+When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage_hunk`, only the specified 0-based lines within the hunk are staged/unstaged using a selectively generated forward patch (and `--reverse` for unstaging), validating bounds and changed line kinds while preserving all working files and other index entries.
 
 ## Read semantics
 

@@ -137,6 +137,238 @@ fn selected_patch(bytes: &[u8], hunk_index: usize, reverse: bool) -> Result<Vec<
     Ok(patch)
 }
 
+fn split_raw_lines(slice: &[u8]) -> Vec<&[u8]> {
+    let mut lines = Vec::new();
+    let mut rest = slice;
+    while !rest.is_empty() {
+        if let Some(pos) = rest.iter().position(|b| *b == b'\n') {
+            lines.push(&rest[..pos + 1]);
+            rest = &rest[pos + 1..];
+        } else {
+            lines.push(rest);
+            break;
+        }
+    }
+    lines
+}
+
+fn selected_lines_patch(
+    bytes: &[u8],
+    hunk_index: usize,
+    reverse: bool,
+    line_indices: &[usize],
+) -> Result<Vec<u8>> {
+    let offsets = hunk_offsets(bytes);
+    let start = *offsets
+        .get(hunk_index)
+        .ok_or_else(|| Error::new("invalidHunk", "Select an existing complete hunk."))?;
+    let end = offsets.get(hunk_index + 1).copied().unwrap_or(bytes.len());
+    let hunk_bytes = &bytes[start..end];
+    let body_start = start
+        + hunk_bytes
+            .iter()
+            .position(|b| *b == b'\n')
+            .ok_or_else(|| Error::new("gitParse", "Incomplete hunk header"))?
+        + 1;
+
+    let fields: Vec<_> = bytes[start..body_start]
+        .split(|b| *b == b' ')
+        .take(4)
+        .collect();
+    let range = |s: &str| -> Result<(u64, u64)> {
+        let (start, count) = s[1..].split_once(',').unwrap_or((&s[1..], "1"));
+        Ok((
+            start
+                .parse()
+                .map_err(|_| Error::new("gitParse", "Invalid hunk start"))?,
+            count
+                .parse()
+                .map_err(|_| Error::new("gitParse", "Invalid hunk count"))?,
+        ))
+    };
+    if fields.len() < 4 || !fields[1].starts_with(b"-") || !fields[2].starts_with(b"+") {
+        return Err(Error::new("gitParse", "Invalid hunk ranges"));
+    }
+    let ascii =
+        |b| std::str::from_utf8(b).map_err(|_| Error::new("gitParse", "Invalid hunk range"));
+    let (old_start, _old_count) = range(ascii(fields[1])?)?;
+    let (new_start, _new_count) = range(ascii(fields[2])?)?;
+
+    let raw_lines = split_raw_lines(&bytes[body_start..end]);
+    if line_indices.is_empty() {
+        return Err(Error::new(
+            "invalidSelection",
+            "Select one or more changed lines.",
+        ));
+    }
+    if line_indices.len() > raw_lines.len() || line_indices.len() > 20_000 {
+        return Err(Error::new("invalidSelection", "Selection exceeds limit."));
+    }
+
+    let mut selected_set = std::collections::HashSet::with_capacity(line_indices.len());
+    for &idx in line_indices {
+        if idx >= raw_lines.len() {
+            return Err(Error::new(
+                "invalidSelection",
+                "Selected line is out of range.",
+            ));
+        }
+        if !selected_set.insert(idx) {
+            return Err(Error::new("invalidSelection", "Duplicate line selection."));
+        }
+        let line = raw_lines[idx];
+        match line.first() {
+            Some(b'+') | Some(b'-') => {}
+            _ => {
+                return Err(Error::new(
+                    "invalidSelection",
+                    "Only changed lines can be selected.",
+                ));
+            }
+        }
+    }
+
+    let has_meta_after =
+        |idx: usize| -> bool { idx + 1 < raw_lines.len() && raw_lines[idx + 1].starts_with(b"\\") };
+
+    let mut patch_body = Vec::new();
+    let mut patch_old_count: u64 = 0;
+    let mut patch_new_count: u64 = 0;
+    let mut additions_in_patch: usize = 0;
+    let mut deletions_in_patch: usize = 0;
+
+    let mut idx = 0;
+    while idx < raw_lines.len() {
+        let line = raw_lines[idx];
+        if line.starts_with(b"\\") {
+            idx += 1;
+            continue;
+        }
+
+        let is_selected = selected_set.contains(&idx);
+        let has_no_newline = has_meta_after(idx);
+        let first_byte = *line.first().unwrap_or(&b' ');
+
+        match first_byte {
+            b' ' => {
+                patch_body.extend_from_slice(line);
+                if has_no_newline {
+                    patch_body.extend_from_slice(raw_lines[idx + 1]);
+                }
+                patch_old_count += 1;
+                patch_new_count += 1;
+            }
+            b'+' => {
+                if reverse {
+                    if is_selected {
+                        patch_body.extend_from_slice(line);
+                        if has_no_newline {
+                            patch_body.extend_from_slice(raw_lines[idx + 1]);
+                        }
+                        patch_new_count += 1;
+                        additions_in_patch += 1;
+                    } else {
+                        if has_no_newline {
+                            return Err(Error::new(
+                                "unsupportedHunk",
+                                "Partial staging across a newline-at-EOF transition is unsupported. Use full-hunk staging or Git.",
+                            ));
+                        }
+                        let mut ctx = line.to_vec();
+                        ctx[0] = b' ';
+                        patch_body.extend_from_slice(&ctx);
+                        patch_old_count += 1;
+                        patch_new_count += 1;
+                    }
+                } else if is_selected {
+                    patch_body.extend_from_slice(line);
+                    if has_no_newline {
+                        patch_body.extend_from_slice(raw_lines[idx + 1]);
+                    }
+                    patch_new_count += 1;
+                    additions_in_patch += 1;
+                }
+            }
+            b'-' => {
+                if reverse {
+                    if is_selected {
+                        patch_body.extend_from_slice(line);
+                        if has_no_newline {
+                            patch_body.extend_from_slice(raw_lines[idx + 1]);
+                        }
+                        patch_old_count += 1;
+                        deletions_in_patch += 1;
+                    }
+                } else if is_selected {
+                    patch_body.extend_from_slice(line);
+                    if has_no_newline {
+                        patch_body.extend_from_slice(raw_lines[idx + 1]);
+                    }
+                    patch_old_count += 1;
+                    deletions_in_patch += 1;
+                } else {
+                    if has_no_newline {
+                        return Err(Error::new(
+                            "unsupportedHunk",
+                            "Partial staging across a newline-at-EOF transition is unsupported. Use full-hunk staging or Git.",
+                        ));
+                    }
+                    let mut ctx = line.to_vec();
+                    ctx[0] = b' ';
+                    patch_body.extend_from_slice(&ctx);
+                    patch_old_count += 1;
+                    patch_new_count += 1;
+                }
+            }
+            _ => {}
+        }
+
+        if has_no_newline {
+            idx += 2;
+        } else {
+            idx += 1;
+        }
+    }
+
+    if additions_in_patch == 0 && deletions_in_patch == 0 {
+        return Err(Error::new(
+            "invalidSelection",
+            "Select one or more changed lines.",
+        ));
+    }
+
+    let (patch_old_start, patch_new_start) = if reverse {
+        let base_start = new_start;
+        let s_old = if patch_old_count == 0 {
+            base_start.saturating_sub(1)
+        } else if patch_new_count == 0 {
+            base_start + 1
+        } else {
+            base_start
+        };
+        (s_old, base_start)
+    } else {
+        let s_new = if patch_new_count == 0 {
+            old_start.saturating_sub(1)
+        } else if patch_old_count == 0 {
+            old_start + 1
+        } else {
+            old_start
+        };
+        (old_start, s_new)
+    };
+
+    let mut patch = bytes[..offsets[0]].to_vec();
+    patch.extend_from_slice(
+        format!(
+            "@@ -{patch_old_start},{patch_old_count} +{patch_new_start},{patch_new_count} @@\n"
+        )
+        .as_bytes(),
+    );
+    patch.extend_from_slice(&patch_body);
+    Ok(patch)
+}
+
 impl Repository {
     pub(crate) fn change_hunk(
         &self,
@@ -144,6 +376,7 @@ impl Repository {
         hunk_index: usize,
         expected: &str,
         reverse: bool,
+        line_indices: Option<&[usize]>,
     ) -> Result<()> {
         let validated = validate_mutation_path(path)?;
         if validated != path {
@@ -178,7 +411,11 @@ impl Repository {
         if action.fingerprint.as_deref() != Some(expected) {
             return Err(stale());
         }
-        let patch = selected_patch(&bytes, hunk_index, reverse)?;
+        let patch = if let Some(lines) = line_indices {
+            selected_lines_patch(&bytes, hunk_index, reverse, lines)?
+        } else {
+            selected_patch(&bytes, hunk_index, reverse)?
+        };
         // Catch index/worktree edits during preparation as well as since display.
         // This is NOT an atomic compare-and-swap with external Git processes:
         // Service serializes Gitty writers only. Git apply acquires index.lock,

@@ -18,3 +18,56 @@
 .hunk-action-button:disabled { opacity: .5; cursor: default; }
 .hunk-action-button:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
 .hunk-unavailable { white-space: normal; }
+
+.line-select-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  margin: 0 6px 0 0;
+  vertical-align: middle;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: var(--surface, var(--subtle));
+  color: var(--text);
+  cursor: pointer;
+  line-height: 1;
+  user-select: none;
+  flex-shrink: 0;
+}
+.line-select-toggle:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.line-select-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.line-select-toggle[aria-pressed='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.line-select-toggle:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.native-diff pre.selected-line {
+  background: color-mix(in srgb, var(--accent-wash) 40%, transparent);
+}
+.native-diff pre.add.selected-line {
+  background: color-mix(in srgb, var(--green-wash) 70%, var(--accent-wash));
+}
+.native-diff pre.remove.selected-line {
+  background: color-mix(in srgb, var(--red-wash) 70%, var(--accent-wash));
+}
+.split-row.selected-line {
+  background: color-mix(in srgb, var(--accent-wash) 30%, transparent);
+}
+.split-row pre.selected-line.add {
+  background: color-mix(in srgb, var(--green-wash) 70%, var(--accent-wash));
+}
+.split-row pre.selected-line.remove {
+  background: color-mix(in srgb, var(--red-wash) 70%, var(--accent-wash));
+}
