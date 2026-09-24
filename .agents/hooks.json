@@ -1,0 +1,14 @@
+{
+  "project-whitelist": {
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "command": "node -e 'let d = JSON.parse(require(\"fs\").readFileSync(0, \"utf-8\")); let cmd = (d.toolCall?.args?.CommandLine || \"\").trim(); const allowedPrefixes = [\"npm test\", \"npm run build\", \"npm run check:rust\", \"npm run test:rust\", \"cargo test --manifest-path src-tauri/Cargo.toml\"]; const isFmtCheck = cmd.startsWith(\"cargo fmt\") && cmd.includes(\"--check\"); if (allowedPrefixes.some(p => cmd.startsWith(p)) || isFmtCheck) { console.log(JSON.stringify({decision: \"allow\"})); } else { console.log(JSON.stringify({decision: \"ask\"})); }'"
+          }
+        ]
+      }
+    ]
+  }
+}
