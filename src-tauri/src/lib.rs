@@ -264,9 +264,10 @@ async fn repository_stage_hunk(
     path: String,
     hunk_index: usize,
     fingerprint: String,
+    line_indices: Option<Vec<usize>>,
 ) -> Result<()> {
     with_service(state, move |s| {
-        s.stage_hunk(&handle, &path, hunk_index, &fingerprint)
+        s.stage_hunk(&handle, &path, hunk_index, &fingerprint, line_indices)
     })
     .await
 }
@@ -277,9 +278,10 @@ async fn repository_unstage_hunk(
     path: String,
     hunk_index: usize,
     fingerprint: String,
+    line_indices: Option<Vec<usize>>,
 ) -> Result<()> {
     with_service(state, move |s| {
-        s.unstage_hunk(&handle, &path, hunk_index, &fingerprint)
+        s.unstage_hunk(&handle, &path, hunk_index, &fingerprint, line_indices)
     })
     .await
 }

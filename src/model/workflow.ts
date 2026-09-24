@@ -16,7 +16,18 @@ export async function writeAndRefresh(handle: string, mutation: RepositoryMutati
       outcome.oid = result.oid;
     } else if (mutation.kind === 'stage_hunk' || mutation.kind === 'unstage_hunk') {
       if (!mutation.path || !mutation.fingerprint || !Number.isSafeInteger(mutation.hunkIndex) || mutation.hunkIndex < 0) throw new Error('Select a complete hunk from a current diff.');
-      await invoke(`repository_${mutation.kind}`, { handle, path: mutation.path, hunkIndex: mutation.hunkIndex, fingerprint: mutation.fingerprint });
+      if (mutation.lineIndices !== undefined) {
+        if (!Array.isArray(mutation.lineIndices) || !mutation.lineIndices.length || mutation.lineIndices.length > 20000 || !mutation.lineIndices.every(i => Number.isSafeInteger(i) && i >= 0) || new Set(mutation.lineIndices).size !== mutation.lineIndices.length) {
+          throw new Error('Select one or more valid distinct changed lines.');
+        }
+      }
+      await invoke(`repository_${mutation.kind}`, {
+        handle,
+        path: mutation.path,
+        hunkIndex: mutation.hunkIndex,
+        fingerprint: mutation.fingerprint,
+        ...(mutation.lineIndices !== undefined ? { lineIndices: mutation.lineIndices } : {}),
+      });
     } else {
       if (!mutation.paths.length) throw new Error('Select at least one path.');
       await invoke(`repository_${mutation.kind}`, { handle, paths: [...new Set(mutation.paths)] });

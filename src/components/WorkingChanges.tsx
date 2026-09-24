@@ -63,6 +63,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   const fallbackGroup = (['unstaged', 'untracked', 'staged', 'conflict'] as WorkingGroup[]).find(kind => groups[kind].length);
   const active = sidebarMode ? chosen : (chosen ?? (fallbackGroup ? { group: fallbackGroup, path: groups[fallbackGroup][0].path } : null));
   const scope = JSON.stringify([session.handle, active?.group, active?.path, revision, retry, busy]);
+  const currentPreview = preview?.scope === scope ? preview : null;
   useEffect(() => {
     let live = true;
     setPreview(null);
@@ -94,9 +95,9 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
     onActiveDiffChange({
       path: active.path,
       group: active.group,
-      diff: preview?.diff ?? null,
-      error: preview?.error,
-      loading: (!preview || preview.scope !== scope) && !busy,
+      diff: currentPreview?.diff ?? null,
+      error: currentPreview?.error,
+      loading: !currentPreview,
       hunkAction: isStaged ? 'unstage_hunk' : active.group === 'unstaged' ? 'stage_hunk' : undefined,
       busy: blocked,
       unavailable: demo ? 'Hunk staging is unavailable in the demo. Open a desktop repository to stage individual hunks.' : undefined,
@@ -108,7 +109,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
       },
       isStaged,
     });
-  }, [active, preview, scope, busy, blocked, demo, onActiveDiffChange]);
+  }, [active, currentPreview, busy, blocked, demo, onActiveDiffChange]);
   const composerDraft = amending ? amendDraft ?? { subject: '', body: '' } : draft;
   const amendReady = amending && !!amendDraft && !!session.head && amendHead === session.head && status?.head === session.head && status.headRef === session.headRef;
   function edit(value: CommitDraft) {
@@ -135,7 +136,8 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   async function perform(mutation: RepositoryMutation, fileCount = 1) {
     if (pending.current || blocked) return;
     pending.current = true;
-    setOperation(mutation.kind === 'commit' ? 'Creating commit and refreshing repository…' : mutation.kind === 'amend' ? 'Rewriting last commit and refreshing repository…' : `${mutation.kind === 'stage' || mutation.kind === 'stage_hunk' ? 'Staging' : 'Unstaging'} ${'hunkIndex' in mutation ? 'selected hunk' : `${fileCount} file${fileCount === 1 ? '' : 's'}`} and refreshing…`);
+    const hasLineIndices = 'lineIndices' in mutation && Array.isArray(mutation.lineIndices) && mutation.lineIndices.length > 0;
+    setOperation(mutation.kind === 'commit' ? 'Creating commit and refreshing repository…' : mutation.kind === 'amend' ? 'Rewriting last commit and refreshing repository…' : `${mutation.kind === 'stage' || mutation.kind === 'stage_hunk' ? 'Staging' : 'Unstaging'} ${'hunkIndex' in mutation ? (hasLineIndices ? 'selected lines' : 'selected hunk') : `${fileCount} file${fileCount === 1 ? '' : 's'}`} and refreshing…`);
     setOutcome(null); setSuccess('');
     try {
       const result = await onMutation(mutation);
@@ -147,7 +149,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
       setOutcome(result);
       if (result.oid && mutation.kind === 'commit') { setDraft({ subject: '', body: '' }); setSuccess(`Created commit ${result.oid.slice(0, 12)}.`); }
       else if (result.oid && mutation.kind === 'amend') { amendRequest.current++; setAmending(false); setAmendDraft(null); setAmendHead(''); setSuccess(`Rewrote last commit as ${result.oid.slice(0, 12)}.`); }
-      else if (!result.error && !result.refreshError) setSuccess(mutation.kind === 'stage' || mutation.kind === 'stage_hunk' ? 'Selected changes staged.' : 'Selected changes unstaged.');
+      else if (!result.error && !result.refreshError) setSuccess(mutation.kind === 'stage' || mutation.kind === 'stage_hunk' ? (hasLineIndices ? 'Selected lines staged.' : 'Selected changes staged.') : (hasLineIndices ? 'Selected lines unstaged.' : 'Selected changes unstaged.'));
     } catch (error) {
       if (alive.current) setOutcome({ error: errorMessage(error), refreshError: 'Repository state could not be confirmed.' });
     } finally { pending.current = false; if (alive.current) setOperation(''); }
@@ -247,7 +249,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
             {kind !== 'conflict' && <button className="file-stage-button" disabled={blocked} title={partial ? kind === 'staged' ? 'Unstage all indexed changes for this path' : 'Stage the remaining working-tree changes for this path' : undefined} aria-label={`${kind === 'staged' ? 'Unstage' : 'Stage'} ${entry.path}`} onClick={() => { const operationKind = kind === 'staged' ? 'unstage' : 'stage'; void perform({ kind: operationKind, paths: operationPaths([entry], operationKind) }); }}>{kind === 'staged' ? <Minus size={18} /> : <Plus size={18} />}</button>}
           </div>; })}
         </section>)}
-        <p className="working-note">A partially staged file appears in both lists. File buttons act on whole files. Use the diff’s hunk buttons to stage or unstage a complete text hunk.</p>
+        <p className="working-note">A partially staged file appears in both lists. File buttons act on whole files. Use the diff’s hunk buttons to stage or unstage a complete text hunk or selected lines.</p>
       </div>
       <div className="working-review">
         <section className="working-preview" aria-label="Working file diff"><div className="review-heading"><div><strong>{active?.path ?? 'Your working tree is clean'}</strong><p>{active ? descriptions[active.group] : 'New changes will appear here.'}</p></div>{active && <button className="secondary-button" aria-pressed={split} onClick={() => setSplit(!split)}>{split ? 'Unified' : 'Side by side'}</button>}</div>
@@ -271,11 +273,161 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   </section>;
 }
 
-export function DiffPreview({ diff, split, hunkAction, busy = false, unavailable, onHunk }: { diff: FileDiff; split: boolean; hunkAction?: 'stage_hunk' | 'unstage_hunk'; busy?: boolean; unavailable?: string; onHunk?: (mutation: RepositoryMutation) => void }) {
+export function DiffPreview({
+  diff,
+  split,
+  hunkAction,
+  busy = false,
+  unavailable,
+  onHunk,
+  selectedLines: controlledSelected,
+  onToggleLine: controlledOnToggle,
+}: {
+  diff: FileDiff;
+  split: boolean;
+  hunkAction?: 'stage_hunk' | 'unstage_hunk';
+  busy?: boolean;
+  unavailable?: string;
+  onHunk?: (mutation: RepositoryMutation) => void;
+  selectedLines?: Record<number, number[]>;
+  onToggleLine?: (hunkIndex: number, lineIndex: number) => void;
+}) {
   const reason = hunkAction ? unavailable || (diff.truncated ? 'Hunk actions are unavailable for truncated previews. Use the whole-file buttons or Git.' : diff.binary ? 'Hunk actions are unavailable for binary files. Use the whole-file buttons.' : diff.hunkAction?.reason) || (!diff.hunkAction?.fingerprint ? 'Hunk actions are unavailable for this preview. Use the whole-file buttons or Git.' : undefined) : undefined;
   const fingerprint = !reason && diff.hunkAction?.fingerprint;
-  const label = hunkAction === 'unstage_hunk' ? 'Unstage hunk' : 'Stage hunk';
+
+  const diffKey = `${diff.path}:${hunkAction ?? ''}:${fingerprint || ''}`;
+  const [currentKey, setCurrentKey] = useState(diffKey);
+  const [internalSelected, setInternalSelected] = useState<Record<number, number[]>>({});
+
+  if (currentKey !== diffKey) {
+    setCurrentKey(diffKey);
+    setInternalSelected({});
+  }
+
+  const selected = controlledSelected ?? internalSelected;
+
+  const toggleLine = (hunkIndex: number, lineIndex: number) => {
+    if (busy || !fingerprint) return;
+    if (controlledOnToggle) {
+      controlledOnToggle(hunkIndex, lineIndex);
+      return;
+    }
+    setInternalSelected(prev => {
+      const current = prev[hunkIndex] ?? [];
+      const next = current.includes(lineIndex)
+        ? current.filter(i => i !== lineIndex)
+        : [...current, lineIndex];
+      return { ...prev, [hunkIndex]: next };
+    });
+  };
+
+  const actionVerb = hunkAction === 'unstage_hunk' ? 'unstaging' : 'staging';
+
   return <><div className="diff-messages" role="status">{diff.binary && <p>Binary file · textual preview unavailable.</p>}{diff.truncated && <p>Diff truncated · only the available preview is shown.</p>}{diff.message && <p>{diff.message}</p>}{reason && <p className="hunk-unavailable">{reason}</p>}{!diff.hunks.length && !diff.binary && <p>No textual hunks · metadata-only or empty file change.</p>}</div><div className={`native-diff ${split ? 'split' : ''}`} tabIndex={0} aria-label={`${split ? 'Side-by-side' : 'Unified'} diff for ${diff.path}`}>
-    {diff.hunks.map((hunk, index) => <section key={index}><div className="hunk-header hunk-action-header"><span>{hunk.header}</span>{hunkAction && <button className="hunk-action-button" disabled={busy || !fingerprint || !onHunk} title={reason} aria-label={`${label} ${index + 1} in ${diff.path}`} onClick={() => { if (!busy && fingerprint && onHunk) onHunk({ kind: hunkAction, path: diff.path, hunkIndex: index, fingerprint }); }}>{label}</button>}</div>{hunk.lines.map((line, i) => split && line.kind !== 'meta' ? <div className="split-row" key={i}><pre className={line.kind === 'remove' ? 'remove' : ''}>{line.kind !== 'add' ? `${line.oldLine ?? ''} ${line.content}` : ''}</pre><pre className={line.kind === 'add' ? 'add' : ''}>{line.kind !== 'remove' ? `${line.newLine ?? ''} ${line.content}` : ''}</pre></div> : <pre key={i} className={line.kind}><span className="line-number">{line.oldLine ?? ''}</span><span className="line-number">{line.newLine ?? ''}</span>{line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ' '}{line.content}</pre>)}</section>)}
+    {diff.hunks.map((hunk, index) => {
+      const hunkSelected = selected[index] ?? [];
+      const hasSelection = hunkSelected.length > 0;
+      const buttonLabel = hasSelection
+        ? hunkAction === 'unstage_hunk' ? 'Unstage selected lines' : 'Stage selected lines'
+        : hunkAction === 'unstage_hunk' ? 'Unstage hunk' : 'Stage hunk';
+
+      return <section key={index}>
+        <div className="hunk-header hunk-action-header">
+          <span>{hunk.header}</span>
+          {hunkAction && (
+            <button
+              className="hunk-action-button"
+              disabled={busy || !fingerprint || !onHunk}
+              title={reason}
+              aria-label={`${buttonLabel} ${index + 1} in ${diff.path}`}
+              onClick={() => {
+                if (!busy && fingerprint && onHunk) {
+                  if (hasSelection) {
+                    onHunk({
+                      kind: hunkAction,
+                      path: diff.path,
+                      hunkIndex: index,
+                      fingerprint,
+                      lineIndices: [...hunkSelected].sort((a, b) => a - b),
+                    });
+                  } else {
+                    onHunk({
+                      kind: hunkAction,
+                      path: diff.path,
+                      hunkIndex: index,
+                      fingerprint,
+                    });
+                  }
+                }
+              }}
+            >
+              {buttonLabel}
+            </button>
+          )}
+        </div>
+        {hunk.lines.map((line, i) => {
+          const isSelectable = !!hunkAction && !reason && !!fingerprint && (line.kind === 'add' || line.kind === 'remove');
+          const isSelected = isSelectable && hunkSelected.includes(i);
+          const lineNum = line.kind === 'add' ? line.newLine : line.oldLine;
+
+          return split && line.kind !== 'meta' ? (
+            <div className={`split-row${isSelected ? ' selected-line' : ''}`} key={i}>
+              <pre className={`${line.kind === 'remove' ? 'remove' : ''}${isSelected && line.kind === 'remove' ? ' selected-line' : ''}`}>
+                {line.kind === 'remove' && isSelectable && (
+                  <button
+                    type="button"
+                    className="line-select-toggle"
+                    aria-pressed={isSelected}
+                    disabled={busy}
+                    title={`${isSelected ? 'Deselect' : 'Select'} line for ${actionVerb}`}
+                    aria-label={`${isSelected ? 'Deselect' : 'Select'} line ${line.oldLine ?? ''} for ${actionVerb}`}
+                    onClick={() => toggleLine(index, i)}
+                  >
+                    {isSelected && <Check size={10} strokeWidth={3} aria-hidden="true" />}
+                  </button>
+                )}
+                {line.kind !== 'add' ? `${line.oldLine ?? ''} ${line.content}` : ''}
+              </pre>
+              <pre className={`${line.kind === 'add' ? 'add' : ''}${isSelected && line.kind === 'add' ? ' selected-line' : ''}`}>
+                {line.kind === 'add' && isSelectable && (
+                  <button
+                    type="button"
+                    className="line-select-toggle"
+                    aria-pressed={isSelected}
+                    disabled={busy}
+                    title={`${isSelected ? 'Deselect' : 'Select'} line for ${actionVerb}`}
+                    aria-label={`${isSelected ? 'Deselect' : 'Select'} line ${line.newLine ?? ''} for ${actionVerb}`}
+                    onClick={() => toggleLine(index, i)}
+                  >
+                    {isSelected && <Check size={10} strokeWidth={3} aria-hidden="true" />}
+                  </button>
+                )}
+                {line.kind !== 'remove' ? `${line.newLine ?? ''} ${line.content}` : ''}
+              </pre>
+            </div>
+          ) : (
+            <pre key={i} className={`${line.kind}${isSelected ? ' selected-line' : ''}`}>
+              {isSelectable && (
+                <button
+                  type="button"
+                  className="line-select-toggle"
+                  aria-pressed={isSelected}
+                  disabled={busy}
+                  title={`${isSelected ? 'Deselect' : 'Select'} line for ${actionVerb}`}
+                  aria-label={`${isSelected ? 'Deselect' : 'Select'} line ${lineNum ?? ''} for ${actionVerb}`}
+                  onClick={() => toggleLine(index, i)}
+                >
+                  {isSelected && <Check size={10} strokeWidth={3} aria-hidden="true" />}
+                </button>
+              )}
+              <span className="line-number">{line.oldLine ?? ''}</span>
+              <span className="line-number">{line.newLine ?? ''}</span>
+              {line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ' '}
+              {line.content}
+            </pre>
+          );
+        })}
+      </section>;
+    })}
   </div></>;
 }

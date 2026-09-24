@@ -44,8 +44,8 @@ export interface CreateCommitResult { oid: string }
  */
 export type RepositoryMutation =
   | { kind: 'stage' | 'unstage'; paths: string[] }
-  | { kind: 'stage_hunk'; path: string; hunkIndex: number; fingerprint: string }
-  | { kind: 'unstage_hunk'; path: string; hunkIndex: number; fingerprint: string }
+  | { kind: 'stage_hunk'; path: string; hunkIndex: number; fingerprint: string; lineIndices?: number[] }
+  | { kind: 'unstage_hunk'; path: string; hunkIndex: number; fingerprint: string; lineIndices?: number[] }
   | { kind: 'commit'; message: string }
   | { kind: 'amend'; message: string; expectedHead: string; expectedHeadRef: string | null; expectedStatusFingerprint: string };
 
@@ -63,9 +63,10 @@ export type RepositoryMutation =
  * repository_search({handle, query: SearchQuery}) -> SearchResult
  * repository_stage({handle, paths: string[]}) -> void
  * repository_unstage({handle, paths: string[]}) -> void
- * repository_stage_hunk({handle, path, hunkIndex, fingerprint}) -> void
- * repository_unstage_hunk({handle, path, hunkIndex, fingerprint}) -> void
- * Hunk indices are zero-based complete hunks from FileDiff. Fingerprints bind
+ * repository_stage_hunk({handle, path, hunkIndex, fingerprint, lineIndices?: number[]}) -> void
+ * repository_unstage_hunk({handle, path, hunkIndex, fingerprint, lineIndices?: number[]}) -> void
+ * Hunk indices are zero-based complete hunks from FileDiff. Optional lineIndices are
+ * zero-based positions in FileDiff.hunks[hunkIndex].lines. Fingerprints bind
  * raw backend diffs and index entries; they are not atomic external-Git locks.
  * Unsupported/truncated previews have no actionable fingerprint. No patch text
  * is accepted from the client. Both commands leave the working tree untouched.

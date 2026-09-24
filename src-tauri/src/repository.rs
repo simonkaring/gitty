@@ -337,9 +337,16 @@ impl Service {
         path: &str,
         hunk_index: usize,
         fingerprint: &str,
+        line_indices: Option<Vec<usize>>,
     ) -> Result<()> {
         self.mutate(handle, |repo| {
-            repo.change_hunk(path, hunk_index, fingerprint, false)
+            repo.change_hunk(
+                path,
+                hunk_index,
+                fingerprint,
+                false,
+                line_indices.as_deref(),
+            )
         })
     }
     pub fn unstage_hunk(
@@ -348,9 +355,10 @@ impl Service {
         path: &str,
         hunk_index: usize,
         fingerprint: &str,
+        line_indices: Option<Vec<usize>>,
     ) -> Result<()> {
         self.mutate(handle, |repo| {
-            repo.change_hunk(path, hunk_index, fingerprint, true)
+            repo.change_hunk(path, hunk_index, fingerprint, true, line_indices.as_deref())
         })
     }
     pub fn close(&self, handle: &str) -> Result<()> {

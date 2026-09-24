@@ -32,6 +32,28 @@ describe('write lifecycle', () => {
     const outcome = await writeAndRefresh('s', { kind: 'unstage_hunk', path: 'file', hunkIndex, fingerprint: 'token' }, reload, () => true, invoke);
     expect(outcome.error).toMatch(/complete hunk/); expect(invoke).not.toHaveBeenCalled();
   });
+  it.each(['stage_hunk', 'unstage_hunk'] as const)('routes %s with lineIndices to IPC and awaits refresh', async kind => {
+    const invoke = vi.fn().mockResolvedValue(undefined) as typeof native;
+    const reload = vi.fn().mockResolvedValue(undefined);
+    const outcome = await writeAndRefresh('s', { kind, path: 'file', hunkIndex: 1, fingerprint: 'token', lineIndices: [0, 3] }, reload, () => true, invoke);
+    expect(outcome).toEqual({});
+    expect(invoke).toHaveBeenCalledExactlyOnceWith(`repository_${kind}`, { handle: 's', path: 'file', hunkIndex: 1, fingerprint: 'token', lineIndices: [0, 3] });
+    expect(reload).toHaveBeenCalledOnce();
+  });
+  it.each([
+    { input: [] },
+    { input: [-1] },
+    { input: [1.5] },
+    { input: [2, 2] },
+    { input: [NaN] },
+    { input: ['0' as unknown as number] },
+  ])('rejects invalid lineIndices $input before IPC', async ({ input }) => {
+    const invoke = vi.fn() as typeof native;
+    const reload = vi.fn().mockResolvedValue(undefined);
+    const outcome = await writeAndRefresh('s', { kind: 'stage_hunk', path: 'file', hunkIndex: 0, fingerprint: 'token', lineIndices: input }, reload, () => true, invoke);
+    expect(outcome.error).toMatch(/valid distinct changed lines/);
+    expect(invoke).not.toHaveBeenCalled();
+  });
   it('does not publish a hunk result or refresh into a superseding tab session', async () => {
     let current = true;
     let release!: () => void;

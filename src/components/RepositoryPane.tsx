@@ -371,12 +371,12 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
               <div className="diff-view-body">
                 {activeDiff.loading && <p className="diff-placeholder" role="status">Loading diff…</p>}
                 {activeDiff.error && <p className="workflow-alert error" role="alert">{activeDiff.error}</p>}
-                {activeDiff.diff && (
+                {!activeDiff.loading && activeDiff.diff && (
                   <DiffPreview
                     diff={activeDiff.diff}
                     split={split}
                     hunkAction={activeDiff.hunkAction}
-                    busy={mutationBusy || mutationBlocked}
+                    busy={mutationBusy || mutationBlocked || activeDiff.busy}
                     onHunk={activeDiff.onHunk}
                   />
                 )}
