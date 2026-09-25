@@ -65,7 +65,7 @@ summary { cursor: pointer; }
 .muted { color: var(--muted); }
 .eyebrow { display: block; font-size: 12px; letter-spacing: .11em; font-weight: 600; color: var(--muted); margin-bottom: 10px; }
 .count { font-family: 'Inter Variable', sans-serif; font-size: 13px; color: var(--secondary); background: var(--subtle); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: 0; }
-.primary-button, .secondary-button, .native-actions > button:not(.icon-button):not(.text-button), .native-filters button:not(.text-button), .native-picker button, .native-inspector button:not(.icon-button), .native-banner button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; padding: 7px 12px; border: 1px solid var(--border-strong); border-radius: 4px; line-height: 1.4; font-size: 14px; }
+.primary-button, .secondary-button, .native-actions > button:not(.icon-button):not(.text-button), .native-filters button:not(.text-button), .native-picker button, .native-inspector button:not(.icon-button):not(.file-row):not(.parent-link), .native-banner button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 38px; padding: 7px 12px; border: 1px solid var(--border-strong); border-radius: 4px; line-height: 1.4; font-size: 14px; }
 .primary-button { background: var(--accent-text); border-color: var(--accent-text); color: var(--button-foreground); font-weight: 600; }
 .primary-button:hover:not(:disabled) { background: var(--accent); color: var(--button-foreground); }
 .secondary-button { background: var(--raised); }
@@ -313,12 +313,12 @@ kbd { font-family: var(--mono); font-size: 12px; display: inline-grid; place-ite
 .native-search-results p { margin-bottom: 8px; }
 .native-search-results > div { max-height: 140px; overflow: auto; display: flex; flex-direction: column; }
 .native-search-results button { padding: 8px; text-align: left; font-size: 14px; }
-.native-inspector { width: var(--inspector-width); flex-shrink: 0; overflow: auto; border-left: 1px solid var(--border); padding: 24px; background: var(--raised); }
+.native-inspector { width: var(--inspector-width); flex-shrink: 0; display: flex; flex-direction: column; min-height: 0; border-left: 1px solid var(--border); background: var(--raised); }
 .native-inspector.expanded { position: absolute; inset: 0 0 0 auto; z-index: 7; width: min(85%, 1200px); box-shadow: var(--shadow); }
-.native-inspector h2 { font-size: 25px; line-height: 1.35; overflow-wrap: anywhere; margin-top: 26px; }
+.native-inspector h2 { font-size: 25px; line-height: 1.35; overflow-wrap: anywhere; }
 .native-inspector label { display: flex; flex-direction: column; gap: 7px; margin-bottom: 12px; font-size: 13px; }
 .native-inspector p { font-size: 14px; color: var(--secondary); line-height: 1.7; }
-.native-sha { display: block; overflow-wrap: anywhere; font-size: 13px; color: var(--muted); margin-bottom: 18px; }
+.native-sha { display: inline; overflow-wrap: anywhere; font-size: inherit; color: inherit; font-family: inherit; }
 .commit-body { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; color: var(--secondary); }
 .native-inspector [aria-pressed='true'] { background: var(--accent-wash); color: var(--accent-text); border-color: var(--accent); }
 .native-files { display: flex; flex-direction: column; gap: 4px; max-height: 300px; overflow: auto; margin: 20px 0; }

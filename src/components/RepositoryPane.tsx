@@ -429,6 +429,7 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
                 onClose={() => setInspectorOpen(false)}
                 activePath={activeDiff?.path ?? null}
                 onActiveDiffChange={setActiveDiff}
+                notify={setNotice}
               />
             )}
           </>}
