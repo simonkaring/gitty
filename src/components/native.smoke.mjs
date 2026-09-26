@@ -1,5 +1,6 @@
 // Optional browser integration check; uses an existing Playwright installation.
 // PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node src/components/native.smoke.mjs
+// Set GITTY_SIDEBAR_SMOKE=1 to run only the focused native layout/filter checks.
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 
@@ -29,8 +30,12 @@ try {
     const f = window.fixture = { mode: 'old', raceOnce: false, delayStatus: false, statusWaiting: false, holdDiff: false, calls: [], walks: new Map(), sequence: 0 };
     const list = () => f.mode === 'rewrite' ? [commit('replacement')] : f.mode === 'new' ? [...added, ...original] : original;
     const state = () => ({ session: { handle: 's', name: 'Fixture', location: { kind: 'native', path: '/fixture' }, root: '/fixture', gitDir: '/fixture/.git', commonDir: '/fixture/.git', head: list()[0].id, headRef: 'refs/heads/main', shallow: false, bare: false, linkedWorktree: false }, refs: [{ name: 'main', fullName: 'refs/heads/main', commitId: list()[0].id, kind: 'local' }, { name: 'empty', fullName: 'refs/tags/empty', commitId: 'c219', kind: 'tag' }], remotes: [], fingerprint: f.mode });
-    window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
+    let callbackId = 0;
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+    window.__TAURI_INTERNALS__ = { transformCallback: () => ++callbackId, unregisterCallback: () => {}, invoke: async (command, args) => {
       f.calls.push({ command, args });
+      if (command === 'plugin:event|listen') return 1;
+      if (command === 'plugin:event|unlisten') return;
       if (command === 'repository_recent') return [{ kind: 'native', path: '/fixture' }];
       if (command === 'wsl_distributions') return [];
       if (command === 'repository_pick') return '/fixture';
@@ -69,6 +74,29 @@ try {
   assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
   await page.getByText('main → origin/main', { exact: false }).waitFor();
 
+  // Native full-history search and scoped filters live in the sidebar, but
+  // remain accessible above the graph when the sidebar is collapsed.
+  const sidebar = page.getByRole('complementary', { name: 'Repository references' });
+  await sidebar.getByText('/fixture', { exact: true }).waitFor();
+  assert.equal(await page.locator('.history-pane .repository-heading').count(), 0);
+  await sidebar.getByRole('textbox', { name: 'Search full history' }).fill('c1');
+  await page.waitForFunction(() => window.fixture.calls.some(call => call.command === 'repository_search' && call.args.query.text === 'c1'));
+  await sidebar.getByRole('combobox', { name: 'Branch scope' }).selectOption('refs/heads/main');
+  await page.waitForFunction(() => window.fixture.calls.some(call => call.command === 'repository_search' && call.args.query.branch === 'refs/heads/main'));
+  await sidebar.getByText('Date & path').click();
+  await sidebar.getByRole('textbox', { name: 'Filter path' }).fill('src/');
+  await page.waitForFunction(() => window.fixture.calls.some(call => call.command === 'repository_search' && call.args.query.path === 'src/'));
+  await sidebar.getByRole('button', { name: 'Clear filters' }).click();
+  await page.getByRole('button', { name: 'Toggle references sidebar' }).click();
+  await page.locator('.workspace-main').getByRole('textbox', { name: 'Search full history' }).fill('c2');
+  await page.waitForFunction(() => window.fixture.calls.some(call => call.command === 'repository_search' && call.args.query.text === 'c2'));
+  await page.locator('.workspace-main').getByRole('button', { name: 'Clear search' }).click();
+  await page.getByRole('button', { name: 'Toggle references sidebar' }).click();
+  if (process.env.GITTY_SIDEBAR_SMOKE) {
+    assert.deepEqual(errors, []);
+    console.log('Native sidebar smoke passed (mocked IPC): repository path, compact graph, scoped search, collapsed sidebar fallback.');
+  } else {
+
   // Repository tabs: a single open tab, and reopening the same recent
   // location focuses it instead of creating a duplicate.
   await page.locator('.repository-tab').getByText('Fixture', { exact: true }).waitFor();
@@ -98,11 +126,11 @@ try {
   await page.getByText('Changes that turn the base commit into the target commit.', { exact: false }).waitFor();
   await page.getByRole('option', { name: /^Working changes/ }).click();
   await page.getByRole('button', { name: 'Staged: file.txt', exact: true }).click();
-  await page.getByText('HEAD → index · included in your next commit', { exact: true }).waitFor();
+  await page.locator('.diff-view-pane .diff-view-group-badge.staged').waitFor();
   await page.waitForFunction(() => window.fixture.calls.filter(c => c.command === 'repository_diff').at(-1)?.args.spec.kind === 'staged');
   await page.getByRole('button', { name: 'Unstaged: file.txt', exact: true }).click();
-  await page.getByText('Index → working tree · not yet staged', { exact: true }).waitFor();
-  await page.getByRole('button', { name: 'History', exact: true }).click();
+  await page.locator('.diff-view-pane .diff-view-group-badge.unstaged').waitFor();
+  await page.getByRole('button', { name: 'Close diff and show tree' }).click();
   await page.getByRole('option', { name: /^Commit c0,/ }).click();
   await page.getByRole('button', { name: 'Clear comparison', exact: true }).click();
 
@@ -112,7 +140,7 @@ try {
   await page.evaluate(() => { window.fixture.raceOnce = true; });
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.statusbar')?.textContent.includes('400 commits loaded'));
-  assert.equal(await page.locator('.history-scroll').evaluate(el => el.scrollTop), 250 * 48 + 453);
+  assert.equal(await page.locator('.history-scroll').evaluate(el => el.scrollTop), 250 * 36 + 453);
   assert.equal(await page.locator('.native-sha').textContent(), 'c0');
 
   // Reject a stale pending diff after selecting a commit with no changed files.
@@ -149,7 +177,8 @@ try {
    assert.equal(await page.locator('.repository-tab').count(), 1);
    assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
   assert.deepEqual(errors, []);
-   console.log('Browser smoke passed (mocked native IPC): demo; operation-state snapshots; native snapshot race; silent polling; selection/anchor preservation; comparison modes; stale diff cleanup; unreachable inspector; Settings theme migration; repository tabs (single-tab dedup, stash dialog); reload persistence.');
+    console.log('Browser smoke passed (mocked native IPC): demo; operation-state snapshots; native snapshot race; silent polling; selection/anchor preservation; comparison modes; stale diff cleanup; unreachable inspector; Settings theme migration; repository tabs (single-tab dedup, stash dialog); reload persistence.');
+  }
 } finally {
   await browser.close();
   await server.close();

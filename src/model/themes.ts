@@ -6,10 +6,10 @@ export interface ThemeDefinition {
 }
 
 export const COLOR_KEYS = ['bg', 'chrome', 'sidebar', 'raised', 'subtle', 'hover', 'border', 'borderStrong', 'text', 'secondary', 'muted', 'accent', 'accentText', 'accentWash', 'selected', 'green', 'greenWash', 'red', 'redWash', 'buttonForeground', 'shadow', 'backdrop', 'graphLane1', 'graphLane2', 'graphLane3', 'graphLane4', 'graphLane5', 'graphLane6', 'graphLane7', 'graphLane8', 'graphSelection', 'graphMerge', 'graphHead'] as const;
-const light = ['#faf9f5', '#f1f0e9', '#eeede5', '#fffefa', '#efeee7', '#e7e6de', '#deddd3', '#c4c5b9', '#292e2a', '#5d645c', '#686e65', '#277c6f', '#17675b', '#e0eee5', '#e5eee5', '#2d7252', '#e3efe1', '#a34438', '#f6e7e0', '#fffefa', '#292e2a18', '#20241e66'];
-const dark = ['#242522', '#20211e', '#1e201d', '#2c2e29', '#2c2f28', '#35392f', '#3d4137', '#555b4e', '#eeeede', '#c0c4b4', '#a5ad9a', '#88c4b0', '#a2d6c2', '#2b443a', '#303e33', '#abd29a', '#2d402b', '#e8aba0', '#48342f', '#1e2a23', '#00000055', '#00000088'];
+const light = ['#fbfaf6', '#f2f0e9', '#f4f2ec', '#ffffff', '#eeece4', '#e6e3d9', '#e0ddd2', '#c3c0b3', '#1f2320', '#4f564f', '#656b63', '#1f7a6b', '#15685b', '#dcefe7', '#d2e9df', '#2a6e4e', '#e1efdd', '#a8392c', '#f7e3dc', '#ffffff', '#1f23201f', '#1a1d1a73'];
+const dark = ['#1a1b19', '#131412', '#161715', '#20221f', '#262825', '#2d302c', '#30332f', '#454941', '#ecebe4', '#bdbdb2', '#9a9d91', '#7cc4ae', '#93d4bf', '#203a33', '#243f37', '#9bd08a', '#1f3222', '#f09a8c', '#3d2422', '#10201b', '#00000066', '#000000a0'];
 function preset(id: string, name: string, mode: ThemeDefinition['mode'], overrides: Record<string, string> = {}): ThemeDefinition {
-  const lanes = mode === 'light' ? ['#277c6f', '#a34438', '#7355a5', '#346d9e', '#8a691d', '#a3497b', '#4e7636', '#6f6254'] : ['#88c4b0', '#e8aba0', '#bd9fe8', '#8bbde8', '#dec780', '#e6a3ca', '#abd29a', '#c4b6a6'];
+  const lanes = mode === 'light' ? ['#1f7a6b', '#a8392c', '#6e4fb0', '#2f6aa3', '#8a6516', '#a3437a', '#4a7430', '#6f6254'] : ['#7cc4ae', '#f09a8c', '#b9a0ec', '#86b8ec', '#e2c46f', '#e79cc8', '#9bd08a', '#c9b79f'];
   return { id, name, mode, colors: { ...Object.fromEntries(COLOR_KEYS.map((key, i) => [key, [...(mode === 'light' ? light : dark), ...lanes, lanes[0], lanes[2], lanes[4]][i]])), ...overrides } };
 }
 function family(id: string, name: string, mode: ThemeDefinition['mode'], bg: string, chrome: string, raised: string, text: string, secondary: string, accent: string, red: string, green: string): ThemeDefinition {

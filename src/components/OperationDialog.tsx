@@ -4,7 +4,6 @@ import type { GitAction, OperationRequest, OperationState, RebaseStep } from '..
 import type { CommitSummary, RepositoryState } from '../model/repository';
 import { actionReason, moveCommit } from '../model/operationUi';
 import { captureOperation } from '../model/operationFlow';
-import '../operations.css';
 
 export interface ActionContext { oid: string; ref?: string; initial?: GitAction['kind']; commits?: string[] }
 export type OperationWrite = (command: string, args: Record<string, unknown>) => Promise<void>;

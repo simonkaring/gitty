@@ -73,7 +73,7 @@ History reads, search, and inspection remain read-only. The **Working changes** 
 1. Open a desktop repository with working changes and select the **Working changes** entry at the top of its graph.
 2. Select an unstaged or untracked file in the right panel to inspect its diff in the center pane, then use its **+** control or **Stage all**.
 3. Review the **Staged** group. Use **−** or **Unstage all** to remove changes from the index without changing working files.
-4. Enter a summary and optional description, then choose **Commit staged changes**. To replace HEAD instead, enable **Amend last commit** and review the last commit's message before submitting. Gitty refreshes status and history after either operation.
+4. Choose **Commit as** (or **Manage profiles…** to save a name and email), enter a summary and optional description, then choose **Commit staged changes**. To replace HEAD instead, enable **Amend last commit** and review the last commit's message before submitting. Gitty refreshes status and history after either operation.
 
 A partially staged file appears in both lists. File-level controls stage its remaining working changes or unstage its indexed changes. Renames are handled as both source and destination where required.
 
@@ -81,7 +81,7 @@ For modified regular text files, use **Stage hunk** in an unstaged diff or **Uns
 
 Hunk actions currently fall back to whole-file controls for new/deleted files, renames, binary files, mode changes, symlinks/submodules, and truncated or oversized previews. Line-level staging is not yet implemented. The browser demo currently offers history and illustrative diffs only.
 
-Commit drafts persist per repository/worktree and survive failed operations. Configured hooks, identity, and signing are honored. Failed or uncertain writes trigger a refresh; Gitty does not automatically retry a commit. Bare repositories, unresolved conflicts, and in-progress Git operations produce explicit errors. A failed refresh blocks further writes in the composer until repository state can be refreshed.
+Commit drafts and profile selections persist per repository/worktree and survive failed operations. Saved profiles live in Gitty's local settings; selecting one sets the author and committer for new commits without changing Git config. The default uses Git's configured identity. Amending preserves the original author and uses the selected profile as committer. Configured hooks and signing are honored. Failed or uncertain writes trigger a refresh; Gitty does not automatically retry a commit. Bare repositories, unresolved conflicts, and in-progress Git operations produce explicit errors. A failed refresh blocks further writes in the composer until repository state can be refreshed.
 
 Amend supports message-only rewrites and staged changes. It never includes unstaged content. HEAD, its symbolic ref, and the working-state fingerprint are revalidated under Gitty's mutation lock immediately before Git runs, so changes already visible at preflight reject a stale review. This serializes Gitty sessions, not external Git: an external process can still race before `git commit` acquires Git's own index/ref locks.
 
@@ -105,6 +105,7 @@ Open the gear button or **Cmd/Ctrl+,** from either workspace, including the nati
 - **System appearance:** choose separate light and dark themes, or use one fixed theme.
 - **Custom themes:** duplicate a preset, edit UI/diff/graph colors with a live preview and contrast feedback, then save a named theme. Import/export versioned local JSON; edits can be reset or canceled.
 - **Editor preferences:** bundled code font, code size, line wrapping, and default unified/side-by-side diffs.
+- **Commit profiles:** add, edit, or delete saved name/email identities for the desktop commit composer.
 - **Workspace reset:** restore pane sizes. Resizing and settings persist across reloads and native/demo switching within the app.
 
 ## Explore the demo

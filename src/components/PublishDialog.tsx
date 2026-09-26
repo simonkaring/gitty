@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { errorMessage } from '../model/native';
 import { defaultRemote } from '../model/remote';
-import './workspace-tabs.css';
 
 /** First-publish flow: pushing a branch with no upstream needs an explicit
  * remote and branch name before `repository_remote_action` can set one. */

@@ -11,7 +11,7 @@ let browser;
 const errors = [];
 const checks = [];
 const presets = [
-  ['gitty-light', 'light', '#faf9f5', '#277c6f'], ['gitty-dark', 'dark', '#242522', '#88c4b0'],
+  ['gitty-light', 'light', '#fbfaf6', '#1f7a6b'], ['gitty-dark', 'dark', '#1a1b19', '#7cc4ae'],
   ['gruvbox-light', 'light', '#fbf1c7', '#076678'], ['gruvbox-dark', 'dark', '#282828', '#8ec07c'],
   ['dracula', 'dark', '#282a36', '#bd93f9'], ['nord', 'dark', '#2e3440', '#88c0d0'],
   ['catppuccin-latte', 'light', '#eff1f5', '#8839ef'], ['catppuccin-mocha', 'dark', '#1e1e2e', '#cba6f7'],
@@ -163,7 +163,7 @@ try {
       assert.equal(await bg.getAttribute('aria-invalid'), 'true');
       assert.equal(await button(page, 'Save theme').isDisabled(), true);
       assert.equal(await button(page, 'Export preview JSON').isDisabled(), true);
-      assert.equal(await token(page, '--bg'), '#faf9f5');
+      assert.equal(await token(page, '--bg'), '#fbfaf6');
     }
     await bg.fill('#123456');
     await page.getByLabel('graphSelection hex color', { exact: true }).fill('#fedcba');

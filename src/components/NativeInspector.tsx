@@ -158,7 +158,7 @@ export function NativeInspector({
   }
 
   function selectFile(filePath: string) {
-    setPath(filePath);
+    setPath(current => current === filePath ? '' : filePath);
   }
 
   const additions = files.reduce((n, f) => n + (f.additions ?? 0), 0);
@@ -171,8 +171,8 @@ export function NativeInspector({
     <aside className={`inspector native-inspector ${expanded ? 'expanded' : ''}`} aria-label={working ? 'Working changes' : comparing ? 'Commit comparison' : 'Commit inspector'}>
       <div className="inspector-content">
         {(error || diffError) && (
-          <div className="workflow-alert error" style={{ margin: '16px 24px' }} role="alert">
-            {error || diffError} <button className="secondary-button" style={{ marginLeft: 8 }} onClick={() => setRetry(retry + 1)}>Retry inspection</button>
+          <div className="workflow-alert error inspector-alert" role="alert">
+            {error || diffError} <button className="secondary-button" onClick={() => setRetry(retry + 1)}>Retry inspection</button>
           </div>
         )}
 
@@ -184,11 +184,11 @@ export function NativeInspector({
                 <button className="icon-button" aria-label="Close commit inspector" title="Close commit inspector" onClick={onClose}><X size={15} /></button>
               </div>
             </div>
-            <p style={{ margin: '16px 0 12px', fontSize: '14px', color: 'var(--secondary)' }}>
+            <p className="working-intro">
               {group === 'staged' ? 'Staged: changes from HEAD to the index (staging area).' : group === 'unstaged' ? 'Unstaged: changes from the index to the working tree.' : group === 'untracked' ? 'Untracked: files in the working tree that are not in the index.' : 'Conflicts: unresolved paths in the index and working tree.'}
             </p>
-            {base && target && <p style={{ fontSize: '13px', color: 'var(--muted)' }}>Saved commit comparison is paused while viewing working changes.</p>}
-            <div className="working-groups" aria-label="Working change categories" style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', margin: '14px 0' }}>
+            {base && target && <p className="working-intro muted">Saved commit comparison is paused while viewing working changes.</p>}
+            <div className="working-groups" aria-label="Working change categories">
               {(Object.keys(groups) as WorkingGroup[]).map(kind => (
                 <button key={kind} aria-pressed={group === kind} onClick={() => setGroup(kind)}>
                   {kind} ({groups[kind].length})
@@ -208,7 +208,7 @@ export function NativeInspector({
                   {session.head && selected === session.head && <span className="head-label">HEAD</span>}
                   <div className="commit-actions">
                     {!onActiveDiffChange && (
-                      <button className="secondary-button" onClick={() => setExpanded(!expanded)} aria-pressed={expanded} style={{ fontSize: '12px', minHeight: '28px', padding: '2px 8px' }}>
+                      <button className="secondary-button" onClick={() => setExpanded(!expanded)} aria-pressed={expanded}>
                         {expanded ? 'Reduce width' : 'Expand diff'}
                       </button>
                     )}
@@ -269,8 +269,8 @@ export function NativeInspector({
               </dl>
 
               {!comparing && detail && detail.parents.length > 1 && (
-                <div style={{ margin: '0 24px 16px' }}>
-                  <label style={{ fontSize: '13px', color: 'var(--secondary)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div className="inspector-block">
+                  <label>
                     Diff against parent:
                     <select value={validParent ?? detail.parents[0]} onChange={e => setParent(e.target.value)}>
                       {detail.parents.map((id, index) => (
@@ -281,22 +281,22 @@ export function NativeInspector({
                 </div>
               )}
 
-              <div className="native-actions" style={{ padding: '0 24px', margin: '0 0 16px', display: 'flex', gap: '8px' }}>
+              <div className="native-actions inspector-block">
                 <button className="secondary-button" onClick={onBase}>Set as base</button>
                 <button className="secondary-button" onClick={onTarget}>Set as target</button>
               </div>
 
               {(base || target) && (
-                <div className="compare-summary" style={{ margin: '0 24px 20px' }}>
-                  <p style={{ margin: '0 0 6px', fontWeight: 550, color: 'var(--text)' }}>
+                <div className="compare-summary">
+                  <p>
                     Base: {base.slice(0, 7) || 'not selected'} → Target: {target.slice(0, 7) || 'not selected'}
                   </p>
-                  <p style={{ margin: '0 0 12px', fontSize: '13px', color: 'var(--secondary)' }}>
+                  <p>
                     {comparing
                       ? 'Changes that turn the base commit into the target commit. Removed lines belong to base; added lines belong to target.'
                       : 'Choose both commits to compare. Currently showing the selected commit’s changes.'}
                   </p>
-                  <div style={{ display: 'flex', gap: '8px' }}>
+                  <div className="native-actions">
                     <button className="secondary-button" disabled={!base || !target} onClick={onSwap}>Swap direction</button>
                     <button className="secondary-button" onClick={onClear}>Clear comparison</button>
                   </div>
@@ -323,7 +323,8 @@ export function NativeInspector({
                 key={f.path}
                 className={`file-row ${isSelected ? 'active' : ''}`}
                 onClick={() => selectFile(f.path)}
-                title={`View diff for ${f.path}`}
+                title={isSelected ? `Close diff for ${f.path}` : `View diff for ${f.path}`}
+                aria-pressed={isSelected}
               >
                 <FileCode2 size={15} />
                 <span className="file-name">
@@ -337,7 +338,7 @@ export function NativeInspector({
         </section>
 
         {!busy && !files.length && (
-          <p className="diff-placeholder" style={{ padding: '20px 24px', margin: 0, color: 'var(--muted)', fontSize: '13px' }}>
+          <p className="diff-placeholder">
             No changed files in this comparison.
           </p>
         )}
@@ -357,7 +358,7 @@ export function NativeInspector({
         ) : (
           <>
             {path && filesScope === scope && (
-              <div className="diff-section" aria-label={`Diff for ${path}`} style={{ padding: '0 24px 20px' }}>
+              <div className="diff-section" aria-label={`Diff for ${path}`}>
                 <div className="diff-heading">
                   <span>{path.split('/').at(-1)}</span>
                   <button aria-pressed={split} onClick={() => setSplit(!split)}>

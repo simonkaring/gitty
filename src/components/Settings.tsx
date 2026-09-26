@@ -2,14 +2,14 @@ import { useEffect, useRef, useState, type ButtonHTMLAttributes } from 'react';
 import { Settings as SettingsIcon, X } from 'lucide-react';
 import { DEFAULT_SETTINGS, MONO_FONTS, useSettings } from '../model/settings';
 import { COLOR_KEYS, MAX_CUSTOM_THEMES, MAX_THEME_FILE_BYTES, contrastRatio, exportTheme, importTheme, isColor, validateTheme, type ThemeDefinition } from '../model/themes';
-import './settings.css';
+import { MAX_COMMIT_PROFILES, validateCommitProfile, type CommitProfile } from '../model/commitProfiles';
 
 export function SettingsButton({ className = 'icon-button', ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
   const { openSettings } = useSettings();
-  return <button type="button" className={className} title="Settings (⌘ / Ctrl+,)" aria-label="Open settings" {...props} onClick={openSettings}><SettingsIcon size={18} /></button>;
+  return <button type="button" className={className} title="Settings (⌘ / Ctrl+,)" aria-label="Open settings" {...props} onClick={() => openSettings()}><SettingsIcon size={18} /></button>;
 }
 const newId = () => `custom-${crypto.randomUUID()}`;
-const sections = ['Appearance', 'Editor & diffs', 'Workspace reset', 'About / shortcuts'] as const;
+const sections = ['Appearance', 'Commit profiles', 'Editor & diffs', 'Workspace reset', 'About / shortcuts'] as const;
 type Section = typeof sections[number];
 
 export function SettingsDialog() {
@@ -18,6 +18,7 @@ export function SettingsDialog() {
   const dialog = useRef<HTMLDialogElement>(null);
   const [section, setSection] = useState<Section>('Appearance');
   const [draft, setDraft] = useState<ThemeDefinition | null>(null);
+  const [profileDraft, setProfileDraft] = useState<CommitProfile | null>(null);
   const [baseline, setBaseline] = useState<ThemeDefinition | null>(null);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -35,9 +36,10 @@ export function SettingsDialog() {
     if (!element.open) element.showModal();
     return () => { element.close(); previous?.focus({ preventScroll: true }); };
   }, [api.isSettingsOpen]);
+  useEffect(() => { if (api.isSettingsOpen && api.settingsSection) setSection(api.settingsSection); }, [api.isSettingsOpen, api.settingsSection]);
   function finish() {
     importGeneration.current += 1; setImporting(false);
-    setDraft(null); setBaseline(null); setColorErrors({}); setConfirmClose(false); setConfirmDelete(false); setError(''); setMessage(''); api.closeSettings();
+    setDraft(null); setProfileDraft(null); setBaseline(null); setColorErrors({}); setConfirmClose(false); setConfirmDelete(false); setError(''); setMessage(''); api.closeSettings();
   }
   function requestClose() { if (dirty) setConfirmClose(true); else finish(); }
   function edit(next: ThemeDefinition) {
@@ -82,6 +84,17 @@ export function SettingsDialog() {
       setMessage('Theme JSON exported.');
     } catch (e) { setError(e instanceof Error ? e.message : 'Export failed.'); }
   }
+  function saveProfile() {
+    try {
+      const profile = validateCommitProfile(profileDraft);
+      updateSettings({ commitProfiles: [...settings.commitProfiles.filter(item => item.id !== profile.id), profile] });
+      setProfileDraft(null); setError(''); setMessage('Commit profile saved.');
+    } catch (e) { setError(e instanceof Error ? e.message : 'Unable to save commit profile.'); }
+  }
+  function deleteProfile(id: string) {
+    updateSettings({ commitProfiles: settings.commitProfiles.filter(profile => profile.id !== id), repositoryCommitProfiles: Object.fromEntries(Object.entries(settings.repositoryCommitProfiles).filter(([, selected]) => selected !== id)) });
+    setProfileDraft(null); setMessage('Commit profile deleted.');
+  }
   const choice = (label: string, value: string, onChange: (id: string) => void, mode?: 'light' | 'dark') => <label className="settings-field">{label}<select value={value} disabled={!!draft} onChange={e => onChange(e.target.value)}>{themes.filter(t => !mode || t.mode === mode).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>;
   return <dialog ref={dialog} className="dialog settings-dialog" aria-labelledby="settings-title" onCancel={e => { e.preventDefault(); requestClose(); }} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Escape' && !e.nativeEvent.isComposing) { e.preventDefault(); requestClose(); } }}>
     <header className="settings-heading"><div><h2 id="settings-title">Settings</h2><p>Personalize Gitty across all repositories and workspaces.</p></div><button className="icon-button" aria-label="Close settings" onClick={requestClose}><X size={20} /></button></header>
@@ -104,6 +117,12 @@ export function SettingsDialog() {
         </div>}
         <ThemePreview theme={theme} />
         <h3>Contrast feedback</h3><ul className="contrast-list">{[['Text', 'text', 'bg'], ['Secondary text', 'secondary', 'bg'], ['Muted text', 'muted', 'bg'], ['Button label', 'buttonForeground', 'accentText'], ['Added diff', 'green', 'greenWash'], ['Removed diff', 'red', 'redWash']].map(([label, foreground, background]) => { const ratio = contrastRatio(theme.colors[foreground], theme.colors[background]); return <li key={label}>{label}: <strong>{ratio.toFixed(2)}:1</strong> — {ratio >= 4.5 ? 'AA normal text' : ratio >= 3 ? 'Large text only' : 'Low contrast'}</li>; })}</ul><p>Guidance only: 4.5:1 is the WCAG AA threshold for normal text. Custom colors remain your choice.</p>
+      </section>
+      <section hidden={section !== 'Commit profiles'} aria-labelledby="profiles-heading"><h3 id="profiles-heading">Commit profiles</h3><p>Save names and email addresses to choose from when committing. Selections are remembered per repository on this device; Git configuration is not changed.</p>
+        {settings.commitProfiles.map(profile => <div className="commit-profile-row" key={profile.id}><span><strong>{profile.name}</strong><small>{profile.email}</small></span><button className="secondary-button" onClick={() => { setProfileDraft({ ...profile }); setError(''); }}>Edit</button><button className="secondary-button" onClick={() => deleteProfile(profile.id)}>Delete</button></div>)}
+        {!settings.commitProfiles.length && <p>No saved profiles. Gitty uses each repository’s configured Git identity by default.</p>}
+        {!profileDraft && <button className="secondary-button" disabled={settings.commitProfiles.length >= MAX_COMMIT_PROFILES} onClick={() => { setProfileDraft({ id: `profile-${crypto.randomUUID()}`, name: '', email: '' }); setError(''); }}>Add profile</button>}
+        {profileDraft && <div className="profile-editor"><label className="settings-field">Name<input autoComplete="name" maxLength={120} value={profileDraft.name} onChange={e => setProfileDraft({ ...profileDraft, name: e.target.value })} /></label><label className="settings-field">Email<input type="email" autoComplete="email" maxLength={254} value={profileDraft.email} onChange={e => setProfileDraft({ ...profileDraft, email: e.target.value })} /></label><div className="settings-actions"><button className="primary-button" onClick={saveProfile}>Save profile</button><button className="secondary-button" onClick={() => { setProfileDraft(null); setError(''); }}>Cancel</button></div></div>}
       </section>
       <section hidden={section !== 'Editor & diffs'} aria-labelledby="editor-heading"><h3 id="editor-heading">Editor & diffs</h3><label className="settings-field">Default diff layout<select value={settings.diffView} onChange={e => updateSettings({ diffView: e.target.value as 'unified' | 'split' })}><option value="unified">Unified</option><option value="split">Side by side</option></select></label><label className="settings-checkbox"><input type="checkbox" checked={settings.diffWrap} onChange={e => updateSettings({ diffWrap: e.target.checked })} />Wrap long diff lines</label><label className="settings-field">Code font (bundled locally)<select value={settings.monoFont} onChange={e => updateSettings({ monoFont: e.target.value })}>{MONO_FONTS.map(font => <option key={font}>{font}</option>)}</select></label><label className="settings-field">Code size: {settings.fontSize}px<input type="range" min="11" max="22" value={settings.fontSize} onChange={e => updateSettings({ fontSize: Number(e.target.value) })} /></label><ThemePreview theme={theme} /><button className="secondary-button" onClick={() => updateSettings({ diffView: DEFAULT_SETTINGS.diffView, diffWrap: DEFAULT_SETTINGS.diffWrap, fontSize: DEFAULT_SETTINGS.fontSize, monoFont: DEFAULT_SETTINGS.monoFont })}>Reset editor preferences</button></section>
       <section hidden={section !== 'Workspace reset'} aria-labelledby="reset-heading"><h3 id="reset-heading">Workspace reset</h3><p>Restore sidebar and inspector widths to 240px and 400px.</p><button className="secondary-button" onClick={() => { api.resetWorkspace(); setResetDone(true); }}>Reset pane sizes</button>{resetDone && <p role="status">Default pane sizes restored.</p>}</section>

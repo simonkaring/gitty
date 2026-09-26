@@ -64,7 +64,7 @@ export function appendHistory(state: LayoutState, commits: readonly GraphCommit[
   return { nodes: [...nodes], edges: resolved, laneCount: state.laneCount };
 }
 
-export const ROW_HEIGHT = 48;
+export const ROW_HEIGHT = 36;
 export const LANE_WIDTH = 18;
 export const LANE_PADDING = 22;
 export const laneX = (lane: number) => LANE_PADDING + lane * LANE_WIDTH;

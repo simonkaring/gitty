@@ -1,6 +1,5 @@
 import type { KeyboardEvent } from 'react';
 import { FolderGit2, Loader2, Plus, X } from 'lucide-react';
-import './workspace-tabs.css';
 
 export interface RepositoryTabSummary { id: string; title: string; busy: boolean; branch: string | null; dirty: boolean }
 

@@ -64,7 +64,7 @@ export function Inspector({ commit, head, onJump, onClose, notify, activePath, o
   function selectFile(index: number, f: ChangedFile) {
     setFileIndex(index);
     if (onActiveDiffChange) {
-      onActiveDiffChange({
+      onActiveDiffChange(activePath === f.path ? null : {
         path: f.path,
         diff: toFileDiff(f),
         loading: false,
@@ -95,8 +95,8 @@ export function Inspector({ commit, head, onJump, onClose, notify, activePath, o
       <section className="changed-files" aria-label="Changed files">
         <div className="section-heading"><span><ChevronDown size={13} /> Changed files <span className="count">{commit.files.length}</span></span><span className="change-totals"><span className="added">+{additions}</span><span className="removed">−{deletions}</span></span></div>
         {commit.files.map((f, index) => {
-          const isSelected = activePath ? f.path === activePath : index === fileIndex;
-          return <button key={f.path} className={`file-row ${isSelected ? 'active' : ''}`} onClick={() => selectFile(index, f)} title={`View diff for ${f.path}`}>
+          const isSelected = onActiveDiffChange ? activePath === f.path : index === fileIndex;
+          return <button key={f.path} className={`file-row ${isSelected ? 'active' : ''}`} aria-pressed={isSelected} onClick={() => selectFile(index, f)} title={isSelected ? `Close diff for ${f.path}` : `View diff for ${f.path}`}>
             <FileCode2 size={15} /><span className="file-name"><strong>{f.path.split('/').at(-1)}</strong><span>{f.path.split('/').slice(0, -1).join('/')}/</span></span><span className={`file-status ${f.status}`}>{f.status[0].toUpperCase()}</span>
           </button>;
         })}

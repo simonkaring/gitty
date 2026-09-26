@@ -47,6 +47,32 @@ fn validate_message(message: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_identity(identity: Option<&CommitIdentity>) -> Result<()> {
+    let Some(identity) = identity else {
+        return Ok(());
+    };
+    let invalid = |s: &str| s.chars().any(|c| c.is_control() || matches!(c, '<' | '>'));
+    if identity.name.trim() != identity.name
+        || identity.name.is_empty()
+        || identity.name.len() > 120
+        || invalid(&identity.name)
+        || identity.email.trim() != identity.email
+        || identity.email.is_empty()
+        || identity.email.len() > 254
+        || invalid(&identity.email)
+        || identity.email.chars().any(char::is_whitespace)
+        || identity.email.split('@').count() != 2
+        || identity.email.starts_with('@')
+        || identity.email.ends_with('@')
+    {
+        return Err(Error::new(
+            "invalidRequest",
+            "Enter a valid commit profile name and email.",
+        ));
+    }
+    Ok(())
+}
+
 /// Operations the ordinary staging/commit API must not modify. Mutating underneath them
 /// would silently change their meaning (a commit during a merge is a merge
 /// commit), so every write is refused while one is in progress.
@@ -353,6 +379,35 @@ impl Repository {
         }
         process::run_with_input_for(command, input, MUTATION_TIMEOUT, max_input).map_err(unverified)
     }
+    fn write_commit(
+        &self,
+        args: &[String],
+        message: &str,
+        identity: Option<&CommitIdentity>,
+        amend: bool,
+    ) -> Result<Output> {
+        let mut vars = Vec::new();
+        if let Some(identity) = identity {
+            if !amend {
+                vars.extend([
+                    ("GIT_AUTHOR_NAME", identity.name.as_str()),
+                    ("GIT_AUTHOR_EMAIL", identity.email.as_str()),
+                ]);
+            }
+            vars.extend([
+                ("GIT_COMMITTER_NAME", identity.name.as_str()),
+                ("GIT_COMMITTER_EMAIL", identity.email.as_str()),
+            ]);
+        }
+        let command = process::git_commit_command(self.location(), args, &vars)?;
+        process::run_with_input_for(
+            command,
+            message.as_bytes(),
+            MUTATION_TIMEOUT,
+            MAX_MESSAGE_BYTES,
+        )
+        .map_err(unverified)
+    }
     /// `--pathspec-from-file=-` with **empty** input means every file to Git, which
     /// is exactly what this backend must never do. `prepare` already guarantees a
     /// non-empty list; this is the last checkpoint before the process starts.
@@ -412,8 +467,13 @@ impl Repository {
     }
     /// Commits exactly what is staged, with the configured identity, hooks and
     /// signing. No `--no-verify`, `--no-gpg-sign`, `--amend` or `--all`.
-    pub(crate) fn create_commit(&self, message: &str) -> Result<CreatedCommit> {
+    pub(crate) fn create_commit(
+        &self,
+        message: &str,
+        identity: Option<&CommitIdentity>,
+    ) -> Result<CreatedCommit> {
         validate_message(message)?;
+        validate_identity(identity)?;
         self.require_writable()?;
         let conflicted = self.unmerged()?;
         if !conflicted.is_empty() {
@@ -447,7 +507,7 @@ impl Repository {
         // argument encoding to round-trip. Git reads it before running any hook,
         // so hooks still see an immediately closed stdin.
         let a = args(&["commit", "--quiet", "--file=-"]);
-        let output = self.write(&a, &[], message.as_bytes(), MAX_MESSAGE_BYTES)?;
+        let output = self.write_commit(&a, message, identity, false)?;
         // Read HEAD once, after hooks have run, and report what Git actually left.
         // A commit that cannot be confirmed must not be reported as a failure.
         let after = self.head_commit().map_err(unverified)?;
@@ -486,11 +546,13 @@ impl Repository {
     pub(crate) fn amend_commit(
         &self,
         message: &str,
+        identity: Option<&CommitIdentity>,
         expected_head: &str,
         expected_head_ref: Option<&str>,
         expected_status_fingerprint: &str,
     ) -> Result<CreatedCommit> {
         validate_message(message)?;
+        validate_identity(identity)?;
         self.require_writable()?;
         let conflicted = self.unmerged()?;
         if !conflicted.is_empty() {
@@ -520,7 +582,7 @@ impl Repository {
             ));
         }
         let a = args(&["commit", "--quiet", "--amend", "--file=-"]);
-        let output = self.write(&a, &[], message.as_bytes(), MAX_MESSAGE_BYTES)?;
+        let output = self.write_commit(&a, message, identity, true)?;
         let after = self.head_commit().map_err(unverified)?;
         if !output.success {
             let text = report(&output);

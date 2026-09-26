@@ -297,22 +297,28 @@ async fn repository_create_commit(
     state: tauri::State<'_, Shared>,
     handle: String,
     message: String,
+    identity: Option<CommitIdentity>,
 ) -> Result<CreatedCommit> {
-    with_service(state, move |s| s.create_commit(&handle, &message)).await
+    with_service(state, move |s| {
+        s.create_commit_with_identity(&handle, &message, identity.as_ref())
+    })
+    .await
 }
 #[tauri::command]
 async fn repository_amend_commit(
     state: tauri::State<'_, Shared>,
     handle: String,
     message: String,
+    identity: Option<CommitIdentity>,
     expected_head: String,
     expected_head_ref: Option<String>,
     expected_status_fingerprint: String,
 ) -> Result<CreatedCommit> {
     with_service(state, move |s| {
-        s.amend_commit(
+        s.amend_commit_with_identity(
             &handle,
             &message,
+            identity.as_ref(),
             &expected_head,
             expected_head_ref.as_deref(),
             &expected_status_fingerprint,

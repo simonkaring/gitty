@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_SETTINGS, SETTINGS_KEY, persistSettings, readSettings, resolveTheme, validateSettings } from './settings';
 import { BUILTIN_THEMES, COLOR_KEYS, contrastRatio, exportTheme, importTheme, themeTokens, validateTheme } from './themes';
+import { commitProfileRepositoryKey, validateCommitProfile } from './commitProfiles';
+import type { RepositorySession } from './repository';
 
 const custom = () => ({ ...BUILTIN_THEMES[0], id: 'custom-test', name: 'My theme', colors: { ...BUILTIN_THEMES[0].colors } });
 function storage(entries: Record<string, string> = {}) {
@@ -31,7 +33,39 @@ describe('local preferences', () => {
     expect(persistSettings(broken, DEFAULT_SETTINGS)).toContain('session');
   });
   it('rejects invalid ranges, references, modes, fonts and duplicates', () => {
-    for (const patch of [{ fontSize: 10 }, { fontSize: 13.5 }, { monoFont: 'https://font' }, { paneWidths: { sidebar: Infinity, inspector: 400 } }, { themeId: 'missing' }, { lightThemeId: 'gitty-dark' }, { customThemes: [custom(), custom()] }, { customThemes: Array(31).fill(custom()) }]) expect(() => validateSettings({ ...DEFAULT_SETTINGS, ...patch })).toThrow();
+    for (const patch of [{ fontSize: 10 }, { fontSize: 13.5 }, { monoFont: 'https://font' }, { paneWidths: { sidebar: Infinity, inspector: 400 } }, { themeId: 'missing' }, { lightThemeId: 'gitty-dark' }, { customThemes: [custom(), custom()] }, { customThemes: Array(31).fill(custom()) }, { historyColumns: [] }, { historyColumns: [{ id: 'unknown', visible: true }] }, { historyColumns: DEFAULT_SETTINGS.historyColumns.slice(0, 5) }]) expect(() => validateSettings({ ...DEFAULT_SETTINGS, ...patch })).toThrow();
+  });
+  it('migrates older settings missing historyColumns to default columns', () => {
+    const withoutCols = { ...DEFAULT_SETTINGS };
+    delete (withoutCols as any).historyColumns;
+    const store = storage({ [SETTINGS_KEY]: JSON.stringify(withoutCols) });
+    const { settings, error } = readSettings(store);
+    expect(error).toBeNull();
+    expect(settings.historyColumns).toEqual(DEFAULT_SETTINGS.historyColumns);
+    expect(settings.commitProfiles).toEqual([]);
+    expect(settings.repositoryCommitProfiles).toEqual({});
+  });
+  it('saves profiles and per-worktree selections without changing other settings', () => {
+    const store = storage();
+    const profile = { id: 'profile-test', name: 'Zoë', email: 'zoe@example.org' };
+    const session = { root: '/repo', location: { kind: 'native', path: '/repo' } } as RepositorySession;
+    const key = commitProfileRepositoryKey(session);
+    expect(key).not.toBe(commitProfileRepositoryKey({ ...session, root: '/other' }));
+    expect(key).not.toBe(commitProfileRepositoryKey({ ...session, location: { kind: 'wsl', distribution: 'Ubuntu', path: '/repo' } }));
+    expect(persistSettings(store, { ...DEFAULT_SETTINGS, commitProfiles: [profile], repositoryCommitProfiles: { [key]: profile.id } })).toBeNull();
+    expect(readSettings(store).settings).toMatchObject({ commitProfiles: [profile], repositoryCommitProfiles: { [key]: profile.id } });
+  });
+  it('rejects malformed identity fields and broken selections', () => {
+    const valid = { id: 'profile-1', name: 'Valid', email: 'valid@example.org' };
+    for (const profile of [{ ...valid, name: 'bad\nname' }, { ...valid, email: 'bad>\n@example.org' }, { ...valid, email: 'missing-at' }, { ...valid, id: '--bad' }]) expect(() => validateCommitProfile(profile)).toThrow();
+    expect(() => validateSettings({ ...DEFAULT_SETTINGS, commitProfiles: [valid, valid] })).toThrow();
+    expect(() => validateSettings({ ...DEFAULT_SETTINGS, repositoryCommitProfiles: { repo: valid.id } })).toThrow();
+  });
+  it('persists reordered and hidden history columns across reloads', () => {
+    const store = storage();
+    const historyColumns = DEFAULT_SETTINGS.historyColumns.map(col => ({ ...col, visible: col.id === 'date' || col.id === 'graph' })).reverse();
+    expect(persistSettings(store, { ...DEFAULT_SETTINGS, historyColumns })).toBeNull();
+    expect(readSettings(store)).toMatchObject({ settings: { historyColumns }, error: null });
   });
   it('resolves system pairs and fixed themes independently of OS appearance', () => {
     const settings = { ...DEFAULT_SETTINGS, lightThemeId: 'catppuccin-latte', darkThemeId: 'nord' };
@@ -61,6 +95,12 @@ describe('theme files and render tokens', () => {
       expect(tokens['--button-foreground']).toBe(theme.colors.buttonForeground);
       expect(tokens['--graph-lane8']).toBe(theme.colors.graphLane8);
       expect(tokens['--shadow']).toBe(`0 12px 40px ${theme.colors.shadow}`);
+    }
+  });
+  it('keeps Gitty presets at WCAG AA for text on every surface', () => {
+    for (const { colors } of BUILTIN_THEMES.slice(0, 2)) {
+      for (const fg of ['text', 'secondary', 'muted']) for (const bg of ['bg', 'chrome', 'sidebar', 'raised', 'subtle']) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
+      for (const [fg, bg] of [['buttonForeground', 'accentText'], ['accentText', 'accentWash'], ['accentText', 'selected'], ['green', 'greenWash'], ['red', 'redWash']]) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
     }
   });
   it('computes WCAG luminance contrast with symmetry and known endpoints', () => {

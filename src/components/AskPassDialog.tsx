@@ -76,9 +76,9 @@ export function AskPassDialog() {
       </div>
       <form onSubmit={onSubmit}>
         <h2>Authentication Required</h2>
-        <p style={{ wordBreak: 'break-all' }}>{current.prompt}</p>
-        <div style={{ margin: '20px 0' }}>
-          <label htmlFor="askpass-answer" style={{ display: 'block', marginBottom: '8px', fontSize: '14px', fontWeight: 500 }}>
+        <p className="dialog-prompt">{current.prompt}</p>
+        <div className="dialog-field">
+          <label htmlFor="askpass-answer">
             {username ? 'Username' : 'Password or passphrase'}
           </label>
           <input
@@ -89,11 +89,10 @@ export function AskPassDialog() {
             required
             autoComplete={username ? 'username' : 'current-password'}
             autoFocus
-            style={{ width: '100%', padding: '8px 12px', fontSize: '14px', borderRadius: '4px', border: '1px solid var(--border)', background: 'var(--bg-inset)', color: 'var(--text)' }}
           />
         </div>
         {error && <p role="alert">{error}</p>}
-        <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px' }}>
+        <div className="dialog-actions">
           <button type="button" className="secondary-button" disabled={submitting} onClick={onCancel}>
             Cancel
           </button>

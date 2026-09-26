@@ -84,6 +84,15 @@ describe('write lifecycle', () => {
     expect(invoke).toHaveBeenCalledExactlyOnceWith('repository_amend_commit', { handle: 's', message: 'Reworded', expectedHead: 'old-head', expectedHeadRef: 'refs/heads/main', expectedStatusFingerprint: 'status-1' });
     expect(reload).toHaveBeenCalledOnce();
   });
+  it('passes selected identity only to commit and amend requests', async () => {
+    const invoke = vi.fn().mockResolvedValue({ oid: 'new-head' }) as typeof native;
+    const reload = vi.fn().mockResolvedValue(undefined);
+    const identity = { name: 'Zoë Selected', email: 'zoe@example.org' };
+    await writeAndRefresh('s', { kind: 'commit', message: 'New', identity }, reload, () => true, invoke);
+    await writeAndRefresh('s', { kind: 'amend', message: 'Edit', identity, expectedHead: 'old', expectedHeadRef: null, expectedStatusFingerprint: 'current' }, reload, () => true, invoke);
+    expect(invoke).toHaveBeenNthCalledWith(1, 'repository_create_commit', { handle: 's', message: 'New', identity });
+    expect(invoke).toHaveBeenNthCalledWith(2, 'repository_amend_commit', { handle: 's', message: 'Edit', identity, expectedHead: 'old', expectedHeadRef: null, expectedStatusFingerprint: 'current' });
+  });
   it('does not retry a stale amend and still reconciles', async () => {
     const invoke = vi.fn().mockRejectedValue({ code: 'staleOperation', message: 'HEAD changed.' }) as typeof native;
     const reload = vi.fn().mockResolvedValue(undefined);

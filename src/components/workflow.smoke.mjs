@@ -17,7 +17,7 @@ try {
   await demo.getByRole('listbox', { name: 'Commit history' }).waitFor();
   await demo.evaluate(() => document.fonts.ready);
   assert.equal(await demo.locator('.commit-row').first().evaluate(el => getComputedStyle(el).fontSize), '14px');
-  assert.equal(await demo.locator('.commit-row').first().evaluate(el => el.getBoundingClientRect().height), 48);
+  assert.equal(await demo.locator('.commit-row').first().evaluate(el => el.getBoundingClientRect().height), 36);
   await screenshot(demo, 'gitty-history-light');
   const sidebarResize = demo.getByRole('separator', { name: 'Resize repository sidebar' });
   await sidebarResize.focus(); await sidebarResize.press('ArrowRight');

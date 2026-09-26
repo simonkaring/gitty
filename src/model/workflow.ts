@@ -8,11 +8,11 @@ export async function writeAndRefresh(handle: string, mutation: RepositoryMutati
   try {
     if (!current()) return { superseded: true };
     if (mutation.kind === 'commit') {
-      const result = await invoke<CreateCommitResult>('repository_create_commit', { handle, message: mutation.message });
+       const result = await invoke<CreateCommitResult>('repository_create_commit', { handle, message: mutation.message, ...(mutation.identity ? { identity: mutation.identity } : {}) });
       outcome.oid = result.oid;
     } else if (mutation.kind === 'amend') {
       if (!mutation.expectedHead || !mutation.expectedStatusFingerprint) throw new Error('Refresh and review the last commit before amending.');
-      const result = await invoke<CreateCommitResult>('repository_amend_commit', { handle, message: mutation.message, expectedHead: mutation.expectedHead, expectedHeadRef: mutation.expectedHeadRef, expectedStatusFingerprint: mutation.expectedStatusFingerprint });
+       const result = await invoke<CreateCommitResult>('repository_amend_commit', { handle, message: mutation.message, ...(mutation.identity ? { identity: mutation.identity } : {}), expectedHead: mutation.expectedHead, expectedHeadRef: mutation.expectedHeadRef, expectedStatusFingerprint: mutation.expectedStatusFingerprint });
       outcome.oid = result.oid;
     } else if (mutation.kind === 'stage_hunk' || mutation.kind === 'unstage_hunk') {
       if (!mutation.path || !mutation.fingerprint || !Number.isSafeInteger(mutation.hunkIndex) || mutation.hunkIndex < 0) throw new Error('Select a complete hunk from a current diff.');

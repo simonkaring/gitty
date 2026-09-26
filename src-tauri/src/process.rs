@@ -296,6 +296,15 @@ pub(crate) fn git_mutation_command(
 ) -> Result<Command> {
     command(location, args, Contract::Mutation)
 }
+/// Per-command identity overrides are passed to the Linux `env` executable for
+/// WSL, rather than relying on host environment forwarding through wsl.exe.
+pub(crate) fn git_commit_command(
+    location: &RepositoryLocation,
+    args: &[String],
+    identity: &[(&str, &str)],
+) -> Result<Command> {
+    command_inner(location, args, Contract::Mutation, true, identity)
+}
 /// Runs Git using the selected native/WSL transport without requiring an
 /// existing repository. Clone uses this with the mutation environment because
 /// credential helpers, SSH configuration, filters and user locale must remain
@@ -304,16 +313,17 @@ pub(crate) fn git_external_mutation_command(
     location: &RepositoryLocation,
     args: &[String],
 ) -> Result<Command> {
-    command_inner(location, args, Contract::Mutation, false)
+    command_inner(location, args, Contract::Mutation, false, &[])
 }
 fn command(location: &RepositoryLocation, args: &[String], contract: Contract) -> Result<Command> {
-    command_inner(location, args, contract, true)
+    command_inner(location, args, contract, true, &[])
 }
 fn command_inner(
     location: &RepositoryLocation,
     args: &[String],
     contract: Contract,
     repository_context: bool,
+    identity: &[(&str, &str)],
 ) -> Result<Command> {
     let read = contract == Contract::Read;
     let mut cmd = match location {
@@ -350,8 +360,11 @@ fn command_inner(
                 "GIT_NO_REPLACE_OBJECTS=1",
                 "GIT_LITERAL_PATHSPECS=1",
                 "GIT_PAGER=cat",
-                "git",
             ]);
+            for (key, value) in identity {
+                c.arg(format!("{key}={value}"));
+            }
+            c.arg("git");
             if repository_context {
                 c.args(["-C", path]);
             }
@@ -377,6 +390,11 @@ fn command_inner(
         // Literal pathspecs are the reason explicit file arguments cannot become
         // magic (`:(exclude)…`, globs) in either contract.
         .env("GIT_LITERAL_PATHSPECS", "1");
+    if matches!(location, RepositoryLocation::Native { .. }) {
+        for (key, value) in identity {
+            cmd.env(key, value);
+        }
+    }
     if read {
         cmd.env("GIT_OPTIONAL_LOCKS", "0").env("LC_ALL", "C");
     } else {

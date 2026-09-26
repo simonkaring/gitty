@@ -47,10 +47,11 @@ try {
         f.saved = args.resolution; f.conflict = false; f.version++; return;
       }
       if (command === 'repository_remotes') { if (f.failRemotes) throw new Error('Remote read fixture failed'); return [{ name: 'origin', fetchUrl: 'https://github.com/example/repo.git', pushUrl: 'https://github.com/example/repo.git', branches: ['main', 'topic'], currentUpstream: 'main' }]; }
-      if (command === 'repository_sync_info') return { branch: 'main', upstream: 'origin/main', ahead: 0, behind: 0, remotes: ['origin'] };
+      if (command === 'repository_sync_info') return { branch: 'main', upstream: f.noUpstream ? null : 'origin/main', ahead: 0, behind: 0, remotes: ['origin'] };
       if (command === 'open_external_url') { if (f.failExternal) throw new Error('Browser launch fixture failed'); return; }
       // The focused tab auto-fetches on open; it has no effect on this fixture.
       if (command === 'repository_remote_action' && args.action.kind === 'backgroundFetch') return { output: '' };
+      if (command === 'repository_remote_action') return { output: 'synced' };
       throw new Error(`Unexpected command: ${command}`);
     } };
   });
@@ -148,17 +149,53 @@ try {
     await scroller.evaluate(el => { el.scrollTop = 0; });
   }
 
-  // Reference actions have the same source via right click, Enter, and context-menu key.
+  // Right click and the context-menu key show a compact menu; Enter keeps the direct dialog.
   for (const gesture of ['rightclick', 'Enter', 'Shift+F10']) {
     if (gesture === 'rightclick') await topic.click({ button: 'right' });
     else { await topic.focus(); await topic.press(gesture); }
+    if (gesture !== 'Enter') {
+      const menu = page.getByRole('menu', { name: 'Actions for topic' });
+      await menu.waitFor();
+      assert.equal(await page.getByRole('dialog', { name: 'Git actions' }).count(), 0);
+      assert.equal(await menu.getByRole('menuitem', { name: 'Merge into current…' }).count(), 1);
+      assert.equal(await menu.getByRole('menuitem', { name: 'Rebase current onto this…' }).count(), 1);
+      assert.equal(await menu.getByRole('menuitem', { name: 'Copy reference name' }).count(), 1);
+      await menu.getByRole('menuitem', { name: 'Create branch here…' }).click();
+    }
     await page.getByRole('dialog', { name: 'Git actions' }).waitFor();
     assert.equal(await page.getByRole('combobox', { name: 'Source / starting revision', exact: true }).inputValue(), 'refs/heads/topic');
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   }
+  await main.click({ button: 'right' });
+  const currentMenu = page.getByRole('menu', { name: 'Actions for main' });
+  await currentMenu.getByRole('menuitem', { name: 'Pull (rebase)' }).click();
+  await page.waitForFunction(() => window.fixture.calls.some(call => call.command === 'repository_remote_action' && call.args.action.pullMode === 'rebase'));
+  await main.click({ button: 'right' });
+  await currentMenu.getByRole('menuitem', { name: 'Push / Publish…' }).click();
+  await page.waitForFunction(() => window.fixture.calls.some(call => call.command === 'repository_remote_action' && call.args.action.kind === 'push'));
+  await page.evaluate(() => { window.fixture.noUpstream = true; });
+  await main.click({ button: 'right' });
+  await currentMenu.getByRole('menuitem', { name: 'Push / Publish…' }).click();
+  await page.getByRole('dialog', { name: 'Publish branch' }).waitFor();
+  await page.getByRole('dialog', { name: 'Publish branch' }).getByRole('button', { name: 'Cancel' }).click();
+  await page.evaluate(() => { window.fixture.noUpstream = false; });
   await page.getByRole('option', { name: /^Commit c1,/ }).click({ button: 'right' });
+  const commitMenu = page.getByRole('menu', { name: 'Commit actions' });
+  assert.equal(await commitMenu.getByRole('menuitem', { name: 'Create tag here…' }).count(), 1);
+  assert.equal(await commitMenu.getByRole('menuitem', { name: 'Set as comparison base' }).count(), 1);
+  await commitMenu.getByRole('menuitem', { name: 'Cherry-pick commit…' }).click();
   assert.equal(await page.locator('input[name="operation-action"]:checked').inputValue(), 'cherryPick');
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await page.locator('.ref-item[title="refs/heads/topic"]').click({ button: 'right' });
+  const sidebarMenu = page.getByRole('menu', { name: 'Actions for topic' });
+  await sidebarMenu.getByRole('menuitem', { name: 'Switch to topic…' }).waitFor();
+  assert.equal(await sidebarMenu.getByRole('menuitem', { name: 'Create pull request…' }).count(), 1);
+  assert.equal(await sidebarMenu.getByRole('menuitem', { name: 'Push / Publish…' }).count(), 0);
+  await page.keyboard.press('Escape');
+  assert.equal(await sidebarMenu.count(), 0);
+  await page.locator('.ref-pill[data-name="origin/topic"]').click({ button: 'right' });
+  await page.getByRole('menu', { name: 'Actions for origin/topic' }).getByRole('menuitem', { name: 'Fetch this remote branch' }).click();
+  await page.waitForFunction(() => window.fixture.calls.some(call => call.command === 'repository_remote_action' && call.args.action.kind === 'fetch' && call.args.action.remote === 'origin' && call.args.action.branch === 'topic'));
 
   // Tags and remote-tracking refs have explicit PR restrictions; no prefix guessing.
   await page.getByRole('button', { name: 'Graph actions for v1', exact: true }).click();
@@ -176,6 +213,7 @@ try {
   // Keyboard actions and explicit ordered multi-commit review.
   await page.locator('.history-scroll').focus();
   await page.keyboard.press('Shift+F10');
+  await page.getByRole('menu', { name: 'Commit actions' }).getByRole('menuitem', { name: 'More Git actions…' }).click();
   await page.getByRole('dialog', { name: 'Git actions' }).waitFor();
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await page.getByRole('button', { name: 'Branch', exact: true }).click();
