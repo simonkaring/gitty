@@ -75,8 +75,12 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   shared string contract cannot represent arbitrary native bytes. Blob display
   uses replacement characters for undecodable bytes.
 - Status fingerprints include tracked/untracked content so repeated edits with
-  unchanged status letters still refresh. This adds Git work, especially with many
-  untracked files. Repository state also fingerprints remotes and shallow boundaries
+  unchanged status letters still refresh. Untracked files are hashed with one
+  `hash-object --no-filters --stdin-paths` batch; names the line protocol cannot
+  carry verbatim (newline, carriage return, leading quote) or a batch Git rejects
+  fall back to one no-index patch per file. The tracked patch and untracked hash,
+  and the independent state reads, run concurrently because each process launch
+  costs about 100 ms through `wsl.exe`. Repository state also fingerprints remotes and shallow boundaries
   so deepening without moving refs invalidates the walk. Reads are best-effort across
   concurrent external changes; nested repository contents are not recursively hashed.
 - Root commits compare against the computed empty-tree ID without writing objects.
@@ -258,9 +262,17 @@ operation IDs are UUIDs, and closing the main window cancels registered clones.
   a local per-app askpass bridge when those cannot supply credentials. Gitty
   keeps answers in memory only. A cancelled or expired prompt fails the helper,
   and a prompt has a 90-second response deadline within Git's write deadline.
-  WSL Git still uses Linux-side helpers/agents noninteractively: native askpass
-  scripts cannot run inside the distribution, and failed explicit actions explain
-  this limitation. No user credential is embedded in a Git argument or retained.
+  WSL Git cannot use the native askpass bridge: its scripts cannot run inside
+  the distribution. Explicit WSL fetch/pull/push instead set
+  `credential.interactive=true`, so a credential helper with its own sign-in
+  window (typically Windows Git Credential Manager reached through WSL interop)
+  can re-authenticate. Terminal prompts, askpass and SSH passphrase prompts stay
+  disabled; background fetch remains fully noninteractive. Failed explicit
+  actions explain this. No user credential is embedded in a Git argument or retained.
+- The frontend auto-fetches only the focused tab of a visible window: when a
+  repository opens, when its tab or the window regains focus, and on a 30-second
+  check, at most once per five minutes. Explicit fetch and pull reset that clock.
+  Background fetch failures appear as a toolbar fetch status, not an error banner.
 
 ## Graph operations and full conflict editor
 
@@ -412,7 +424,15 @@ default-branch/full-clone behavior, no recursive submodule initialization,
 progress, cancellation, timeout/error cleanup, and preservation of existing and
 concurrently created destinations.
 
-Windows Job Objects, WSL execution, and the graphical picker require platform/UI
+Real WSL tests (`src/wsl_tests.rs`) run on Windows when `GITTY_WSL_TEST_DISTRO`
+names a distribution with Git (`$env:GITTY_WSL_TEST_DISTRO="Ubuntu"; cargo test
+wsl_tests`). They create temporary repositories under `/tmp` inside the
+distribution and cover opening a path with spaces/Unicode, state, status and
+untracked-content fingerprints, stage/commit, index-lock detection, background
+fetch, pull and push against a local bare remote, and report refresh timing.
+Without the variable they return immediately.
+
+Windows Job Objects and the graphical picker require platform/UI
 integration testing; they are not exercised by the macOS unit test suite. Killing
 the Windows WSL launcher cannot promise termination of every Linux descendant
 inside the distribution. The app does not terminate an entire WSL distribution.

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { DirectoryEntry, RepositoryLocation, WslDistribution } from '../model/repository';
 import { errorMessage, native } from '../model/native';
 import { suggestedCloneName, type CloneRequest } from '../model/clone';
+import { locationForPickedFolder } from '../model/wslPath';
 
 export function RepositoryPicker({ onOpen, onClone, cloneBusy, onClose }: { onOpen: (location: RepositoryLocation) => void; onClone: (request: CloneRequest) => void; cloneBusy: boolean; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -34,7 +35,7 @@ export function RepositoryPicker({ onOpen, onClone, cloneBusy, onClose }: { onOp
   async function pick() {
     const token = ++request.current;
     setError('');
-    try { const folder = await native<string | null>('repository_pick'); if (folder && token === request.current) onOpen({ kind: 'native', path: folder }); }
+    try { const folder = await native<string | null>('repository_pick'); if (folder && token === request.current) onOpen(locationForPickedFolder(folder)); }
     catch (e) { if (token === request.current) setError(errorMessage(e)); }
   }
   async function pickCloneParent() {
@@ -49,7 +50,7 @@ export function RepositoryPicker({ onOpen, onClone, cloneBusy, onClose }: { onOp
     const directoryName = cloneName.trim() || suggestedCloneName(source);
     const parent: RepositoryLocation | null = cloneKind === 'wsl'
       ? distribution ? { kind: 'wsl', distribution, path } : null
-      : nativeParent ? { kind: 'native', path: nativeParent } : null;
+      : nativeParent ? locationForPickedFolder(nativeParent) : null;
     if (!source || !directoryName || !parent) { setError('Choose a clone source, destination folder, and directory name.'); return; }
     onClone({ source, parent, directoryName });
   }

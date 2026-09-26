@@ -61,6 +61,24 @@ pub fn distributions() -> Result<Vec<WslDistribution>> {
         })
         .collect())
 }
+/// Browsing validates the distribution on every folder. Listing costs two
+/// `wsl.exe` launches, so a recent answer is reused; an unknown name always
+/// re-reads the list in case a distribution was just installed.
+fn known_distribution(name: &str) -> Result<bool> {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static CACHE: Mutex<Option<(Instant, Vec<String>)>> = Mutex::new(None);
+    let fresh = |at: &Instant| at.elapsed() < Duration::from_secs(60);
+    if let Some((at, names)) = &*CACHE.lock().unwrap_or_else(|e| e.into_inner()) {
+        if fresh(at) && names.iter().any(|n| n == name) {
+            return Ok(true);
+        }
+    }
+    let names: Vec<String> = distributions()?.into_iter().map(|d| d.name).collect();
+    let known = names.iter().any(|n| n == name);
+    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), names));
+    Ok(known)
+}
 pub fn directories(distribution: &str, path: &str) -> Result<Vec<DirectoryEntry>> {
     supported()?;
     process::validate_distribution(distribution)?;
@@ -70,7 +88,7 @@ pub fn directories(distribution: &str, path: &str) -> Result<Vec<DirectoryEntry>
             "WSL browsing requires an absolute Linux path",
         ));
     }
-    if !distributions()?.iter().any(|d| d.name == distribution) {
+    if !known_distribution(distribution)? {
         return Err(Error::new(
             "invalidDistribution",
             "Unknown WSL distribution",

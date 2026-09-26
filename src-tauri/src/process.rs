@@ -43,6 +43,28 @@ pub(crate) fn without_read_deadline<T>(f: impl FnOnce() -> Result<T>) -> Result<
     f()
 }
 
+/// Runs independent reads concurrently. Each costs a process launch — about
+/// 100 ms through `wsl.exe` — so sequential reads dominate WSL refreshes. The
+/// caller's request deadline is carried into every worker thread.
+pub(crate) fn parallel<T: Send>(jobs: Vec<Box<dyn FnOnce() -> T + Send + '_>>) -> Vec<T> {
+    let deadline = REQUEST_DEADLINE.with(|d| d.get());
+    thread::scope(|scope| {
+        let handles: Vec<_> = jobs
+            .into_iter()
+            .map(|job| {
+                scope.spawn(move || {
+                    REQUEST_DEADLINE.with(|d| d.set(deadline));
+                    job()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
+            .collect()
+    })
+}
+
 #[cfg(windows)]
 pub(crate) struct ProcessJob(windows_sys::Win32::Foundation::HANDLE);
 // The handle is exclusively owned and Win32 job operations may run on any thread.

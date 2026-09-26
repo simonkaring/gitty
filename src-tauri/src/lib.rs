@@ -415,3 +415,5 @@ mod operation_tests;
 mod remote_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(all(test, windows))]
+mod wsl_tests;

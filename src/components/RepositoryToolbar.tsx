@@ -3,6 +3,7 @@ import { ChevronDown, Download, GitBranch, RefreshCw, Upload } from 'lucide-reac
 import { native, errorMessage } from '../model/native';
 import { DEFAULT_PULL_MODE, PULL_MODE_LABELS, describeRemoteAction, needsPublish, syncSummary, type PullMode, type RemoteActionRequest, type SyncInfo } from '../model/remote';
 import { PublishDialog } from './PublishDialog';
+import { describeFetchStatus, type FetchStatus } from '../model/autoFetch';
 import './workspace-tabs.css';
 
 export interface RepositoryToolbarProps {
@@ -21,6 +22,7 @@ export interface RepositoryToolbarProps {
   onRefresh: () => void;
   onWrite: (command: string, args: Record<string, unknown>) => Promise<string>;
   notify: (message: string) => void;
+  fetchStatus?: FetchStatus;
 }
 
 /** Closes an open dropdown on outside pointerdown or Escape, and returns
@@ -42,10 +44,20 @@ function useMenuDismiss(open: boolean, close: () => void, menuRef: RefObject<HTM
   }, [open, close, menuRef, toggleRef]);
 }
 
+const IDLE_FETCH: FetchStatus = { kind: 'idle' };
+
 /** Compact Pull / Push / Branch / Stash / Refresh toolbar. Sync info is a
  * passive, local-only read refetched when the active repository changes.
  * RepositoryPane separately schedules background fetches of remote refs. */
-export function RepositoryToolbar({ handle, active, revision, busy, pickCount, pickMode, onCreateBranch, onSwitchBranch, onCherryPick, onClearPick, onStartPickMode, onOpenStash, onRefresh, onWrite, notify }: RepositoryToolbarProps) {
+export function RepositoryToolbar({ handle, active, revision, busy, pickCount, pickMode, onCreateBranch, onSwitchBranch, onCherryPick, onClearPick, onStartPickMode, onOpenStash, onRefresh, onWrite, notify, fetchStatus = IDLE_FETCH }: RepositoryToolbarProps) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 30 * 1000);
+    return () => clearInterval(timer);
+  }, [active, fetchStatus]);
+  const fetchLabel = describeFetchStatus(fetchStatus, now);
   const [sync, setSync] = useState<SyncInfo | null>(null);
   const [syncError, setSyncError] = useState('');
   const [pending, setPending] = useState<'fetch' | 'pull' | 'push' | null>(null);
@@ -106,6 +118,7 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
       </div>
       <button disabled={disabled || !!pending} onClick={push}><Upload size={15} />{pending === 'push' ? 'Pushing…' : needsPublish(sync) ? 'Publish…' : 'Push'}</button>
       <span className="repository-sync-badge" data-error={!sync && !!syncError} role="status">{sync ? syncSummary(sync) : syncError ? 'Sync info unavailable' : 'Reading sync info…'}</span>
+      {fetchLabel && <span className="repository-fetch-status" data-error={fetchStatus.kind === 'failed'} title={fetchStatus.kind === 'failed' ? fetchStatus.message : undefined}>{fetchLabel}{fetchStatus.kind === 'failed' && <span className="sr-only">: {fetchStatus.message}</span>}</span>}
     </div>
     <span className="repository-toolbar-divider" aria-hidden="true" />
     <div className="repository-toolbar-group">
