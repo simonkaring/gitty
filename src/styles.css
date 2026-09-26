@@ -290,6 +290,62 @@ kbd { font-family: var(--mono); font-size: 12px; display: inline-grid; place-ite
 .native-switch { position: fixed; bottom: 40px; left: 12px; z-index: 20; background: var(--raised); border: 1px solid var(--border); padding: 10px; border-radius: 4px; }
 .native-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .native-actions > strong { flex: 1; overflow-wrap: anywhere; }
+.native-shell .native-sidebar .workspace-label {
+  margin: 0;
+  padding: 16px 14px 12px;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+.native-shell .native-sidebar .workspace-label > svg {
+  width: 36px;
+  height: 36px;
+  padding: 8px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--subtle);
+}
+.native-shell .native-sidebar .workspace-label > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.native-shell .native-sidebar .workspace-label small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.native-shell .native-sidebar .sidebar-divider { margin: 6px 14px 12px; }
+.native-shell .native-sidebar .native-filters { padding: 0 12px 14px; }
+.native-shell .native-sidebar .filter-primary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
+.native-shell .native-sidebar .filter-primary .search-field { grid-column: 1 / -1; height: 34px; }
+.native-shell .native-sidebar .filter-primary select { min-width: 0; width: 100%; max-width: none; height: 32px; font-size: 13px; }
+.native-shell .native-sidebar .filter-primary .head-button { height: 32px; border: 1px solid var(--border-strong); background: var(--raised); padding: 0 8px; }
+.native-shell .native-sidebar .filter-secondary { align-items: center; margin-top: 5px; }
+.native-shell .native-sidebar .filter-secondary summary { cursor: pointer; padding: 6px 0; }
+.native-shell .native-sidebar .filter-secondary .filter-disclosure { flex-direction: column; }
+.native-shell .native-sidebar .filter-disclosure label { min-width: 0; }
+.native-shell .native-sidebar .filter-disclosure input { width: 100%; min-width: 0; }
+.native-shell .native-sidebar .filter-secondary > .text-button { font-size: 12px; white-space: nowrap; }
+.native-shell .native-sidebar .reference-group { margin: 0 10px 14px; }
+.native-shell .native-sidebar .reference-group summary {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  margin: 0;
+  padding: 7px 8px;
+  list-style: none;
+  cursor: pointer;
+}
+.native-shell .native-sidebar .reference-group summary::-webkit-details-marker { display: none; }
+.native-shell .native-sidebar .reference-group summary::before { content: '›'; width: 13px; font-size: 18px; line-height: 14px; }
+.native-shell .native-sidebar .reference-group[open] summary::before { transform: rotate(90deg); }
+.native-shell .native-sidebar .reference-group summary .count { margin-left: auto; }
+.native-shell .native-sidebar .ref-action-row { display: flex; align-items: center; padding-right: 6px; border-radius: 4px; }
+.native-shell .native-sidebar .ref-action-row:focus-within,
+.native-shell .native-sidebar .ref-action-row:hover { background: var(--subtle); }
+.native-shell .native-sidebar .ref-action-row .ref-item { min-width: 0; flex: 1; padding: 9px 4px 9px 20px; }
+.native-shell .native-sidebar .ref-action-row > button:last-child { padding: 5px 8px; color: var(--secondary); }
+.native-shell .native-sidebar .sidebar-bottom { border-top: 1px solid var(--border); margin: auto 14px 20px; padding: 14px 6px 0; }
+.native-shell .history-pane > .repository-heading { padding: 14px 24px 6px; }
+.native-shell .history-pane > .repository-heading h1 { font-size: 22px; }
+.native-shell .history-pane > .repository-heading p { max-width: 100%; }
+.native-shell .history-pane > .native-repo-meta { padding: 4px 24px 12px; }
+.native-shell .history-pane > .native-repo-meta:last-child { padding: 10px 24px; }
+.native-shell .native-filters { padding: 0 24px 14px; }
 .native-banner { padding: 12px 22px; background: var(--accent-wash); border-bottom: 1px solid var(--border); font-size: 14px; }
 .native-banner button { margin-left: 10px; }
 .native-welcome { flex: 1; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 22px; padding: 8vh max(24px, 14vw); background: radial-gradient(ellipse at 85% 10%, var(--accent-wash), transparent 60%); }
@@ -300,8 +356,9 @@ kbd { font-family: var(--mono); font-size: 12px; display: inline-grid; place-ite
 .history-pane > .native-repo-meta:last-child { padding: 10px 24px; border-top: 1px solid var(--border); }
 .native-filters { padding: 0 26px 16px; }
 .filter-primary { display: flex; gap: 8px; }
-.filter-primary > input { flex: 1; width: 150px; }
+.filter-primary > .search-field { flex: 1; }
 .filter-primary > select { max-width: 190px; }
+.workspace-main > .native-filters { flex-shrink: 0; padding: 12px 24px; border-bottom: 1px solid var(--border); }
 .filter-secondary { display: flex; gap: 12px; align-items: flex-start; margin-top: 10px; font-size: 13px; color: var(--secondary); }
 .filter-secondary > details { flex: 1; }
 .filter-secondary summary { padding: 6px 0; }

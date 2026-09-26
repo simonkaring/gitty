@@ -69,6 +69,23 @@ try {
   assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
   await page.getByText('main → origin/main', { exact: false }).waitFor();
 
+  // Native full-history search and scoped filters live in the sidebar, but
+  // remain accessible above the graph when the sidebar is collapsed.
+  const sidebar = page.getByRole('complementary', { name: 'Repository references' });
+  await sidebar.getByRole('textbox', { name: 'Search full history' }).fill('c1');
+  await page.waitForFunction(() => window.fixture.calls.some(call => call.command === 'repository_search' && call.args.query.text === 'c1'));
+  await sidebar.getByRole('combobox', { name: 'Branch scope' }).selectOption('refs/heads/main');
+  await page.waitForFunction(() => window.fixture.calls.some(call => call.command === 'repository_search' && call.args.query.branch === 'refs/heads/main'));
+  await sidebar.getByText('Date & path').click();
+  await sidebar.getByRole('textbox', { name: 'Filter path' }).fill('src/');
+  await page.waitForFunction(() => window.fixture.calls.some(call => call.command === 'repository_search' && call.args.query.path === 'src/'));
+  await sidebar.getByRole('button', { name: 'Clear filters' }).click();
+  await page.getByRole('button', { name: 'Toggle references sidebar' }).click();
+  await page.locator('.workspace-main').getByRole('textbox', { name: 'Search full history' }).fill('c2');
+  await page.waitForFunction(() => window.fixture.calls.some(call => call.command === 'repository_search' && call.args.query.text === 'c2'));
+  await page.locator('.workspace-main').getByRole('button', { name: 'Clear search' }).click();
+  await page.getByRole('button', { name: 'Toggle references sidebar' }).click();
+
   // Repository tabs: a single open tab, and reopening the same recent
   // location focuses it instead of creating a duplicate.
   await page.locator('.repository-tab').getByText('Fixture', { exact: true }).waitFor();
