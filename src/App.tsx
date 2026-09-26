@@ -134,6 +134,7 @@ function Workspace({ repository, theme, sidebarOpen, inspectorOpen, inspectorWid
       repository={repository}
       refs={snapshot.refs}
       onJump={jump}
+      onSwitchBranch={() => notify('Switching branches requires a desktop repository.')}
       activeRef={activeRef}
       commitCount={snapshot.commits.length}
       query={query}
@@ -178,7 +179,7 @@ function Workspace({ repository, theme, sidebarOpen, inspectorOpen, inspectorWid
         ) : (
           <section className="history-pane" aria-label="Repository history">
             {normalized && <div className="search-results" role="status"><span>{results.length ? `${matchIndex >= 0 ? `${matchIndex + 1} of ` : ''}${results.length} matches` : `No commits match “${query}”`}<span className="search-preserve"> · Full graph preserved</span></span><span><button className="icon-button" disabled={!results.length} aria-label="Previous search result" onClick={() => nextResult(-1)}><ArrowUp size={14} /></button><button className="icon-button" disabled={!results.length} aria-label="Next search result" onClick={() => nextResult(1)}><ArrowDown size={14} /></button></span></div>}
-            <HistoryGraph ref={graphRef} commits={snapshot.commits} layout={layout} refs={snapshot.refs} selectedId={selectedId} head={snapshot.head} loaded={loaded} matches={matches} onSelect={id => { setActiveDiff(null); setSelectedId(id); setActiveRef(null); }} onLoadMore={() => setLoaded(value => Math.min(value + 240, snapshot.commits.length))} onOpenDetails={() => setInspectorOpen(true)} onActions={() => notify('Branch, merge, cherry-pick, tag and pull request actions require a desktop repository.')} theme={theme} />
+            <HistoryGraph ref={graphRef} commits={snapshot.commits} layout={layout} refs={snapshot.refs} selectedId={selectedId} head={snapshot.head} loaded={loaded} matches={matches} onSelect={id => { setActiveDiff(null); setSelectedId(id); setActiveRef(null); }} onLoadMore={() => setLoaded(value => Math.min(value + 240, snapshot.commits.length))} onOpenDetails={() => setInspectorOpen(true)} onActions={() => notify('Branch, merge, cherry-pick, tag and pull request actions require a desktop repository.')} onSwitchBranch={() => notify('Switching branches requires a desktop repository.')} theme={theme} />
           </section>
         )}
         {inspectorOpen && <><PaneResizer label="Resize commit inspector" width={inspectorWidth} onChange={setInspectorWidth} max={520} />

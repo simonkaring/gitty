@@ -158,7 +158,7 @@ export function NativeInspector({
   }
 
   function selectFile(filePath: string) {
-    setPath(filePath);
+    setPath(current => current === filePath ? '' : filePath);
   }
 
   const additions = files.reduce((n, f) => n + (f.additions ?? 0), 0);
@@ -323,7 +323,8 @@ export function NativeInspector({
                 key={f.path}
                 className={`file-row ${isSelected ? 'active' : ''}`}
                 onClick={() => selectFile(f.path)}
-                title={`View diff for ${f.path}`}
+                title={isSelected ? `Close diff for ${f.path}` : `View diff for ${f.path}`}
+                aria-pressed={isSelected}
               >
                 <FileCode2 size={15} />
                 <span className="file-name">

@@ -39,24 +39,45 @@ interface Props {
   shallow?: boolean;
   headRef?: string | null;
   onActions?: (context: ActionContext) => void;
+  onSwitchBranch?: (ref: string) => void;
   pickOrder?: string[];
   onTogglePick?: (oid: string) => void;
 }
 
-export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, loaded, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, pickOrder, onTogglePick }, ref) {
+export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, loaded, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onSwitchBranch, pickOrder, onTogglePick }, ref) {
   const scroller = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
+  const [scrollLeft, setScrollLeft] = useState(0);
   const [height, setHeight] = useState(600);
+  const [widths, setWidths] = useState({ refs: 170, graph: 0, message: 130, author: 110, hash: 90 });
+  type Column = keyof typeof widths;
+  const limits: Record<Column, [number, number]> = { refs: [90, 420], graph: [0, 360], message: [100, 600], author: [70, 260], hash: [70, 180] };
+  function resize(column: Column, delta: number) {
+    setWidths(current => ({ ...current, [column]: Math.max(limits[column][0], Math.min(limits[column][1], current[column] + delta)) }));
+  }
+  function resizeHandle(column: Column) {
+    return <button className="history-column-resize" aria-label={`Resize ${column === 'refs' ? 'Branch / tag' : column === 'hash' ? 'Commit' : column} column`} title="Drag or use arrow keys to resize" onClick={event => event.stopPropagation()}
+      onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); resize(column, event.key === 'ArrowRight' ? 10 : -10); } }}
+      onPointerDown={event => {
+        event.preventDefault();
+        const target = event.currentTarget, start = event.clientX, initial = widths[column];
+        target.setPointerCapture(event.pointerId);
+        const move = (moveEvent: PointerEvent) => setWidths(current => ({ ...current, [column]: Math.max(limits[column][0], Math.min(limits[column][1], initial + moveEvent.clientX - start)) }));
+        const end = () => { target.removeEventListener('pointermove', move); target.removeEventListener('pointerup', end); target.removeEventListener('pointercancel', end); };
+        target.addEventListener('pointermove', move); target.addEventListener('pointerup', end); target.addEventListener('pointercancel', end);
+      }} />;
+  }
   const dragFrame = useRef(0);
+  const badgeAction = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dragVelocity = useRef(0);
   function stopDrag() { cancelAnimationFrame(dragFrame.current); dragFrame.current = 0; dragVelocity.current = 0; }
   function autoScroll() {
     if (scroller.current && dragVelocity.current) { scroller.current.scrollTop += dragVelocity.current; setScrollTop(scroller.current.scrollTop); dragFrame.current = requestAnimationFrame(autoScroll); }
     else dragFrame.current = 0;
   }
-  useEffect(() => { window.addEventListener('dragend', stopDrag); window.addEventListener('drop', stopDrag, true); return () => { stopDrag(); window.removeEventListener('dragend', stopDrag); window.removeEventListener('drop', stopDrag, true); }; }, []);
-  const graphWidth = Math.max(112, layout.laneCount * LANE_WIDTH + 32);
+  useEffect(() => { window.addEventListener('dragend', stopDrag); window.addEventListener('drop', stopDrag, true); return () => { stopDrag(); if (badgeAction.current) clearTimeout(badgeAction.current); window.removeEventListener('dragend', stopDrag); window.removeEventListener('drop', stopDrag, true); }; }, []);
+  const graphWidth = Math.max(112, layout.laneCount * LANE_WIDTH + 32) + widths.graph;
   const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - 8);
   const end = Math.min(loaded, Math.ceil((scrollTop + height) / ROW_HEIGHT) + 8);
   const selectedIndex = commits.findIndex(commit => commit.id === selectedId);
@@ -144,12 +165,12 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     scrollTo(next);
   }
 
-  return <div className="history-body" style={{ '--graph-width': `${graphWidth}px` } as React.CSSProperties}>
-    <div className="history-columns" aria-hidden="true"><span>Graph</span><span>Commit message</span><span className="author-column">Author</span><span className="hash-column">Commit</span></div>
+  return <div className="history-body" style={{ '--ref-width': `${widths.refs}px`, '--graph-width': `${graphWidth}px`, '--message-width': `${widths.message}px`, '--author-width': `${widths.author}px`, '--hash-width': `${widths.hash}px` } as React.CSSProperties}>
+    <div className="history-column-viewport"><div className="history-columns" style={{ transform: `translateX(${-scrollLeft}px)` }}><span>Branch / tag{resizeHandle('refs')}</span><span>Graph{resizeHandle('graph')}</span><span>Commit message{resizeHandle('message')}</span><span className="author-column">Author{resizeHandle('author')}</span><span className="hash-column">Commit{resizeHandle('hash')}</span></div></div>
     <div className="graph-viewport">
       <div className="history-scroll" ref={scroller} role="listbox" aria-label="Commit history" aria-describedby="history-keyboard-help" tabIndex={0}
         aria-activedescendant={selectedIndex >= start && selectedIndex < end ? `commit-${selectedId}` : undefined}
-        onScroll={event => setScrollTop(event.currentTarget.scrollTop)}
+        onScroll={event => { setScrollTop(event.currentTarget.scrollTop); setScrollLeft(event.currentTarget.scrollLeft); }}
         onDragOver={event => { if (![REF_DRAG_TYPE, COMMIT_DRAG_TYPE].some(type => event.dataTransfer.types.includes(type))) return; const bounds = event.currentTarget.getBoundingClientRect(); dragVelocity.current = event.clientY < bounds.top + 45 ? -10 : event.clientY > bounds.bottom - 45 ? 10 : 0; if (!dragFrame.current) autoScroll(); }}
         onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) stopDrag(); }}
         onKeyDown={event => {
@@ -175,18 +196,23 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                 height: ROW_HEIGHT,
                 '--branch-color': branchColor,
               } as React.CSSProperties} onContextMenu={event => { if (onActions && commit.id !== WORKING_ID) { event.preventDefault(); onActions({ oid: commit.id }); } }} onClick={() => { onSelect(commit.id); scroller.current?.focus(); }} onDoubleClick={onOpenDetails}>
-              <div className="commit-message">
-                {onTogglePick && commit.id !== WORKING_ID && <input className="graph-pick" type="checkbox" aria-label={`Cherry-pick ${commit.id.slice(0, 7)}`} checked={pickOrder?.includes(commit.id) ?? false} onClick={event => event.stopPropagation()} onChange={() => onTogglePick(commit.id)} />}
+              <div className="commit-refs">
                 {badges.map(ref => <span key={ref.fullName ?? ref.name} className={`ref-pill ${ref.kind === 'tag' ? 'tag-ref' : ref.kind === 'remote' ? 'remote-ref' : ref.name === 'main' ? 'main-ref' : ''}`}
+                  data-name={ref.name} title={ref.name}
                   role={onActions && ref.fullName ? 'button' : undefined} tabIndex={onActions && ref.fullName ? 0 : undefined} aria-label={onActions && ref.fullName ? `Graph actions for ${ref.name}` : undefined}
                   onKeyDown={event => { if (onActions && ref.fullName && (event.key === 'Enter' || event.key === ' ' || event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) { event.preventDefault(); event.stopPropagation(); onActions({ oid: commit.id, ref: ref.fullName }); } }}
                   data-current={!!headRef && ref.fullName === headRef} draggable={!!onActions && !!ref.fullName && ref.kind !== 'tag'}
                   onDragStart={event => { event.stopPropagation(); if (onActions && ref.fullName && ref.kind !== 'tag') { event.dataTransfer.clearData(COMMIT_DRAG_TYPE); event.dataTransfer.setData(REF_DRAG_TYPE, ref.fullName); event.dataTransfer.effectAllowed = 'copy'; } else event.preventDefault(); }} onDragEnd={stopDrag}
                   onDragOver={event => { if (ref.fullName === headRef && [REF_DRAG_TYPE, COMMIT_DRAG_TYPE].some(type => event.dataTransfer.types.includes(type))) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
                   onDrop={event => { event.preventDefault(); event.stopPropagation(); stopDrag(); const action = graphDropAction(event.dataTransfer, ref.fullName, headRef, commits.slice(0, loaded), refs); if (action) onActions?.(action); }}
-                  onContextMenu={event => { if (onActions && ref.fullName) { event.preventDefault(); event.stopPropagation(); onActions({ oid: commit.id, ref: ref.fullName }); } }} onClick={event => { if (onActions && ref.fullName) { event.stopPropagation(); onActions({ oid: commit.id, ref: ref.fullName }); } }}>
-                  {ref.kind === 'tag' ? <Tag size={10} /> : ref.kind === 'remote' ? <Globe2 size={10} /> : <GitBranch size={10} />}{ref.name}
+                  onContextMenu={event => { if (onActions && ref.fullName) { event.preventDefault(); event.stopPropagation(); onActions({ oid: commit.id, ref: ref.fullName }); } }} onClick={event => { if (onActions && ref.fullName) { event.stopPropagation(); if (ref.kind === 'local' && onSwitchBranch) { if (badgeAction.current) clearTimeout(badgeAction.current); if (event.detail < 2) badgeAction.current = setTimeout(() => { badgeAction.current = null; onActions({ oid: commit.id, ref: ref.fullName }); }, 500); } else onActions({ oid: commit.id, ref: ref.fullName }); } }}
+                  onDoubleClick={event => { if (ref.kind === 'local' && ref.fullName && onSwitchBranch) { event.stopPropagation(); if (badgeAction.current) clearTimeout(badgeAction.current); badgeAction.current = null; onSwitchBranch(ref.fullName); } }}>
+                  {ref.kind === 'tag' ? <Tag size={10} /> : ref.kind === 'remote' ? <Globe2 size={10} /> : <GitBranch size={10} />}<span className="ref-pill-name">{ref.name}</span>
                 </span>)}
+              </div>
+              <div className="commit-graph-cell" aria-hidden="true" />
+              <div className="commit-message">
+                {onTogglePick && commit.id !== WORKING_ID && <input className="graph-pick" type="checkbox" aria-label={`Cherry-pick ${commit.id.slice(0, 7)}`} checked={pickOrder?.includes(commit.id) ?? false} onClick={event => event.stopPropagation()} onChange={() => onTogglePick(commit.id)} />}
                 {commit.parents.length > 1 && <GitMerge size={13} className="merge-icon" />}
                 <span className="subject" title={commit.subject} draggable={!!onActions && commit.id !== WORKING_ID}
                   onDragStart={event => { event.stopPropagation(); if (!onActions || commit.id === WORKING_ID) { event.preventDefault(); return; } event.dataTransfer.clearData(REF_DRAG_TYPE); event.dataTransfer.setData(COMMIT_DRAG_TYPE, commit.id); event.dataTransfer.effectAllowed = 'copy'; }} onDragEnd={stopDrag}>{commit.subject}</span>
@@ -199,11 +225,11 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
           })}
         </div>
       </div>
-      <canvas ref={canvas} className="graph-canvas" aria-hidden="true" style={{ width: graphWidth, height }} />
+      <canvas ref={canvas} className="graph-canvas" aria-hidden="true" style={{ width: graphWidth, height, left: widths.refs - scrollLeft }} />
     </div>
     <div className="history-bottom"><span><span className="live-dot" />{loaded.toLocaleString()} loaded{shallow ? ' · Shallow repository boundary' : ''}</span>
       {(hasMore ?? loaded < commits.length) ? <button className="text-button" disabled={paging} onClick={onLoadMore}>{paging ? 'Loading…' : 'Load older history ↓'}</button> : <span className="muted">{shallow ? 'Available history loaded' : 'All history loaded'}</span>}
     </div>
-    <span id="history-keyboard-help" className="sr-only">Use Up and Down to select commits, Page Up and Page Down to move a page, Home and End to move to the loaded boundaries. Press Enter to open details.{onActions && ' Press Shift+F10 for commit actions. Tab to a branch badge and press Enter or Shift+F10 for branch actions.'}</span>
+    <span id="history-keyboard-help" className="sr-only">Use Up and Down to select commits, Page Up and Page Down to move a page, Home and End to move to the loaded boundaries. Press Enter to open details.{onActions && ' Press Shift+F10 for commit actions. Tab to a branch badge and press Enter or Shift+F10 for branch actions.'}{onSwitchBranch && ' Double-click a local branch badge to switch branches.'}</span>
   </div>;
 });

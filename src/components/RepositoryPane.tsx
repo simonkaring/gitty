@@ -16,7 +16,8 @@ import { PullRequestDialog } from './PullRequestDialog';
 import { RepositoryToolbar } from './RepositoryToolbar';
 import { RemoteStashDialog } from './RemoteStashDialog';
 import { toggleCommit } from '../model/operationUi';
-import { operationAndRefresh, readOperationSnapshot } from '../model/operationFlow';
+import { captureOperation, operationAndRefresh, readOperationSnapshot } from '../model/operationFlow';
+import { SwitchBlockedDialog } from './SwitchBlockedDialog';
 import { locationLabel, sessionKey } from '../model/tabs';
 import { useSettings } from '../model/settings';
 import { AUTO_FETCH_CHECK, autoFetchDue, isFetchingAction, type FetchStatus } from '../model/autoFetch';
@@ -67,6 +68,8 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
   const [operation, setOperation] = useState<OperationState | null>(null);
   const operationFingerprint = useRef('');
   const [actionContext, setActionContext] = useState<ActionContext | null>(null);
+  const [blockedSwitch, setBlockedSwitch] = useState<{ branch: string; ref: string; oid: string; reason: string } | null>(null);
+  const switchPending = useRef(false);
   const [conflictPath, setConflictPath] = useState<string | null>(null);
   const [prSource, setPrSource] = useState<string | null>(null);
   const [pickOrder, setPickOrder] = useState<string[]>([]);
@@ -120,7 +123,7 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
   // dialog-open state so the two can't drift apart. Any in-flight write
   // (operationWrite/remoteWrite) is owned by this component, not by the
   // dialog, so it keeps running and its result still lands on this tab.
-  useEffect(() => { if (!active) { setActionContext(null); setConflictPath(null); setPrSource(null); setStashOpen(false); } }, [active]);
+  useEffect(() => { if (!active) { setActionContext(null); setBlockedSwitch(null); setConflictPath(null); setPrSource(null); setStashOpen(false); } }, [active]);
   const close = (handle: string) => native('repository_close', { handle }).catch(() => {});
   useEffect(() => () => { epoch.current++; revealToken.current++; if (session.current) void close(session.current.session.handle); session.current = null; }, []);
   function installHistory(items: CommitSummary[], next: string | null) { history.current = items; nextCursor.current = next; setCommits(items); setCursor(next); }
@@ -224,6 +227,22 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
       if (outcome.refreshError) { blockedRef.current = true; setMutationBlocked(true); }
       if (outcome.error || outcome.refreshError) throw new Error([outcome.error, outcome.refreshError && `Refresh failed: ${outcome.refreshError}. Further writes are blocked until refresh succeeds.`].filter(Boolean).join('\n'));
     } finally { if (isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
+  }
+  async function switchBranch(ref: string) {
+    const current = session.current;
+    const target = current?.refs.find(item => item.kind === 'local' && item.fullName === ref);
+    if (!current || !target || ref === current.session.headRef || switchPending.current) return;
+    if (mutationLock.current || blockedRef.current) { setBlockedSwitch({ branch: target.name, ref, oid: target.commitId, reason: blockedRef.current ? 'Refresh the repository before another write.' : 'Another repository operation is running. Wait for it to finish.' }); return; }
+    switchPending.current = true;
+    const token = epoch.current;
+    try {
+      const request = await captureOperation(current.session.handle, { kind: 'switchBranch', branch: ref });
+      if (epoch.current !== token || session.current?.session.handle !== current.session.handle) return;
+      await operationWrite('repository_run_operation', { request });
+      if (epoch.current === token) setNotice(`Switched to ${target.name}.`);
+    } catch (error) {
+      if (epoch.current === token) setBlockedSwitch({ branch: target.name, ref, oid: target.commitId, reason: errorMessage(error) });
+    } finally { switchPending.current = false; }
   }
   /** Same write+refresh lifecycle as `operationWrite`, for the remote/stash
    * IPC contract, which returns human-readable `output` text bound to this
@@ -359,7 +378,7 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
         <input ref={search} aria-label="Search full history" placeholder="Search commits…" value={text} onChange={event => setText(event.target.value)} />
         {text ? <button className="icon-button" aria-label="Clear search" onClick={() => setText('')}><X size={13} /></button> : <kbd>/</kbd>}
       </div>
-      <select aria-label="Branch scope" value={branch} onChange={event => setBranch(event.target.value)}>
+      <select aria-label="Branch scope" title={branch ? state?.refs.find(ref => ref.fullName === branch)?.name ?? branch : 'All branches'} value={branch} onChange={event => setBranch(event.target.value)}>
         <option value="">All branches</option>
         {state?.refs.map(ref => <option key={ref.fullName} value={ref.fullName}>{ref.name}</option>)}
       </select>
@@ -399,7 +418,7 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
         onDragStart={event => { event.stopPropagation(); if (ref.kind === 'tag') { event.preventDefault(); return; } event.dataTransfer.clearData(COMMIT_DRAG_TYPE); event.dataTransfer.setData(REF_DRAG_TYPE, ref.fullName); event.dataTransfer.effectAllowed = 'copy'; }}
         onDragOver={event => { if (ref.fullName === state.session.headRef && [REF_DRAG_TYPE, COMMIT_DRAG_TYPE].some(type => event.dataTransfer.types.includes(type))) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
         onDrop={event => { event.preventDefault(); event.stopPropagation(); const action = graphDropAction(event.dataTransfer, ref.fullName, state.session.headRef, commits, state.refs); if (action) setActionContext(action); }}
-        onClick={() => reveal(ref.commitId)} onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); setActionContext({ oid: ref.commitId, ref: ref.fullName }); } }}><Icon size={15} /><span>{ref.name}</span>{ref.fullName === state.session.headRef && <span className="current-branch-dot" />}</button><button aria-label={`Actions for ${ref.name}`} onClick={() => setActionContext({ oid: ref.commitId, ref: ref.fullName })}>…</button></div>)}{!refs.length && <p className="empty-category">No references</p>}</details>; })}{state.remotes.length > 0 && <details className="reference-group"><summary>Remotes<span className="count">{state.remotes.length}</span></summary>{state.remotes.map(remote => <p key={remote}>{remote}</p>)}</details>}<div className="sidebar-bottom"><span className="eyebrow">LOCAL FIRST</span><p>Repository data stays on your machine.</p></div></aside><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
+        onClick={() => reveal(ref.commitId)} onDoubleClick={() => { if (ref.kind === 'local') void switchBranch(ref.fullName); }} onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); setActionContext({ oid: ref.commitId, ref: ref.fullName }); } }}><Icon size={15} /><span>{ref.name}</span>{ref.fullName === state.session.headRef && <span className="current-branch-dot" />}</button><button aria-label={`Actions for ${ref.name}`} onClick={() => setActionContext({ oid: ref.commitId, ref: ref.fullName })}>…</button></div>)}{!refs.length && <p className="empty-category">No references</p>}</details>; })}{state.remotes.length > 0 && <details className="reference-group"><summary>Remotes<span className="count">{state.remotes.length}</span></summary>{state.remotes.map(remote => <p key={remote}>{remote}</p>)}</details>}<div className="sidebar-bottom"><span className="eyebrow">LOCAL FIRST</span><p>Repository data stays on your machine.</p></div></aside><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
       <div className="workspace-main">
         {!sidebarOpen && filters}
         <div className="history-workspace">
@@ -443,7 +462,7 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
             <section className="history-pane" aria-label="Repository history">
               {filtering && <div className="native-search-results"><p role="status">{searchBusy ? 'Searching full history…' : `${result?.commits.length ?? 0} matches${result?.truncated ? ' · Results truncated; narrow the query' : ''}`} · Ancestry preserved</p>{searchError && <p role="alert">{searchError} <button onClick={() => setSearchRetry(value => value + 1)}>Retry search</button></p>}<div>{result?.commits.map(commit => <button key={commit.id} disabled={busy} onClick={() => reveal(commit.id)}>{commit.id.slice(0, 7)} {commit.subject}</button>)}</div></div>}
               {!graphCommits.length && <p className="native-banner">This repository has no commits or working changes.</p>}
-              <HistoryGraph ref={graph} commits={graphCommits} layout={layout} refs={state.refs} selectedId={selected} head={state.session.head ?? ''} headRef={state.session.headRef} onActions={context => setActionContext(context)} pickOrder={pickOrder} onTogglePick={pickMode ? id => setPickOrder(order => toggleCommit(order, id)) : undefined} loaded={graphCommits.length} matches={matches} onSelect={id => reveal(id)} onLoadMore={() => void load()} onOpenDetails={() => setInspectorOpen(true)} theme={theme} hasMore={!!cursor} paging={busy} shallow={state.session.shallow} />
+              <HistoryGraph ref={graph} commits={graphCommits} layout={layout} refs={state.refs} selectedId={selected} head={state.session.head ?? ''} headRef={state.session.headRef} onActions={context => setActionContext(context)} onSwitchBranch={ref => void switchBranch(ref)} pickOrder={pickOrder} onTogglePick={pickMode ? id => setPickOrder(order => toggleCommit(order, id)) : undefined} loaded={graphCommits.length} matches={matches} onSelect={id => reveal(id)} onLoadMore={() => void load()} onOpenDetails={() => setInspectorOpen(true)} theme={theme} hasMore={!!cursor} paging={busy} shallow={state.session.shallow} />
               <div className="native-repo-meta">{cursor ? 'Unloaded ancestry continues below. Load older history to reveal parents.' : state.session.shallow ? 'Shallow boundary: earlier ancestry is unavailable locally.' : 'End of available history.'}</div>
             </section>
           )}
@@ -493,6 +512,7 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
     </main>}
     <footer className="statusbar"><span><span className="live-dot" />{mutationBusy ? 'Updating repository…' : 'Local workspace · automatic refresh'}</span><span>{state ? `${commits.length} commits loaded` : 'No repository open'}</span></footer>
     {state && actionContext && <OperationDialog key={state.session.handle} state={state} operation={operation} context={actionContext} commits={commits} busy={mutationBusy || mutationBlocked} onWrite={operationWrite} onClose={() => setActionContext(null)} onCompare={source => { setBase(state.session.head ?? ''); setTarget(source); setInspectorOpen(true); setActionContext(null); }} onPullRequest={source => { setPrSource(source); setActionContext(null); }} />}
+    {state && blockedSwitch && <SwitchBlockedDialog branch={blockedSwitch.branch} reason={blockedSwitch.reason} hasChanges={!!status?.entries.length} onReview={() => { setSelected(WORKING_ID); setInspectorOpen(true); setBlockedSwitch(null); }} onOperations={() => { setActionContext({ oid: blockedSwitch.oid, ref: blockedSwitch.ref, initial: 'switchBranch' }); setBlockedSwitch(null); }} onClose={() => setBlockedSwitch(null)} />}
     {state && conflictPath && <ConflictEditor key={`${state.session.handle}:${conflictPath}`} handle={state.session.handle} path={conflictPath} revision={revision} busy={mutationBusy || mutationBlocked} onWrite={operationWrite} onClose={() => setConflictPath(null)} />}
     {state && prSource && <PullRequestDialog key={state.session.handle} handle={state.session.handle} source={prSource} onClose={() => setPrSource(null)} />}
     {state && stashOpen && <RemoteStashDialog key={`${state.session.handle}:stash`} handle={state.session.handle} onWrite={remoteWrite} onClose={() => setStashOpen(false)} notify={setNotice} />}

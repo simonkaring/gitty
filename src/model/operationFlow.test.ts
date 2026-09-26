@@ -23,6 +23,16 @@ it('rejects a review raced by an external mutation', async () => {
   const invoke = vi.fn().mockResolvedValueOnce(op).mockResolvedValueOnce(state).mockResolvedValueOnce({ ...op, fingerprint: 'new-state' });
   await expect(captureOperation('h', { kind: 'merge', source: 'topic', noFastForward: false }, invoke as typeof native)).rejects.toThrow(/changed during review/);
 });
+it('captures a local branch switch for immediate execution but refuses an active operation', async () => {
+  const reads = vi.fn().mockResolvedValueOnce(op).mockResolvedValueOnce(state).mockResolvedValueOnce(op);
+  const request = await captureOperation('handle', { kind: 'switchBranch', branch: 'refs/heads/topic' }, reads as typeof native);
+  expect(request).toMatchObject({ action: { kind: 'switchBranch', branch: 'refs/heads/topic' }, expectedHeadRef: 'refs/heads/main', expectedOperation: 'reviewed' });
+  const invoke = vi.fn().mockResolvedValue(undefined);
+  await operationAndRefresh('handle', 'repository_run_operation', { request }, async () => {}, () => true, invoke as typeof native);
+  expect(invoke).toHaveBeenCalledWith('repository_run_operation', { handle: 'handle', request });
+  const blocked = vi.fn().mockResolvedValueOnce({ ...op, kind: 'merge' }).mockResolvedValueOnce(state).mockResolvedValueOnce({ ...op, kind: 'merge' });
+  await expect(captureOperation('handle', { kind: 'switchBranch', branch: 'refs/heads/topic' }, blocked as typeof native)).rejects.toThrow(/Finish or abort/);
+});
 it('awaits refresh after uncertain writes and reports refresh failure for mutation blocking', async () => {
   let finish!: () => void;
   const reload = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));

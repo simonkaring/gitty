@@ -198,7 +198,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
               const partial = groups.staged.some(item => item.path === entry.path) && groups.unstaged.some(item => item.path === entry.path);
               const isSelected = active?.group === kind && active.path === entry.path;
               return <div className={`working-file ${isSelected ? 'selected' : ''}`} key={entry.path}>
-                <button className="working-file-select" aria-pressed={isSelected} aria-label={`${labels[kind]}: ${entry.path}`} onClick={() => setSelection({ group: kind, path: entry.path })}>
+                <button className="working-file-select" aria-pressed={isSelected} aria-label={`${labels[kind]}: ${entry.path}`} onClick={() => setSelection(current => current?.group === kind && current.path === entry.path ? null : { group: kind, path: entry.path })}>
                   <FileCode2 size={15} />
                   <span>
                     <strong>{entry.path}</strong>

@@ -13,6 +13,7 @@ export interface SidebarProps {
   refs: GitRef[];
   onRepository?: (id: string) => void;
   onJump: (id: string, name?: string) => void;
+  onSwitchBranch?: (name: string) => void;
   onAdd?: () => void;
   activeRef: string | null;
   view?: 'history' | 'working';
@@ -35,6 +36,7 @@ export function Sidebar({
   repository,
   refs,
   onJump,
+  onSwitchBranch,
   activeRef,
   commitCount,
   query,
@@ -111,7 +113,7 @@ export function Sidebar({
       const Icon = kind === 'tag' ? Tag : kind === 'remote' ? Globe2 : GitBranch;
       return <section className="refs-section" key={section}>
         <button className="refs-heading" aria-expanded={!closed} aria-controls={`refs-${kind}`} onClick={() => toggle(section)}>{closed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}<span>{section}</span><span className="count">{entries.length}</span></button>
-        {!closed && <div id={`refs-${kind}`} className="refs-list">{entries.map(ref => <button key={ref.name} title={`Jump to ${ref.name}`} className={`ref-item ${activeRef === ref.name ? 'active' : ''}`} onClick={() => onJump(ref.commitId, ref.name)}><Icon size={13} /><span>{ref.name}</span>{ref.name === 'main' && <span className="current-branch-dot" />}</button>)}</div>}
+        {!closed && <div id={`refs-${kind}`} className="refs-list">{entries.map(ref => <button key={ref.name} title={`Jump to ${ref.name}${kind === 'local' ? ' · double-click to switch' : ''}`} className={`ref-item ${activeRef === ref.name ? 'active' : ''}`} onClick={() => onJump(ref.commitId, ref.name)} onDoubleClick={() => { if (kind === 'local') onSwitchBranch?.(ref.name); }}><Icon size={13} /><span>{ref.name}</span>{ref.name === 'main' && <span className="current-branch-dot" />}</button>)}</div>}
       </section>;
     })}
     {historyTitle ?? (commitCount !== undefined && (
