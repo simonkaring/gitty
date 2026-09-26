@@ -286,9 +286,9 @@ capability is exposed):
 - `repository_resolve_conflict({handle, path, fingerprint, resolution}) -> void`
 - `repository_remotes({handle}) -> RemoteInfo[]`
 - `open_external_url({url}) -> void`
+- `editor_reply({requestId, content}) -> void`
 
-Rust serde names, nullability and tagged unions match that contract. No frontend
-contract changes are required. `currentUpstream` is the remote-qualified short
+Rust serde names, nullability and tagged unions match that contract. `currentUpstream` is the remote-qualified short
 name, such as `origin/main`. The singular fetch/push URL fields report Git's
 effective first URL; all locally known remote branches are included, except the
 remote's symbolic `HEAD` alias. These reads do not fetch or contact remotes.
@@ -316,6 +316,15 @@ remote's symbolic `HEAD` alias. These reads do not fetch or contact remotes.
   `mergeHistory` rather than silently flattening it. Detached merge/rebase
   requests are rejected. Ordered cherry-picks accept 1–100 concrete commits and
   validate the optional 1-based mainline against every merge commit first.
+- `interactiveRebase` accepts an ancestor `onto` and a complete permutation of
+  1–100 concrete, linear commits with `pick`, `drop`, `reword`, `squash`, or `fixup`.
+  It rejects duplicates, missing commits, merge ranges, an all-drop plan, or a
+  squash/fixup without an earlier retained commit. The reviewed fingerprint and
+  HEAD are checked under the mutation lock. A per-mutation authenticated
+  `GIT_SEQUENCE_EDITOR` bridge verifies Git's generated pick list matches every
+  reviewed commit before rewriting the todo; it does not accept `exec` or
+  user-supplied patch text. Native `GIT_EDITOR` prompts handle message edits.
+  WSL interactive rebase creation remains unsupported.
 - Tags never overwrite existing refs. A supplied message creates an annotated
   tag and honors signing configuration; no message creates a lightweight tag
   (explicit `--no-sign` avoids `tag.gpgSign` changing its type).
@@ -324,14 +333,25 @@ remote's symbolic `HEAD` alias. These reads do not fetch or contact remotes.
   progress reads Git's step/total; sequencer progress combines completed commits
   and its remaining todo. A stale `REBASE_HEAD` alone is not an active rebase.
   Apply-backend rebases, `git am`, bisect and unknown sequencers are explicitly
-  unsupported. Non-pick interactive/merge-preserving rebase todo commands must
-  be continued in Git; they can still be aborted here.
+  unsupported. Supported rebase todo instructions are `pick`, `reword`, `squash`,
+  and `fixup`. Directives including `exec`/`x`, `break`, `label`, `reset`, `merge`,
+  `update-ref` and unknown instructions are rejected with `unsupportedOperation`;
+  they must be continued in Git, but can still be aborted here.
   Rebase abort/skip conservatively refuses non-conflicted staged/unstaged changes
   it cannot distinguish from unrelated work, including some staged resolutions.
-- Hook and signing settings remain active. Constant editor overrides make
-  continuation noninteractive. Git receives explicit argv and bounded stdin;
-  no user text is interpolated into a shell. Git's configured hooks, signing
-  programs and filters are still allowed to run as configured by the user.
+- Hook and signing settings remain active. Non-editor operations use constant
+  editor overrides to stay noninteractive. For eligible native rebase continuation
+  requiring message edits (`reword`, `squash`), an authenticated loopback TCP
+  `GIT_EDITOR` bridge prompts the desktop app without exposing filesystem paths.
+  Each concurrent rebase receives a distinct helper token and pending prompts
+  are cancelled only for their own mutation. Message files are checked against
+  their initial contents and replaced within a pinned parent directory, so a
+  symlink swap cannot redirect an editor save outside the Git directory.
+  Prompts have a 90-second response deadline. User cancellation, timeout, or
+  tampered files on disk cause the helper to exit nonzero, safely interrupting the
+  Git write without modifying the message. WSL Git cannot run native editor helpers;
+  interactive rebase continuation on WSL repositories is refused with an explanation
+  to finish in Git.
 - A conflict-producing Git exit returns `OperationResult` with output, actual
   HEAD and refreshed operation state. Other Git failures return `{code,message}`.
   The frontend must refresh repository/status/operation state in `finally` on
@@ -365,8 +385,14 @@ remote's symbolic `HEAD` alias. These reads do not fetch or contact remotes.
   requires Python 3**; Git operations otherwise use the existing WSL Git transport.
 - Ordinary add/add and modify/delete conflicts work, as do independent regular
   file paths in rename conflicts. Git still determines rename relationships
-  after staging. Symlink, submodule, directory/file and special-file conflicts,
-  missing parent directories, and ambiguous path spellings receive explicit
+  after staging. On Unix and WSL, symlink conflicts support exact stage-2/stage-3 blob/mode selection
+  or deletion, installing the link without following its target; text editing and
+  staging an existing symlink as the resolution are unavailable. When both
+  submodule sides are gitlinks and the working path is a directory or absent,
+  choosing one side installs its exact OID in the index without modifying the
+  nested worktree; deletion and other submodule path layouts remain unsupported.
+  Directory/file and other special-file conflicts, missing parent directories,
+  and ambiguous path spellings receive explicit
   unsupported errors rather than unsafe editing. Conflict paths cannot traverse
   `.git`, `..`, symlink ancestors, Windows alternate streams or path separators.
 - A Git staging/index failure after the working replacement can leave an edited
@@ -440,6 +466,6 @@ Under WSL, the Git-directory listing used for lock and operation detection runs
 `find -maxdepth 1` in the distribution and therefore needs the same GNU `find`
 the browser already requires; it is not covered by the macOS suite. Graph
 operations, regular-file conflict resolution, hunk staging, stashes, remote
-operations, amend, and cloning are described above. Line staging and richer
-authentication setup remain future work. The current suite includes 113 passing
-tests on macOS.
+operations, amend, and cloning are described above. Line staging and a scoped
+WSL askpass bridge have local tests; Windows/WSL runtime checks remain open.
+The current suite includes 137 passing library tests and two binary tests on macOS.

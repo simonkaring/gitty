@@ -18,7 +18,7 @@ export function actionReason(action: GitAction, session: RepositorySession, oper
   if (action.kind === 'createTag') return action.name.trim() && action.oid ? '' : 'Enter a tag name and commit.';
   if (action.kind === 'cherryPick') return action.commits.length ? '' : 'Choose commits in the order they should be applied.';
   if (!session.headRef) return 'Check out a local branch first.';
-  const source = action.kind === 'merge' ? action.source : action.kind === 'rebase' ? action.onto : '';
+  const source = action.kind === 'merge' ? action.source : action.kind === 'rebase' || action.kind === 'interactiveRebase' ? action.onto : '';
   return source && source !== session.headRef && source !== session.headRef.replace(/^refs\/heads\//, '') ? '' : 'Choose a source different from the current branch.';
 }
 
@@ -26,7 +26,7 @@ export function actionReason(action: GitAction, session: RepositorySession, oper
 export function toggleCommit(order: string[], oid: string): string[] {
   return order.includes(oid) ? order.filter(value => value !== oid) : [...order, oid];
 }
-export function moveCommit(order: string[], index: number, delta: number): string[] {
+export function moveCommit<T>(order: T[], index: number, delta: number): T[] {
   const next = [...order], destination = index + delta;
   if (index < 0 || index >= order.length || destination < 0 || destination >= order.length) return next;
   [next[index], next[destination]] = [next[destination], next[index]];

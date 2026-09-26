@@ -61,7 +61,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const end = Math.min(loaded, Math.ceil((scrollTop + height) / ROW_HEIGHT) + 8);
   const selectedIndex = commits.findIndex(commit => commit.id === selectedId);
   const loadedIds = useMemo(() => new Set(commits.slice(0, loaded).map(commit => commit.id)), [commits, loaded]);
-  const visibleEdges = useMemo(() => indexEdges(layout.edges), [layout.edges]);
+  const visibleEdges = useMemo(() => indexEdges(layout.edges, layout.edgeMaxTo), [layout.edges, layout.edgeMaxTo]);
   const colors = useMemo(() => Array.from({ length: 8 }, (_, index) => theme.colors[`graphLane${index + 1}`]), [theme]);
 
   function scrollTo(row: number) {

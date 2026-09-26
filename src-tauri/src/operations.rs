@@ -14,8 +14,9 @@ impl Service {
         &self,
         handle: &str,
         request: OperationRequest,
+        editor: Option<&crate::editor::EditorRegistry>,
     ) -> Result<OperationResult> {
-        self.mutate(handle, |repo| repo.run_operation(request))
+        self.mutate(handle, |repo| repo.run_operation(request, editor))
     }
     pub fn resolve_conflict(
         &self,
@@ -353,7 +354,34 @@ impl Repository {
         }
         Ok(())
     }
-    fn run_operation(&self, request: OperationRequest) -> Result<OperationResult> {
+    fn validate_rebase_todo_lines<'a>(lines: impl Iterator<Item = &'a str>) -> Result<bool> {
+        let mut has_interactive = false;
+        for line in lines {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let first_word = line.split_whitespace().next().unwrap_or("");
+            match first_word {
+                "pick" | "drop" => {}
+                "reword" | "squash" | "fixup" => {
+                    has_interactive = true;
+                }
+                _ => {
+                    return Err(Error::new(
+                        "unsupportedOperation",
+                        "This external rebase contains an unsupported directive (such as exec, break, label, reset, merge, update-ref, or unknown/abbreviated commands). Continue it in Git, or abort it here.",
+                    ));
+                }
+            }
+        }
+        Ok(has_interactive)
+    }
+    fn run_operation(
+        &self,
+        request: OperationRequest,
+        editor: Option<&crate::editor::EditorRegistry>,
+    ) -> Result<OperationResult> {
         self.operation_writable()?;
         let before = self.operation_state()?;
         let state = self.state()?;
@@ -371,6 +399,8 @@ impl Repository {
             GitAction::Continue | GitAction::Skip | GitAction::Abort
         );
         let aborting = matches!(request.action, GitAction::Abort);
+        let is_continue = matches!(request.action, GitAction::Continue);
+        let is_interactive_rebase = matches!(request.action, GitAction::InteractiveRebase { .. });
         if !control && before.kind != OperationKind::None {
             return Err(Error::new("operationInProgress", before.label));
         }
@@ -378,6 +408,7 @@ impl Repository {
             return Err(Error::new("dirtyWorktree", "Commit or explicitly stash all staged, unstaged and untracked changes first. Gitty never automatically stashes."));
         }
         let mut input = Vec::new();
+        let mut rebase_plan = None;
         let mut a = args(&[
             "-c",
             "core.editor=true",
@@ -460,6 +491,95 @@ impl Repository {
                 self.protect_untracked(&targets)?;
                 a.extend(args(&[
                     "rebase",
+                    "--merge",
+                    "--no-autostash",
+                    "--no-update-refs",
+                    "--no-rebase-merges",
+                    "--no-autosquash",
+                    &oid,
+                ]));
+            }
+            GitAction::InteractiveRebase { onto, steps } => {
+                if state.session.head_ref.is_none()
+                    || !matches!(self.location(), RepositoryLocation::Native { .. })
+                {
+                    return Err(Error::new(
+                        "unsupportedOperation",
+                        "Interactive rebase requires a checked-out native branch.",
+                    ));
+                }
+                if editor.is_none() {
+                    return Err(Error::new(
+                        "unsupportedOperation",
+                        "Interactive rebase requires the native editor bridge.",
+                    ));
+                }
+                let oid = resolve(self.location(), &onto)?;
+                if self
+                    .check(&["merge-base", "--is-ancestor", &oid, "HEAD"])?
+                    .code
+                    != Some(0)
+                {
+                    return Err(Error::new(
+                        "invalidRequest",
+                        "Choose an ancestor of HEAD as the interactive rebase base.",
+                    ));
+                }
+                let replay =
+                    self.check_text(&["rev-list", "--reverse", &format!("{oid}..HEAD"), "--"])?;
+                let originals: Vec<_> = replay.lines().collect();
+                if originals.is_empty() || originals.len() > 100 || steps.len() != originals.len() {
+                    return Err(Error::new(
+                        "invalidRequest",
+                        "Review every commit in a linear range of 1–100 commits.",
+                    ));
+                }
+                let merges =
+                    self.check_text(&["rev-list", "--merges", &format!("{oid}..HEAD"), "--"])?;
+                if !merges.is_empty() {
+                    return Err(Error::new("mergeHistory", "Interactive rebase does not flatten merge commits; use Git with --rebase-merges."));
+                }
+                let mut seen = std::collections::HashSet::new();
+                let mut applied = 0;
+                for step in &steps {
+                    if !originals.contains(&step.oid.as_str()) || !seen.insert(step.oid.as_str()) {
+                        return Err(Error::new(
+                            "invalidRequest",
+                            "The reviewed rebase commits no longer match the selected range.",
+                        ));
+                    }
+                    if matches!(
+                        step.instruction,
+                        RebaseInstruction::Squash | RebaseInstruction::Fixup
+                    ) && applied == 0
+                    {
+                        return Err(Error::new(
+                            "invalidRequest",
+                            "A squash or fixup needs an earlier retained commit.",
+                        ));
+                    }
+                    if step.instruction != RebaseInstruction::Drop {
+                        applied += 1;
+                    }
+                }
+                if applied == 0 {
+                    return Err(Error::new(
+                        "invalidRequest",
+                        "Retain at least one commit in the rebase plan.",
+                    ));
+                }
+                let mut targets = originals
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>();
+                targets.push(oid.clone());
+                self.protect_untracked(&targets)?;
+                rebase_plan = Some(steps);
+                a.extend(args(&[
+                    "-c",
+                    "rebase.abbreviateCommands=false",
+                    "rebase",
+                    "--interactive",
                     "--merge",
                     "--no-autostash",
                     "--no-update-refs",
@@ -571,16 +691,28 @@ impl Repository {
                     };
                     self.protect_untracked(&[target])?;
                 }
-                // Do not execute arbitrary exec commands in an externally-created interactive todo.
+                // Validate rebase todo instructions and enforce editor requirements
                 if before.kind == OperationKind::Rebase && flag != "--abort" {
+                    let mut interactive = false;
                     if let Some(todo) = self.metadata("rebase-merge/git-rebase-todo")? {
-                        let todo = process::text(todo)?;
-                        if todo.lines().any(|l| {
-                            let l = l.trim();
-                            !l.is_empty() && !l.starts_with('#') && !l.starts_with("pick ")
-                        }) {
-                            return Err(Error::new("unsupportedOperation", "This external rebase has an interactive or merge-preserving todo. Continue it in Git, or abort it here."));
-                        }
+                        let text = process::text(todo)?;
+                        interactive |= Self::validate_rebase_todo_lines(text.lines())?;
+                    }
+                    if let Some(done) = self.metadata("rebase-merge/done")? {
+                        let text = process::text(done)?;
+                        interactive |= Self::validate_rebase_todo_lines(text.lines())?;
+                    }
+                    if matches!(self.location(), RepositoryLocation::Wsl { .. }) && interactive {
+                        return Err(Error::new(
+                            "unsupportedOperation",
+                            "Interactive rebase continuation is currently not supported for WSL repositories. Finish this action in Git.",
+                        ));
+                    }
+                    if interactive && editor.is_none() {
+                        return Err(Error::new(
+                            "unsupportedOperation",
+                            "Interactive rebase continuation requires the editor bridge.",
+                        ));
                     }
                 }
                 if before.kind != OperationKind::Merge {
@@ -600,7 +732,7 @@ impl Repository {
                             for line in process::text(todo)?.lines() {
                                 let mut words = line.split_whitespace();
                                 match (words.next(), words.next()) {
-                                    (Some("pick"), Some(id)) => {
+                                    (Some("pick" | "reword" | "squash" | "fixup"), Some(id)) => {
                                         targets.push(resolve(self.location(), id)?)
                                     }
                                     (Some("revert"), Some(id)) => {
@@ -618,7 +750,33 @@ impl Repository {
                 a.extend(args(&[command, flag]));
             }
         }
-        let output = self.write(&a, &[], &input, 65536)?;
+        let mut env = Vec::new();
+        let mut _editor_guard = None;
+        if (before.kind == OperationKind::Rebase && is_continue) || is_interactive_rebase {
+            if let (RepositoryLocation::Native { .. }, Some(editor)) = (self.location(), editor) {
+                env.push((
+                    "GIT_EDITOR".into(),
+                    crate::askpass::shell_quote(&editor.script_path.to_string_lossy()),
+                ));
+                env.push(("GITTY_EDITOR_PORT".into(), editor.port.to_string()));
+                _editor_guard = Some(editor.start_with_plan(
+                    &self.session.git_dir,
+                    &self.session.common_dir,
+                    rebase_plan,
+                ));
+                env.push((
+                    "GITTY_EDITOR_TOKEN".into(),
+                    _editor_guard.as_ref().unwrap().token().into(),
+                ));
+                if is_interactive_rebase {
+                    env.push((
+                        "GIT_SEQUENCE_EDITOR".into(),
+                        crate::askpass::shell_quote(&editor.script_path.to_string_lossy()),
+                    ));
+                }
+            }
+        }
+        let output = self.write(&a, &env, &input, 65536)?;
         let operation = self.operation_state().map_err(|e| {
             Error::new(
                 "mutationUnverified",

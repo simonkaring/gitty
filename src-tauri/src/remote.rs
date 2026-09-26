@@ -179,11 +179,8 @@ impl Repository {
         action: RemoteAction,
         askpass: Option<&crate::askpass::AskpassRegistry>,
     ) -> Result<ActionOutput> {
-        // Native askpass scripts cannot run inside a WSL distribution. Keep
-        // Linux credential helpers and SSH agents available there, but never
-        // hand Linux Git an unusable Windows script path.
         let wsl = matches!(self.location(), RepositoryLocation::Wsl { .. });
-        let askpass = if wsl { None } else { askpass };
+        let interactive = !matches!(action, RemoteAction::BackgroundFetch);
         self.require_writable()?;
         if !self.unmerged()?.is_empty() {
             return Err(Error::new(
@@ -228,6 +225,26 @@ impl Repository {
                 .and_then(|b| b.strip_prefix("refs/heads/"))
         } else {
             None
+        };
+
+        #[cfg(windows)]
+        let wsl_bridge =
+            if let (true, RepositoryLocation::Wsl { distribution, .. }, Some(registry)) =
+                (interactive, self.location(), askpass)
+            {
+                crate::askpass::wsl_executable_path(distribution)
+                    .ok()
+                    .map(|path| (path, registry.start_operation()))
+            } else {
+                None
+            };
+        #[cfg(not(windows))]
+        let wsl_bridge: Option<(String, crate::askpass::AskpassGuard<'_>)> = None;
+        let network = || match (&wsl_bridge, askpass) {
+            (Some((path, guard)), Some(registry)) => {
+                network_args_wsl(path, registry, guard.token())
+            }
+            _ => network_args(interactive, if wsl { None } else { askpass }),
         };
 
         match &action {
@@ -485,8 +502,7 @@ pub(crate) fn network_args(
 
     let mut env = Vec::new();
 
-    if interactive && askpass_registry.is_some() {
-        let registry = askpass_registry.unwrap();
+    if let Some(registry) = askpass_registry.filter(|_| interactive) {
         a.extend(args(&[
             "-c",
             "core.sshCommand=ssh -oStrictHostKeyChecking=yes",

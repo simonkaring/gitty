@@ -18,9 +18,11 @@ export type GitAction =
   | { kind: 'switchBranch'; branch: string }
   | { kind: 'merge'; source: string; noFastForward: boolean }
   | { kind: 'rebase'; onto: string }
+  | { kind: 'interactiveRebase'; onto: string; steps: RebaseStep[] }
   | { kind: 'cherryPick'; commits: string[]; mainline?: number }
   | { kind: 'createTag'; name: string; oid: string; message?: string }
   | { kind: 'continue' | 'skip' | 'abort' };
+export interface RebaseStep { oid: string; instruction: 'pick' | 'drop' | 'reword' | 'squash' | 'fixup' }
 export interface OperationRequest {
   action: GitAction;
   expectedHead: string | null;
@@ -52,6 +54,12 @@ export interface RemoteInfo {
   currentUpstream: string | null;
 }
 
+export interface EditorPromptPayload {
+  requestId: number;
+  fileName: string;
+  content: string;
+}
+
 /* Commands (camelCase arguments):
  * repository_operation_state({handle}) -> OperationState
  * repository_run_operation({handle, request: OperationRequest}) -> OperationResult
@@ -59,5 +67,6 @@ export interface RemoteInfo {
  * repository_resolve_conflict({handle, path, fingerprint, resolution: ConflictResolution}) -> void
  * repository_remotes({handle}) -> RemoteInfo[]
  * open_external_url({url}) -> void
+ * editor_reply({requestId: number, content: string | null}) -> void
  * All writes use repository mutation serialization and are followed by frontend refresh.
  */

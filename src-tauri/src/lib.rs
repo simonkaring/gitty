@@ -1,4 +1,5 @@
 mod askpass;
+pub mod editor;
 
 mod clone;
 mod clone_dto;
@@ -91,10 +92,15 @@ async fn repository_operation_state(
 #[tauri::command]
 async fn repository_run_operation(
     state: tauri::State<'_, Shared>,
+    editor: tauri::State<'_, Arc<crate::editor::EditorRegistry>>,
     handle: String,
     request: OperationRequest,
 ) -> Result<OperationResult> {
-    with_service(state, move |s| s.run_operation(&handle, request)).await
+    let editor = editor.inner().clone();
+    with_service(state, move |s| {
+        s.run_operation(&handle, request, Some(&editor))
+    })
+    .await
 }
 #[tauri::command]
 async fn repository_conflict_file(
@@ -360,11 +366,18 @@ pub fn run() {
         .setup(|app| {
             app.manage(Arc::new(Service::new(app.path().app_data_dir()?)));
             askpass::init(app.handle().clone())?;
+            editor::init(app.handle().clone())?;
             Ok(())
         })
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                 window.state::<Shared>().cancel_all_clones();
+                if let Some(askpass) = window.try_state::<Arc<askpass::AskpassRegistry>>() {
+                    askpass.cancel_all();
+                }
+                if let Some(editor) = window.try_state::<Arc<editor::EditorRegistry>>() {
+                    editor.cancel_all();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -400,6 +413,7 @@ pub fn run() {
             repository_stash_action,
             open_external_url,
             askpass::repository_provide_password,
+            editor::editor_reply,
             wsl_distributions,
             wsl_directories
         ])

@@ -1,7 +1,20 @@
 export interface GraphCommit { id: string; parents: readonly string[] }
 export interface GraphNode { id: string; row: number; lane: number }
 export interface GraphEdge { from: string; to: string; fromRow: number; toRow: number; fromLane: number; toLane: number; track: number }
-export interface GraphLayout { nodes: GraphNode[]; edges: GraphEdge[]; laneCount: number }
+export interface GraphLayout { nodes: GraphNode[]; edges: GraphEdge[]; laneCount: number; edgeMaxTo?: Int32Array }
+
+/** Mutable, worker-owned state for appending older pages to a pinned walk. */
+export interface LayoutState {
+  slots: (string | null)[];
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  positions: Map<string, GraphNode>;
+  laneCount: number;
+}
+
+export function createLayoutState(): LayoutState {
+  return { slots: [], nodes: [], edges: [], positions: new Map(), laneCount: 1 };
+}
 
 /**
  * Streaming lane reservation. A pending parent owns its lane until consumed.
@@ -10,11 +23,11 @@ export interface GraphLayout { nodes: GraphNode[]; edges: GraphEdge[]; laneCount
  * No canvas, DOM, dates or branch-name dependencies.
  */
 export function layoutHistory(commits: readonly GraphCommit[]): GraphLayout {
-  const slots: (string | null)[] = [];
-  const nodes: GraphNode[] = [];
-  const pending: Omit<GraphEdge, 'toRow' | 'toLane'>[] = [];
-  const positions = new Map<string, GraphNode>();
-  let laneCount = 1;
+  return appendHistory(createLayoutState(), commits);
+}
+
+export function appendHistory(state: LayoutState, commits: readonly GraphCommit[]): GraphLayout {
+  const { slots, nodes, edges, positions } = state;
   function reserve(id: string): number {
     const existing = slots.indexOf(id);
     if (existing >= 0) return existing;
@@ -23,7 +36,8 @@ export function layoutHistory(commits: readonly GraphCommit[]): GraphLayout {
     slots[lane] = id;
     return lane;
   }
-  commits.forEach((commit, row) => {
+  commits.forEach(commit => {
+    const row = nodes.length;
     if (positions.has(commit.id)) throw new Error(`Duplicate commit: ${commit.id}`);
     const lane = reserve(commit.id);
     const node = { id: commit.id, row, lane };
@@ -37,16 +51,17 @@ export function layoutHistory(commits: readonly GraphCommit[]): GraphLayout {
         if (index === 0) { slots[lane] = parent; track = lane; }
         else track = reserve(parent);
       }
-      pending.push({ from: commit.id, to: parent, fromRow: row, fromLane: lane, track });
+      edges.push({ from: commit.id, to: parent, fromRow: row, fromLane: lane, track, toRow: row + 1, toLane: track });
     });
-    laneCount = Math.max(laneCount, slots.length, lane + 1);
+    state.laneCount = Math.max(state.laneCount, slots.length, lane + 1);
     while (slots.length && slots[slots.length - 1] === null) slots.pop();
   });
-  const edges = pending.map(edge => {
+  // Do not mutate previous snapshots: callers may still be painting the prior page.
+  const resolved = edges.map(edge => {
     const target = positions.get(edge.to);
-    return { ...edge, toRow: target?.row ?? commits.length, toLane: target?.lane ?? edge.track };
+    return { ...edge, toRow: target?.row ?? nodes.length, toLane: target?.lane ?? edge.track };
   });
-  return { nodes, edges, laneCount };
+  return { nodes: [...nodes], edges: resolved, laneCount: state.laneCount };
 }
 
 export const ROW_HEIGHT = 48;
@@ -59,12 +74,43 @@ export function visibleEdges(edges: readonly GraphEdge[], start: number, end: nu
   return edges.filter(edge => edge.fromRow < end && edge.toRow >= start);
 }
 
+/** Build the interval pruning index off the main thread alongside lane layout. */
+export function buildEdgeIndex(edges: readonly GraphEdge[]): Int32Array {
+  const maxTo = new Int32Array(edges.length * 4 + 1);
+  function build(node: number, start: number, end: number): number {
+    if (start >= end) return -1;
+    if (end - start === 1) return maxTo[node] = edges[start].toRow;
+    const middle = (start + end) >>> 1;
+    return maxTo[node] = Math.max(build(node * 2, start, middle), build(node * 2 + 1, middle, end));
+  }
+  build(1, 0, edges.length);
+  return maxTo;
+}
+
 /** Immutable interval index: skip entire subtrees above/below the viewport while
  * retaining long parent edges whose two endpoints are both offscreen. */
-export function indexEdges(edges: readonly GraphEdge[]) {
+export function indexEdges(edges: readonly GraphEdge[], edgeMaxTo?: Int32Array) {
+  if (edgeMaxTo) {
+    return (start: number, end: number): GraphEdge[] => {
+      const result: GraphEdge[] = [];
+      function visit(node: number, first: number, last: number) {
+        if (first >= last || edgeMaxTo![node] < start || edges[first].fromRow >= end) return;
+        if (last - first === 1) {
+          if (edges[first].toRow >= start) result.push(edges[first]);
+          return;
+        }
+        const middle = (first + last) >>> 1;
+        visit(node * 2, first, middle);
+        visit(node * 2 + 1, middle, last);
+      }
+      visit(1, 0, edges.length);
+      return result;
+    };
+  }
   interface IntervalNode { edge: GraphEdge; minFrom: number; maxTo: number; left?: IntervalNode; right?: IntervalNode }
-  // Layout emits source-row order. Sorting a copy also supports other callers.
-  const sorted = [...edges].sort((a, b) => a.fromRow - b.fromRow);
+  // Layout emits source-row order; avoid a full sort for the common path.
+  const ordered = edges.every((edge, i) => i === 0 || edges[i - 1].fromRow <= edge.fromRow);
+  const sorted = ordered ? edges : [...edges].sort((a, b) => a.fromRow - b.fromRow);
   function build(start: number, end: number): IntervalNode | undefined {
     if (start >= end) return;
     const middle = (start + end) >>> 1;

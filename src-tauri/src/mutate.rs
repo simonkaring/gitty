@@ -343,6 +343,14 @@ impl Repository {
         for (k, v) in env {
             command.env(k, v);
         }
+        if matches!(self.location(), RepositoryLocation::Wsl { .. })
+            && env.iter().any(|(k, _)| k == "GITTY_ASKPASS_TOKEN")
+        {
+            command.env(
+                "WSLENV",
+                crate::askpass::wsl_env_mapping(std::env::var("WSLENV").ok().as_deref()),
+            );
+        }
         process::run_with_input_for(command, input, MUTATION_TIMEOUT, max_input).map_err(unverified)
     }
     /// `--pathspec-from-file=-` with **empty** input means every file to Git, which

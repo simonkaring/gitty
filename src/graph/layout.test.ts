@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createDemoHistory } from '../model/demo';
-import { indexEdges, layoutHistory, visibleEdges } from './layout';
+import { appendHistory, buildEdgeIndex, createLayoutState, indexEdges, layoutHistory, visibleEdges } from './layout';
 
 describe('history topology and lane reservations', () => {
   const history = createDemoHistory();
@@ -42,6 +42,21 @@ describe('history topology and lane reservations', () => {
         .toEqual(layout.edges.filter(e => e.fromRow < size).map(({ toRow: _r, toLane: _l, ...e }) => e));
     }
   });
+  it('appends pages without recomputing prior rows or mutating delivered snapshots', () => {
+    const state = createLayoutState();
+    const pages = [history.commits.slice(0, 1), history.commits.slice(1, 240), history.commits.slice(240, 481), history.commits.slice(481)];
+    let count = 0;
+    let previous = layoutHistory([]);
+    for (const page of pages) {
+      const snapshot = structuredClone(previous);
+      const result = appendHistory(state, page);
+      count += page.length;
+      expect(result).toEqual(layoutHistory(history.commits.slice(0, count)));
+      expect(previous).toEqual(snapshot);
+      previous = result;
+    }
+    expect(appendHistory(createLayoutState(), [{ id: 'a', parents: ['b'] }]).edges[0].toRow).toBe(1);
+  });
   it('handles roots, missing parents, convergence, disconnected and invalid histories', () => {
     expect(layoutHistory([]).nodes).toEqual([]);
     const small = layoutHistory([
@@ -62,8 +77,10 @@ describe('history topology and lane reservations', () => {
     for (const size of [0, 1, 240, history.commits.length]) {
       const { edges } = layoutHistory(history.commits.slice(0, size));
       const visible = indexEdges(edges);
+      const workerVisible = indexEdges(edges, buildEdgeIndex(edges));
       for (let row = -10; row <= size + 30; row += 17) {
         expect(visible(row, row + 25)).toEqual(visibleEdges(edges, row, row + 25));
+        expect(workerVisible(row, row + 25)).toEqual(visible(row, row + 25));
       }
     }
   });

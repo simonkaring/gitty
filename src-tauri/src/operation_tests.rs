@@ -87,7 +87,7 @@ impl Fixture {
     }
     fn run(&self, action: GitAction) -> Result<OperationResult> {
         self.service
-            .run_operation(&self.handle, self.request(action))
+            .run_operation(&self.handle, self.request(action), None)
     }
     fn resolve(&self, resolution: ConflictResolution) -> Result<()> {
         let file = self.repo.conflict_file("file")?;
@@ -109,6 +109,165 @@ impl Fixture {
             no_fast_forward,
         })
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn operations_symlink_conflict_selects_exact_side_without_following_target() {
+    use std::os::unix::fs::symlink;
+    for choice in ["theirs", "ours", "delete"] {
+        let f = Fixture::new();
+        f.write("precious", "keep this\n");
+        f.commit("add link target");
+        f.git(&["switch", "-c", "side"]);
+        std::fs::remove_file(f.dir.path().join("file")).unwrap();
+        symlink("precious", f.dir.path().join("file")).unwrap();
+        f.commit("link side");
+        f.git(&["switch", "main"]);
+        std::fs::remove_file(f.dir.path().join("file")).unwrap();
+        symlink("different-target", f.dir.path().join("file")).unwrap();
+        f.commit("other link side");
+        // The link target is not consulted or changed by side selection.
+        assert!(f
+            .merge("side", false)
+            .unwrap()
+            .operation
+            .conflicts
+            .contains(&"file".to_string()));
+        let conflict = f.repo.conflict_file("file").unwrap();
+        assert!(!conflict.editable);
+        assert!(conflict.reason.unwrap().contains("Symlink"));
+        assert_eq!(conflict.theirs.as_ref().unwrap().mode, "120000");
+        if choice == "theirs" {
+            std::fs::remove_file(f.dir.path().join("file")).unwrap();
+            symlink("changed-after-preview", f.dir.path().join("file")).unwrap();
+            assert_eq!(
+                f.service
+                    .resolve_conflict(
+                        &f.handle,
+                        "file",
+                        &conflict.fingerprint,
+                        ConflictResolution::Theirs
+                    )
+                    .unwrap_err()
+                    .code,
+                "staleConflict"
+            );
+        }
+        let conflict = f.repo.conflict_file("file").unwrap();
+        let selected = match choice {
+            "theirs" => ConflictResolution::Theirs,
+            "ours" => ConflictResolution::Ours,
+            _ => ConflictResolution::Delete,
+        };
+        assert_eq!(
+            f.service
+                .resolve_conflict(
+                    &f.handle,
+                    "file",
+                    &conflict.fingerprint,
+                    ConflictResolution::Working
+                )
+                .unwrap_err()
+                .code,
+            "unsupportedConflict"
+        );
+        f.service
+            .resolve_conflict(&f.handle, "file", &conflict.fingerprint, selected)
+            .unwrap();
+        if choice == "delete" {
+            assert!(f.git(&["ls-files", "--stage", "--", "file"]).is_empty());
+            assert!(!f.dir.path().join("file").exists());
+        } else {
+            assert_eq!(
+                f.git(&["ls-files", "--stage", "--", "file"])
+                    .split_whitespace()
+                    .next(),
+                Some("120000")
+            );
+            assert_eq!(
+                std::fs::read_link(f.dir.path().join("file")).unwrap(),
+                std::path::Path::new(if choice == "theirs" {
+                    "precious"
+                } else {
+                    "different-target"
+                })
+            );
+        }
+        assert_eq!(
+            std::fs::read(f.dir.path().join("precious")).unwrap(),
+            b"keep this\n"
+        );
+    }
+}
+
+#[test]
+fn operations_submodule_conflict_selects_index_pointer_without_touching_nested_worktree() {
+    let source = Fixture::new();
+    let base = source.git(&["rev-parse", "HEAD"]);
+    source.write("one", "one\n");
+    let one = source.commit("one");
+    source.git(&["switch", "-c", "other", &base]);
+    source.write("two", "two\n");
+    let two = source.commit("two");
+    source.git(&["switch", "main"]);
+    let f = Fixture::new();
+    f.git(&[
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        source.dir.path().to_str().unwrap(),
+        "nested",
+    ]);
+    git(&f.dir.path().join("nested"), &["checkout", &base]);
+    f.commit("add nested module");
+    f.git(&["switch", "-c", "side"]);
+    git(&f.dir.path().join("nested"), &["checkout", &one]);
+    f.git(&["add", "nested"]);
+    f.git(&["commit", "-m", "side pointer"]);
+    f.git(&["switch", "main"]);
+    git(&f.dir.path().join("nested"), &["checkout", &two]);
+    f.git(&["add", "nested"]);
+    f.git(&["commit", "-m", "main pointer"]);
+    let conflicts = f.merge("side", false).unwrap().operation.conflicts;
+    assert!(conflicts.contains(&"nested".into()));
+    let file = f.repo.conflict_file("nested").unwrap();
+    assert!(!file.editable);
+    assert_eq!(file.ours.as_ref().unwrap().mode, "160000");
+    assert_eq!(file.theirs.as_ref().unwrap().mode, "160000");
+    let nested_before = git(&f.dir.path().join("nested"), &["rev-parse", "HEAD"]);
+    assert_eq!(
+        f.service
+            .resolve_conflict(
+                &f.handle,
+                "nested",
+                &file.fingerprint,
+                ConflictResolution::Delete
+            )
+            .unwrap_err()
+            .code,
+        "unsupportedConflict"
+    );
+    f.service
+        .resolve_conflict(
+            &f.handle,
+            "nested",
+            &file.fingerprint,
+            ConflictResolution::Theirs,
+        )
+        .unwrap();
+    assert_eq!(
+        f.git(&["ls-files", "--stage", "nested"])
+            .split_whitespace()
+            .nth(1),
+        Some(one.as_str())
+    );
+    assert_eq!(
+        git(&f.dir.path().join("nested"), &["rev-parse", "HEAD"]),
+        nested_before
+    );
+    assert!(f.dir.path().join("nested").is_dir());
 }
 
 #[test]
@@ -253,7 +412,7 @@ fn operations_external_merge_restart_abort_and_stale_expectations() {
     f.git(&["tag", "changed"]);
     assert_eq!(
         f.service
-            .run_operation(&f.handle, request)
+            .run_operation(&f.handle, request, None)
             .unwrap_err()
             .code,
         "staleOperation"
@@ -264,7 +423,7 @@ fn operations_external_merge_restart_abort_and_stale_expectations() {
     request.expected_head_ref = None;
     assert_eq!(
         f.service
-            .run_operation(&f.handle, request)
+            .run_operation(&f.handle, request, None)
             .unwrap_err()
             .code,
         "staleOperation"
@@ -640,7 +799,7 @@ fn operations_unsupported_state_bare_and_signing_errors() {
     };
     assert_eq!(
         f.service
-            .run_operation(&state.session.handle, request)
+            .run_operation(&state.session.handle, request, None)
             .unwrap_err()
             .code,
         "bareRepository"
@@ -688,7 +847,7 @@ fn operations_rebase_abort_target_is_reviewed_state() {
     f.write(".git/rebase-merge/orig-head", format!("{head}\n"));
     assert_eq!(
         f.service
-            .run_operation(&f.handle, request)
+            .run_operation(&f.handle, request, None)
             .unwrap_err()
             .code,
         "staleOperation"
@@ -879,7 +1038,10 @@ fn operations_linked_worktree_waiter_rechecks_refs_under_lock() {
         locked_rx.recv().unwrap();
         scope.spawn(move || {
             result_tx
-                .send(f.service.run_operation(&state.session.handle, request))
+                .send(
+                    f.service
+                        .run_operation(&state.session.handle, request, None),
+                )
                 .unwrap();
         });
         let early = result_rx.recv_timeout(Duration::from_millis(150));
@@ -1105,4 +1267,508 @@ fn operations_merge_and_cherry_pick_abort_preserve_unrelated_edits() {
             b"precious untracked\n"
         );
     }
+}
+
+#[test]
+fn operations_rebase_interactive_reword_squash_and_exec_guards() {
+    let f = Fixture::new();
+    f.diverge();
+    f.run(GitAction::Rebase {
+        onto: "side".into(),
+    })
+    .unwrap();
+    f.resolve(ConflictResolution::Text {
+        content: "resolved\n".into(),
+    })
+    .unwrap();
+
+    // 1. exec rejection without running
+    let sentinel = f.dir.path().join("sentinel");
+    f.write(
+        ".git/rebase-merge/git-rebase-todo",
+        format!("exec touch {}\n", sentinel.display()),
+    );
+    assert_eq!(
+        f.run(GitAction::Continue).unwrap_err().code,
+        "unsupportedOperation"
+    );
+    assert!(!sentinel.exists());
+
+    // 2. merge-preserving directive rejection
+    f.write(
+        ".git/rebase-merge/git-rebase-todo",
+        "merge -C 1234567890123456789012345678901234567890\n",
+    );
+    assert_eq!(
+        f.run(GitAction::Continue).unwrap_err().code,
+        "unsupportedOperation"
+    );
+
+    // 3. Abort is still allowed despite unsupported directive
+    let f_abort = Fixture::new();
+    f_abort.diverge();
+    f_abort
+        .run(GitAction::Rebase {
+            onto: "side".into(),
+        })
+        .unwrap();
+    f_abort.write(
+        ".git/rebase-merge/git-rebase-todo",
+        format!("exec touch {}\n", sentinel.display()),
+    );
+    f_abort.run(GitAction::Abort).unwrap();
+    assert_eq!(
+        f_abort.repo.operation_state().unwrap().kind,
+        OperationKind::None
+    );
+
+    // 4. Interactive rebase with editor bridge (reword & save)
+    let f2 = Fixture::new();
+    f2.diverge();
+    f2.run(GitAction::Rebase {
+        onto: "side".into(),
+    })
+    .unwrap();
+
+    // Resolve conflict first
+    f2.resolve(ConflictResolution::Text {
+        content: "resolved\n".into(),
+    })
+    .unwrap();
+
+    // Setup reword in done
+    let head = f2.git(&["rev-parse", "HEAD"]);
+    f2.write(".git/rebase-merge/done", format!("reword {head} main\n"));
+
+    // Without editor bridge, continuation with interactive step is refused
+    assert_eq!(
+        f2.service
+            .run_operation(&f2.handle, f2.request(GitAction::Continue), None)
+            .unwrap_err()
+            .code,
+        "unsupportedOperation"
+    );
+
+    // Setup mock editor registry
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let token = "test-rebase-token".to_string();
+
+    let script_path = f2.dir.path().join("test-editor.py");
+    let script_code = r#"#!/usr/bin/env python3
+import socket, sys, os
+port = int(os.environ["GITTY_EDITOR_PORT"])
+token = os.environ["GITTY_EDITOR_TOKEN"].encode()
+path = sys.argv[1].encode()
+s = socket.socket()
+s.connect(("127.0.0.1", port))
+s.sendall(len(token).to_bytes(4, 'big') + token + len(path).to_bytes(4, 'big') + path)
+res = s.recv(1)
+sys.exit(0 if res == b'1' else 1)
+"#;
+    std::fs::write(&script_path, script_code).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms).unwrap();
+    }
+
+    let editor_registry = Arc::new(crate::editor::EditorRegistry::new(port, token, script_path));
+
+    let reg_clone = editor_registry.clone();
+    let (prompt_tx, prompt_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for (req_id, stream) in (1..).zip(listener.incoming().flatten()) {
+            let reg = reg_clone.clone();
+            let p_tx = prompt_tx.clone();
+            std::thread::spawn(move || {
+                crate::editor::handle_connection(
+                    stream,
+                    &reg,
+                    req_id,
+                    |id, name, content| p_tx.send((id, name, content)).map_err(|_| ()),
+                    |_| {},
+                );
+            });
+        }
+    });
+
+    let f2_handle = f2.handle.clone();
+    let f2_request = f2.request(GitAction::Continue);
+    let f2_service = &f2.service;
+    let ed_ref = editor_registry.clone();
+
+    std::thread::scope(|s| {
+        let op_thread = s.spawn(|| f2_service.run_operation(&f2_handle, f2_request, Some(&ed_ref)));
+
+        let (req_id, file_name, content) = prompt_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        assert!(file_name.contains("COMMIT_EDITMSG") || file_name.contains("message"));
+        assert!(content.contains("main") || !content.is_empty());
+
+        let new_msg = "feat: successfully reworded commit message\n";
+        editor_registry
+            .reply(req_id, Some(new_msg.to_string()))
+            .unwrap();
+
+        let res = op_thread.join().unwrap();
+        assert!(res.is_ok(), "Operation failed: {:?}", res);
+    });
+
+    assert_eq!(
+        f2.git(&["log", "-1", "--format=%s"]),
+        "feat: successfully reworded commit message"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn operations_reviewed_interactive_rebase_reorders_fixups_and_rewords() {
+    use std::os::unix::fs::PermissionsExt;
+    for squash in [false, true] {
+        let f = Fixture::new();
+        let base = f.git(&["rev-parse", "HEAD"]);
+        f.write("one", "one\n");
+        let one = f.commit("one");
+        f.write("two", "two\n");
+        let two = f.commit("two");
+        f.write("three", "three\n");
+        let three = f.commit("three");
+        let original = f.git(&["rev-parse", "HEAD"]);
+        let helper_dir = tempfile::tempdir().unwrap();
+        let script_path = helper_dir.path().join("editor helper.py");
+        std::fs::write(
+            &script_path,
+            r#"#!/usr/bin/env python3
+import socket, sys, os
+token = os.environ['GITTY_EDITOR_TOKEN'].encode()
+path = os.fsencode(sys.argv[1])
+with socket.create_connection(('127.0.0.1', int(os.environ['GITTY_EDITOR_PORT']))) as sock:
+    sock.sendall(len(token).to_bytes(4, 'big') + token + len(path).to_bytes(4, 'big') + path)
+    sys.exit(0 if sock.recv(1) == b'1' else 1)
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let registry = Arc::new(crate::editor::EditorRegistry::new(
+            listener.local_addr().unwrap().port(),
+            "planned-rebase".into(),
+            script_path,
+        ));
+        let (prompt_tx, prompt_rx) = std::sync::mpsc::channel();
+        let reg = registry.clone();
+        std::thread::spawn(move || {
+            for (id, stream) in listener.incoming().enumerate() {
+                if let Ok(stream) = stream {
+                    let reg = reg.clone();
+                    let tx = prompt_tx.clone();
+                    std::thread::spawn(move || {
+                        crate::editor::handle_connection(
+                            stream,
+                            &reg,
+                            id + 1,
+                            |req, name, content| tx.send((req, name, content)).map_err(|_| ()),
+                            |_| {},
+                        )
+                    });
+                }
+            }
+        });
+        let steps = if squash {
+            vec![
+                RebaseStep {
+                    oid: one.clone(),
+                    instruction: RebaseInstruction::Drop,
+                },
+                RebaseStep {
+                    oid: two.clone(),
+                    instruction: RebaseInstruction::Pick,
+                },
+                RebaseStep {
+                    oid: three.clone(),
+                    instruction: RebaseInstruction::Squash,
+                },
+            ]
+        } else {
+            vec![
+                RebaseStep {
+                    oid: two.clone(),
+                    instruction: RebaseInstruction::Pick,
+                },
+                RebaseStep {
+                    oid: one.clone(),
+                    instruction: RebaseInstruction::Fixup,
+                },
+                RebaseStep {
+                    oid: three.clone(),
+                    instruction: RebaseInstruction::Reword,
+                },
+            ]
+        };
+        let stale_review = f.request(GitAction::InteractiveRebase {
+            onto: base.clone(),
+            steps: steps.clone(),
+        });
+        let action = GitAction::InteractiveRebase {
+            onto: base.clone(),
+            steps,
+        };
+        assert_eq!(
+            f.service
+                .run_operation(
+                    &f.handle,
+                    f.request(GitAction::InteractiveRebase {
+                        onto: base.clone(),
+                        steps: vec![]
+                    }),
+                    Some(&registry)
+                )
+                .unwrap_err()
+                .code,
+            "invalidRequest"
+        );
+        std::thread::scope(|scope| {
+            let op = scope.spawn(|| {
+                f.service
+                    .run_operation(&f.handle, f.request(action), Some(&registry))
+            });
+            for _ in 0..30 {
+                if op.is_finished() {
+                    break;
+                }
+                if let Ok((id, _, _)) = prompt_rx.recv_timeout(std::time::Duration::from_secs(1)) {
+                    registry
+                        .reply(id, Some("rewritten three\n".into()))
+                        .unwrap();
+                }
+            }
+            let result = op.join().unwrap();
+            assert!(result.is_ok(), "{:?}", result.err());
+        });
+        assert_eq!(
+            f.git(&["rev-list", "--count", &format!("{base}..HEAD")]),
+            if squash { "1" } else { "2" }
+        );
+        assert_eq!(f.git(&["log", "-1", "--format=%s"]), "rewritten three");
+        assert_ne!(f.git(&["rev-parse", "HEAD"]), original);
+        assert_eq!(
+            f.service
+                .run_operation(&f.handle, stale_review, Some(&registry))
+                .unwrap_err()
+                .code,
+            "staleOperation"
+        );
+        for name in ["one", "two", "three"] {
+            assert_eq!(f.dir.path().join(name).exists(), name != "one" || !squash);
+        }
+    }
+}
+
+#[test]
+fn operations_rebase_interactive_cancel_halts_helper_and_preserves_state() {
+    let f = Fixture::new();
+    f.diverge();
+    f.run(GitAction::Rebase {
+        onto: "side".into(),
+    })
+    .unwrap();
+
+    f.resolve(ConflictResolution::Text {
+        content: "resolved\n".into(),
+    })
+    .unwrap();
+
+    let head = f.git(&["rev-parse", "HEAD"]);
+    f.write(".git/rebase-merge/done", format!("reword {head} main\n"));
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let token = "test-cancel-token".to_string();
+
+    let script_path = f.dir.path().join("test-editor-cancel.py");
+    let script_code = r#"#!/usr/bin/env python3
+import socket, sys, os
+port = int(os.environ["GITTY_EDITOR_PORT"])
+token = os.environ["GITTY_EDITOR_TOKEN"].encode()
+path = sys.argv[1].encode()
+s = socket.socket()
+s.connect(("127.0.0.1", port))
+s.sendall(len(token).to_bytes(4, 'big') + token + len(path).to_bytes(4, 'big') + path)
+res = s.recv(1)
+sys.exit(0 if res == b'1' else 1)
+"#;
+    std::fs::write(&script_path, script_code).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms).unwrap();
+    }
+
+    let editor_registry = Arc::new(crate::editor::EditorRegistry::new(port, token, script_path));
+
+    let reg_clone = editor_registry.clone();
+    let (prompt_tx, prompt_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for (req_id, stream) in (1..).zip(listener.incoming().flatten()) {
+            let reg = reg_clone.clone();
+            let p_tx = prompt_tx.clone();
+            std::thread::spawn(move || {
+                crate::editor::handle_connection(
+                    stream,
+                    &reg,
+                    req_id,
+                    |id, name, content| p_tx.send((id, name, content)).map_err(|_| ()),
+                    |_| {},
+                );
+            });
+        }
+    });
+
+    let f_handle = f.handle.clone();
+    let f_request = f.request(GitAction::Continue);
+    let f_service = &f.service;
+    let ed_ref = editor_registry.clone();
+
+    std::thread::scope(|s| {
+        let op_thread = s.spawn(|| f_service.run_operation(&f_handle, f_request, Some(&ed_ref)));
+
+        let (req_id, _, _) = prompt_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+
+        // Cancel the prompt
+        editor_registry.reply(req_id, None).unwrap();
+
+        let res = op_thread.join().unwrap();
+        assert!(res.is_err(), "Expected cancellation to fail Git write");
+    });
+
+    // Operation is still in progress, untouched
+    assert_eq!(
+        f.repo.operation_state().unwrap().kind,
+        OperationKind::Rebase
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn operations_continue_real_external_interactive_squash() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    f.git(&["switch", "-c", "side"]);
+    f.write("file", "side\n");
+    f.commit("side");
+    f.git(&["switch", "main"]);
+    f.write("file", "main\n");
+    let first = f.commit("first");
+    f.write("second-file", "second\n");
+    let second = f.commit("second");
+
+    // Git itself creates the interactive state and stops at the first conflict.
+    let sequence_script = f.dir.path().join("sequence-editor.sh");
+    std::fs::write(
+        &sequence_script,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' 'pick {first} first' 'squash {second} second' > \"$1\"\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&sequence_script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(f.dir.path())
+        .args(["rebase", "-i", "--merge", "side"])
+        .env("GIT_SEQUENCE_EDITOR", &sequence_script)
+        .env("GIT_EDITOR", "true")
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "expected a conflict: {output:?}");
+    assert_eq!(
+        f.repo.operation_state().unwrap().kind,
+        OperationKind::Rebase
+    );
+    f.resolve(ConflictResolution::Text {
+        content: "resolved\n".into(),
+    })
+    .unwrap();
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let script_path = f.dir.path().join("test squash editor.py");
+    std::fs::write(
+        &script_path,
+        r#"#!/usr/bin/env python3
+import socket, sys, os
+token = os.environ["GITTY_EDITOR_TOKEN"].encode()
+path = sys.argv[1].encode()
+with socket.create_connection(("127.0.0.1", int(os.environ["GITTY_EDITOR_PORT"]))) as sock:
+    sock.sendall(len(token).to_bytes(4, 'big') + token + len(path).to_bytes(4, 'big') + path)
+    sys.exit(0 if sock.recv(1) == b'1' else 1)
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let registry = Arc::new(crate::editor::EditorRegistry::new(
+        port,
+        "squash-test".into(),
+        script_path,
+    ));
+    let (prompt_tx, prompt_rx) = std::sync::mpsc::channel();
+    let reg = registry.clone();
+    std::thread::spawn(move || {
+        for (id, stream) in listener.incoming().enumerate() {
+            if let Ok(stream) = stream {
+                let reg = reg.clone();
+                let tx = prompt_tx.clone();
+                std::thread::spawn(move || {
+                    crate::editor::handle_connection(
+                        stream,
+                        &reg,
+                        id + 1,
+                        |request_id, name, content| {
+                            tx.send((request_id, name, content)).map_err(|_| ())
+                        },
+                        |_| {},
+                    )
+                });
+            }
+        }
+    });
+
+    let request = f.request(GitAction::Continue);
+    std::thread::scope(|scope| {
+        let op = scope.spawn(|| f.service.run_operation(&f.handle, request, Some(&registry)));
+        let mut saw_squash = false;
+        for _ in 0..30 {
+            if op.is_finished() {
+                break;
+            }
+            match prompt_rx.recv_timeout(std::time::Duration::from_secs(1)) {
+                Ok((id, _, message)) => {
+                    saw_squash |= message.contains("combination of 2 commits");
+                    registry
+                        .reply(id, Some("combined message\n".into()))
+                        .unwrap();
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(e) => panic!("editor listener disconnected: {e}"),
+            }
+        }
+        assert!(
+            op.is_finished(),
+            "rebase did not finish after editor replies"
+        );
+        let result = op.join().unwrap().unwrap();
+        assert_eq!(result.operation.kind, OperationKind::None);
+        assert!(saw_squash, "expected Git's squash message editor");
+    });
+    assert_eq!(f.git(&["log", "-1", "--format=%s"]), "combined message");
+    assert_eq!(f.git(&["rev-list", "--count", "side..main"]), "1");
+    assert_eq!(f.git(&["show", "HEAD:second-file"]), "second");
 }

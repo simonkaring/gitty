@@ -49,6 +49,10 @@ pub enum GitAction {
     Rebase {
         onto: String,
     },
+    InteractiveRebase {
+        onto: String,
+        steps: Vec<RebaseStep>,
+    },
     CherryPick {
         commits: Vec<String>,
         mainline: Option<usize>,
@@ -61,6 +65,35 @@ pub enum GitAction {
     Continue,
     Skip,
     Abort,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RebaseStep {
+    pub oid: String,
+    pub instruction: RebaseInstruction,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RebaseInstruction {
+    Pick,
+    Drop,
+    Reword,
+    Squash,
+    Fixup,
+}
+
+impl RebaseInstruction {
+    pub fn git(self) -> &'static str {
+        match self {
+            Self::Pick => "pick",
+            Self::Drop => "drop",
+            Self::Reword => "reword",
+            Self::Squash => "squash",
+            Self::Fixup => "fixup",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

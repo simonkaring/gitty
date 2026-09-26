@@ -1,6 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.schema.json",
-  "permissions": [
+  "permission": [
     {
       "action": "shell",
       "resource": "npm test*",

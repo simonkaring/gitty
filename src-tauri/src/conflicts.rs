@@ -49,20 +49,34 @@ try:
  except FileNotFoundError:
   m = None
  if m is None: kind, data = 'missing', b''
+ elif stat.S_ISLNK(m.st_mode): kind, data = 'symlink', os.fsencode(os.readlink(name, dir_fd=d))
+ elif stat.S_ISDIR(m.st_mode): kind, data = 'directory', b''
  elif not stat.S_ISREG(m.st_mode): kind, data = 'unsupported', b''
  else:
   f = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=d)
   with os.fdopen(f, 'rb') as stream: data = stream.read(16777217)
   if len(data) > 16777216: raise ValueError('Working file exceeds 16 MiB; resolve it in Git')
   kind = 'executable' if m.st_mode & 0o111 else 'file'
+ if len(data) > 16777216: raise ValueError('Working path exceeds 16 MiB; resolve it in Git')
  if action == 'read':
   sys.stdout.buffer.write(kind.encode() + b'\0' + data)
  else:
-  if kind == 'unsupported': raise ValueError('Symlinks, directories and special files must be resolved in Git')
+  if kind == 'unsupported': raise ValueError('Directories and special files must be resolved in Git')
   expected = r['expected']
   if expected['kind'] != kind or bytes(expected['bytes']) != data: raise ValueError('staleConflict: working file changed; reload it')
   if action == 'delete':
    if m is not None: os.unlink(name, dir_fd=d)
+  elif action == 'symlink':
+   import secrets
+   target = sys.stdin.buffer.read(16777217)
+   if not target or len(target) > 16777216 or b'\0' in target: raise ValueError('Invalid symlink target')
+   tmp = '.gitty-resolution-' + secrets.token_hex(16)
+   try:
+    os.symlink(os.fsdecode(target), tmp, dir_fd=d)
+    os.rename(tmp, name, src_dir_fd=d, dst_dir_fd=d)
+   finally:
+    try: os.unlink(tmp, dir_fd=d)
+    except FileNotFoundError: pass
   else:
    import secrets
    tmp = '.gitty-resolution-' + secrets.token_hex(16)
@@ -137,7 +151,10 @@ impl Repository {
                     }
                 })?;
         if !output.success {
-            return Err(unsupported(&format!("WSL conflict filesystem access requires python3 and a regular, non-symlink path: {}", crate::mutate::report(&output))));
+            return Err(unsupported(&format!(
+                "WSL conflict filesystem access requires python3 and a supported path: {}",
+                crate::mutate::report(&output)
+            )));
         }
         Ok(output.stdout)
     }
@@ -172,6 +189,27 @@ impl Repository {
             }
             Err(e) => return Err(e.into()),
         };
+        if meta.file_type().is_symlink() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::ffi::OsStrExt;
+                let target = dir.read_link_contents(name)?;
+                let bytes = target.as_os_str().as_bytes().to_vec();
+                if bytes.len() > LIMIT {
+                    return Err(unsupported("Symlink target exceeds 16 MiB"));
+                }
+                return Ok(WorkingSnapshot {
+                    kind: "symlink".into(),
+                    bytes,
+                });
+            }
+        }
+        if meta.is_dir() {
+            return Ok(WorkingSnapshot {
+                kind: "directory".into(),
+                bytes: vec![],
+            });
+        }
         if !meta.is_file() || meta.file_type().is_symlink() {
             return Ok(WorkingSnapshot {
                 kind: "unsupported".into(),
@@ -225,6 +263,7 @@ impl Repository {
         expected: &WorkingSnapshot,
         bytes: Option<&[u8]>,
         executable: bool,
+        symlink: bool,
     ) -> Result<()> {
         if bytes.is_some_and(|b| b.len() > LIMIT) {
             return Err(unsupported("Resolution exceeds 16 MiB"));
@@ -232,7 +271,13 @@ impl Repository {
         if matches!(self.location(), RepositoryLocation::Wsl { .. }) {
             self.wsl_file(
                 path,
-                if bytes.is_some() { "write" } else { "delete" },
+                if bytes.is_none() {
+                    "delete"
+                } else if symlink {
+                    "symlink"
+                } else {
+                    "write"
+                },
                 Some(expected),
                 bytes.unwrap_or_default(),
                 executable,
@@ -248,12 +293,27 @@ impl Repository {
         }
         if expected.kind == "unsupported" {
             return Err(unsupported(
-                "Symlinks, directories and special files must be resolved in Git.",
+                "Directories and special files must be resolved in Git.",
             ));
         }
         if let Some(bytes) = bytes {
+            if symlink && (bytes.is_empty() || bytes.contains(&0)) {
+                return Err(unsupported("Invalid symlink target"));
+            }
             let temp = format!(".gitty-resolution-{}", uuid::Uuid::new_v4());
             let result = (|| -> Result<()> {
+                if symlink {
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::ffi::OsStrExt;
+                        let target = std::ffi::OsStr::from_bytes(bytes);
+                        dir.symlink_contents(target, &temp)?;
+                        dir.rename(&temp, &dir, &name)?;
+                        return Ok(());
+                    }
+                    #[cfg(not(unix))]
+                    return Err(unsupported("Symlink resolution requires WSL on Windows."));
+                }
                 let mut opts = cap_std::fs::OpenOptions::new();
                 opts.write(true).create_new(true);
                 let mut file = dir.open_with(&temp, &opts)?;
@@ -306,7 +366,7 @@ impl Repository {
             if !(1..=3).contains(&stage) {
                 return Err(Error::new("gitParse", "Invalid index stage"));
             }
-            let content = if matches!(fields[0], "100644" | "100755") {
+            let content = if matches!(fields[0], "100644" | "100755" | "120000") {
                 let size: usize = self
                     .check_text(&["cat-file", "-s", fields[1]])?
                     .parse()
@@ -335,15 +395,26 @@ impl Repository {
             ));
         }
         let working = self.conflict_working_snapshot(path)?;
-        let special = stages
+        let gitlink = stages.iter().flatten().all(|s| s.mode == "160000")
+            && stages[1].is_some()
+            && stages[2].is_some()
+            && matches!(working.kind.as_str(), "directory" | "missing");
+        let symlink = stages.iter().flatten().any(|s| s.mode == "120000");
+        let unsupported_kind = stages
             .iter()
             .flatten()
-            .any(|s| !matches!(s.mode.as_str(), "100644" | "100755"))
-            || working.kind == "unsupported";
+            .any(|s| !matches!(s.mode.as_str(), "100644" | "100755" | "120000") && !gitlink)
+            || (working.kind == "unsupported" || working.kind == "directory") && !gitlink
+            || (working.kind == "symlink" && !symlink);
+        let special = unsupported_kind || symlink || gitlink;
         let binary = stages.iter().flatten().any(|s| s.content.is_none())
             || (working.kind != "missing" && text(&working.bytes).is_none());
-        let reason = if special {
-            Some("Symlink, submodule, directory/file or special-file conflicts must be resolved in Git. No filesystem writes are allowed here.".into())
+        let reason = if unsupported_kind {
+            Some("Submodule, directory/file or special-file conflicts must be resolved in Git. No filesystem writes are allowed here.".into())
+        } else if gitlink {
+            Some("Submodule pointer conflict: select an exact indexed commit. The submodule directory and its checked-out contents will not be changed; deletion and text editing are unavailable.".into())
+        } else if symlink {
+            Some("Symlink conflicts support exact side selection or deletion. Text editing and staging the working path are unavailable.".into())
         } else if binary {
             Some("Binary or non-UTF-8 content cannot be edited as text. Choose a side, delete, or stage the working file without text conversion.".into())
         } else {
@@ -403,14 +474,55 @@ impl Repository {
                 "Index stages or working file changed. Reload the conflict before resolving.",
             ));
         }
+        let symlink = [&file.base, &file.ours, &file.theirs]
+            .into_iter()
+            .flatten()
+            .any(|s| s.mode == "120000");
+        let gitlink = file.ours.as_ref().is_some_and(|s| s.mode == "160000")
+            && file.theirs.as_ref().is_some_and(|s| s.mode == "160000")
+            && [&file.base, &file.ours, &file.theirs]
+                .into_iter()
+                .flatten()
+                .all(|s| s.mode == "160000")
+            && matches!(working.kind.as_str(), "directory" | "missing");
+        if gitlink {
+            let side = match resolution {
+                ConflictResolution::Ours => file.ours.unwrap(),
+                ConflictResolution::Theirs => file.theirs.unwrap(),
+                _ => return Err(unsupported("Submodule pointer conflicts require choosing an exact index side. Resolve deletion or worktree changes in Git.")),
+            };
+            let input = format!("{} {}\t{}\0", side.mode, side.oid, path);
+            let output = self.write(
+                &args(&["update-index", "-z", "--index-info"]),
+                &[],
+                input.as_bytes(),
+                8192,
+            )?;
+            if !output.success {
+                return Err(self.failed(&output));
+            }
+            return Ok(());
+        }
         if working.kind == "unsupported"
+            || working.kind == "directory"
+            || (working.kind == "symlink" && !symlink)
             || [&file.base, &file.ours, &file.theirs]
                 .into_iter()
                 .flatten()
-                .any(|s| !matches!(s.mode.as_str(), "100644" | "100755"))
+                .any(|s| !matches!(s.mode.as_str(), "100644" | "100755" | "120000"))
         {
             return Err(unsupported(
-                "Resolve symlink, submodule, directory/file and special-file conflicts in Git.",
+                "Resolve submodule, directory/file and special-file conflicts in Git.",
+            ));
+        }
+        if symlink
+            && matches!(
+                resolution,
+                ConflictResolution::Text { .. } | ConflictResolution::Working
+            )
+        {
+            return Err(unsupported(
+                "Symlink conflicts require selecting an exact side or deleting the path.",
             ));
         }
         let executable = working.kind == "executable"
@@ -438,6 +550,7 @@ impl Repository {
                     &working,
                     Some(&output.stdout),
                     side.mode == "100755",
+                    side.mode == "120000",
                 )?;
                 // Index the exact selected blob. In particular no UTF-8 decoding,
                 // newline rewriting, clean filter or binary round-trip occurs.
@@ -461,10 +574,16 @@ impl Repository {
                         "This conflict cannot safely be edited as UTF-8 text.",
                     ));
                 }
-                self.write_conflict_working(path, &working, Some(content.as_bytes()), executable)?;
+                self.write_conflict_working(
+                    path,
+                    &working,
+                    Some(content.as_bytes()),
+                    executable,
+                    false,
+                )?;
             }
             ConflictResolution::Delete => {
-                self.write_conflict_working(path, &working, None, false)?
+                self.write_conflict_working(path, &working, None, false, false)?
             }
             ConflictResolution::Working => {
                 if working.kind == "missing" {
@@ -497,5 +616,86 @@ impl Repository {
         } else {
             staged
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod helper_tests {
+    use super::WSL_FILE;
+    use std::{
+        io::Write,
+        os::unix::fs::symlink,
+        process::{Command, Stdio},
+    };
+
+    fn python(request: serde_json::Value, bytes: &[u8]) -> std::process::Output {
+        let mut child = Command::new("python3")
+            .arg("-c")
+            .arg(WSL_FILE)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut input = serde_json::to_vec(&request).unwrap();
+        input.push(b'\n');
+        input.extend_from_slice(bytes);
+        child.stdin.take().unwrap().write_all(&input).unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    #[test]
+    fn wsl_helper_reads_replaces_and_rejects_stale_symlink_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("link");
+        let target = dir.path().join("outside");
+        std::fs::write(&target, b"untouched").unwrap();
+        symlink(&target, &path).unwrap();
+        let root = dir.path().to_str().unwrap();
+        let read = python(
+            serde_json::json!({"root": root, "path": "link", "action": "read"}),
+            &[],
+        );
+        assert!(
+            read.status.success(),
+            "{}",
+            String::from_utf8_lossy(&read.stderr)
+        );
+        let original = std::fs::read_link(&path).unwrap().into_os_string();
+        use std::os::unix::ffi::OsStrExt;
+        assert_eq!(
+            read.stdout,
+            [b"symlink\0".as_slice(), original.as_bytes()].concat()
+        );
+        let expected = serde_json::json!({"kind": "symlink", "bytes": original.as_bytes()});
+        let request = serde_json::json!({"root": root, "path": "link", "action": "symlink", "expected": expected, "executable": false});
+        let updated = python(request.clone(), b"other-target");
+        assert!(
+            updated.status.success(),
+            "{}",
+            String::from_utf8_lossy(&updated.stderr)
+        );
+        assert_eq!(
+            std::fs::read_link(&path).unwrap(),
+            std::path::Path::new("other-target")
+        );
+        assert!(!python(request, b"overwrite").status.success());
+        assert_eq!(std::fs::read(&target).unwrap(), b"untouched");
+    }
+
+    #[test]
+    fn wsl_helper_identifies_a_submodule_directory_without_opening_its_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("nested")).unwrap();
+        let output = python(
+            serde_json::json!({"root": dir.path().to_str().unwrap(), "path": "nested", "action": "read"}),
+            &[],
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(output.stdout, b"directory\0");
     }
 }

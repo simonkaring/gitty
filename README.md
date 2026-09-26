@@ -35,7 +35,7 @@ npm run desktop:build           # Production app and platform bundles
 npm run check:rust              # Cargo check (build the frontend first)
 ```
 
-`src-tauri/tauri.conf.json` sets the app identity, window limits, local asset CSP, and platform icons. `app-icon.svg` is the editable source; regenerate assets with `npm run tauri -- icon app-icon.svg --output src-tauri/icons`. Installer signing and notarization are not configured.
+`src-tauri/tauri.conf.json` sets the app identity, window limits, local asset CSP, and platform icons. `app-icon.svg` is the editable source; regenerate assets with `npm run tauri -- icon app-icon.svg --output src-tauri/icons`. The manual `.github/workflows/release.yml` workflow uses protected CI secrets to build and verify signed Windows installers and a notarized macOS DMG; a successful workflow run and installation are required before treating the bundles as release-ready. macOS secrets: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_CONTENT` (the private `.p8` contents). Windows secrets: `WINDOWS_CERTIFICATE` (base64 PFX) and `WINDOWS_CERTIFICATE_PASSWORD`. No signing secrets belong in this repository.
 
 ## Explore a real repository
 
@@ -91,11 +91,11 @@ The browser demo does not modify repository files. Its commit history and diffs 
 
 - Use **New branch…** or **Switch branch…**, or open a reference/commit's action menu with its button, right-click, or **Shift+F10**.
 - Drag a branch onto the **outlined current branch** in the graph or sidebar to review a merge. Drag a commit subject onto that target to review a cherry-pick. Dropping opens the action dialog; execution follows an explicit review.
-- Other actions include rebasing the current branch onto a selected source, ordered multi-commit cherry-picks, comparison, and lightweight/annotated tags. Merge commits require an explicit cherry-pick mainline parent.
-- The operation banner provides **Continue**, **Skip** where applicable, **Abort**, and conflict links. The built-in conflict editor shows full base/current/incoming versions, editable results, block acceptance, and whole-file/deletion choices. External edits are detected before saving.
+- Other actions include rebasing the current branch onto a selected source, editing up to 100 recent linear commits with a reviewed interactive rebase (reorder/drop/reword/squash/fixup), ordered multi-commit cherry-picks, comparison, and lightweight/annotated tags. Merge commits require an explicit cherry-pick mainline parent.
+- The operation banner provides **Continue**, **Skip** where applicable, **Abort**, and conflict links. The built-in conflict editor shows full base/current/incoming versions, editable results, block acceptance, and whole-file/deletion choices. On Unix and WSL, symlink conflicts allow exact side selection or deletion; external edits are detected before saving.
 - **Create pull request…** opens GitHub, GitLab.com, or Azure DevOps in your browser with source/base branches filled in. Choose a local source branch and remote; use the toolbar's **Push / Publish…** first when needed. Background fetch does not push your branch.
 
-New graph mutations currently require a clean index/worktree, including no untracked files. Rebase ranges containing merge commits and special-file conflicts have explicit limitations. See [Milestone 3](docs/milestone-3.md) for semantics and validation.
+New graph mutations currently require a clean index/worktree, including no untracked files. Interactive rebase requires a native checkout and a loaded ancestor base; WSL interactive editing is still unsupported. Submodule conflicts with two gitlink sides permit an index-only pointer selection without changing the nested worktree. Rebase ranges containing merge commits and directory/file conflicts have explicit limitations. See [Milestone 3](docs/milestone-3.md) for the original graph workflow semantics.
 
 ## Settings and themes
 
@@ -156,7 +156,9 @@ src/
     Sidebar.tsx                  Repository and reference navigation
     Inspector.tsx                Commit metadata, files, mock diff
   graph/
-    layout.ts                    Pure renderer-independent lane layout
+    layout.ts                    Pure renderer-independent appendable lane layout
+    layout.worker.ts             Off-main-thread layout for loaded history pages
+    useGraphLayout.ts            Worker lifecycle and stale-page handoff
     layout.test.ts               DAG, lane, append-stability, clipping invariants
   model/
     types.ts                     Commit/ref/file models and provider boundary
@@ -248,8 +250,8 @@ PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/hun
 
 ## Scope and next steps
 
-Repository tabs, native/WSL cloning, file/hunk staging, commits and amend, branch creation/switching, merge/rebase/cherry-pick, tags, stashes, background fetch, explicit fetch/pull/push, regular-file conflict resolution, and settings/custom themes are implemented in the desktop app. The browser demo currently focuses on synthetic history and diffs. Next functional work includes line staging, broader rebase/conflict support, and WSL interactive authentication. Live remote authentication, WSL runtime verification, and broader packaged-desktop validation remain platform release work.
+Repository tabs, native/WSL cloning, file/hunk/line staging, commits and amend, branch creation/switching, merge/rebase/interactive rebase/cherry-pick, tags, stashes, background fetch, explicit fetch/pull/push, regular-file and narrowly scoped symlink/submodule conflict resolution, and settings/custom themes are implemented in the desktop app. The browser demo currently focuses on synthetic history and diffs. Directory/file conflicts and merge-preserving rebase remain unsupported. Windows/WSL interactive authentication, native GUI runtime checks, Linux rendering, screen-reader auditing, and signed/notarized artifact installation still need platform verification; see [Milestone 4 runtime checks](docs/milestone-4-runtime.md).
 
-The demo snapshot remains materialized once per repository. Native history uses a pinned Git walk with bounded read-ahead and a temporary replay spool, batched metadata reads, and lazy diffs. Canvas and DOM rendering are viewport bounded; an interval index accelerates edge visibility queries. Layout still runs on the main thread for the loaded prefix; worker-based/incremental layout remains performance follow-up work.
+The demo snapshot remains materialized once per repository. Native history uses a pinned Git walk with bounded read-ahead and a temporary replay spool, batched metadata reads, and lazy diffs. Canvas and DOM rendering are viewport bounded; an interval index accelerates edge visibility queries. Lane layout and edge-index construction run in a Web Worker and append loaded history pages without replaying earlier lane reservations. Subsequent pages transfer only new nodes/edges, resolved parent endpoints, and a typed edge index. Viewport drawing still occurs on the main thread; large-history browser interaction profiling remains open.
 
 See the [M3 implementation](docs/milestone-3.md), [redesign and workflow notes](docs/redesign-notes.md), [M1 architecture record](docs/architecture.md), [M2 implementation](docs/milestone-2.md), and [backend details](src-tauri/BACKEND.md).

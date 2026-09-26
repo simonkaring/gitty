@@ -7,6 +7,28 @@ use crate::{
 use serde_json::{json, Value};
 use std::{path::Path, process::Command, sync::Arc};
 
+#[test]
+fn wsl_network_bridge_uses_scoped_token_and_linux_executable_path() {
+    let registry = crate::askpass::AskpassRegistry::new(4521, "app-token".into(), "unused".into());
+    let guard = registry.start_operation();
+    let (args, env) = crate::remote::network_args_wsl(
+        "/mnt/c/Program Files/Gitty/gitty.exe",
+        &registry,
+        guard.token(),
+    );
+    assert!(args
+        .iter()
+        .any(|arg| arg == "core.askPass='/mnt/c/Program Files/Gitty/gitty.exe'"));
+    assert!(args.iter().any(|arg| arg == "credential.interactive=true"));
+    assert!(env
+        .iter()
+        .any(|(key, value)| key == "GITTY_ASKPASS_TOKEN" && value == guard.token()));
+    assert!(env.iter().any(
+        |(key, value)| key == "SSH_ASKPASS" && value == "/mnt/c/Program Files/Gitty/gitty.exe"
+    ));
+    assert!(!env.iter().any(|(_, value)| value == "app-token"));
+}
+
 fn git(path: &Path, a: &[&str]) -> String {
     let output = Command::new("git")
         .arg("-C")

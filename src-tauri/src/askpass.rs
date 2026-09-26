@@ -8,20 +8,73 @@ use tauri::Manager;
 use tauri::{AppHandle, Emitter, State};
 
 pub struct AskpassRegistry {
-    pub requests: Mutex<HashMap<usize, std::sync::mpsc::Sender<Option<String>>>>,
+    requests: Mutex<HashMap<usize, PendingPrompt>>,
+    active_tokens: Mutex<std::collections::HashSet<String>>,
     pub port: u16,
     pub token: String,
     pub script_path: std::path::PathBuf,
+}
+
+struct PendingPrompt {
+    token: String,
+    reply: std::sync::mpsc::Sender<Option<String>>,
+}
+
+pub struct AskpassGuard<'a> {
+    registry: &'a AskpassRegistry,
+    token: String,
+}
+
+impl AskpassGuard<'_> {
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+}
+
+impl Drop for AskpassGuard<'_> {
+    fn drop(&mut self) {
+        self.registry
+            .active_tokens
+            .lock()
+            .unwrap()
+            .remove(&self.token);
+        let mut pending = self.registry.requests.lock().unwrap();
+        pending.retain(|_, prompt| {
+            if prompt.token != self.token {
+                return true;
+            }
+            let _ = prompt.reply.send(None);
+            false
+        });
+    }
 }
 
 impl AskpassRegistry {
     pub fn new(port: u16, token: String, script_path: std::path::PathBuf) -> Self {
         Self {
             requests: Mutex::new(HashMap::new()),
+            active_tokens: Mutex::new(std::collections::HashSet::new()),
             port,
             token,
             script_path,
         }
+    }
+
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn start_operation(&self) -> AskpassGuard<'_> {
+        let token = uuid::Uuid::new_v4().to_string();
+        self.active_tokens.lock().unwrap().insert(token.clone());
+        AskpassGuard {
+            registry: self,
+            token,
+        }
+    }
+
+    pub fn cancel_all(&self) {
+        for (_, pending) in self.requests.lock().unwrap().drain() {
+            let _ = pending.reply.send(None);
+        }
+        self.active_tokens.lock().unwrap().clear();
     }
 }
 
@@ -75,56 +128,69 @@ pub fn init(app: AppHandle) -> std::io::Result<()> {
     std::thread::spawn(move || {
         let request_counter = AtomicUsize::new(1);
 
-        for stream in listener.incoming() {
-            if let Ok(mut stream) = stream {
-                let registry = registry.clone();
-                let app_handle = app_handle.clone();
-                let token = token.clone();
-                let request_id = request_counter.fetch_add(1, Ordering::SeqCst);
+        for mut stream in listener.incoming().flatten() {
+            let registry = registry.clone();
+            let app_handle = app_handle.clone();
+            let token = token.clone();
+            let request_id = request_counter.fetch_add(1, Ordering::SeqCst);
 
-                std::thread::spawn(move || {
-                    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-                    let mut reader = BufReader::new(&stream);
-                    let mut received_token = String::new();
-                    if reader.read_line(&mut received_token).is_ok() {
-                        if received_token.trim() != token {
-                            return;
-                        }
-
-                        let mut prompt = String::new();
-                        if reader.read_line(&mut prompt).is_ok() {
-                            let prompt = prompt.trim_end().to_string();
-
-                            let (tx, rx) = std::sync::mpsc::channel();
-                            registry.requests.lock().unwrap().insert(request_id, tx);
-
-                            #[derive(Clone, serde::Serialize)]
-                            struct AskpassPromptPayload {
-                                request_id: usize,
-                                prompt: String,
-                            }
-
-                            if app_handle
-                                .emit(
-                                    "git_askpass_prompt",
-                                    AskpassPromptPayload { request_id, prompt },
-                                )
-                                .is_ok()
-                            {
-                                // The child process has a shorter read timeout. A
-                                // dismissed or lost prompt must not strand a thread.
-                                let response = rx.recv_timeout(Duration::from_secs(90));
-                                if response.is_err() {
-                                    let _ = app_handle.emit("git_askpass_expired", request_id);
-                                }
-                                let _ = stream.write_all(&encode_response(response.ok().flatten()));
-                            }
-
-                            registry.requests.lock().unwrap().remove(&request_id);
-                        }
+            std::thread::spawn(move || {
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                let mut reader = BufReader::new(&stream);
+                let mut received_token = String::new();
+                if reader.read_line(&mut received_token).is_ok() {
+                    let supplied = received_token.trim();
+                    if supplied != token
+                        && !registry.active_tokens.lock().unwrap().contains(supplied)
+                    {
+                        return;
                     }
-                });
-            }
+
+                    let mut prompt = String::new();
+                    if reader.read_line(&mut prompt).is_ok() {
+                        let prompt = prompt.trim_end().to_string();
+
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        {
+                            let active = registry.active_tokens.lock().unwrap();
+                            if supplied != registry.token && !active.contains(supplied) {
+                                return;
+                            }
+                            registry.requests.lock().unwrap().insert(
+                                request_id,
+                                PendingPrompt {
+                                    token: supplied.to_string(),
+                                    reply: tx,
+                                },
+                            );
+                        }
+
+                        #[derive(Clone, serde::Serialize)]
+                        struct AskpassPromptPayload {
+                            request_id: usize,
+                            prompt: String,
+                        }
+
+                        if app_handle
+                            .emit(
+                                "git_askpass_prompt",
+                                AskpassPromptPayload { request_id, prompt },
+                            )
+                            .is_ok()
+                        {
+                            // The child process has a shorter read timeout. A
+                            // dismissed or lost prompt must not strand a thread.
+                            let response = rx.recv_timeout(Duration::from_secs(90));
+                            if response.is_err() {
+                                let _ = app_handle.emit("git_askpass_expired", request_id);
+                            }
+                            let _ = stream.write_all(&encode_response(response.ok().flatten()));
+                        }
+
+                        registry.requests.lock().unwrap().remove(&request_id);
+                    }
+                }
+            });
         }
     });
 
@@ -138,7 +204,7 @@ pub fn repository_provide_password(
     password: Option<String>,
 ) -> Result<(), String> {
     if let Some(tx) = registry.requests.lock().unwrap().remove(&request_id) {
-        let _ = tx.send(password);
+        let _ = tx.reply.send(password);
         Ok(())
     } else {
         Err("Invalid request ID".into())
@@ -158,9 +224,56 @@ pub(crate) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+/// WSL interoperability runs the Windows app executable on the Windows host,
+/// so its existing loopback prompt server remains reachable without WSL2
+/// network/localhost forwarding assumptions.
+#[cfg(windows)]
+pub(crate) fn wsl_executable_path(distribution: &str) -> crate::dto::Result<String> {
+    crate::process::validate_distribution(distribution)?;
+    let exe = std::env::current_exe()?;
+    let mut cmd = std::process::Command::new("wsl.exe");
+    cmd.args(["--distribution", distribution, "--exec", "wslpath", "-u"])
+        .arg(exe);
+    let result = crate::process::run_for(cmd, crate::process::CHECK_TIMEOUT)?;
+    if !result.success {
+        return Err(crate::dto::Error::new("unsupportedOperation", "WSL interop could not translate the Gitty executable path; use a Linux credential helper or SSH agent."));
+    }
+    let path = crate::process::text(result.stdout)?.trim().to_string();
+    if !path.starts_with('/') || path.chars().any(|ch| matches!(ch, '\n' | '\r' | '\0')) {
+        return Err(crate::dto::Error::new(
+            "unsupportedOperation",
+            "WSL returned an invalid Gitty executable path.",
+        ));
+    }
+    Ok(path)
+}
+
+pub(crate) const WSL_ASKPASS_ENV: [&str; 6] = [
+    "GIT_ASKPASS",
+    "SSH_ASKPASS",
+    "SSH_ASKPASS_REQUIRE",
+    "DISPLAY",
+    "GITTY_ASKPASS_PORT",
+    "GITTY_ASKPASS_TOKEN",
+];
+
+pub(crate) fn wsl_env_mapping(previous: Option<&str>) -> String {
+    let mut parts = previous
+        .unwrap_or_default()
+        .split(':')
+        .filter(|part| !part.is_empty())
+        .map(String::from)
+        .collect::<Vec<_>>();
+    for key in WSL_ASKPASS_ENV {
+        parts.retain(|part| part.split('/').next() != Some(key));
+        parts.push(key.into());
+    }
+    parts.join(":")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{encode_response, shell_quote};
+    use super::{encode_response, shell_quote, wsl_env_mapping, AskpassRegistry};
 
     #[test]
     fn responses_preserve_whitespace_and_distinguish_cancel() {
@@ -175,5 +288,25 @@ mod tests {
             shell_quote("/some path/app's helper"),
             "'/some path/app'\\''s helper'"
         );
+    }
+
+    #[test]
+    fn wsl_operation_tokens_expire_and_env_mapping_preserves_existing_entries() {
+        let registry = AskpassRegistry::new(12, "app-token".into(), "helper".into());
+        let token = {
+            let guard = registry.start_operation();
+            assert!(registry
+                .active_tokens
+                .lock()
+                .unwrap()
+                .contains(guard.token()));
+            guard.token().to_string()
+        };
+        assert!(!registry.active_tokens.lock().unwrap().contains(&token));
+        let mapped = wsl_env_mapping(Some("CUSTOM/p:GITTY_ASKPASS_TOKEN/w"));
+        assert!(mapped.starts_with("CUSTOM/p:"));
+        assert_eq!(mapped.matches("GITTY_ASKPASS_TOKEN").count(), 1);
+        assert!(!mapped.contains("GITTY_ASKPASS_TOKEN/w"));
+        assert!(mapped.contains("SSH_ASKPASS_REQUIRE"));
     }
 }
