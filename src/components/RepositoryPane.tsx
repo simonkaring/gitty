@@ -19,6 +19,7 @@ import { toggleCommit } from '../model/operationUi';
 import { operationAndRefresh, readOperationSnapshot } from '../model/operationFlow';
 import { locationLabel, sessionKey } from '../model/tabs';
 import { useSettings } from '../model/settings';
+import { AUTO_FETCH_CHECK, autoFetchDue, isFetchingAction, type FetchStatus } from '../model/autoFetch';
 
 export interface RepositoryPaneProps {
   tabId: string;
@@ -73,6 +74,9 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
   const [stashOpen, setStashOpen] = useState(false);
   const [mutationBlocked, setMutationBlocked] = useState(false);
   const blockedRef = useRef(false);
+  const [fetchStatus, setFetchStatus] = useState<FetchStatus>({ kind: 'idle' });
+  const lastFetchAttempt = useRef<number | null>(null);
+  const autoFetchRef = useRef<() => void>(() => {});
   const [base, setBase] = useState('');
   const [target, setTarget] = useState('');
   const [text, setText] = useState('');
@@ -188,7 +192,7 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
   // operation state until the next successful write happens in it.
   const wasActive = useRef(active);
   useEffect(() => {
-    if (active && !wasActive.current) void refresh();
+    if (active && !wasActive.current) void refresh().then(() => autoFetchRef.current());
     wasActive.current = active;
   }, [active, refresh]);
   async function mutate(mutation: RepositoryMutation): Promise<MutationOutcome> {
@@ -224,40 +228,67 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
   /** Same write+refresh lifecycle as `operationWrite`, for the remote/stash
    * IPC contract, which returns human-readable `output` text bound to this
    * tab (never a global toast) instead of a void result. */
-  async function remoteWrite(command: string, args: Record<string, unknown>): Promise<string> {
+  async function remoteWrite(command: string, args: Record<string, unknown>, options: { quiet?: boolean } = {}): Promise<string> {
     const current = session.current;
     if (!current || mutationLock.current || blockedRef.current) throw new Error('Repository mutations are blocked. Refresh successfully before retrying.');
     const token = epoch.current;
     const isCurrent = () => epoch.current === token && session.current?.session.handle === current.session.handle;
-    mutationLock.current = true; setMutationBusy(true); setActionError('');
+    const kind = (args.action as { kind?: string } | undefined)?.kind;
+    const fetching = command === 'repository_remote_action' && isFetchingAction(args.action);
+    mutationLock.current = true; setMutationBusy(true);
+    // Background fetch reports through the toolbar's fetch status instead of
+    // clearing or replacing an error banner the user has not dismissed yet.
+    if (!options.quiet) setActionError('');
+    if (fetching) { lastFetchAttempt.current = Date.now(); setFetchStatus({ kind: 'fetching', since: Date.now() }); }
     try {
       while (lock.current && isCurrent()) await new Promise(resolve => setTimeout(resolve, 25));
       if (!isCurrent()) throw new Error('Repository session changed.');
       const outcome = await remoteAndRefresh(current.session.handle, command, args, () => refresh(true), isCurrent);
       if (outcome.superseded) throw new Error('Repository session changed.');
+      if (fetching && isCurrent()) {
+        // A failed pull may have fetched and then refused to integrate; only a
+        // failed fetch is a fetch failure.
+        if (!outcome.error) setFetchStatus({ kind: 'fetched', at: Date.now() });
+        else if (kind !== 'pull') setFetchStatus({ kind: 'failed', at: Date.now(), message: outcome.error });
+        else setFetchStatus(previous => previous.kind === 'fetching' ? { kind: 'idle' } : previous);
+      }
       if (outcome.refreshError) { blockedRef.current = true; setMutationBlocked(true); }
       if (outcome.error || outcome.refreshError) throw new Error([outcome.error, outcome.refreshError && `Refresh failed: ${outcome.refreshError}. Further writes are blocked until refresh succeeds.`].filter(Boolean).join('\n'));
       return outcome.output ?? '';
     } catch (e) {
       // A stash/publish dialog can close while its write continues. Keep errors
       // on the originating pane even after that dialog has been unmounted.
-      if (isCurrent()) setActionError(errorMessage(e));
+      if (isCurrent()) {
+        if (!options.quiet) setActionError(errorMessage(e));
+        if (fetching) setFetchStatus(previous => previous.kind === 'fetching' ? { kind: 'failed', at: Date.now(), message: errorMessage(e) } : previous);
+      }
       throw e;
     } finally { if (isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
   }
   const remoteWriteRef = useRef(remoteWrite);
   remoteWriteRef.current = remoteWrite;
+  /** Fetches the focused tab's remote when due. Never runs for a hidden tab or
+   * window, and skips (rather than queues behind) any read or write in flight;
+   * the periodic check retries shortly afterwards. */
+  const autoFetch = useCallback(() => {
+    if (document.hidden || !activeRef.current || !session.current?.remotes.length) return;
+    if (lock.current || mutationLock.current || blockedRef.current) return;
+    if (!autoFetchDue(lastFetchAttempt.current, Date.now())) return;
+    void remoteWriteRef.current('repository_remote_action', { action: { kind: 'backgroundFetch' } }, { quiet: true }).catch(() => {});
+  }, []);
+  autoFetchRef.current = autoFetch;
+  const handle = state?.session.handle;
+  useEffect(() => {
+    lastFetchAttempt.current = null; setFetchStatus({ kind: 'idle' });
+    if (handle) autoFetch();
+  }, [handle, autoFetch]);
   useEffect(() => {
     const timer = setInterval(() => { if (!document.hidden && activeRef.current) void refresh(); }, 5000);
-    const fetchTimer = setInterval(() => {
-      if (!document.hidden && activeRef.current && session.current?.remotes.length && !lock.current && !mutationLock.current && !blockedRef.current) {
-        void remoteWriteRef.current('repository_remote_action', { action: { kind: 'backgroundFetch' } }).catch(() => {});
-      }
-    }, 5 * 60 * 1000);
-    const focus = () => { if (activeRef.current) void refresh(); };
+    const fetchTimer = setInterval(autoFetch, AUTO_FETCH_CHECK);
+    const focus = () => { if (activeRef.current) void refresh().then(autoFetch); };
     window.addEventListener('focus', focus);
     return () => { clearInterval(timer); clearInterval(fetchTimer); window.removeEventListener('focus', focus); };
-  }, [refresh]);
+  }, [refresh, autoFetch]);
   async function load(reveal?: string) {
     if (!session.current || lock.current || mutationLock.current) return;
     const token = epoch.current; const request = ++revealToken.current; lock.current = true; setBusy(true); setError('');
@@ -331,10 +362,11 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
       onOpenStash={() => setStashOpen(true)}
       onRefresh={() => void refresh()}
       onWrite={remoteWrite}
+      fetchStatus={fetchStatus}
       notify={setNotice} />}
     {actionError && <div className="native-banner" role="alert">{actionError} <button onClick={() => setActionError('')}>Dismiss operation error</button></div>}
     {error && <div className="native-banner" role="alert">{error} <button disabled={busy} onClick={() => state ? void refresh() : void open()}>Retry</button></div>}
-    {busy && !state && <div className="native-banner" role="status">Opening {locationLabel(location)}…</div>}{notice && <div className="native-banner" role="status">{notice}</div>}
+    {busy && !state && <div className="native-banner" role="status">Opening {locationLabel(location)}…{location.kind === 'wsl' && ' A stopped WSL distribution can take a few seconds to start.'}</div>}{notice && <div className="native-banner" role="status">{notice}</div>}
     {mutationBlocked && <div className="operation-banner" role="alert">Refresh failed after a write. Further writes are blocked until a successful refresh.<button onClick={() => void refresh()}>Refresh now</button></div>}
     {state && operation && (operation.kind !== 'none' || !!operation.conflicts.length) && <div className="operation-banner" role="status"><strong>{operation.label || operation.kind}</strong><span>{operation.current} {operation.incoming && `← ${operation.incoming}`}{operation.step !== null && ` · Step ${operation.step}${operation.total !== null ? ` / ${operation.total}` : ''}`}</span>{(['continue', 'skip', 'abort'] as const).map(kind => <button key={kind} disabled={mutationBusy || mutationBlocked || operation.kind === 'unsupported' || (kind === 'continue' && !operation.canContinue) || (kind === 'skip' && !operation.canSkip)} onClick={() => setActionContext({ oid: state.session.head ?? '', initial: kind })}>{kind === 'continue' ? 'Continue' : kind === 'skip' ? 'Skip' : 'Abort'}</button>)}{operation.conflicts.map(path => <button key={path} onClick={() => setConflictPath(path)}>Resolve {path}</button>)}</div>}
     {state && selected && selected !== WORKING_ID && !commits.some(commit => commit.id === selected) && <div className="native-banner" role="status">Selected commit {selected.slice(0, 12)} is {cursor ? 'outside the loaded history' : 'no longer reachable from the current references'}. Its inspector remains open by object ID.{cursor && <button disabled={busy} onClick={() => reveal(selected)}>Reveal selected commit</button>}</div>}
@@ -429,6 +461,7 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
                 onClose={() => setInspectorOpen(false)}
                 activePath={activeDiff?.path ?? null}
                 onActiveDiffChange={setActiveDiff}
+                notify={setNotice}
               />
             )}
           </>}

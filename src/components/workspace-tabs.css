@@ -61,6 +61,8 @@
 .repository-toolbar-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .repository-sync-badge { font-size: 13px; color: var(--secondary); font-variant-numeric: tabular-nums; padding: 4px 2px; }
 .repository-sync-badge[data-error='true'] { color: var(--red); }
+.repository-fetch-status { font-size: 12px; color: var(--secondary); padding: 4px 2px; white-space: nowrap; }
+.repository-fetch-status[data-error='true'] { color: var(--red); cursor: help; }
 .repository-toolbar button { padding: 6px 10px; min-height: 34px; }
 .pull-dropdown { position: relative; display: inline-flex; }
 .pull-dropdown-toggle { padding: 6px 6px !important; }

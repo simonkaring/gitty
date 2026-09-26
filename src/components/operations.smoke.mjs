@@ -49,6 +49,8 @@ try {
       if (command === 'repository_remotes') { if (f.failRemotes) throw new Error('Remote read fixture failed'); return [{ name: 'origin', fetchUrl: 'https://github.com/example/repo.git', pushUrl: 'https://github.com/example/repo.git', branches: ['main', 'topic'], currentUpstream: 'main' }]; }
       if (command === 'repository_sync_info') return { branch: 'main', upstream: 'origin/main', ahead: 0, behind: 0, remotes: ['origin'] };
       if (command === 'open_external_url') { if (f.failExternal) throw new Error('Browser launch fixture failed'); return; }
+      // The focused tab auto-fetches on open; it has no effect on this fixture.
+      if (command === 'repository_remote_action' && args.action.kind === 'backgroundFetch') return { output: '' };
       throw new Error(`Unexpected command: ${command}`);
     } };
   });

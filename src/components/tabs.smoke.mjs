@@ -181,7 +181,7 @@ try {
   await page.waitForFunction(() => !window.fixture.remoteWaiting);
   await tabButton('Repo B').click();
   await activePane().getByText('synced handle-b', { exact: true }).waitFor();
-  assert.equal(await page.evaluate(() => window.fixture.calls.filter(c => c.command === 'repository_remote_action').length), 1, 'the pull ran exactly once, bound to repo B');
+  assert.equal(await page.evaluate(() => window.fixture.calls.filter(c => c.command === 'repository_remote_action' && c.args.action.kind !== 'backgroundFetch').length), 1, 'the pull ran exactly once, bound to repo B');
 
   // Normal push delegates upstream resolution to Git, including remotes with
   // slashes or a differently named upstream branch; no display-label parsing.
@@ -210,6 +210,11 @@ try {
   assert.equal(await page.locator('.repository-tab').count(), 2, 'both tabs are restored after reload');
   assert.equal(await page.locator('.repository-tab[data-selected="true"]').getByText('Repo B', { exact: true }).count(), 1, 'the previously active tab is still active after reload');
   await activePane().getByRole('option', { name: /^Commit b0,/ }).waitFor();
+  // Opening a repository auto-fetches it, but only in the focused tab.
+  await page.waitForFunction(() => window.fixture.calls.some(c => c.command === 'repository_remote_action' && c.args.action.kind === 'backgroundFetch'));
+  await activePane().getByText(/^Fetched /).waitFor();
+  const backgroundHandles = await page.evaluate(() => [...new Set(window.fixture.calls.filter(c => c.command === 'repository_remote_action' && c.args.action.kind === 'backgroundFetch').map(c => c.args.handle))]);
+  assert.deepEqual(backgroundHandles, ['handle-b'], 'only the focused tab (Repo B) auto-fetched after reload');
 
   // --- Cannot close a busy tab; closing an idle one cleans up its handle --
   await page.evaluate(() => { window.fixture.holdRemote = true; });
@@ -226,8 +231,8 @@ try {
   assert.equal(await page.locator('.repository-tab').count(), 1, 'closing an idle tab removes it');
   assert.equal(await page.locator('.repository-tab').getByText('Repo A', { exact: true }).count(), 1, 'the remaining tab is focused after closing the other one');
 
-  // --- Offline-first: remote/stash actions never run passively ------------
-  const remoteCalls = await page.evaluate(() => window.fixture.calls.filter(c => c.command === 'repository_remote_action').length);
+  // --- Only explicit actions and the focused tab's auto-fetch reach remotes --
+  const remoteCalls = await page.evaluate(() => window.fixture.calls.filter(c => c.command === 'repository_remote_action' && c.args.action.kind !== 'backgroundFetch').length);
   const stashActionCalls = await page.evaluate(() => window.fixture.calls.filter(c => c.command === 'repository_stash_action').length);
   assert.equal(remoteCalls, 1, 'repository_remote_action only ran for the one explicit Pull click across the whole scenario');
   assert.equal(stashActionCalls, 0, 'repository_stash_action never ran: no stash action was explicitly requested');

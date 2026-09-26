@@ -211,6 +211,13 @@ impl Repository {
             | RemoteAction::Push { remote, branch, .. } => (remote.as_deref(), branch.as_deref()),
         };
         let interactive = !matches!(action, RemoteAction::BackgroundFetch);
+        let network = || {
+            let (mut a, env) = network_args(interactive, askpass);
+            if wsl && interactive {
+                allow_credential_helper_ui(&mut a);
+            }
+            (a, env)
+        };
         let remote = self.choose_remote(remote, configured_remote.as_deref(), &info.remotes)?;
         if let Some(branch) = branch {
             self.remote_branch_name(branch)?;
@@ -225,7 +232,7 @@ impl Repository {
 
         match &action {
             RemoteAction::Fetch { .. } | RemoteAction::BackgroundFetch => {
-                let (mut a, env) = network_args(interactive, askpass);
+                let (mut a, env) = network();
                 a.extend(args(&[
                     "fetch",
                     "--no-all",
@@ -283,7 +290,7 @@ impl Repository {
                         "Choose a remote with exactly one push URL.",
                     ));
                 }
-                let (mut a, env) = network_args(interactive, askpass);
+                let (mut a, env) = network();
                 a.extend(args(&[
                     "push",
                     "--porcelain",
@@ -318,7 +325,7 @@ impl Repository {
                 self.remote_branch_name(branch)?;
                 // Fetch precisely one branch, then integrate its pinned object ID.
                 // No merge/rebase ever runs after an uncertain or failed fetch.
-                let (mut fetch, env) = network_args(interactive, askpass);
+                let (mut fetch, env) = network();
                 fetch.extend(args(&[
                     "fetch",
                     "--no-all",
@@ -432,10 +439,23 @@ pub(crate) fn action_result(output: Output) -> Result<ActionOutput> {
 fn network_result(output: Output, wsl: bool) -> Result<ActionOutput> {
     action_result(output).map_err(|mut error| {
         if wsl {
-            error.message.push_str("\nInteractive authentication is unavailable for WSL repositories. Configure a credential helper or SSH agent inside the distribution, then retry.");
+            error.message.push_str("\nGitty cannot prompt for passwords or passphrases in WSL. A credential helper with its own sign-in window (such as Git Credential Manager) can still ask; otherwise configure a credential helper or SSH agent inside the distribution, then retry.");
         }
         error
     })
+}
+
+/// Explicit WSL actions cannot use the native askpass bridge, but a credential
+/// helper that opens its own window — typically Windows Git Credential Manager
+/// reached through WSL interop — may sign the user in again. Terminal prompts,
+/// askpass programs and SSH passphrase prompts stay disabled, so nothing can
+/// wait on input Gitty cannot supply. Background fetch never calls this.
+fn allow_credential_helper_ui(a: &mut [String]) {
+    for value in a.iter_mut() {
+        if value == "credential.interactive=false" {
+            *value = "credential.interactive=true".into();
+        }
+    }
 }
 
 pub(crate) fn network_args(
@@ -503,4 +523,22 @@ pub(crate) fn network_args(
     }
 
     (a, env)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credential_helper_ui_keeps_every_other_prompt_disabled() {
+        let (mut a, env) = network_args(true, None);
+        allow_credential_helper_ui(&mut a);
+        assert!(env.is_empty());
+        assert!(a.iter().any(|v| v == "credential.interactive=true"));
+        assert!(!a.iter().any(|v| v == "credential.interactive=false"));
+        assert!(a.iter().any(|v| v == "core.askPass="));
+        assert!(a
+            .iter()
+            .any(|v| v == "core.sshCommand=ssh -oBatchMode=yes -oStrictHostKeyChecking=yes"));
+    }
 }

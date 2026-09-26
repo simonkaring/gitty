@@ -375,10 +375,30 @@ impl Repository {
     }
     pub fn state(&self) -> Result<RepositoryState> {
         let mut session = self.session.clone();
-        session.head = optional(self.location(), &["rev-parse", "--verify", "HEAD^{commit}"])?;
-        session.head_ref = optional(self.location(), &["symbolic-ref", "-q", "HEAD"])?;
-        session.shallow =
-            string(self.location(), &["rev-parse", "--is-shallow-repository"])? == "true";
+        let location = self.location();
+        let required = |values: &'static [&'static str]| {
+            Box::new(move || string(location, values).map(Some))
+                as Box<dyn FnOnce() -> Result<Option<String>> + Send + '_>
+        };
+        let [head, head_ref, shallow, raw, remotes]: [Result<Option<String>>; 5] =
+            process::parallel(vec![
+                Box::new(|| optional(location, &["rev-parse", "--verify", "HEAD^{commit}"])),
+                Box::new(|| optional(location, &["symbolic-ref", "-q", "HEAD"])),
+                required(&["rev-parse", "--is-shallow-repository"]),
+                required(&["for-each-ref", "--format=%(refname)%00%(objecttype)%00%(objectname)%00%(*objecttype)%00%(*objectname)", "refs/heads", "refs/remotes", "refs/tags"]),
+                required(&["remote"]),
+            ])
+            .try_into()
+            .unwrap_or_else(|_| unreachable!());
+        session.head = head?;
+        session.head_ref = head_ref?;
+        session.shallow = shallow?.unwrap_or_default() == "true";
+        let raw = raw?.unwrap_or_default();
+        let remotes: Vec<String> = remotes?
+            .unwrap_or_default()
+            .lines()
+            .map(String::from)
+            .collect();
         // Deepening a shallow clone can change the graph without moving any ref
         // or changing the boolean shallow flag. Hash the actual boundary file
         // through Git so WSL uses Linux paths and no objects are written.
@@ -399,7 +419,6 @@ impl Repository {
         } else {
             None
         };
-        let raw = string(self.location(), &["for-each-ref", "--format=%(refname)%00%(objecttype)%00%(objectname)%00%(*objecttype)%00%(*objectname)", "refs/heads", "refs/remotes", "refs/tags"])?;
         let mut refs = vec![];
         for line in raw.lines().filter(|s| !s.is_empty()) {
             let f: Vec<_> = line.split('\0').collect();
@@ -430,10 +449,6 @@ impl Repository {
                 kind: kind.into(),
             });
         }
-        let remotes: Vec<String> = string(self.location(), &["remote"])?
-            .lines()
-            .map(String::from)
-            .collect();
         let fingerprint = fingerprint((
             &raw,
             &session.head,
@@ -541,40 +556,98 @@ impl Repository {
     }
     pub fn status(&self) -> Result<RepositoryStatus> {
         let mut status = self.status_entries()?;
-        let mut hash = DefaultHasher::new();
-        status.fingerprint.hash(&mut hash);
-        // Porcelain includes index object IDs, but only status letters for working
-        // files. Hash actual binary-capable patches so repeated same-size edits
-        // invalidate the inspector, including files with restored mtimes.
-        if status
+        let untracked: Vec<&str> = status
             .entries
             .iter()
-            .any(|e| !e.untracked && e.worktree_status != ".")
-        {
-            let a = args(&[
-                "diff",
-                "--ours",
-                "--binary",
-                "--full-index",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--no-color",
-                "--no-renames",
-                "--ignore-submodules=none",
-                "--",
-            ]);
-            let mut stream = crate::stream::GitStream::diff(self.location(), &a)?;
-            while let Some(record) = stream.next()? {
-                record.hash(&mut hash);
+            .filter(|e| e.untracked)
+            .map(|e| e.path.as_str())
+            .collect();
+        let tracked_changes = status
+            .entries
+            .iter()
+            .any(|e| !e.untracked && e.worktree_status != ".");
+        let [tracked, untracked]: [Result<u64>; 2] = process::parallel(vec![
+            Box::new(|| {
+                if tracked_changes {
+                    self.tracked_content_hash()
+                } else {
+                    Ok(0)
+                }
+            }),
+            Box::new(|| self.untracked_content_hash(&untracked)),
+        ])
+        .try_into()
+        .unwrap_or_else(|_| unreachable!());
+        status.fingerprint = fingerprint((&status.fingerprint, tracked?, untracked?));
+        Ok(status)
+    }
+    /// Porcelain includes index object IDs, but only status letters for working
+    /// files. Hash actual binary-capable patches so repeated same-size edits
+    /// invalidate the inspector, including files with restored mtimes.
+    fn tracked_content_hash(&self) -> Result<u64> {
+        let mut hash = DefaultHasher::new();
+        let a = args(&[
+            "diff",
+            "--ours",
+            "--binary",
+            "--full-index",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--no-renames",
+            "--ignore-submodules=none",
+            "--",
+        ]);
+        let mut stream = crate::stream::GitStream::diff(self.location(), &a)?;
+        while let Some(record) = stream.next()? {
+            record.hash(&mut hash);
+        }
+        Ok(hash.finish())
+    }
+    /// Hashes untracked content with one `hash-object --stdin-paths` for the
+    /// whole set rather than a process per file. Names that the line protocol
+    /// cannot carry verbatim, or a batch Git refuses (a dangling symlink, a file
+    /// that vanished), fall back to one no-index patch per file.
+    fn untracked_content_hash(&self, paths: &[&str]) -> Result<u64> {
+        let mut hash = DefaultHasher::new();
+        // Git reports untracked embedded repositories as a single directory even
+        // with -uall; neither a blob hash nor a file patch can represent one.
+        let files: Vec<&str> = paths
+            .iter()
+            .copied()
+            .filter(|p| !p.ends_with('/'))
+            .collect();
+        paths.hash(&mut hash);
+        if files.is_empty() {
+            return Ok(hash.finish());
+        }
+        let batchable = files
+            .iter()
+            .all(|p| !p.contains(['\n', '\r']) && !p.starts_with('"'));
+        if batchable {
+            let input = files.join("\n") + "\n";
+            let command = process::git_command(
+                self.location(),
+                &args(&["hash-object", "--no-filters", "--stdin-paths"]),
+            )?;
+            let o = process::run_with_input_for(
+                command,
+                input.as_bytes(),
+                process::remaining_timeout()?,
+                8 * 1024 * 1024,
+            )?;
+            if o.success
+                && o.stdout
+                    .split(|b| *b == b'\n')
+                    .filter(|l| !l.is_empty())
+                    .count()
+                    == files.len()
+            {
+                o.stdout.hash(&mut hash);
+                return Ok(hash.finish());
             }
         }
-        for entry in status.entries.iter().filter(|e| e.untracked) {
-            entry.path.hash(&mut hash);
-            // Git reports untracked embedded repositories as a single directory
-            // even with -uall. A no-index file patch cannot represent a directory.
-            if entry.path.ends_with('/') {
-                continue;
-            }
+        for path in files {
             let a = args(&[
                 "diff",
                 "--no-index",
@@ -585,15 +658,14 @@ impl Repository {
                 "--no-color",
                 "--",
                 "/dev/null",
-                &entry.path,
+                path,
             ]);
             let mut stream = crate::stream::GitStream::diff(self.location(), &a)?;
             while let Some(record) = stream.next()? {
                 record.hash(&mut hash);
             }
         }
-        status.fingerprint = format!("{:016x}", hash.finish());
-        Ok(status)
+        Ok(hash.finish())
     }
     // Internal diff validation needs paths/status only, not refresh fingerprints.
     pub(crate) fn status_entries(&self) -> Result<RepositoryStatus> {

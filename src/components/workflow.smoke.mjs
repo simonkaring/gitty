@@ -99,6 +99,8 @@ try {
         f.version++;
         return;
       }
+      // The focused tab auto-fetches on open; it has no effect on this fixture.
+      if (command === 'repository_remote_action' && args.action.kind === 'backgroundFetch') return { output: '' };
       throw new Error(`Unexpected command ${command}`);
     } };
   });
