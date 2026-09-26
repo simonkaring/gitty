@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import { ChevronDown, Download, GitBranch, RefreshCw, Upload } from 'lucide-react';
+import { ChevronDown, Download, GitBranch, RefreshCw, Upload, UserRound } from 'lucide-react';
 import { native, errorMessage } from '../model/native';
 import { DEFAULT_PULL_MODE, PULL_MODE_LABELS, describeRemoteAction, needsPublish, syncSummary, type PullMode, type RemoteActionRequest, type SyncInfo } from '../model/remote';
 import { PublishDialog } from './PublishDialog';
 import { describeFetchStatus, type FetchStatus } from '../model/autoFetch';
+import { RepositoryIdentityDialog } from './RepositoryIdentityDialog';
+import type { CommitIdentity, GitIdentityValues } from '../model/repository';
 
 export interface RepositoryToolbarProps {
   handle: string;
@@ -63,6 +65,7 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
   const [pullMenuOpen, setPullMenuOpen] = useState(false);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
+  const [identityOpen, setIdentityOpen] = useState(false);
   const pullMenuRef = useRef<HTMLDivElement>(null);
   const pullToggleRef = useRef<HTMLButtonElement>(null);
   const branchMenuRef = useRef<HTMLDivElement>(null);
@@ -78,7 +81,7 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
   // Deactivating the tab makes the browser force-close any top-layer publish
   // dialog in it; keep menus/dialog state in sync rather than leaving a
   // dropdown open behind a hidden pane.
-  useEffect(() => { if (!active) { setPullMenuOpen(false); setBranchMenuOpen(false); setPublishOpen(false); } }, [active]);
+  useEffect(() => { if (!active) { setPullMenuOpen(false); setBranchMenuOpen(false); setPublishOpen(false); setIdentityOpen(false); } }, [active]);
   const disabled = busy || !active;
   async function run(action: RemoteActionRequest, kind: 'fetch' | 'pull' | 'push') {
     if (disabled || pending) return;
@@ -137,9 +140,12 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
       <button disabled={busy} onClick={onOpenStash}>Stash…</button>
     </div>
     <span className="repository-toolbar-divider" aria-hidden="true" />
+    <div className="repository-toolbar-group"><button disabled={disabled} onClick={() => setIdentityOpen(true)}><UserRound size={15} />Git identity…</button></div>
+    <span className="repository-toolbar-divider" aria-hidden="true" />
     <div className="repository-toolbar-group">
       <button className="secondary-button" disabled={busy} onClick={onRefresh}><RefreshCw size={15} />Refresh</button>
     </div>
     {publishOpen && <PublishDialog remotes={sync?.remotes ?? []} branch={sync?.branch ?? ''} onPublish={publish} onClose={() => setPublishOpen(false)} />}
+    {identityOpen && <RepositoryIdentityDialog handle={handle} revision={revision} onApply={async (identity: CommitIdentity, expectedLocal: GitIdentityValues) => { await onWrite('repository_set_git_identity', { identity, expectedLocal }); notify('Repository Git identity updated.'); }} onClose={() => setIdentityOpen(false)} />}
   </div>;
 }

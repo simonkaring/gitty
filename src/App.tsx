@@ -80,7 +80,7 @@ function Workspace({ repository, theme, sidebarOpen, inspectorOpen, inspectorWid
   useEffect(() => setSplit(settings.diffView !== 'unified'), [settings.diffView]);
   const [sidebarWidth, setSidebarWidth] = usePaneWidth('sidebar', 240, 210, 340);
   useEffect(() => { onDirty(false); }, [onDirty]);
-  const { layout, count: layoutCount } = useGraphLayout(snapshot.commits);
+  const { layout } = useGraphLayout(snapshot.commits);
   const [selectedId, setSelectedId] = useState(snapshot.head);
   const [loaded, setLoaded] = useState(240);
   const [query, setQuery] = useState('');

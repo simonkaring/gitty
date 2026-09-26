@@ -47,7 +47,7 @@ fn validate_message(message: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_identity(identity: Option<&CommitIdentity>) -> Result<()> {
+pub(crate) fn validate_identity(identity: Option<&CommitIdentity>) -> Result<()> {
     let Some(identity) = identity else {
         return Ok(());
     };

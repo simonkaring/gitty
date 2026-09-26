@@ -9,6 +9,7 @@ mod diff;
 mod dto;
 mod external;
 mod hunk;
+mod identity;
 mod mutate;
 mod operation_dto;
 mod operations;
@@ -197,6 +198,25 @@ async fn repository_state(
     handle: String,
 ) -> Result<RepositoryState> {
     with_service(state, move |s| s.repo(&handle)?.state()).await
+}
+#[tauri::command]
+async fn repository_git_identity(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+) -> Result<RepositoryGitIdentity> {
+    with_service(state, move |s| s.repo(&handle)?.git_identity()).await
+}
+#[tauri::command]
+async fn repository_set_git_identity(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    identity: CommitIdentity,
+    expected_local: GitIdentityValues,
+) -> Result<RepositoryGitIdentity> {
+    with_service(state, move |s| {
+        s.set_git_identity(&handle, &identity, &expected_local)
+    })
+    .await
 }
 #[tauri::command]
 async fn repository_history(
@@ -396,6 +416,8 @@ pub fn run() {
             repository_close,
             repository_recent,
             repository_state,
+            repository_git_identity,
+            repository_set_git_identity,
             repository_history,
             repository_commit,
             repository_status,

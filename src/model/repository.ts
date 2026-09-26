@@ -36,6 +36,8 @@ export interface DirectoryEntry { name: string; path: string }
 export interface RepositoryError { code: string; message: string }
 export interface CreateCommitResult { oid: string }
 export interface CommitIdentity { name: string; email: string }
+export interface GitIdentityValues { name: string | null; email: string | null }
+export interface RepositoryGitIdentity { local: GitIdentityValues; effective: GitIdentityValues }
 /** Writes use explicit repository-relative paths; an empty array never means all.
  * File stage/unstage affect whole paths, including the remainder of partially staged
  * files. Conflicted paths cannot be mutated here. The service is authoritative
@@ -73,6 +75,8 @@ export type RepositoryMutation =
  * is accepted from the client. Both commands leave the working tree untouched.
   * repository_create_commit({handle, message: string, identity?: CommitIdentity}) -> CreateCommitResult
   * repository_amend_commit({handle, message, identity?: CommitIdentity, expectedHead, expectedHeadRef, expectedStatusFingerprint}) -> CreateCommitResult
+  * repository_git_identity({handle}) -> RepositoryGitIdentity
+  * repository_set_git_identity({handle, identity: CommitIdentity, expectedLocal: GitIdentityValues}) -> RepositoryGitIdentity
  * wsl_distributions() -> WslDistribution[]
  * wsl_directories({distribution, path}) -> DirectoryEntry[]
  * Errors: {code: string, message: string}

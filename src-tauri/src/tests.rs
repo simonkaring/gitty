@@ -42,6 +42,105 @@ fn open(service: &mut Service, path: &Path) -> RepositoryState {
 }
 
 #[test]
+fn repository_git_identity_is_explicit_shared_and_detects_external_changes() {
+    let d = init();
+    std::fs::write(d.path().join("base"), "base").unwrap();
+    commit(d.path(), "initial");
+    let linked = tempfile::tempdir().unwrap();
+    let linked_path = linked.path().join("linked");
+    git(
+        d.path(),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "linked",
+            linked_path.to_str().unwrap(),
+        ],
+    );
+    let data = tempfile::tempdir().unwrap();
+    git(d.path(), &["config", "--local", "core.abbrev", "9"]);
+    let mut service = Service::new(data.path().into());
+    let main = open(&mut service, d.path());
+    let worktree = open(&mut service, &linked_path);
+    let before = service
+        .repo(&main.session.handle)
+        .unwrap()
+        .git_identity()
+        .unwrap();
+    assert_eq!(before.local.name.as_deref(), Some("Test Author"));
+    let selected = CommitIdentity {
+        name: "Different Author".into(),
+        email: "different@example.org".into(),
+    };
+    let updated = service
+        .set_git_identity(&worktree.session.handle, &selected, &before.local)
+        .unwrap();
+    assert_eq!(updated.effective.name.as_deref(), Some("Different Author"));
+    assert_eq!(
+        git(d.path(), &["config", "--local", "user.email"]),
+        selected.email
+    );
+    assert_eq!(git(&linked_path, &["config", "user.name"]), selected.name);
+    assert_eq!(git(d.path(), &["config", "--local", "core.abbrev"]), "9");
+    std::fs::write(linked_path.join("outside-gitty"), "external commit").unwrap();
+    commit(&linked_path, "from terminal");
+    assert_eq!(
+        git(&linked_path, &["log", "-1", "--format=%an <%ae>"]),
+        "Different Author <different@example.org>"
+    );
+    git(d.path(), &["config", "extensions.worktreeConfig", "true"]);
+    git(
+        &linked_path,
+        &["config", "--worktree", "user.email", "worktree@example.org"],
+    );
+    let overridden = service
+        .repo(&worktree.session.handle)
+        .unwrap()
+        .git_identity()
+        .unwrap();
+    assert_eq!(
+        overridden.local.email.as_deref(),
+        Some("different@example.org")
+    );
+    assert_eq!(
+        overridden.effective.email.as_deref(),
+        Some("worktree@example.org")
+    );
+    git(
+        d.path(),
+        &["config", "--local", "user.name", "External Author"],
+    );
+    let error = service
+        .set_git_identity(&main.session.handle, &selected, &before.local)
+        .err()
+        .unwrap();
+    assert_eq!(error.code, "staleOperation");
+    assert_eq!(git(d.path(), &["config", "user.name"]), "External Author");
+    let invalid = CommitIdentity {
+        name: "Bad\nName".into(),
+        email: "bad@example.org".into(),
+    };
+    assert_eq!(
+        service
+            .set_git_identity(
+                &main.session.handle,
+                &invalid,
+                &service
+                    .repo(&main.session.handle)
+                    .unwrap()
+                    .git_identity()
+                    .unwrap()
+                    .local
+            )
+            .err()
+            .unwrap()
+            .code,
+        "invalidRequest"
+    );
+}
+
+#[test]
 fn unborn_status_odd_paths_staged_untracked_and_persistence() {
     let d = init();
     let data = tempfile::tempdir().unwrap();

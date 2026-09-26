@@ -144,7 +144,9 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       ctx.bezierCurveTo(xt, y2 - bend, x2, y2 - bend, x2, y2);
       ctx.stroke();
     }
-    for (let row = start; row < end; row++) {
+    // The worker can still be laying out newly loaded history when this effect
+    // runs. Rows remain visible, but their canvas nodes must wait for layout.
+    for (let row = start; row < Math.min(end, layout.nodes.length, commits.length); row++) {
       const node = layout.nodes[row];
       const commit = commits[row];
       const x = laneX(node.lane), cy = y(row);

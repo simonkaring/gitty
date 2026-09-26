@@ -12,6 +12,8 @@ Ordinary index/commit writes use these commands:
 - `repository_unstage_hunk({handle, path: string, hunkIndex: number, fingerprint: string, lineIndices?: number[]}) -> void`
 - `repository_create_commit({handle, message: string, identity?: {name: string, email: string}}) -> {oid: string}`
 - `repository_amend_commit({handle, message: string, identity?: {name: string, email: string}, expectedHead: string, expectedHeadRef: string | null, expectedStatusFingerprint: string}) -> {oid: string}`
+- `repository_git_identity({handle}) -> {local: {name: string | null, email: string | null}, effective: {name: string | null, email: string | null}}`
+- `repository_set_git_identity({handle, identity: {name: string, email: string}, expectedLocal: {name: string | null, email: string | null}}) -> RepositoryGitIdentity`
 
 `repository_commit({handle, oid})` is unchanged and remains a read.
 When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage_hunk`, only the specified 0-based lines within the hunk are staged/unstaged using a selectively generated forward patch (and `--reverse` for unstaging), validating bounds and changed line kinds while preserving all working files and other index entries.
@@ -93,6 +95,7 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   limits return an error rather than silently returning incomplete data.
 - Recent repositories are stored in app-data `recent-repositories.json`, capped
   at 20 and replaced atomically. No repository files are written.
+- Identity reads report both repository-local and effective Git `user.name` / `user.email` values. The local values are read without includes; effective values honor Git's normal configuration precedence.
 - The folder picker uses `rfd`'s native asynchronous dialog. WSL discovery decodes
   UTF-16 output; browsing invokes Linux `find` directly, NUL-delimited, one directory
   level at a time. WSL requires Windows and Linux Git, `env`, and GNU `find`.
@@ -162,6 +165,7 @@ targeted conflict resolutions have the additional contract documented below.
   inside the lock, so checks and the write are one unit relative to other Gitty
   sessions. External Git can still change the repository before the subprocess
   acquires Git's own index/ref locks. Reads are never blocked.
+- Applying a saved identity explicitly sets `user.name` and `user.email` in repository-local Git config (`git config --local --replace-all`), shared by linked worktrees. Values are validated like commit profiles and local values are compared against `expectedLocal` under the mutation lock; external changes detected before writing return `staleOperation`. Only those two keys are written, not global Git config. Git config writes use separate commands, so a failure after the first command may leave one field changed; clients re-read the identity after any failure. Worktree-specific config can override the shared local values and is shown separately in the effective read.
 - Before an ordinary stage/unstage/commit write: bare repositories are rejected (`bareRepository`); an
   in-progress merge, rebase, `am`, cherry-pick, revert, sequencer run or bisect is
   rejected (`operationInProgress`), detected from this worktree's Git directory

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { FileCode2, FolderGit2, GitBranch, Globe2, LocateFixed, Search, Tag, X } from 'lucide-react';
-import { layoutHistory } from '../graph/layout';
+import { useGraphLayout } from '../graph/useGraphLayout';
 import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
 import { appendUnique, errorMessage, graphCommit, native, validateHistory, WORKING_ID } from '../model/native';
 import { HistoryGraph, graphDropAction, REF_DRAG_TYPE, COMMIT_DRAG_TYPE, type GraphAnchor, type GraphHandle } from './HistoryGraph';

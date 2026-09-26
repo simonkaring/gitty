@@ -180,7 +180,6 @@ impl Repository {
         askpass: Option<&crate::askpass::AskpassRegistry>,
     ) -> Result<ActionOutput> {
         let wsl = matches!(self.location(), RepositoryLocation::Wsl { .. });
-        let interactive = !matches!(action, RemoteAction::BackgroundFetch);
         self.require_writable()?;
         if !self.unmerged()?.is_empty() {
             return Err(Error::new(
@@ -208,13 +207,6 @@ impl Repository {
             | RemoteAction::Push { remote, branch, .. } => (remote.as_deref(), branch.as_deref()),
         };
         let interactive = !matches!(action, RemoteAction::BackgroundFetch);
-        let network = || {
-            let (mut a, env) = network_args(interactive, askpass);
-            if wsl && interactive {
-                allow_credential_helper_ui(&mut a);
-            }
-            (a, env)
-        };
         let remote = self.choose_remote(remote, configured_remote.as_deref(), &info.remotes)?;
         if let Some(branch) = branch {
             self.remote_branch_name(branch)?;
@@ -244,7 +236,13 @@ impl Repository {
             (Some((path, guard)), Some(registry)) => {
                 network_args_wsl(path, registry, guard.token())
             }
-            _ => network_args(interactive, if wsl { None } else { askpass }),
+            _ => {
+                let (mut args, env) = network_args(interactive, if wsl { None } else { askpass });
+                if wsl && interactive {
+                    allow_credential_helper_ui(&mut args);
+                }
+                (args, env)
+            }
         };
 
         match &action {
@@ -539,6 +537,28 @@ pub(crate) fn network_args(
     }
 
     (a, env)
+}
+
+pub(crate) fn network_args_wsl(
+    executable: &str,
+    registry: &crate::askpass::AskpassRegistry,
+    token: &str,
+) -> (Vec<String>, Vec<(String, String)>) {
+    let (mut args, mut env) = network_args(false, None);
+    args.extend(crate::process::args(&[
+        "-c",
+        "credential.interactive=true",
+        "-c",
+        &format!("core.askPass={}", crate::askpass::shell_quote(executable)),
+    ]));
+    env.extend([
+        ("GIT_ASKPASS".into(), executable.into()),
+        ("SSH_ASKPASS".into(), executable.into()),
+        ("SSH_ASKPASS_REQUIRE".into(), "force".into()),
+        ("GITTY_ASKPASS_PORT".into(), registry.port.to_string()),
+        ("GITTY_ASKPASS_TOKEN".into(), token.into()),
+    ]);
+    (args, env)
 }
 
 #[cfg(test)]

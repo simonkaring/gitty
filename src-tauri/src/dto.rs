@@ -77,6 +77,18 @@ pub struct CommitIdentity {
     pub name: String,
     pub email: String,
 }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitIdentityValues {
+    pub name: Option<String>,
+    pub email: Option<String>,
+}
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryGitIdentity {
+    pub local: GitIdentityValues,
+    pub effective: GitIdentityValues,
+}
 #[derive(Debug, Serialize)]
 pub struct HistoryPage {
     pub commits: Vec<CommitSummary>,
