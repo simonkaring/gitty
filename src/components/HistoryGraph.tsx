@@ -39,12 +39,13 @@ interface Props {
   shallow?: boolean;
   headRef?: string | null;
   onActions?: (context: ActionContext) => void;
+  onContextActions?: (context: ActionContext, x: number, y: number, trigger: HTMLElement) => void;
   onSwitchBranch?: (ref: string) => void;
   pickOrder?: string[];
   onTogglePick?: (oid: string) => void;
 }
 
-export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, loaded, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onSwitchBranch, pickOrder, onTogglePick }, ref) {
+export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, loaded, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onContextActions, onSwitchBranch, pickOrder, onTogglePick }, ref) {
   const scroller = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -176,7 +177,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
         onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) stopDrag(); }}
         onKeyDown={event => {
           if (event.target !== event.currentTarget) return;
-          if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && selectedId !== WORKING_ID) { event.preventDefault(); onActions?.({ oid: selectedId }); }
+          if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && selectedId !== WORKING_ID && onContextActions) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); onContextActions({ oid: selectedId }, rect.left + 24, rect.top + 24, event.currentTarget); }
           const moves: Record<string, number> = { ArrowDown: selectedIndex + 1, ArrowUp: selectedIndex - 1, Home: 0, End: loaded - 1, PageDown: selectedIndex + Math.floor(height / ROW_HEIGHT), PageUp: selectedIndex - Math.floor(height / ROW_HEIGHT) };
           if (event.key in moves) { event.preventDefault(); navigate(moves[event.key]); }
           if (event.key === 'Enter') { event.preventDefault(); onOpenDetails(); }
@@ -196,17 +197,17 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                 top: row * ROW_HEIGHT,
                 height: ROW_HEIGHT,
                 '--branch-color': branchColor,
-              } as React.CSSProperties} onContextMenu={event => { if (onActions && commit.id !== WORKING_ID) { event.preventDefault(); onActions({ oid: commit.id }); } }} onClick={() => { onSelect(commit.id); scroller.current?.focus(); }} onDoubleClick={onOpenDetails}>
+               } as React.CSSProperties} onContextMenu={event => { if (onContextActions && commit.id !== WORKING_ID) { event.preventDefault(); onContextActions({ oid: commit.id }, event.clientX, event.clientY, scroller.current ?? event.currentTarget); } }} onClick={() => { onSelect(commit.id); scroller.current?.focus(); }} onDoubleClick={onOpenDetails}>
               <div className="commit-refs">
                 {badges.map(ref => <span key={ref.fullName ?? ref.name} className={`ref-pill ${ref.kind === 'tag' ? 'tag-ref' : ref.kind === 'remote' ? 'remote-ref' : ref.name === 'main' ? 'main-ref' : ''}`}
                   data-name={ref.name} title={ref.name}
                   role={onActions && ref.fullName ? 'button' : undefined} tabIndex={onActions && ref.fullName ? 0 : undefined} aria-label={onActions && ref.fullName ? `Graph actions for ${ref.name}` : undefined}
-                  onKeyDown={event => { if (onActions && ref.fullName && (event.key === 'Enter' || event.key === ' ' || event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) { event.preventDefault(); event.stopPropagation(); onActions({ oid: commit.id, ref: ref.fullName }); } }}
+                   onKeyDown={event => { if (!ref.fullName) return; if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && onContextActions) { event.preventDefault(); event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); onContextActions({ oid: commit.id, ref: ref.fullName }, rect.left, rect.bottom, event.currentTarget); } else if (onActions && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.stopPropagation(); onActions({ oid: commit.id, ref: ref.fullName }); } }}
                   data-current={!!headRef && ref.fullName === headRef} draggable={!!onActions && !!ref.fullName && ref.kind !== 'tag'}
                   onDragStart={event => { event.stopPropagation(); if (onActions && ref.fullName && ref.kind !== 'tag') { event.dataTransfer.clearData(COMMIT_DRAG_TYPE); event.dataTransfer.setData(REF_DRAG_TYPE, ref.fullName); event.dataTransfer.effectAllowed = 'copy'; } else event.preventDefault(); }} onDragEnd={stopDrag}
                   onDragOver={event => { if (ref.fullName === headRef && [REF_DRAG_TYPE, COMMIT_DRAG_TYPE].some(type => event.dataTransfer.types.includes(type))) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
                   onDrop={event => { event.preventDefault(); event.stopPropagation(); stopDrag(); const action = graphDropAction(event.dataTransfer, ref.fullName, headRef, commits.slice(0, loaded), refs); if (action) onActions?.(action); }}
-                  onContextMenu={event => { if (onActions && ref.fullName) { event.preventDefault(); event.stopPropagation(); onActions({ oid: commit.id, ref: ref.fullName }); } }} onClick={event => { if (onActions && ref.fullName) { event.stopPropagation(); if (ref.kind === 'local' && onSwitchBranch) { if (badgeAction.current) clearTimeout(badgeAction.current); if (event.detail < 2) badgeAction.current = setTimeout(() => { badgeAction.current = null; onActions({ oid: commit.id, ref: ref.fullName }); }, 500); } else onActions({ oid: commit.id, ref: ref.fullName }); } }}
+                   onContextMenu={event => { if (onContextActions && ref.fullName) { event.preventDefault(); event.stopPropagation(); onContextActions({ oid: commit.id, ref: ref.fullName }, event.clientX, event.clientY, event.currentTarget); } }} onClick={event => { if (onActions && ref.fullName) { event.stopPropagation(); if (ref.kind === 'local' && onSwitchBranch) { if (badgeAction.current) clearTimeout(badgeAction.current); if (event.detail < 2) badgeAction.current = setTimeout(() => { badgeAction.current = null; onActions({ oid: commit.id, ref: ref.fullName }); }, 500); } else onActions({ oid: commit.id, ref: ref.fullName }); } }}
                   onDoubleClick={event => { if (ref.kind === 'local' && ref.fullName && onSwitchBranch) { event.stopPropagation(); if (badgeAction.current) clearTimeout(badgeAction.current); badgeAction.current = null; onSwitchBranch(ref.fullName); } }}>
                   {ref.kind === 'tag' ? <Tag size={10} /> : ref.kind === 'remote' ? <Globe2 size={10} /> : <GitBranch size={10} />}<span className="ref-pill-name">{ref.name}</span>
                 </span>)}

@@ -163,7 +163,7 @@ button[data-danger='true']:hover:not(:disabled) { background: var(--red-wash); b
 .repository-tab-new { flex-shrink: 0; width: var(--h-compact); height: var(--h-compact); border-radius: var(--r-sm); display: inline-flex; align-items: center; justify-content: center; color: var(--secondary); }
 .repository-tab-new:hover:not(:disabled) { background: var(--accent-wash); color: var(--accent-text); }
 
-.repository-toolbar { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--sidebar); }
+.repository-toolbar { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--border); background: var(--sidebar); }
 .repository-toolbar-group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
 .repository-toolbar button { background: transparent; border-color: transparent; color: var(--text); padding: 0 10px; }
 .repository-toolbar button svg { color: var(--secondary); }
@@ -175,7 +175,7 @@ button[data-danger='true']:hover:not(:disabled) { background: var(--red-wash); b
 .repository-fetch-status[data-error='true'] { color: var(--red); cursor: help; }
 .pull-dropdown { position: relative; display: inline-flex; }
 .repository-toolbar .pull-dropdown-toggle { padding: 0 6px; margin-left: -4px; }
-.pull-dropdown-menu { position: absolute; top: 100%; left: 0; z-index: 20; margin-top: 4px; min-width: 240px; background: var(--raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow); padding: 4px; display: flex; flex-direction: column; gap: 1px; }
+.pull-dropdown-menu { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); z-index: 20; margin-top: 4px; min-width: 240px; background: var(--raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow); padding: 4px; display: flex; flex-direction: column; gap: 1px; }
 .repository-toolbar .pull-dropdown-menu button { width: 100%; justify-content: flex-start; border: none; text-align: left; font-weight: 450; }
 .pull-dropdown-menu button[aria-current='true'] { background: var(--accent-wash); color: var(--accent-text); }
 .repository-toolbar-divider { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
@@ -643,6 +643,11 @@ button[data-danger='true']:hover:not(:disabled) { background: var(--red-wash); b
 
 /* Operation, publish, stash, pull request dialogs */
 .operation-dialog { width: min(720px, 94vw); max-height: 90vh; overflow: auto; }
+.graph-context-menu { position: fixed; z-index: 30; min-width: 224px; max-width: calc(100vw - 8px); max-height: calc(100dvh - 8px); overflow: auto; padding: 4px; background: var(--raised); border: 1px solid var(--border-strong); border-radius: var(--r-md); box-shadow: var(--shadow); }
+.graph-context-menu button { display: block; width: 100%; min-height: 30px; padding: 5px 10px; text-align: left; color: var(--text); border-radius: var(--r-sm); font-size: var(--fs-sm); }
+.graph-context-menu button:hover, .graph-context-menu button:focus-visible { background: var(--hover); }
+.graph-menu-divider { height: 1px; margin: 4px 6px; background: var(--border); }
+.graph-context-menu button:last-child { border-top: 1px solid var(--border); border-radius: 0; margin-top: 3px; }
 .operation-dialog label, .publish-dialog label { display: block; margin: 12px 0; }
 .operation-dialog input:not([type=checkbox]):not([type=radio]), .operation-dialog select, .operation-dialog textarea, .publish-dialog input, .publish-dialog select { display: block; width: 100%; margin-top: 4px; }
 .operation-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--r-md); font-size: var(--fs-xs); }
@@ -756,6 +761,8 @@ button[data-danger='true']:hover:not(:disabled) { background: var(--red-wash); b
   .composer-footer { flex-direction: row; }
 }
 @media (max-width: 540px) {
+  .repository-toolbar { justify-content: flex-start; }
+  .pull-dropdown-menu { left: 0; transform: none; }
   .history-body { --visible-hash-width: 0px; }
   .brand { font-size: 22px; }
   .titlebar-actions { gap: 0; }
