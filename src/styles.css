@@ -306,8 +306,10 @@ kbd { font-family: var(--mono); font-size: 12px; display: inline-grid; place-ite
   border-radius: 5px;
   background: var(--subtle);
 }
-.native-shell .native-sidebar .workspace-label > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.native-shell .native-sidebar .workspace-label small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.native-shell .native-sidebar .workspace-label > span { min-width: 0; overflow-wrap: anywhere; }
+.native-shell .native-sidebar .workspace-label small { overflow-wrap: anywhere; white-space: normal; }
+.native-shell .native-sidebar .native-sidebar-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 14px 8px; color: var(--secondary); font-size: 12px; }
+.native-shell .native-sidebar .native-sidebar-meta .branch-heading { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: 4px; padding: 2px 7px; background: var(--subtle); }
 .native-shell .native-sidebar .sidebar-divider { margin: 6px 14px 12px; }
 .native-shell .native-sidebar .native-filters { padding: 0 12px 14px; }
 .native-shell .native-sidebar .filter-primary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; }
@@ -340,12 +342,6 @@ kbd { font-family: var(--mono); font-size: 12px; display: inline-grid; place-ite
 .native-shell .native-sidebar .ref-action-row .ref-item { min-width: 0; flex: 1; padding: 9px 4px 9px 20px; }
 .native-shell .native-sidebar .ref-action-row > button:last-child { padding: 5px 8px; color: var(--secondary); }
 .native-shell .native-sidebar .sidebar-bottom { border-top: 1px solid var(--border); margin: auto 14px 20px; padding: 14px 6px 0; }
-.native-shell .history-pane > .repository-heading { padding: 14px 24px 6px; }
-.native-shell .history-pane > .repository-heading h1 { font-size: 22px; }
-.native-shell .history-pane > .repository-heading p { max-width: 100%; }
-.native-shell .history-pane > .native-repo-meta { padding: 4px 24px 12px; }
-.native-shell .history-pane > .native-repo-meta:last-child { padding: 10px 24px; }
-.native-shell .native-filters { padding: 0 24px 14px; }
 .native-banner { padding: 12px 22px; background: var(--accent-wash); border-bottom: 1px solid var(--border); font-size: 14px; }
 .native-banner button { margin-left: 10px; }
 .native-welcome { flex: 1; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 22px; padding: 8vh max(24px, 14vw); background: radial-gradient(ellipse at 85% 10%, var(--accent-wash), transparent 60%); }
