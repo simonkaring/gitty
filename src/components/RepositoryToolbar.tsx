@@ -60,7 +60,6 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
   const [sync, setSync] = useState<SyncInfo | null>(null);
   const [syncError, setSyncError] = useState('');
   const [pending, setPending] = useState<'fetch' | 'pull' | 'push' | null>(null);
-  const [error, setError] = useState('');
   const [pullMenuOpen, setPullMenuOpen] = useState(false);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
@@ -83,9 +82,9 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
   const disabled = busy || !active;
   async function run(action: RemoteActionRequest, kind: 'fetch' | 'pull' | 'push') {
     if (disabled || pending) return;
-    setPending(kind); setPullMenuOpen(false); setError('');
+    setPending(kind); setPullMenuOpen(false);
     try { const output = await onWrite('repository_remote_action', { action }); notify(output || `${describeRemoteAction(action)} complete.`); }
-    catch (e) { setError(errorMessage(e)); }
+    catch { /* The pane owns the dismissible operation error. */ }
     finally { setPending(null); }
   }
   function push() {
@@ -100,7 +99,7 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
    * the push had succeeded. */
   async function publish(remote: string, branch: string) {
     if (pending) throw new Error('Another action is already in progress.');
-    setPending('push'); setError('');
+    setPending('push');
     try { const output = await onWrite('repository_remote_action', { action: { kind: 'push', remote, branch, setUpstream: true } }); notify(output || 'Publish complete.'); }
     finally { setPending(null); }
   }
@@ -141,7 +140,6 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
     <div className="repository-toolbar-group">
       <button className="secondary-button" disabled={busy} onClick={onRefresh}><RefreshCw size={15} />Refresh</button>
     </div>
-    {error && <p className="repository-toolbar-error" role="alert">{error}</p>}
     {publishOpen && <PublishDialog remotes={sync?.remotes ?? []} branch={sync?.branch ?? ''} onPublish={publish} onClose={() => setPublishOpen(false)} />}
   </div>;
 }

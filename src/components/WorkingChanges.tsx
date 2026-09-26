@@ -4,6 +4,7 @@ import type { CommitDetail, DiffSpec, FileDiff, RepositoryMutation, RepositorySe
 import { errorMessage, native, statusGroups, type WorkingGroup } from '../model/native';
 import { clearSubmittedDraft, commitMessage, draftFromCommitMessage, draftKey, operationPaths, readDraft, saveDraft, type CommitDraft, type MutationOutcome } from '../model/workflow';
 import { useSettings } from '../model/settings';
+import { commitProfileRepositoryKey } from '../model/commitProfiles';
 
 const labels: Record<WorkingGroup, string> = { staged: 'Staged', unstaged: 'Unstaged', untracked: 'Untracked', conflict: 'Conflicts' };
 const descriptions: Record<WorkingGroup, string> = { staged: 'HEAD → index · included in your next commit', unstaged: 'Index → working tree · not yet staged', untracked: 'New files · not yet tracked by Git', conflict: 'Unresolved paths · open the conflict editor to resolve' };
@@ -49,7 +50,14 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   const [outcome, setOutcome] = useState<MutationOutcome | null>(null);
   useEffect(() => { if (!mutationBlocked) setOutcome(value => value?.refreshError ? { ...value, refreshError: undefined } : value); }, [revision, mutationBlocked]);
   const [success, setSuccess] = useState('');
-  const { settings } = useSettings();
+  const { settings, updateSettings, openSettings } = useSettings();
+  const profileKey = commitProfileRepositoryKey(session);
+  const selectedProfile = settings.commitProfiles.find(profile => profile.id === settings.repositoryCommitProfiles[profileKey]);
+  const identity = selectedProfile ? { name: selectedProfile.name, email: selectedProfile.email } : undefined;
+  const identityControl = <div className="composer-identity"><label htmlFor={`${composerId}-identity`}>{amending ? 'Committer profile' : 'Commit as'}</label><select id={`${composerId}-identity`} value={selectedProfile?.id ?? ''} disabled={!!operation || busy || mutationBlocked} onChange={event => { const id = event.target.value; updateSettings(current => { const selections = { ...current.repositoryCommitProfiles }; if (id) selections[profileKey] = id; else delete selections[profileKey]; return { repositoryCommitProfiles: selections }; }); }}>
+    <option value="">Repository Git identity (default)</option>
+    {settings.commitProfiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name} · {profile.email}</option>)}
+  </select><button type="button" className="text-button" onClick={() => openSettings('Commit profiles')}>Manage profiles…</button>{amending && <small>The original author is preserved when amending.</small>}</div>;
   const [split, setSplit] = useState(settings.diffView === 'split');
   useEffect(() => setSplit(settings.diffView === 'split'), [settings.diffView]);
   const pending = useRef(false);
@@ -211,9 +219,10 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
             })}
           </section>)}
         </div>
-        <form className="commit-composer" aria-label="Commit composer" onSubmit={event => { event.preventDefault(); if (!composerDraft.subject.trim() || groups.conflict.length) return; if (amending && amendReady && status && session.head) void perform({ kind: 'amend', message: commitMessage(composerDraft), expectedHead: session.head, expectedHeadRef: session.headRef, expectedStatusFingerprint: status.fingerprint }); else if (!amending && stagedCount) void perform({ kind: 'commit', message: commitMessage(composerDraft) }); }}>
+        <form className="commit-composer" aria-label="Commit composer" onSubmit={event => { event.preventDefault(); if (!composerDraft.subject.trim() || groups.conflict.length) return; if (amending && amendReady && status && session.head) void perform({ kind: 'amend', message: commitMessage(composerDraft), identity, expectedHead: session.head, expectedHeadRef: session.headRef, expectedStatusFingerprint: status.fingerprint }); else if (!amending && stagedCount) void perform({ kind: 'commit', message: commitMessage(composerDraft), identity }); }}>
           <div className="composer-heading"><h2><GitCommitHorizontal size={18} />{amending ? 'Rewrite last commit' : 'Create commit'}</h2><span>{stagedCount} staged</span></div>
           <label className="amend-control"><input type="checkbox" checked={amending} disabled={!!operation || demo || !session.head} onChange={event => void toggleAmend(event.target.checked)} /><span>Amend last commit</span></label>
+          {identityControl}
           {amending && !amendDraft && !amendError && <p role="status">Loading last commit…</p>}
           {amendError && <p className="workflow-alert error" role="alert">{amendError}</p>}
           <label htmlFor={`${composerId}-subject`}>Summary <span>required</span></label>
@@ -257,9 +266,10 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
           {preview?.scope === scope && preview.diff && <DiffPreview diff={preview.diff} split={split} hunkAction={active?.group === 'staged' ? 'unstage_hunk' : active?.group === 'unstaged' ? 'stage_hunk' : undefined} busy={blocked} unavailable={demo ? 'Hunk staging is unavailable in the demo. Open a desktop repository to stage individual hunks.' : undefined} onHunk={mutation => void perform(mutation)} />}
           {!active && <div className="clean-state"><Check size={32} /><h2>Nothing to review.</h2><p>Edit files in your repository, then return here to stage and commit.</p></div>}
         </section>
-        <form className="commit-composer" aria-label="Commit composer" onSubmit={event => { event.preventDefault(); if (!composerDraft.subject.trim() || groups.conflict.length) return; if (amending && amendReady && status && session.head) void perform({ kind: 'amend', message: commitMessage(composerDraft), expectedHead: session.head, expectedHeadRef: session.headRef, expectedStatusFingerprint: status.fingerprint }); else if (!amending && stagedCount) void perform({ kind: 'commit', message: commitMessage(composerDraft) }); }}>
+        <form className="commit-composer" aria-label="Commit composer" onSubmit={event => { event.preventDefault(); if (!composerDraft.subject.trim() || groups.conflict.length) return; if (amending && amendReady && status && session.head) void perform({ kind: 'amend', message: commitMessage(composerDraft), identity, expectedHead: session.head, expectedHeadRef: session.headRef, expectedStatusFingerprint: status.fingerprint }); else if (!amending && stagedCount) void perform({ kind: 'commit', message: commitMessage(composerDraft), identity }); }}>
           <div className="composer-heading"><h2><GitCommitHorizontal size={20} />{amending ? 'Rewrite last commit' : 'Create a commit'}</h2><span>{stagedCount} staged {stagedCount === 1 ? 'path' : 'paths'}</span></div>
           <label className="amend-control"><input type="checkbox" checked={amending} disabled={!!operation || demo || !session.head} onChange={event => void toggleAmend(event.target.checked)} /><span>Amend last commit</span></label>
+          {identityControl}
           <p className="amend-description">{demo ? 'Amending history is available only for desktop repositories.' : amending ? 'This replaces the current HEAD commit. Staged changes will be included; with nothing staged, only its message is rewritten.' : 'Enable this to replace the current HEAD commit instead of creating a new one.'}</p>
           {amending && !amendDraft && !amendError && <p role="status">Loading the last commit message…</p>}
           {amendError && <p className="workflow-alert error" role="alert">{amendError}</p>}

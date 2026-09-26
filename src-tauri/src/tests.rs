@@ -1373,6 +1373,92 @@ fn amend_supports_message_only_and_staged_changes_without_committing_unstaged_co
 }
 
 #[test]
+fn selected_commit_profile_only_overrides_commit_identity_and_amend_preserves_author() {
+    let d = init();
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    let selected = CommitIdentity {
+        name: "Zoë Selected".into(),
+        email: "zoe@example.org".into(),
+    };
+    std::fs::write(d.path().join("first"), "first").unwrap();
+    service.stage(&handle, &paths(&["first"])).unwrap();
+    let first = service
+        .create_commit_with_identity(&handle, "selected", Some(&selected))
+        .unwrap();
+    assert_eq!(
+        git(
+            d.path(),
+            &["show", "-s", "--format=%an <%ae>|%cn <%ce>", &first.oid]
+        ),
+        "Zoë Selected <zoe@example.org>|Zoë Selected <zoe@example.org>"
+    );
+    assert_eq!(git(d.path(), &["config", "user.name"]), "Test Author");
+    assert_eq!(git(d.path(), &["config", "user.email"]), "test@example.com");
+
+    let status = repo.status().unwrap();
+    let committer = CommitIdentity {
+        name: "Other Committer".into(),
+        email: "other@example.org".into(),
+    };
+    let amended = service
+        .amend_commit_with_identity(
+            &handle,
+            "amended",
+            Some(&committer),
+            &first.oid,
+            status.head_ref.as_deref(),
+            &status.fingerprint,
+        )
+        .unwrap();
+    assert_eq!(
+        git(
+            d.path(),
+            &["show", "-s", "--format=%an <%ae>|%cn <%ce>", &amended.oid]
+        ),
+        "Zoë Selected <zoe@example.org>|Other Committer <other@example.org>"
+    );
+
+    std::fs::write(d.path().join("second"), "second").unwrap();
+    service.stage(&handle, &paths(&["second"])).unwrap();
+    let configured = service.create_commit(&handle, "configured").unwrap();
+    assert_eq!(
+        git(
+            d.path(),
+            &[
+                "show",
+                "-s",
+                "--format=%an <%ae>|%cn <%ce>",
+                &configured.oid
+            ]
+        ),
+        "Test Author <test@example.com>|Test Author <test@example.com>"
+    );
+
+    std::fs::write(d.path().join("third"), "third").unwrap();
+    service.stage(&handle, &paths(&["third"])).unwrap();
+    for invalid in [
+        CommitIdentity {
+            name: "bad\nname".into(),
+            email: "valid@example.org".into(),
+        },
+        CommitIdentity {
+            name: "Valid".into(),
+            email: "bad>\nGIT_CONFIG_COUNT=1@example.org".into(),
+        },
+    ] {
+        assert_eq!(
+            service
+                .create_commit_with_identity(&handle, "rejected", Some(&invalid))
+                .unwrap_err()
+                .code,
+            "invalidRequest"
+        );
+        assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), configured.oid);
+    }
+}
+
+#[test]
 fn amend_revalidates_head_symbolic_ref_and_status_under_the_mutation_lock() {
     let d = init();
     std::fs::write(d.path().join("file"), "one\n").unwrap();

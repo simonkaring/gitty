@@ -72,6 +72,11 @@ pub struct CommitDetail {
 pub struct CreatedCommit {
     pub oid: String,
 }
+#[derive(Debug, Clone, Deserialize)]
+pub struct CommitIdentity {
+    pub name: String,
+    pub email: String,
+}
 #[derive(Debug, Serialize)]
 pub struct HistoryPage {
     pub commits: Vec<CommitSummary>,

@@ -311,9 +311,19 @@ impl Service {
     pub fn unstage(&self, handle: &str, paths: &[String]) -> Result<()> {
         self.mutate(handle, |repo| repo.unstage(paths))
     }
+    #[cfg(test)]
     pub fn create_commit(&self, handle: &str, message: &str) -> Result<CreatedCommit> {
-        self.mutate(handle, |repo| repo.create_commit(message))
+        self.create_commit_with_identity(handle, message, None)
     }
+    pub fn create_commit_with_identity(
+        &self,
+        handle: &str,
+        message: &str,
+        identity: Option<&CommitIdentity>,
+    ) -> Result<CreatedCommit> {
+        self.mutate(handle, |repo| repo.create_commit(message, identity))
+    }
+    #[cfg(test)]
     pub fn amend_commit(
         &self,
         handle: &str,
@@ -322,9 +332,28 @@ impl Service {
         expected_head_ref: Option<&str>,
         expected_status_fingerprint: &str,
     ) -> Result<CreatedCommit> {
+        self.amend_commit_with_identity(
+            handle,
+            message,
+            None,
+            expected_head,
+            expected_head_ref,
+            expected_status_fingerprint,
+        )
+    }
+    pub fn amend_commit_with_identity(
+        &self,
+        handle: &str,
+        message: &str,
+        identity: Option<&CommitIdentity>,
+        expected_head: &str,
+        expected_head_ref: Option<&str>,
+        expected_status_fingerprint: &str,
+    ) -> Result<CreatedCommit> {
         self.mutate(handle, |repo| {
             repo.amend_commit(
                 message,
+                identity,
                 expected_head,
                 expected_head_ref,
                 expected_status_fingerprint,

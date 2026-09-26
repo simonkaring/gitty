@@ -10,8 +10,8 @@ Ordinary index/commit writes use these commands:
 - `repository_unstage({handle, paths: string[]}) -> void`
 - `repository_stage_hunk({handle, path: string, hunkIndex: number, fingerprint: string, lineIndices?: number[]}) -> void`
 - `repository_unstage_hunk({handle, path: string, hunkIndex: number, fingerprint: string, lineIndices?: number[]}) -> void`
-- `repository_create_commit({handle, message: string}) -> {oid: string}`
-- `repository_amend_commit({handle, message: string, expectedHead: string, expectedHeadRef: string | null, expectedStatusFingerprint: string}) -> {oid: string}`
+- `repository_create_commit({handle, message: string, identity?: {name: string, email: string}}) -> {oid: string}`
+- `repository_amend_commit({handle, message: string, identity?: {name: string, email: string}, expectedHead: string, expectedHeadRef: string | null, expectedStatusFingerprint: string}) -> {oid: string}`
 
 `repository_commit({handle, oid})` is unchanged and remains a read.
 When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage_hunk`, only the specified 0-based lines within the hunk are staged/unstaged using a selectively generated forward patch (and `--reverse` for unstaging), validating bounds and changed line kinds while preserving all working files and other index entries.
@@ -143,8 +143,13 @@ targeted conflict resolutions have the additional contract documented below.
   removed exactly as for reads, so an inherited `GIT_INDEX_FILE` or
   `GIT_AUTHOR_NAME` cannot redirect a write; native config-file selectors are
   preserved. Configured hooks, `commit.gpgsign`/`gpg.program`, `commit.cleanup`,
-  identity and templates are honored, and their failures are surfaced verbatim
-  (stderr and stdout, capped at 4000 characters). **No `--no-verify`,
+   identity and templates are honored, and their failures are surfaced verbatim
+   (stderr and stdout, capped at 4000 characters). An optional saved profile
+   overrides author and committer environment variables for a new commit, or
+   committer alone for an amend (Git retains the old author); no Git config is
+   written. The values are validated and passed in the process environment
+   (through WSL's `env` launcher for Linux Git) only for that commit command.
+   **No `--no-verify`,
   `--no-gpg-sign`, `--force`, `--all`, or `-a` is ever passed**; `--amend` is used
   only by the explicit amend command. No global Git configuration is written.
   Hooks run with stdin closed, so a hook

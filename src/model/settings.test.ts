@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_SETTINGS, SETTINGS_KEY, persistSettings, readSettings, resolveTheme, validateSettings } from './settings';
 import { BUILTIN_THEMES, COLOR_KEYS, contrastRatio, exportTheme, importTheme, themeTokens, validateTheme } from './themes';
+import { commitProfileRepositoryKey, validateCommitProfile } from './commitProfiles';
+import type { RepositorySession } from './repository';
 
 const custom = () => ({ ...BUILTIN_THEMES[0], id: 'custom-test', name: 'My theme', colors: { ...BUILTIN_THEMES[0].colors } });
 function storage(entries: Record<string, string> = {}) {
@@ -40,6 +42,24 @@ describe('local preferences', () => {
     const { settings, error } = readSettings(store);
     expect(error).toBeNull();
     expect(settings.historyColumns).toEqual(DEFAULT_SETTINGS.historyColumns);
+    expect(settings.commitProfiles).toEqual([]);
+    expect(settings.repositoryCommitProfiles).toEqual({});
+  });
+  it('saves profiles and per-worktree selections without changing other settings', () => {
+    const store = storage();
+    const profile = { id: 'profile-test', name: 'Zoë', email: 'zoe@example.org' };
+    const session = { root: '/repo', location: { kind: 'native', path: '/repo' } } as RepositorySession;
+    const key = commitProfileRepositoryKey(session);
+    expect(key).not.toBe(commitProfileRepositoryKey({ ...session, root: '/other' }));
+    expect(key).not.toBe(commitProfileRepositoryKey({ ...session, location: { kind: 'wsl', distribution: 'Ubuntu', path: '/repo' } }));
+    expect(persistSettings(store, { ...DEFAULT_SETTINGS, commitProfiles: [profile], repositoryCommitProfiles: { [key]: profile.id } })).toBeNull();
+    expect(readSettings(store).settings).toMatchObject({ commitProfiles: [profile], repositoryCommitProfiles: { [key]: profile.id } });
+  });
+  it('rejects malformed identity fields and broken selections', () => {
+    const valid = { id: 'profile-1', name: 'Valid', email: 'valid@example.org' };
+    for (const profile of [{ ...valid, name: 'bad\nname' }, { ...valid, email: 'bad>\n@example.org' }, { ...valid, email: 'missing-at' }, { ...valid, id: '--bad' }]) expect(() => validateCommitProfile(profile)).toThrow();
+    expect(() => validateSettings({ ...DEFAULT_SETTINGS, commitProfiles: [valid, valid] })).toThrow();
+    expect(() => validateSettings({ ...DEFAULT_SETTINGS, repositoryCommitProfiles: { repo: valid.id } })).toThrow();
   });
   it('persists reordered and hidden history columns across reloads', () => {
     const store = storage();

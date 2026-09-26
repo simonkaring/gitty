@@ -35,6 +35,7 @@ export interface WslDistribution { name: string; running: boolean }
 export interface DirectoryEntry { name: string; path: string }
 export interface RepositoryError { code: string; message: string }
 export interface CreateCommitResult { oid: string }
+export interface CommitIdentity { name: string; email: string }
 /** Writes use explicit repository-relative paths; an empty array never means all.
  * File stage/unstage affect whole paths, including the remainder of partially staged
  * files. Conflicted paths cannot be mutated here. The service is authoritative
@@ -46,8 +47,8 @@ export type RepositoryMutation =
   | { kind: 'stage' | 'unstage'; paths: string[] }
   | { kind: 'stage_hunk'; path: string; hunkIndex: number; fingerprint: string; lineIndices?: number[] }
   | { kind: 'unstage_hunk'; path: string; hunkIndex: number; fingerprint: string; lineIndices?: number[] }
-  | { kind: 'commit'; message: string }
-  | { kind: 'amend'; message: string; expectedHead: string; expectedHeadRef: string | null; expectedStatusFingerprint: string };
+  | { kind: 'commit'; message: string; identity?: CommitIdentity }
+  | { kind: 'amend'; message: string; identity?: CommitIdentity; expectedHead: string; expectedHeadRef: string | null; expectedStatusFingerprint: string };
 
 /* Tauri commands (all argument names camelCase):
  * repository_pick() -> string | null
@@ -70,8 +71,8 @@ export type RepositoryMutation =
  * raw backend diffs and index entries; they are not atomic external-Git locks.
  * Unsupported/truncated previews have no actionable fingerprint. No patch text
  * is accepted from the client. Both commands leave the working tree untouched.
- * repository_create_commit({handle, message: string}) -> CreateCommitResult
- * repository_amend_commit({handle, message, expectedHead, expectedHeadRef, expectedStatusFingerprint}) -> CreateCommitResult
+  * repository_create_commit({handle, message: string, identity?: CommitIdentity}) -> CreateCommitResult
+  * repository_amend_commit({handle, message, identity?: CommitIdentity, expectedHead, expectedHeadRef, expectedStatusFingerprint}) -> CreateCommitResult
  * wsl_distributions() -> WslDistribution[]
  * wsl_directories({distribution, path}) -> DirectoryEntry[]
  * Errors: {code: string, message: string}
