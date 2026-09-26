@@ -5,6 +5,12 @@ export type { ThemeDefinition } from './themes';
 export const SETTINGS_KEY = 'gitty:settings';
 export const WORKSPACE_RESET_EVENT = 'gitty:workspace-reset';
 export const MONO_FONTS = ['Geist Mono Variable', 'JetBrains Mono'] as const;
+export const HISTORY_COLUMN_IDS = ['refs', 'graph', 'message', 'author', 'hash', 'date'] as const;
+export type HistoryColumnId = typeof HISTORY_COLUMN_IDS[number];
+export interface HistoryColumnConfig {
+  id: HistoryColumnId;
+  visible: boolean;
+}
 export interface Settings {
   version: 1;
   themeMode: 'fixed' | 'system';
@@ -17,8 +23,17 @@ export interface Settings {
   fontSize: number;
   monoFont: string;
   paneWidths: { sidebar: number; inspector: number };
+  historyColumns: HistoryColumnConfig[];
 }
-export const DEFAULT_SETTINGS: Settings = { version: 1, themeMode: 'system', themeId: 'gitty-light', lightThemeId: 'gitty-light', darkThemeId: 'gitty-dark', customThemes: [], diffView: 'unified', diffWrap: false, fontSize: 13, monoFont: MONO_FONTS[0], paneWidths: { sidebar: 240, inspector: 400 } };
+export const DEFAULT_HISTORY_COLUMNS: HistoryColumnConfig[] = [
+  { id: 'refs', visible: true },
+  { id: 'graph', visible: true },
+  { id: 'message', visible: true },
+  { id: 'author', visible: true },
+  { id: 'hash', visible: true },
+  { id: 'date', visible: false },
+];
+export const DEFAULT_SETTINGS: Settings = { version: 1, themeMode: 'system', themeId: 'gitty-light', lightThemeId: 'gitty-light', darkThemeId: 'gitty-dark', customThemes: [], diffView: 'unified', diffWrap: false, fontSize: 13, monoFont: MONO_FONTS[0], paneWidths: { sidebar: 240, inspector: 400 }, historyColumns: DEFAULT_HISTORY_COLUMNS };
 export function validateSettings(value: unknown): Settings {
   if (!value || typeof value !== 'object') throw new Error('Invalid settings.');
   const s = value as Settings;
@@ -29,13 +44,25 @@ export function validateSettings(value: unknown): Settings {
   const themes = [...BUILTIN_THEMES, ...customThemes];
   if (!themes.some(t => t.id === s.themeId) || !themes.some(t => t.id === s.lightThemeId && t.mode === 'light') || !themes.some(t => t.id === s.darkThemeId && t.mode === 'dark')) throw new Error('Missing or incompatible theme selection.');
   if (!s.paneWidths || Object.keys(s.paneWidths).some(k => !['sidebar', 'inspector'].includes(k)) || !Number.isFinite(s.paneWidths.sidebar) || s.paneWidths.sidebar < 180 || s.paneWidths.sidebar > 400 || !Number.isFinite(s.paneWidths.inspector) || s.paneWidths.inspector < 300 || s.paneWidths.inspector > 800) throw new Error('Invalid pane widths.');
-  return { ...s, customThemes, paneWidths: { ...s.paneWidths } };
+  if (!Array.isArray(s.historyColumns) || s.historyColumns.length !== HISTORY_COLUMN_IDS.length) throw new Error('Invalid history columns.');
+  const columnIds = new Set<string>();
+  for (const col of s.historyColumns) {
+    if (!col || typeof col !== 'object' || !HISTORY_COLUMN_IDS.includes(col.id as HistoryColumnId) || typeof col.visible !== 'boolean' || columnIds.has(col.id)) throw new Error('Invalid history column configuration.');
+    columnIds.add(col.id);
+  }
+  return { ...s, customThemes, paneWidths: { ...s.paneWidths }, historyColumns: s.historyColumns.map(c => ({ ...c })) };
 }
 export interface PreferenceStorage { getItem(key: string): string | null; setItem(key: string, value: string): void }
 export function readSettings(storage: PreferenceStorage): { settings: Settings; error: string | null } {
   try {
     const saved = storage.getItem(SETTINGS_KEY);
-    if (saved !== null) return { settings: validateSettings(JSON.parse(saved)), error: null };
+    if (saved !== null) {
+      const parsed = JSON.parse(saved);
+      if (parsed && typeof parsed === 'object' && !('historyColumns' in parsed)) {
+        parsed.historyColumns = DEFAULT_HISTORY_COLUMNS;
+      }
+      return { settings: validateSettings(parsed), error: null };
+    }
     const legacy = storage.getItem('gitty:theme');
     const width = (key: string, fallback: number, min: number, max: number) => { const value = Number(storage.getItem(key)); return Number.isFinite(value) && value > 0 ? Math.max(min, Math.min(max, value)) : fallback; };
     return { settings: { ...DEFAULT_SETTINGS, ...(legacy === 'dark' || legacy === 'light' ? { themeMode: 'fixed' as const, themeId: `gitty-${legacy}` } : {}), paneWidths: { sidebar: width('gitty:sidebar-width', 240, 180, 400), inspector: width('gitty:inspector-width', 400, 300, 800) } }, error: null };

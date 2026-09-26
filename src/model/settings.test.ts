@@ -31,7 +31,21 @@ describe('local preferences', () => {
     expect(persistSettings(broken, DEFAULT_SETTINGS)).toContain('session');
   });
   it('rejects invalid ranges, references, modes, fonts and duplicates', () => {
-    for (const patch of [{ fontSize: 10 }, { fontSize: 13.5 }, { monoFont: 'https://font' }, { paneWidths: { sidebar: Infinity, inspector: 400 } }, { themeId: 'missing' }, { lightThemeId: 'gitty-dark' }, { customThemes: [custom(), custom()] }, { customThemes: Array(31).fill(custom()) }]) expect(() => validateSettings({ ...DEFAULT_SETTINGS, ...patch })).toThrow();
+    for (const patch of [{ fontSize: 10 }, { fontSize: 13.5 }, { monoFont: 'https://font' }, { paneWidths: { sidebar: Infinity, inspector: 400 } }, { themeId: 'missing' }, { lightThemeId: 'gitty-dark' }, { customThemes: [custom(), custom()] }, { customThemes: Array(31).fill(custom()) }, { historyColumns: [] }, { historyColumns: [{ id: 'unknown', visible: true }] }, { historyColumns: DEFAULT_SETTINGS.historyColumns.slice(0, 5) }]) expect(() => validateSettings({ ...DEFAULT_SETTINGS, ...patch })).toThrow();
+  });
+  it('migrates older settings missing historyColumns to default columns', () => {
+    const withoutCols = { ...DEFAULT_SETTINGS };
+    delete (withoutCols as any).historyColumns;
+    const store = storage({ [SETTINGS_KEY]: JSON.stringify(withoutCols) });
+    const { settings, error } = readSettings(store);
+    expect(error).toBeNull();
+    expect(settings.historyColumns).toEqual(DEFAULT_SETTINGS.historyColumns);
+  });
+  it('persists reordered and hidden history columns across reloads', () => {
+    const store = storage();
+    const historyColumns = DEFAULT_SETTINGS.historyColumns.map(col => ({ ...col, visible: col.id === 'date' || col.id === 'graph' })).reverse();
+    expect(persistSettings(store, { ...DEFAULT_SETTINGS, historyColumns })).toBeNull();
+    expect(readSettings(store)).toMatchObject({ settings: { historyColumns }, error: null });
   });
   it('resolves system pairs and fixed themes independently of OS appearance', () => {
     const settings = { ...DEFAULT_SETTINGS, lightThemeId: 'catppuccin-latte', darkThemeId: 'nord' };
