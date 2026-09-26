@@ -4,7 +4,6 @@ import type { CommitDetail, DiffSpec, FileDiff, RepositoryMutation, RepositorySe
 import { errorMessage, native, statusGroups, type WorkingGroup } from '../model/native';
 import { clearSubmittedDraft, commitMessage, draftFromCommitMessage, draftKey, operationPaths, readDraft, saveDraft, type CommitDraft, type MutationOutcome } from '../model/workflow';
 import { useSettings } from '../model/settings';
-import './hunk-actions.css';
 
 const labels: Record<WorkingGroup, string> = { staged: 'Staged', unstaged: 'Unstaged', untracked: 'Untracked', conflict: 'Conflicts' };
 const descriptions: Record<WorkingGroup, string> = { staged: 'HEAD → index · included in your next commit', unstaged: 'Index → working tree · not yet staged', untracked: 'New files · not yet tracked by Git', conflict: 'Unresolved paths · open the conflict editor to resolve' };

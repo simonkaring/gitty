@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ButtonHTMLAttributes } from 'react';
 import { Settings as SettingsIcon, X } from 'lucide-react';
 import { DEFAULT_SETTINGS, MONO_FONTS, useSettings } from '../model/settings';
 import { COLOR_KEYS, MAX_CUSTOM_THEMES, MAX_THEME_FILE_BYTES, contrastRatio, exportTheme, importTheme, isColor, validateTheme, type ThemeDefinition } from '../model/themes';
-import './settings.css';
 
 export function SettingsButton({ className = 'icon-button', ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
   const { openSettings } = useSettings();

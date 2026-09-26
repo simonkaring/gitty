@@ -4,7 +4,6 @@ import { native, errorMessage } from '../model/native';
 import { DEFAULT_PULL_MODE, PULL_MODE_LABELS, describeRemoteAction, needsPublish, syncSummary, type PullMode, type RemoteActionRequest, type SyncInfo } from '../model/remote';
 import { PublishDialog } from './PublishDialog';
 import { describeFetchStatus, type FetchStatus } from '../model/autoFetch';
-import './workspace-tabs.css';
 
 export interface RepositoryToolbarProps {
   handle: string;

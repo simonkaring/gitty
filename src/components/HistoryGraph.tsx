@@ -130,9 +130,10 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       ctx.globalAlpha = matches ? 0.33 : 0.72;
       ctx.beginPath();
       ctx.moveTo(x1, y1);
-      ctx.bezierCurveTo(x1, y1 + 12, xt, y1 + 12, xt, y1 + 20);
-      ctx.lineTo(xt, y2 - 20);
-      ctx.bezierCurveTo(xt, y2 - 12, x2, y2 - 12, x2, y2);
+      const bend = ROW_HEIGHT / 4, reach = ROW_HEIGHT * 5 / 12;
+      ctx.bezierCurveTo(x1, y1 + bend, xt, y1 + bend, xt, y1 + reach);
+      ctx.lineTo(xt, y2 - reach);
+      ctx.bezierCurveTo(xt, y2 - bend, x2, y2 - bend, x2, y2);
       ctx.stroke();
     }
     for (let row = start; row < end; row++) {

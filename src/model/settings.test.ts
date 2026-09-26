@@ -63,6 +63,12 @@ describe('theme files and render tokens', () => {
       expect(tokens['--shadow']).toBe(`0 12px 40px ${theme.colors.shadow}`);
     }
   });
+  it('keeps Gitty presets at WCAG AA for text on every surface', () => {
+    for (const { colors } of BUILTIN_THEMES.slice(0, 2)) {
+      for (const fg of ['text', 'secondary', 'muted']) for (const bg of ['bg', 'chrome', 'sidebar', 'raised', 'subtle']) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
+      for (const [fg, bg] of [['buttonForeground', 'accentText'], ['accentText', 'accentWash'], ['accentText', 'selected'], ['green', 'greenWash'], ['red', 'redWash']]) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
+    }
+  });
   it('computes WCAG luminance contrast with symmetry and known endpoints', () => {
     expect(contrastRatio('#000000', '#ffffff')).toBe(21);
     expect(contrastRatio('#ffffff', '#ffffff')).toBe(1);

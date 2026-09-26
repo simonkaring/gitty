@@ -8,7 +8,6 @@ import { SettingsButton } from './Settings';
 import { RepositoryPane } from './RepositoryPane';
 import { RepositoryTabs, type RepositoryTabSummary } from './RepositoryTabs';
 import { loadPersistedTabs, locationLabel, savePersistedTabs, tabsReducer, type TabsState } from '../model/tabs';
-import './workspace-tabs.css';
 import { errorMessage, native } from '../model/native';
 import { cloneReducer, type CloneProgress, type CloneRequest } from '../model/clone';
 

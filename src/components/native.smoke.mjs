@@ -140,7 +140,7 @@ try {
   await page.evaluate(() => { window.fixture.raceOnce = true; });
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.statusbar')?.textContent.includes('400 commits loaded'));
-  assert.equal(await page.locator('.history-scroll').evaluate(el => el.scrollTop), 250 * 48 + 453);
+  assert.equal(await page.locator('.history-scroll').evaluate(el => el.scrollTop), 250 * 36 + 453);
   assert.equal(await page.locator('.native-sha').textContent(), 'c0');
 
   // Reject a stale pending diff after selecting a commit with no changed files.

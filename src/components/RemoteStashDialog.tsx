@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { native, errorMessage } from '../model/native';
 import { describeStashAction, sortStashes, type StashActionRequest, type StashEntry } from '../model/remote';
-import './workspace-tabs.css';
 
 export function RemoteStashDialog({ handle, onWrite, onClose, notify }: {
   handle: string; onWrite: (command: string, args: Record<string, unknown>) => Promise<string>; onClose: () => void; notify: (message: string) => void;
