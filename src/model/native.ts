@@ -94,3 +94,10 @@ export function inspectorSpec(selected: string, group: WorkingGroup, base: strin
   if (base && target) return { kind: 'compare', base, target };
   return { kind: 'commit', oid: selected, ...(parent ? { parent } : {}) };
 }
+
+export function handleWindowDrag(event: React.MouseEvent<HTMLElement>) {
+  if (event.button !== 0) return;
+  const target = event.target as HTMLElement | null;
+  if (target?.closest('button, input, select, textarea, a, [role="tab"]')) return;
+  void native('app_start_dragging').catch(() => {});
+}

@@ -456,6 +456,12 @@ async fn backend_info() -> Result<BackendInfo> {
     })
     .await
 }
+#[tauri::command]
+fn app_start_dragging(window: tauri::WebviewWindow) -> Result<()> {
+    window
+        .start_dragging()
+        .map_err(|e| Error::new("window", e.to_string()))
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -481,6 +487,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            app_start_dragging,
             backend_info,
             list_provider_accounts,
             provider_connect_token,
