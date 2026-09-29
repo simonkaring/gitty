@@ -9,14 +9,25 @@ use crate::{
 };
 
 impl Service {
+    #[cfg(test)]
     pub fn remote_action(
         &self,
         handle: &str,
         action: RemoteAction,
         askpass: Option<&crate::askpass::AskpassRegistry>,
     ) -> Result<ActionOutput> {
+        self.remote_action_using_accounts(handle, action, askpass, None)
+    }
+
+    pub fn remote_action_using_accounts(
+        &self,
+        handle: &str,
+        action: RemoteAction,
+        askpass: Option<&crate::askpass::AskpassRegistry>,
+        accounts: Option<&crate::provider_accounts::AccountStore>,
+    ) -> Result<ActionOutput> {
         self.mutate(handle, |repo| {
-            repo.remote_action_with_registry(action, askpass)
+            repo.remote_action_with_accounts(action, askpass, accounts)
         })
     }
 }
@@ -174,10 +185,11 @@ impl Repository {
         Ok(remote.into())
     }
 
-    pub(crate) fn remote_action_with_registry(
+    pub(crate) fn remote_action_with_accounts(
         &self,
         action: RemoteAction,
         askpass: Option<&crate::askpass::AskpassRegistry>,
+        accounts: Option<&crate::provider_accounts::AccountStore>,
     ) -> Result<ActionOutput> {
         let wsl = matches!(self.location(), RepositoryLocation::Wsl { .. });
         self.require_writable()?;
@@ -219,6 +231,29 @@ impl Repository {
             None
         };
 
+        let account_url = if matches!(action, RemoteAction::Push { .. }) {
+            self.check_text(&["remote", "get-url", "--push", "--", &remote])?
+        } else {
+            self.check_text(&["remote", "get-url", "--", &remote])?
+        };
+        let credential = if !wsl {
+            accounts
+                .map(|store| store.for_remote(account_url.trim_end()))
+                .transpose()?
+                .flatten()
+        } else {
+            None
+        };
+        let scoped = if let (Some(registry), Some((account, token))) = (askpass, credential) {
+            Some(registry.start_credential_operation(
+                account.provider.host(),
+                account.username,
+                token,
+            ))
+        } else {
+            None
+        };
+
         #[cfg(windows)]
         let wsl_bridge =
             if let (true, RepositoryLocation::Wsl { distribution, .. }, Some(registry)) =
@@ -237,7 +272,20 @@ impl Repository {
                 network_args_wsl(path, registry, guard.token())
             }
             _ => {
-                let (mut args, env) = network_args(interactive, if wsl { None } else { askpass });
+                let (mut args, mut env) = network_args(
+                    interactive || scoped.is_some(),
+                    if wsl { None } else { askpass },
+                );
+                if let Some(guard) = &scoped {
+                    // Clear external helpers only for an explicitly connected
+                    // HTTPS host, so stale Keychain entries cannot win.
+                    args.extend(crate::process::args(&["-c", "credential.helper="]));
+                    if let Some((_, token)) =
+                        env.iter_mut().find(|(key, _)| key == "GITTY_ASKPASS_TOKEN")
+                    {
+                        *token = guard.token().into();
+                    }
+                }
                 if wsl && interactive {
                     allow_credential_helper_ui(&mut args);
                 }
@@ -507,17 +555,11 @@ pub(crate) fn network_args(
             "-c",
             "credential.interactive=true",
             "-c",
-            &format!(
-                "core.askPass={}",
-                crate::askpass::shell_quote(&registry.script_path.to_string_lossy())
-            ),
+            &format!("core.askPass={}", registry.script_path.to_string_lossy()),
         ]));
 
         let script_path = registry.script_path.display().to_string();
-        env.push((
-            "GIT_ASKPASS".into(),
-            crate::askpass::shell_quote(&script_path),
-        ));
+        env.push(("GIT_ASKPASS".into(), script_path.clone()));
         env.push(("SSH_ASKPASS".into(), script_path));
         env.push(("SSH_ASKPASS_REQUIRE".into(), "force".into()));
         if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
@@ -549,7 +591,7 @@ pub(crate) fn network_args_wsl(
         "-c",
         "credential.interactive=true",
         "-c",
-        &format!("core.askPass={}", crate::askpass::shell_quote(executable)),
+        &format!("core.askPass={executable}"),
     ]));
     env.extend([
         ("GIT_ASKPASS".into(), executable.into()),

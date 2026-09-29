@@ -14,6 +14,8 @@ mod mutate;
 mod operation_dto;
 mod operations;
 mod process;
+mod provider_accounts;
+mod provider_pr;
 mod remote;
 mod remote_dto;
 mod repository;
@@ -30,17 +32,84 @@ use std::sync::Arc;
 use tauri::Manager;
 
 type Shared = Arc<Service>;
+type Accounts = Arc<provider_accounts::AccountStore>;
+
+#[tauri::command]
+async fn list_provider_accounts(
+    state: tauri::State<'_, Accounts>,
+) -> Result<Vec<provider_accounts::ProviderAccount>> {
+    let accounts = state.inner().clone();
+    blocking(move || accounts.list()).await
+}
+
+#[tauri::command]
+async fn provider_connect_token(
+    state: tauri::State<'_, Accounts>,
+    provider: provider_accounts::Provider,
+    username: String,
+    token: String,
+) -> Result<provider_accounts::ProviderAccount> {
+    let accounts = state.inner().clone();
+    blocking(move || accounts.connect_token(provider, username, token)).await
+}
+
+#[tauri::command]
+async fn provider_disconnect(state: tauri::State<'_, Accounts>, id: String) -> Result<()> {
+    let accounts = state.inner().clone();
+    blocking(move || accounts.disconnect(&id)).await
+}
+
+#[tauri::command]
+async fn provider_pull_requests(
+    state: tauri::State<'_, Shared>,
+    accounts: tauri::State<'_, Accounts>,
+    handle: String,
+    remote: String,
+    account_id: String,
+) -> Result<Vec<provider_pr::ProviderPullRequest>> {
+    let accounts = accounts.inner().clone();
+    with_service(state, move |s| {
+        s.provider_pull_requests(&accounts, &handle, &remote, &account_id)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn provider_create_pull_request(
+    state: tauri::State<'_, Shared>,
+    accounts: tauri::State<'_, Accounts>,
+    handle: String,
+    remote: String,
+    account_id: String,
+    request: provider_pr::CreatePullRequest,
+) -> Result<provider_pr::ProviderPullRequest> {
+    let accounts = accounts.inner().clone();
+    with_service(state, move |s| {
+        s.provider_create_pull_request(&accounts, &handle, &remote, &account_id, request)
+    })
+    .await
+}
 #[tauri::command]
 async fn repository_clone(
     state: tauri::State<'_, Shared>,
+    accounts: tauri::State<'_, Accounts>,
+    askpass: tauri::State<'_, Arc<askpass::AskpassRegistry>>,
     operation_id: String,
     request: CloneRequest,
     on_progress: tauri::ipc::Channel<CloneProgress>,
 ) -> Result<RepositoryLocation> {
+    let accounts = accounts.inner().clone();
+    let askpass = askpass.inner().clone();
     with_service(state, move |service| {
-        service.clone_repository(&operation_id, request, move |progress| {
-            let _ = on_progress.send(progress);
-        })
+        service.clone_repository_with_accounts(
+            &operation_id,
+            request,
+            move |progress| {
+                let _ = on_progress.send(progress);
+            },
+            Some(&askpass),
+            Some(&accounts),
+        )
     })
     .await
 }
@@ -59,12 +128,14 @@ async fn repository_sync_info(state: tauri::State<'_, Shared>, handle: String) -
 async fn repository_remote_action(
     state: tauri::State<'_, Shared>,
     registry: tauri::State<'_, Arc<crate::askpass::AskpassRegistry>>,
+    accounts: tauri::State<'_, Accounts>,
     handle: String,
     action: RemoteAction,
 ) -> Result<ActionOutput> {
     let registry = Some(registry.inner().clone());
+    let accounts = accounts.inner().clone();
     with_service(state, move |s| {
-        s.remote_action(&handle, action, registry.as_deref())
+        s.remote_action_using_accounts(&handle, action, registry.as_deref(), Some(&accounts))
     })
     .await
 }
@@ -390,6 +461,9 @@ async fn backend_info() -> Result<BackendInfo> {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            app.manage(Arc::new(provider_accounts::AccountStore::new(
+                app.path().app_data_dir()?.join("provider-accounts.json"),
+            )));
             app.manage(Arc::new(Service::new(app.path().app_data_dir()?)));
             askpass::init(app.handle().clone())?;
             editor::init(app.handle().clone())?;
@@ -408,6 +482,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             backend_info,
+            list_provider_accounts,
+            provider_connect_token,
+            provider_disconnect,
+            provider_pull_requests,
+            provider_create_pull_request,
             repository_clone,
             repository_cancel_clone,
             repository_pick,

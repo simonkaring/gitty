@@ -18,7 +18,7 @@ fn wsl_network_bridge_uses_scoped_token_and_linux_executable_path() {
     );
     assert!(args
         .iter()
-        .any(|arg| arg == "core.askPass='/mnt/c/Program Files/Gitty/gitty.exe'"));
+        .any(|arg| arg == "core.askPass=/mnt/c/Program Files/Gitty/gitty.exe"));
     assert!(args.iter().any(|arg| arg == "credential.interactive=true"));
     assert!(env
         .iter()
@@ -27,6 +27,66 @@ fn wsl_network_bridge_uses_scoped_token_and_linux_executable_path() {
         |(key, value)| key == "SSH_ASKPASS" && value == "/mnt/c/Program Files/Gitty/gitty.exe"
     ));
     assert!(!env.iter().any(|(_, value)| value == "app-token"));
+}
+
+#[cfg(unix)]
+#[test]
+fn native_network_askpass_runs_git_helper_from_environment() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("askpass helper's script.sh");
+    std::fs::write(
+        &script_path,
+        "#!/bin/sh\ncase \"$1\" in *Username*) printf 'test-user\\n';; *Password*) printf 'test-password\\n';; esac\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let registry =
+        crate::askpass::AskpassRegistry::new(4521, "app-token".into(), script_path.clone());
+    let (args, env) = crate::remote::network_args(true, Some(&registry));
+    assert!(env
+        .iter()
+        .any(|(key, value)| { key == "GIT_ASKPASS" && value == script_path.to_str().unwrap() }));
+
+    for use_environment in [true, false] {
+        let mut command = Command::new("git");
+        command
+            .args(&args)
+            .args(["-c", "credential.helper="])
+            .args(["credential", "fill"])
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GCM_INTERACTIVE", "never")
+            .env_remove("GIT_CONFIG_PARAMETERS")
+            .env_remove("GIT_ASKPASS")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        for (key, value) in &env {
+            if use_environment || key != "GIT_ASKPASS" {
+                command.env(key, value);
+            }
+        }
+        let mut child = command.spawn().unwrap();
+        use std::io::Write;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"protocol=https\nhost=example.invalid\n\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let answer = String::from_utf8(output.stdout).unwrap();
+        assert!(answer.contains("username=test-user\n"));
+        assert!(answer.contains("password=test-password\n"));
+    }
 }
 
 fn git(path: &Path, a: &[&str]) -> String {

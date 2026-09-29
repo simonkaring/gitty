@@ -3,13 +3,14 @@ import { Settings as SettingsIcon, X } from 'lucide-react';
 import { DEFAULT_SETTINGS, MONO_FONTS, useSettings } from '../model/settings';
 import { COLOR_KEYS, MAX_CUSTOM_THEMES, MAX_THEME_FILE_BYTES, contrastRatio, exportTheme, importTheme, isColor, validateTheme, type ThemeDefinition } from '../model/themes';
 import { MAX_COMMIT_PROFILES, validateCommitProfile, type CommitProfile } from '../model/commitProfiles';
+import { IntegrationsSettings } from './IntegrationsSettings';
 
 export function SettingsButton({ className = 'icon-button', ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
   const { openSettings } = useSettings();
   return <button type="button" className={className} title="Settings (⌘ / Ctrl+,)" aria-label="Open settings" {...props} onClick={() => openSettings()}><SettingsIcon size={18} /></button>;
 }
 const newId = () => `custom-${crypto.randomUUID()}`;
-const sections = ['Appearance', 'Commit profiles', 'Editor & diffs', 'Workspace reset', 'About / shortcuts'] as const;
+const sections = ['Appearance', 'Commit profiles', 'Integrations', 'Editor & diffs', 'Workspace reset', 'About / shortcuts'] as const;
 type Section = typeof sections[number];
 
 export function SettingsDialog() {
@@ -102,6 +103,7 @@ export function SettingsDialog() {
     {api.storageError && <div className="settings-notice" role="alert">{api.storageError} <button className="text-button" onClick={api.retryPersistence}>Retry saving</button></div>}
     <div className="settings-layout"><nav aria-label="Settings sections">{sections.map(s => <button key={s} aria-current={section === s ? 'page' : undefined} onClick={() => setSection(s)}>{s}</button>)}</nav>
     <div className="settings-content">
+      <div hidden={section !== 'Integrations'}><IntegrationsSettings /></div>
       <section hidden={section !== 'Appearance'} aria-labelledby="appearance-heading"><h3 id="appearance-heading">Appearance</h3>
         <label className="settings-field">Theme behavior<select value={settings.themeMode} disabled={!!draft} onChange={e => updateSettings({ themeMode: e.target.value as 'fixed' | 'system' })}><option value="fixed">Fixed theme</option><option value="system">Follow system appearance</option></select></label>
         {settings.themeMode === 'fixed' ? choice('Theme', settings.themeId, themeId => updateSettings({ themeId })) : <div className="settings-pair">{choice('Light appearance', settings.lightThemeId, lightThemeId => updateSettings({ lightThemeId }), 'light')}{choice('Dark appearance', settings.darkThemeId, darkThemeId => updateSettings({ darkThemeId }), 'dark')}</div>}

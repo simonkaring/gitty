@@ -46,10 +46,15 @@ export function AskPassDialog() {
     setSubmitting(true);
     try {
       await invoke('repository_provide_password', { requestId: current.requestId, password });
-      setPrompts(prev => prev.slice(1));
+      setPrompts(prev => prev.filter(prompt => prompt.requestId !== current.requestId));
       setError('');
     } catch (e) {
-      setError(String(e));
+      if (password === null) {
+        setPrompts(prev => prev.filter(prompt => prompt.requestId !== current.requestId));
+        setError('');
+      } else {
+        setError(String(e));
+      }
     } finally {
       setSubmitting(false);
     }
@@ -79,7 +84,7 @@ export function AskPassDialog() {
         <p className="dialog-prompt">{current.prompt}</p>
         <div className="dialog-field">
           <label htmlFor="askpass-answer">
-            {username ? 'Username' : 'Password or passphrase'}
+            {username ? 'Username' : /github\.com/i.test(current.prompt) ? 'Personal access token' : 'Token or SSH passphrase'}
           </label>
           <input
             key={current.requestId}
@@ -91,6 +96,7 @@ export function AskPassDialog() {
             autoFocus
           />
         </div>
+        {!username && /github\.com/i.test(current.prompt) && <p>GitHub does not accept your account password for Git. Use a personal access token, or connect an account in Settings → Integrations.</p>}
         {error && <p role="alert">{error}</p>}
         <div className="dialog-actions">
           <button type="button" className="secondary-button" disabled={submitting} onClick={onCancel}>
