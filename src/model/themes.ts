@@ -6,11 +6,14 @@ export interface ThemeDefinition {
 }
 
 export const COLOR_KEYS = ['bg', 'chrome', 'sidebar', 'raised', 'subtle', 'hover', 'border', 'borderStrong', 'text', 'secondary', 'muted', 'accent', 'accentText', 'accentWash', 'selected', 'green', 'greenWash', 'red', 'redWash', 'buttonForeground', 'shadow', 'backdrop', 'graphLane1', 'graphLane2', 'graphLane3', 'graphLane4', 'graphLane5', 'graphLane6', 'graphLane7', 'graphLane8', 'graphSelection', 'graphMerge', 'graphHead'] as const;
-const light = ['#fbfaf6', '#f2f0e9', '#f4f2ec', '#ffffff', '#eeece4', '#e6e3d9', '#e0ddd2', '#c3c0b3', '#1f2320', '#4f564f', '#656b63', '#1f7a6b', '#15685b', '#dcefe7', '#d2e9df', '#2a6e4e', '#e1efdd', '#a8392c', '#f7e3dc', '#ffffff', '#1f23201f', '#1a1d1a73'];
-const dark = ['#1a1b19', '#131412', '#161715', '#20221f', '#262825', '#2d302c', '#30332f', '#454941', '#ecebe4', '#bdbdb2', '#9a9d91', '#7cc4ae', '#93d4bf', '#203a33', '#243f37', '#9bd08a', '#1f3222', '#f09a8c', '#3d2422', '#10201b', '#00000066', '#000000a0'];
+// Gitty defaults: neutral zinc surfaces with a single burnt-orange accent. Red leans rose so it never reads as the accent.
+const light = ['#fafafa', '#f3f3f4', '#f5f5f6', '#ffffff', '#eeeef0', '#e6e6e9', '#e1e1e5', '#c6c6cc', '#18181b', '#4f4f57', '#62626a', '#c2410c', '#a3360a', '#fcebe1', '#f9e1d4', '#23704a', '#e0f0e5', '#be123c', '#fce4e8', '#ffffff', '#18181b1f', '#18181b73'];
+const dark = ['#141416', '#0e0e10', '#111113', '#1b1b1e', '#212125', '#29292d', '#29292e', '#3f3f46', '#ededef', '#b4b4bc', '#8f8f99', '#f07a3d', '#ff9a62', '#3a2216', '#40271a', '#86d19a', '#1a2e21', '#fb7c93', '#3a1d25', '#1a0c04', '#00000080', '#000000a6'];
 function preset(id: string, name: string, mode: ThemeDefinition['mode'], overrides: Record<string, string> = {}): ThemeDefinition {
-  const lanes = mode === 'light' ? ['#1f7a6b', '#a8392c', '#6e4fb0', '#2f6aa3', '#8a6516', '#a3437a', '#4a7430', '#6f6254'] : ['#7cc4ae', '#f09a8c', '#b9a0ec', '#86b8ec', '#e2c46f', '#e79cc8', '#9bd08a', '#c9b79f'];
-  return { id, name, mode, colors: { ...Object.fromEntries(COLOR_KEYS.map((key, i) => [key, [...(mode === 'light' ? light : dark), ...lanes, lanes[0], lanes[2], lanes[4]][i]])), ...overrides } };
+  // Lanes avoid orange so HEAD and selection (accent) stay distinct; lane 5 doubles as --amber.
+  const lanes = mode === 'light' ? ['#2563a8', '#0f7a6e', '#6d4fc2', '#b42359', '#92660a', '#3f7d2a', '#0e7490', '#6b6b75'] : ['#6ea8f0', '#5cc7b5', '#b39cf5', '#f07ab0', '#e6c166', '#95d17e', '#5fc4dc', '#a8a8b3'];
+  const base = mode === 'light' ? light : dark;
+  return { id, name, mode, colors: { ...Object.fromEntries(COLOR_KEYS.map((key, i) => [key, [...base, ...lanes, base[11], lanes[2], base[11]][i]])), ...overrides } };
 }
 function family(id: string, name: string, mode: ThemeDefinition['mode'], bg: string, chrome: string, raised: string, text: string, secondary: string, accent: string, red: string, green: string): ThemeDefinition {
   const mix = (a: string, b: string, weight: number) => '#' + [1, 3, 5].map(i => Math.round(parseInt(a.slice(i, i + 2), 16) * weight + parseInt(b.slice(i, i + 2), 16) * (1 - weight)).toString(16).padStart(2, '0')).join('');
