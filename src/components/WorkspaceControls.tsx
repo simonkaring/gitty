@@ -13,7 +13,7 @@ export function usePaneWidth(name: 'sidebar' | 'inspector', fallback: number, mi
 }
 
 export function Brand({ demo = false }: { demo?: boolean }) {
-  return <div className="brand"><span className="brand-icon"><GitBranch size={22} /></span><span>gitty<span className="brand-period">.</span></span><span className="preview-label">{demo ? 'DEMO' : 'LOCAL GIT'}</span></div>;
+  return <div className="brand" data-tauri-drag-region><span className="brand-icon" data-tauri-drag-region><GitBranch size={22} /></span><span data-tauri-drag-region>gitty<span className="brand-period">.</span></span><span className="preview-label">{demo ? 'DEMO' : 'LOCAL GIT'}</span></div>;
 }
 export function ViewNavigation({ view, count, onChange }: { view: 'history' | 'working'; count: number; onChange: (view: 'history' | 'working') => void }) {
   return <nav className="view-navigation" aria-label="Workspace views"><button aria-current={view === 'history' ? 'page' : undefined} onClick={() => onChange('history')}><GitCommitHorizontal size={18} />History</button><button aria-current={view === 'working' ? 'page' : undefined} onClick={() => onChange('working')}><Files size={18} />Working changes<span className="count">{count}</span></button></nav>;

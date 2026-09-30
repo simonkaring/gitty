@@ -23,8 +23,8 @@ export function RepositoryTabs({ tabs, activeId, onSelect, onClose, onNew }: {
   tabs: RepositoryTabSummary[]; activeId: string | null; onSelect: (id: string) => void; onClose: (id: string) => void; onNew: () => void;
 }) {
   const ids = tabs.map(tab => tab.id);
-  return <div className="repository-tabs-row">
-    <nav className="repository-tabs" aria-label="Open repositories" role="tablist" onKeyDown={event => handleTablistKeyDown(event, ids, activeId, onSelect)}>
+  return <div className="repository-tabs-row" data-tauri-drag-region>
+    <nav className="repository-tabs" aria-label="Open repositories" role="tablist" onKeyDown={event => handleTablistKeyDown(event, ids, activeId, onSelect)} data-tauri-drag-region>
       {tabs.map(tab => {
         const selected = tab.id === activeId;
         return <div key={tab.id} className="repository-tab" data-selected={selected}>

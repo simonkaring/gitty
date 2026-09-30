@@ -11,6 +11,7 @@ import { Brand, PaneResizer, usePaneWidth } from './components/WorkspaceControls
 import { DiffPreview, type ActiveDiffState } from './components/WorkingChanges';
 import { RepositoryTabs } from './components/RepositoryTabs';
 import { useSettings, type ThemeDefinition } from './model/settings';
+import { handleWindowDrag } from './model/native';
 import { SettingsButton } from './components/Settings';
 
 import { AskPassDialog } from './components/AskPassDialog';
@@ -47,7 +48,7 @@ function DemoApp() {
   useEffect(() => { if (modal) modalRef.current?.showModal(); else modalRef.current?.close(); }, [modal]);
 
   return <div className={`app-shell ${sidebarOpen ? '' : 'sidebar-hidden'} ${inspectorOpen ? '' : 'inspector-hidden'}`} style={{ '--inspector-width': `${inspectorWidth}px` } as CSSProperties}>
-    <header className="titlebar">
+    <header className="titlebar" data-tauri-drag-region onMouseDown={handleWindowDrag}>
       <Brand demo />
       <RepositoryTabs tabs={[{ id: repository, title: repository, busy: false, branch: 'main', dirty }]} activeId={repository} onSelect={() => {}} onClose={() => notify('Closing tabs requires a desktop repository.')} onNew={() => setModal('repositories')} />
       <div className="titlebar-actions"><button className="icon-button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onClick={() => setModal('help')}><CircleHelp size={17} /></button><SettingsButton /><span className="toolbar-divider" /><button className={`icon-button ${sidebarOpen ? 'toggled' : ''}`} aria-label="Toggle references sidebar" aria-pressed={sidebarOpen} onClick={() => setSidebarOpen(value => !value)}><PanelLeft size={17} /></button><button className={`icon-button ${inspectorOpen ? 'toggled' : ''}`} aria-label="Toggle working changes and inspector" aria-pressed={inspectorOpen} onClick={() => setInspectorOpen(value => !value)}><PanelRight size={17} /></button></div>

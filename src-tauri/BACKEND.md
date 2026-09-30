@@ -243,8 +243,10 @@ operation IDs are UUIDs, and closing the main window cancels registered clones.
   sources retain Git's local clone behavior but use `--no-hardlinks`, so object
   files are copied rather than sharing inodes with the source.
 - Credential helpers, system/global Git configuration, SSH agent/configuration,
-  and configured filters remain available. Prompts, askpass, recursive submodules,
-  and external transport helpers are disabled. HTTP(S) URLs containing credentials
+  and configured filters remain available. Prompts and external askpass remain
+  disabled except for a matching connected provider account on native HTTPS
+  clones. Recursive submodules and external transport helpers are disabled.
+  HTTP(S) URLs containing credentials
   are rejected; Gitty does not retain credentials.
 - The destination must not exist. Git clones into an operation-owned hidden sibling
   and publishes it with a no-replace rename only after success. Failure, timeout,
@@ -260,6 +262,25 @@ operation IDs are UUIDs, and closing the main window cancels registered clones.
   is terminated; Gitty never terminates an entire WSL distribution.
 
 ## Remote tracking and authentication
+
+Connected cloud-provider accounts are managed through `list_provider_accounts`,
+`provider_connect_token`, and `provider_disconnect`. The account metadata file
+in app data contains provider, username and an opaque ID only; access tokens
+are stored in the OS credential store under that ID. GitHub, GitLab and
+Bitbucket tokens are checked against the provider's user endpoint on connect.
+Azure DevOps PATs are checked when used against an organization. Browser OAuth
+sign-in requires registered provider applications and is not implemented yet.
+
+For an unambiguous connected account matching the exact HTTPS host of a
+remote, fetch/pull/push and native clone use a per-operation askpass token to
+provide the account username and access token. That Git invocation clears
+other credential helpers to prevent stale Keychain entries taking precedence;
+it never puts the access token in Git arguments, remote URLs or browser
+preferences. A prompt for another host is rejected. With no connected match,
+the existing Git helper/SSH behavior applies. WSL keeps its own distribution
+credential handling. `provider_pull_requests` and
+`provider_create_pull_request` call bounded, host-specific HTTPS provider APIs
+for a selected connected account. PR creation is explicit and does not push.
 
 - The native pane schedules a fetch of the selected/configured remote about every
   five minutes while active and visible. The backend's `backgroundFetch` action
@@ -277,7 +298,9 @@ operation IDs are UUIDs, and closing the main window cancels registered clones.
   window (typically Windows Git Credential Manager reached through WSL interop)
   can re-authenticate. Terminal prompts, askpass and SSH passphrase prompts stay
   disabled; background fetch remains fully noninteractive. Failed explicit
-  actions explain this. No user credential is embedded in a Git argument or retained.
+  actions explain this. No user credential is embedded in a Git argument;
+  ad-hoc prompt answers are not retained, while connected account tokens remain
+  in the OS credential store until disconnected.
 - The frontend auto-fetches only the focused tab of a visible window: when a
   repository opens, when its tab or the window regains focus, and on a 30-second
   check, at most once per five minutes. Explicit fetch and pull reset that clock.

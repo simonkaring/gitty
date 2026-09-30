@@ -8,7 +8,7 @@ import { SettingsButton } from './Settings';
 import { RepositoryPane } from './RepositoryPane';
 import { RepositoryTabs, type RepositoryTabSummary } from './RepositoryTabs';
 import { loadPersistedTabs, locationLabel, savePersistedTabs, tabsReducer, type TabsState } from '../model/tabs';
-import { errorMessage, native } from '../model/native';
+import { errorMessage, handleWindowDrag, native } from '../model/native';
 import { cloneReducer, type CloneProgress, type CloneRequest } from '../model/clone';
 
 function initialTabsState(): TabsState {
@@ -96,7 +96,7 @@ export function NativeWorkspace({ onDemo }: { onDemo: () => void }) {
 
   const tabSummaries: RepositoryTabSummary[] = tabs.map(tab => ({ id: tab.id, title: tab.title, busy: tab.busy, branch: tab.branch, dirty: tab.dirty }));
   return <div className="app-shell native-shell" style={{ '--inspector-width': `${inspectorWidth}px`, '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
-    <header className="titlebar">
+    <header className="titlebar" data-tauri-drag-region onMouseDown={handleWindowDrag}>
       <Brand />
       <RepositoryTabs tabs={tabSummaries} activeId={activeId} onSelect={selectTab} onClose={closeTab} onNew={() => setPicker(true)} />
       <div className="native-actions">

@@ -27,7 +27,7 @@ Install **Git 2.37+** and the [Tauri 2 prerequisites](https://v2.tauri.app/start
 
 - **macOS:** Xcode Command Line Tools; the first visual target. The app uses a standard native titlebar and a platform-neutral workspace beneath it.
 - **Windows:** Microsoft C++ Build Tools and WebView2. No POSIX shell assumptions or hard-coded filesystem paths in the backend.
-- **Linux:** the distribution’s WebKitGTK 4.1 and other Tauri development libraries. See the prerequisites link and the Ubuntu CI setup.
+- **Linux:** the distribution’s WebKitGTK 4.1 and other Tauri development libraries. See the prerequisites link for your distribution's setup.
 
 ```sh
 npm run desktop                 # Native development window + Vite
@@ -66,6 +66,8 @@ The toolbar beneath the tabs stays available while inspecting history or working
 - **Git identity…:** inspect the repository-local and effective name/email, then explicitly apply a saved profile to this repository’s Git config. Linked worktrees share that local identity, including for commits made outside Gitty.
 
 Clone and background fetch use configured Git credential helpers and an OpenSSH agent without prompting. Explicit fetch/pull/push can prompt for HTTPS credentials or SSH passphrases in the native desktop app when helpers cannot provide them; cancelling a prompt aborts authentication. For WSL repositories Gitty cannot show its own password or passphrase prompts, but explicit fetch/pull/push let a credential helper with its own sign-in window — such as Windows Git Credential Manager configured as the distribution's `credential.helper` — sign you in again; otherwise configure a credential helper or SSH agent inside the distribution. Auto-fetch runs only for the focused tab: on open, on tab or window focus, and at most every five minutes, with the last result shown in the toolbar. Embedded HTTP(S) credentials are rejected for clone. Browser demo sync/stash controls are labeled desktop-only; simultaneous repository sessions are a native feature.
+
+The desktop app's **Settings → Integrations** can save provider access tokens in the OS credential store for GitHub.com, GitLab.com, Azure DevOps Services and Bitbucket Cloud. When exactly one account matches an HTTPS remote, Gitty uses it for fetch/pull/push and native clone instead of an old credential helper entry. Multiple accounts for the same host need explicit account selection for pull requests; Git operations fall back to the configured Git helper until remote-specific account selection is available. Connected accounts can list and create pull requests from **Create pull request…**. Gitty does not yet offer browser OAuth sign-in; this requires provider app registrations. Azure DevOps personal accounts may need a PAT. SSH remotes continue to use your SSH agent.
 
 History reads, search, and inspection remain read-only. The **Working changes** graph entry opens staging and commit controls; graph and sidebar action controls provide explicit branch operations. The backend uses the installed Git with separate read/write command contracts and shell-free arguments. Missing objects, unsupported encodings, partial/promisor clones, and process limits return explicit errors.
 
@@ -203,9 +205,12 @@ npm run preview                 # Serve the production build
 npm audit
 npm run check:rust              # Requires Rust/Cargo
 npm run test:rust               # Real temporary repository integration tests
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
 ```
 
-The CI workflow defines a macOS / Windows / Ubuntu matrix for frontend tests/builds, Rust tests, and native compilation. The matrix is not evidence that Windows or Linux runtime behavior has been verified locally. The verification notes below record results at the time of each implementation; they are not current test totals or claims that every historical browser scenario still matches the redesigned UI.
+Testing is local-only for now; pushes and pull requests do not trigger GitHub Actions checks. Run `npm run build` before the Rust checks so the frontend assets are available. For native compilation, run `npm run tauri -- build --no-bundle` on the target platform. Local checks validate the host platform; Windows and Linux runtime behavior require testing on those platforms. Automated cross-platform checks can be introduced in Azure DevOps when needed. The signed-release GitHub workflow remains manually triggered for release packaging.
+
+The verification notes below record results at the time of each implementation; they are not current test totals or claims that every historical browser scenario still matches the redesigned UI.
 
 ### Historical: tabs, sync, stashes, hunk staging, amend, and clone verification
 

@@ -19,5 +19,5 @@ Gitty is a graph-first desktop Git client built with Tauri 2, Rust, React 19, Ty
 ## Checks
 
 - Frontend: `npm test` (Vitest) and `npm run build` (TypeScript + Vite).
-- Rust or IPC changes: `npm run check:rust` and `npm run test:rust`; run `cargo fmt --manifest-path src-tauri/Cargo.toml --check` for Rust edits. The full cross-platform CI commands are in `.github/workflows/check.yml`.
+- Rust or IPC changes: `npm run check:rust` and `npm run test:rust`; run `cargo fmt --manifest-path src-tauri/Cargo.toml --check` for Rust edits. Build the frontend first with `npm run build`. Testing is local-only for now; see the README for checks and native compilation commands. Future automated checks will use Azure DevOps.
 - Add or update focused tests for behavior changes. Browser smoke scripts under `src/components/*.smoke.mjs` use mocked Tauri IPC and require a separate Playwright/Chromium installation; see the README for invocation.

@@ -123,7 +123,9 @@ button[data-danger='true']:hover:not(:disabled) { background: var(--red-wash); b
    App shell, title bar, repository tabs, toolbar
    ========================================================================== */
 .app-shell { height: 100dvh; min-height: 480px; display: flex; flex-direction: column; overflow: hidden; }
-.titlebar { min-height: 52px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px 8px 16px; border-bottom: 1px solid var(--border); background: var(--chrome); user-select: none; }
+.titlebar { min-height: 52px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px 8px 16px; border-bottom: 1px solid var(--border); background: var(--chrome); user-select: none; -webkit-app-region: drag; app-region: drag; }
+[data-platform='macos'] .titlebar { padding-left: 82px; }
+.titlebar button, .titlebar input, .titlebar select, .titlebar a, .titlebar [role='tab'] { -webkit-app-region: no-drag; app-region: no-drag; }
 .brand { display: flex; align-items: baseline; gap: 8px; flex-shrink: 0; font-family: var(--serif); font-size: 24px; font-weight: 620; letter-spacing: -.03em; line-height: 1; }
 .brand-icon { align-self: center; width: 28px; height: 28px; color: var(--accent-text); display: grid; place-items: center; }
 .brand-icon svg { width: 20px; height: 20px; }

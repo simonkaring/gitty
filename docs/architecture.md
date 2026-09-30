@@ -59,7 +59,7 @@ Suggested commands:
 
 Include typed errors (not found, unsafe ownership, unavailable Git, permission denied, invalid cursor, cancellation), distinguish empty and shallow repositories, and retain raw commit IDs. Reads and later mutation commands must have separate interfaces/capabilities. Watching refs invalidates the walk revision instead of silently mixing two histories.
 
-Cross-platform CI includes all three host operating systems. Release packaging and runtime smoke testing must run on each platform; macOS signing/notarization and Windows signing are separate distribution tasks. No native platform has been validated by this milestone’s local browser checks.
+Testing is local-only for now, with future automated cross-platform checks planned for Azure DevOps. Release packaging and runtime smoke testing must run on each platform; macOS signing/notarization and Windows signing are separate distribution tasks. No native platform has been validated by this milestone’s local browser checks.
 
 ## Future WSL backend — design only
 
