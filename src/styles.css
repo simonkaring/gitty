@@ -4275,6 +4275,97 @@ button[data-danger='true']:hover:not(:disabled) {
   font-family: var(--mono);
   font-size: 11px;
 }
+/* ==========================================================================
+   Graph polish: lane-tinted rows, HEAD pulse, fresh-commit entrance, ref pills
+   ========================================================================== */
+.commit-row {
+  transition: background-color var(--dur-fast) ease;
+}
+.commit-row:hover {
+  background: color-mix(in srgb, var(--branch-color, var(--hover)) 7%, transparent);
+  box-shadow: inset 2px 0 color-mix(in srgb, var(--branch-color, var(--accent)) 55%, transparent);
+}
+.commit-row.selected {
+  background: color-mix(in srgb, var(--branch-color, var(--accent)) 14%, var(--bg));
+}
+.commit-row.fresh {
+  animation: row-in 600ms var(--ease-out) both;
+}
+.commit-row.fresh::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--branch-color, var(--accent)) 28%, transparent), transparent 70%);
+  animation: row-flash 1.2s ease-out forwards;
+}
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
+@keyframes row-flash {
+  to {
+    opacity: 0;
+  }
+}
+.commit-graph-cell {
+  position: relative;
+  align-self: stretch;
+}
+.graph-head-pulse {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: var(--graph-head, var(--accent));
+  opacity: 0;
+  animation: head-pulse 2.6s var(--ease-out) infinite;
+}
+@keyframes head-pulse {
+  0% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(3.2);
+  }
+}
+.ref-pill {
+  color: color-mix(in srgb, var(--branch-color, var(--green)) 85%, var(--text));
+  background: color-mix(in srgb, var(--branch-color, var(--green)) 13%, var(--bg));
+  border-color: color-mix(in srgb, var(--branch-color, var(--green)) 38%, transparent);
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast);
+}
+.ref-pill:hover {
+  transform: translateY(-1px);
+}
+.ref-pill.remote-ref {
+  color: var(--secondary);
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--border-strong);
+}
+.ref-pill.tag-ref {
+  border-radius: var(--r-sm);
+}
+.ref-pill[data-current='true'] {
+  color: var(--button-foreground);
+  background: var(--accent-text);
+  border-color: var(--accent-text);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  font-weight: 650;
+}
+.live-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
