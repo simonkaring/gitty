@@ -63,6 +63,8 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
   const [notice, setNotice] = useState('');
+  // Notices are transient toasts; errors stay until dismissed.
+  useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 6000); return () => clearTimeout(timer); }, [notice]);
   const [revision, setRevision] = useState(0);
   const [activeDiff, setActiveDiff] = useState<ActiveDiffState | null>(null);
   const [split, setSplit] = useState(settings.diffView === 'split');
@@ -437,13 +439,15 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
       onWrite={remoteWrite}
       fetchStatus={fetchStatus}
       notify={setNotice} />}
+    <div className="toast-region">
     {actionError && <div className="native-banner" role="alert">{actionError} <button onClick={() => setActionError('')}>Dismiss operation error</button></div>}
     {error && <div className="native-banner" role="alert">{error} <button disabled={busy} onClick={() => state ? void refresh() : void open()}>Retry</button></div>}
-    {busy && !state && <div className="native-banner" role="status">Opening {locationLabel(location)}…{location.kind === 'wsl' && ' A stopped WSL distribution can take a few seconds to start.'}</div>}{notice && <div className="native-banner" role="status">{notice}</div>}
+    {busy && !state && <div className="native-banner" role="status">Opening {locationLabel(location)}…{location.kind === 'wsl' && ' A stopped WSL distribution can take a few seconds to start.'}</div>}{notice && <div className="native-banner" role="status">{notice}<button className="toast-dismiss" aria-label="Dismiss notification" onClick={() => setNotice('')}><X size={14} /></button></div>}
+    {state && selected && selected !== WORKING_ID && !commits.some(commit => commit.id === selected) && <div className="native-banner" role="status">Selected commit {selected.slice(0, 12)} is {cursor ? 'outside the loaded history' : 'no longer reachable from the current references'}. Its inspector remains open by object ID.{cursor && <button disabled={busy} onClick={() => reveal(selected)}>Reveal selected commit</button>}</div>}
+    </div>
     {mutationBlocked && <div className="operation-banner" role="alert">Refresh failed after a write. Further writes are blocked until a successful refresh.<button onClick={() => void refresh()}>Refresh now</button></div>}
     {state && operation && (operation.kind !== 'none' || !!operation.conflicts.length) && <div className="operation-banner" role="status"><strong>{operation.label || operation.kind}</strong><span>{operation.current} {operation.incoming && `← ${operation.incoming}`}{operation.step !== null && ` · Step ${operation.step}${operation.total !== null ? ` / ${operation.total}` : ''}`}</span>{(['continue', 'skip', 'abort'] as const).map(kind => <button key={kind} disabled={mutationBusy || mutationBlocked || operation.kind === 'unsupported' || (kind === 'continue' && !operation.canContinue) || (kind === 'skip' && !operation.canSkip)} onClick={() => setActionContext({ oid: state.session.head ?? '', initial: kind })}>{kind === 'continue' ? 'Continue' : kind === 'skip' ? 'Skip' : 'Abort'}</button>)}{operation.conflicts.map(path => <button key={path} onClick={() => setConflictPath(path)}>Resolve {path}</button>)}</div>}
-    {state && selected && selected !== WORKING_ID && !commits.some(commit => commit.id === selected) && <div className="native-banner" role="status">Selected commit {selected.slice(0, 12)} is {cursor ? 'outside the loaded history' : 'no longer reachable from the current references'}. Its inspector remains open by object ID.{cursor && <button disabled={busy} onClick={() => reveal(selected)}>Reveal selected commit</button>}</div>}
-    {!state ? <main className="native-welcome"><span className="eyebrow">OPENING REPOSITORY</span><h1>{locationLabel(location)}</h1><p>{error ? 'This repository could not be opened. Use Retry above once the problem is resolved.' : 'Reading repository state…'}</p></main> : <main className="workspace">
+    {!state ? <main className="native-welcome"><span className="eyebrow">OPENING REPOSITORY</span><h1>{locationLabel(location)}</h1><p>{error ? 'This repository could not be opened. Use Retry once the problem is resolved.' : 'Reading repository state…'}</p></main> : <main className="workspace">
        {sidebarOpen && <><NativeSidebar state={state} commits={commits} filters={filters} busy={busy} reveal={reveal} switchBranch={ref => void switchBranch(ref)} openMenu={openMenu} onAction={setActionContext} /><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
       <div className="workspace-main">
         {!sidebarOpen && filters}

@@ -107,9 +107,11 @@ export function NativeWorkspace({ onDemo }: { onDemo: () => void }) {
         <button className="icon-button" aria-label="Toggle working changes and inspector" aria-pressed={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><PanelRight size={18} /></button>
       </div>
     </header>
+    <div className="toast-region">
     {notice && <div className="native-banner" role="status">{notice}</div>}
     {cloneBusy && <div className="clone-progress" role="status" aria-live="polite"><div><strong>{clone.status === 'cancelling' ? 'Cancelling clone…' : `Cloning ${clone.destinationName}`}</strong><span>{clone.progress?.message ?? 'Starting Git…'}</span>{clone.progress?.percent !== null && clone.progress?.percent !== undefined && <progress max="100" value={clone.progress.percent}>{clone.progress.percent}%</progress>}</div><button disabled={clone.status === 'cancelling'} onClick={cancelClone}>Cancel clone</button></div>}
     {clone.status === 'error' && <div className="native-banner" role="alert">Clone failed: {clone.message} <button onClick={() => dispatchClone({ type: 'dismiss' })}>Dismiss</button></div>}
+    </div>
     {!tabs.length ? <main className="native-welcome"><span className="eyebrow">A CLEARER VIEW OF YOUR WORK</span><h1>Your history.<br />Your next chapter.</h1><p>Explore the graph, review working changes, and compose your next commit. Built for local repositories. Open more than one repository at once, each in its own tab.</p><button className="primary-button" onClick={() => setPicker(true)}>Open repository</button><button className="text-button" onClick={onDemo}>Explore a demo workspace</button></main>
       : tabs.map(tab => <div key={tab.id} id={`tabpanel-${tab.id}`} role="tabpanel" aria-labelledby={`tab-${tab.id}`} hidden={tab.id !== activeId} className="tab-pane-host">
         <RepositoryPane tabId={tab.id} location={tab.location} active={tab.id === activeId}

@@ -463,10 +463,6 @@ button[data-danger='true']:hover:not(:disabled) {
   border-radius: 999px;
   color: var(--secondary);
 }
-.titlebar-actions {
-  display: flex;
-  align-items: center;
-}
 .titlebar-slash {
   color: var(--muted);
 }
@@ -4049,6 +4045,235 @@ button[data-danger='true']:hover:not(:disabled) {
   .settings-shortcuts {
     grid-template-columns: 1fr;
   }
+}
+/* ==========================================================================
+   Shell polish: segmented toolbar, toast region, animated sidebar groups
+   ========================================================================== */
+:root {
+  interpolate-size: allow-keywords;
+}
+.titlebar {
+  background: color-mix(in srgb, var(--chrome) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(12px);
+}
+.brand-icon {
+  border-radius: var(--r-md);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%);
+  box-shadow: var(--edge-highlight);
+}
+.repository-tab {
+  transition:
+    background-color var(--dur-fast) ease,
+    border-color var(--dur-fast) ease,
+    transform var(--dur-fast) var(--ease-out);
+}
+.repository-tab[data-selected='true'] {
+  box-shadow: var(--shadow-raised);
+}
+.repository-tab[data-selected='true']::after {
+  animation: tab-underline var(--dur-slow) var(--ease-out);
+}
+@keyframes tab-underline {
+  from {
+    transform: scaleX(0.2);
+    opacity: 0;
+  }
+}
+.repository-tab-busy {
+  animation: pulse-dot 1.2s ease-in-out infinite;
+}
+@keyframes pulse-dot {
+  50% {
+    transform: scale(0.6);
+    opacity: 0.5;
+  }
+}
+
+/* Toolbar: each group is a quiet segmented control. */
+.repository-toolbar {
+  justify-content: flex-start;
+  gap: var(--sp-2);
+  padding: 6px var(--sp-3);
+  background: var(--bg);
+}
+.repository-toolbar-divider {
+  display: none;
+}
+.repository-toolbar-group {
+  gap: 0;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--r-md) + 2px);
+  background: var(--sidebar);
+  box-shadow: var(--edge-highlight);
+}
+.repository-toolbar-group:last-of-type {
+  margin-left: auto;
+}
+.repository-toolbar button {
+  min-height: var(--h-compact);
+  border-radius: var(--r-md);
+}
+.repository-toolbar button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.repository-toolbar .secondary-button {
+  border-color: transparent;
+  background: transparent;
+}
+.repository-sync-badge {
+  margin: 0 4px;
+}
+.pull-dropdown-menu {
+  box-shadow: var(--shadow-raised), var(--shadow);
+  transform-origin: top center;
+  animation: pop-in var(--dur-med) var(--ease-out);
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-4px) scale(0.97);
+  }
+}
+
+/* Toasts: transient notices float instead of pushing the layout. */
+.toast-region {
+  position: fixed;
+  right: var(--sp-4);
+  bottom: 40px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: var(--sp-2);
+  width: min(400px, calc(100vw - 32px));
+  pointer-events: none;
+}
+.native-shell > .toast-region {
+  top: 64px;
+  bottom: auto;
+  flex-direction: column;
+}
+.toast-region:empty {
+  display: none;
+}
+.toast-region > * {
+  pointer-events: auto;
+  position: relative;
+  padding: 10px 12px 10px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--raised) 92%, transparent);
+  backdrop-filter: blur(16px) saturate(1.3);
+  box-shadow: var(--shadow-raised), var(--shadow);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  overflow: hidden;
+  animation: toast-in var(--dur-slow) var(--ease-spring);
+}
+.toast-region > *::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--accent);
+}
+.toast-region > [role='alert'] {
+  background: color-mix(in srgb, var(--red-wash) 92%, transparent);
+  border-color: color-mix(in srgb, var(--red) 40%, transparent);
+}
+.toast-region > [role='alert']::before {
+  background: var(--red);
+}
+.toast-region .native-banner {
+  border-bottom: 1px solid var(--border-strong);
+}
+.toast-region .native-banner[role='alert'] {
+  border-color: color-mix(in srgb, var(--red) 40%, transparent);
+}
+.toast-region .clone-progress {
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+}
+.toast-dismiss {
+  margin-left: auto;
+  width: 24px;
+  min-height: 24px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  color: var(--muted) !important;
+}
+.toast-dismiss:hover {
+  color: var(--text) !important;
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+}
+.toast {
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-raised), var(--shadow);
+  transition:
+    opacity var(--dur-med) var(--ease-out),
+    transform var(--dur-slow) var(--ease-spring);
+}
+
+/* Sidebar: groups animate open, rows slide on hover, current branch glows. */
+.reference-group::details-content {
+  block-size: 0;
+  overflow: clip;
+  transition:
+    block-size var(--dur-med) var(--ease-out),
+    content-visibility var(--dur-med) allow-discrete;
+}
+.reference-group[open]::details-content {
+  block-size: auto;
+}
+.reference-group summary::before {
+  transition: transform var(--dur-med) var(--ease-spring);
+}
+.reference-group summary .count {
+  transition:
+    background-color var(--dur-fast),
+    color var(--dur-fast);
+}
+.reference-group[open] summary .count {
+  color: var(--accent-text);
+  background: var(--accent-wash);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.ref-action-row {
+  transition: background-color var(--dur-fast) ease;
+}
+.ref-item > span:first-of-type {
+  transition: transform var(--dur-med) var(--ease-out);
+}
+.ref-action-row:hover .ref-item > span:first-of-type {
+  transform: translateX(2px);
+}
+.ref-item:has(.current-branch-dot) {
+  color: var(--text);
+}
+.ref-item:has(.current-branch-dot) svg {
+  color: var(--accent-text);
+}
+.current-branch-dot {
+  animation: head-glow 2.4s ease-in-out infinite;
+}
+@keyframes head-glow {
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+}
+.workspace-label > svg {
+  box-shadow: var(--edge-highlight);
+  background: linear-gradient(145deg, var(--accent-wash), var(--raised));
+}
+.statusbar {
+  font-family: var(--mono);
+  font-size: 11px;
 }
 @media (prefers-reduced-motion: reduce) {
   *,
