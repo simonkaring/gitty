@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, FolderGit2, GitBranch, GitCommitHorizontal, Globe2, LocateFixed, Search, Tag, X } from 'lucide-react';
+import { ChevronDown, FolderGit2, GitBranch, GitCommitHorizontal, Globe2, LocateFixed, Search, Tag, X } from 'lucide-react';
 import { useState, type ReactNode, type RefObject } from 'react';
 import type { GitRef } from '../model/types';
 
@@ -112,7 +112,7 @@ export function Sidebar({
       const closed = collapsed.includes(section);
       const Icon = kind === 'tag' ? Tag : kind === 'remote' ? Globe2 : GitBranch;
       return <section className="refs-section" key={section}>
-        <button className="refs-heading" aria-expanded={!closed} aria-controls={`refs-${kind}`} onClick={() => toggle(section)}>{closed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}<span>{section}</span><span className="count">{entries.length}</span></button>
+        <button className="refs-heading" aria-expanded={!closed} aria-controls={`refs-${kind}`} onClick={() => toggle(section)}><ChevronDown size={13} /><span>{section}</span><span className="count">{entries.length}</span></button>
         {!closed && <div id={`refs-${kind}`} className="refs-list">{entries.map(ref => <button key={ref.name} title={`Jump to ${ref.name}${kind === 'local' ? ' · double-click to switch' : ''}`} className={`ref-item ${activeRef === ref.name ? 'active' : ''}`} onClick={() => onJump(ref.commitId, ref.name)} onDoubleClick={() => { if (kind === 'local') onSwitchBranch?.(ref.name); }}><Icon size={13} /><span>{ref.name}</span>{ref.name === 'main' && <span className="current-branch-dot" />}</button>)}</div>}
       </section>;
     })}

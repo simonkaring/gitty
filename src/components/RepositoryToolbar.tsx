@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
-import { ChevronDown, Download, GitBranch, RefreshCw, Upload, UserRound } from 'lucide-react';
+import { Check, ChevronDown, Download, GitBranch, RefreshCw, Upload, UserRound } from 'lucide-react';
 import { native, errorMessage } from '../model/native';
 import { DEFAULT_PULL_MODE, PULL_MODE_LABELS, describeRemoteAction, needsPublish, syncSummary, type PullMode, type RemoteActionRequest, type SyncInfo } from '../model/remote';
 import { PublishDialog } from './PublishDialog';
@@ -62,6 +62,9 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
   const [sync, setSync] = useState<SyncInfo | null>(null);
   const [syncError, setSyncError] = useState('');
   const [pending, setPending] = useState<'fetch' | 'pull' | 'push' | null>(null);
+  // Briefly swaps the finished action's icon for a self-drawing check.
+  const [done, setDone] = useState<'fetch' | 'pull' | 'push' | null>(null);
+  useEffect(() => { if (!done) return; const timer = setTimeout(() => setDone(null), 1600); return () => clearTimeout(timer); }, [done]);
   const [pullMenuOpen, setPullMenuOpen] = useState(false);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
@@ -86,7 +89,7 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
   async function run(action: RemoteActionRequest, kind: 'fetch' | 'pull' | 'push') {
     if (disabled || pending) return;
     setPending(kind); setPullMenuOpen(false);
-    try { const output = await onWrite('repository_remote_action', { action }); notify(output || `${describeRemoteAction(action)} complete.`); }
+    try { const output = await onWrite('repository_remote_action', { action }); notify(output || `${describeRemoteAction(action)} complete.`); setDone(kind === 'fetch' ? 'pull' : kind); }
     catch { /* The pane owns the dismissible operation error. */ }
     finally { setPending(null); }
   }
@@ -103,21 +106,21 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
   async function publish(remote: string, branch: string) {
     if (pending) throw new Error('Another action is already in progress.');
     setPending('push');
-    try { const output = await onWrite('repository_remote_action', { action: { kind: 'push', remote, branch, setUpstream: true } }); notify(output || 'Publish complete.'); }
+    try { const output = await onWrite('repository_remote_action', { action: { kind: 'push', remote, branch, setUpstream: true } }); notify(output || 'Publish complete.'); setDone('push'); }
     finally { setPending(null); }
   }
   function branchAction(action: () => void) { setBranchMenuOpen(false); action(); }
   return <div className="repository-toolbar" aria-label="Repository actions">
     <div className="repository-toolbar-group">
       <div className="pull-dropdown" ref={pullMenuRef}>
-        <button disabled={disabled || !!pending} onClick={() => void run({ kind: 'pull', pullMode: DEFAULT_PULL_MODE }, 'pull')} title={PULL_MODE_LABELS[DEFAULT_PULL_MODE]}><Download size={15} />{pending === 'pull' ? 'Pulling…' : 'Pull'}</button>
+        <button className="sync-button pull" data-pending={pending === 'pull' || pending === 'fetch'} disabled={disabled || !!pending} onClick={() => void run({ kind: 'pull', pullMode: DEFAULT_PULL_MODE }, 'pull')} title={PULL_MODE_LABELS[DEFAULT_PULL_MODE]}>{done === 'pull' ? <Check size={15} className="done-check" /> : <Download size={15} />}{pending === 'pull' ? 'Pulling…' : 'Pull'}</button>
         <button ref={pullToggleRef} className="pull-dropdown-toggle" disabled={disabled || !!pending} aria-label="More pull options" aria-expanded={pullMenuOpen} aria-haspopup="menu" onClick={() => setPullMenuOpen(value => !value)}><ChevronDown size={14} /></button>
         {pullMenuOpen && <div className="pull-dropdown-menu" role="menu">
           <button role="menuitem" onClick={() => void run({ kind: 'fetch' }, 'fetch')}>Fetch only</button>
           {(Object.keys(PULL_MODE_LABELS) as PullMode[]).map(mode => <button key={mode} role="menuitem" aria-current={mode === DEFAULT_PULL_MODE} onClick={() => void run({ kind: 'pull', pullMode: mode }, 'pull')}>{PULL_MODE_LABELS[mode]}{mode === DEFAULT_PULL_MODE && ' (default)'}</button>)}
         </div>}
       </div>
-      <button disabled={disabled || !!pending} onClick={push}><Upload size={15} />{pending === 'push' ? 'Pushing…' : needsPublish(sync) ? 'Publish…' : 'Push'}</button>
+      <button className="sync-button push" data-pending={pending === 'push'} disabled={disabled || !!pending} onClick={push}>{done === 'push' ? <Check size={15} className="done-check" /> : <Upload size={15} />}{pending === 'push' ? 'Pushing…' : needsPublish(sync) ? 'Publish…' : 'Push'}</button>
       <span className="repository-sync-badge" data-error={!sync && !!syncError} role="status">{sync ? syncSummary(sync) : syncError ? 'Sync info unavailable' : 'Reading sync info…'}</span>
       {fetchLabel && <span className="repository-fetch-status" data-error={fetchStatus.kind === 'failed'} title={fetchStatus.kind === 'failed' ? fetchStatus.message : undefined}>{fetchLabel}{fetchStatus.kind === 'failed' && <span className="sr-only">: {fetchStatus.message}</span>}</span>}
     </div>
@@ -143,7 +146,7 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
     <div className="repository-toolbar-group"><button disabled={disabled} onClick={() => setIdentityOpen(true)}><UserRound size={15} />Git identity…</button></div>
     <span className="repository-toolbar-divider" aria-hidden="true" />
     <div className="repository-toolbar-group">
-      <button className="secondary-button" disabled={busy} onClick={onRefresh}><RefreshCw size={15} />Refresh</button>
+      <button className="secondary-button refresh-button" data-pending={busy} disabled={busy} onClick={onRefresh}><RefreshCw size={15} />Refresh</button>
     </div>
     {publishOpen && <PublishDialog remotes={sync?.remotes ?? []} branch={sync?.branch ?? ''} onPublish={publish} onClose={() => setPublishOpen(false)} />}
     {identityOpen && <RepositoryIdentityDialog handle={handle} revision={revision} onApply={async (identity: CommitIdentity, expectedLocal: GitIdentityValues) => { await onWrite('repository_set_git_identity', { identity, expectedLocal }); notify('Repository Git identity updated.'); }} onClose={() => setIdentityOpen(false)} />}

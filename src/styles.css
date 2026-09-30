@@ -4366,6 +4366,211 @@ button[data-danger='true']:hover:not(:disabled) {
 .live-dot {
   animation: pulse-dot 2s ease-in-out infinite;
 }
+/* ==========================================================================
+   Animated icons and micro-interactions (lucide SVGs + state attributes)
+   ========================================================================== */
+/* Any check that appears draws itself in. */
+svg.lucide-check path,
+svg.lucide-circle-check path,
+svg.lucide-check-circle path {
+  stroke-dasharray: 30;
+  stroke-dashoffset: 0;
+  animation: draw-in 420ms var(--ease-out) both;
+}
+@keyframes draw-in {
+  from {
+    stroke-dashoffset: 30;
+  }
+}
+.icon-button svg.lucide-check,
+.done-check {
+  color: var(--green);
+  animation: pop var(--dur-slow) var(--ease-spring);
+}
+@keyframes pop {
+  from {
+    transform: scale(0.4);
+  }
+}
+/* Brand mark draws in on launch. */
+.brand-icon svg path,
+.brand-icon svg circle,
+.brand-icon svg line {
+  stroke-dasharray: 60;
+  animation: draw-brand 900ms var(--ease-out) both;
+}
+.brand-icon svg :nth-child(2) {
+  animation-delay: 120ms;
+}
+.brand-icon svg :nth-child(3) {
+  animation-delay: 240ms;
+}
+.brand-icon svg :nth-child(4) {
+  animation-delay: 360ms;
+}
+@keyframes draw-brand {
+  from {
+    stroke-dashoffset: 60;
+  }
+}
+/* Pull nudges down, push nudges up; both bob while in flight. */
+.sync-button svg {
+  transition: transform var(--dur-med) var(--ease-spring);
+}
+.sync-button.pull:hover:not(:disabled) svg {
+  transform: translateY(2px);
+}
+.sync-button.push:hover:not(:disabled) svg {
+  transform: translateY(-2px);
+}
+.sync-button.pull[data-pending='true'] svg {
+  animation: bob-down 900ms ease-in-out infinite;
+}
+.sync-button.push[data-pending='true'] svg {
+  animation: bob-up 900ms ease-in-out infinite;
+}
+@keyframes bob-down {
+  0%,
+  100% {
+    transform: translateY(-2px);
+    opacity: 0.6;
+  }
+  50% {
+    transform: translateY(2px);
+    opacity: 1;
+  }
+}
+@keyframes bob-up {
+  0%,
+  100% {
+    transform: translateY(2px);
+    opacity: 0.6;
+  }
+  50% {
+    transform: translateY(-2px);
+    opacity: 1;
+  }
+}
+.refresh-button svg,
+svg.lucide-refresh-cw {
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+.refresh-button:hover:not(:disabled) svg {
+  transform: rotate(90deg);
+}
+.refresh-button[data-pending='true'] svg {
+  animation: spin 0.9s linear infinite;
+}
+/* Chevrons follow their disclosure state. */
+svg.lucide-chevron-down {
+  transition: transform var(--dur-med) var(--ease-spring);
+}
+[aria-haspopup][aria-expanded='true'] > svg.lucide-chevron-down {
+  transform: rotate(180deg);
+}
+.refs-heading[aria-expanded='false'] > svg.lucide-chevron-down {
+  transform: rotate(-90deg);
+}
+/* Settings gear turns, close crosses twist, help bounces. */
+svg.lucide-settings,
+svg.lucide-x,
+svg.lucide-circle-help,
+svg.lucide-plus {
+  transition: transform var(--dur-slow) var(--ease-spring);
+}
+button:hover:not(:disabled) > svg.lucide-settings {
+  transform: rotate(60deg);
+}
+button:hover:not(:disabled) > svg.lucide-x {
+  transform: rotate(90deg);
+}
+button:hover:not(:disabled) > svg.lucide-plus {
+  transform: rotate(90deg) scale(1.1);
+}
+button:hover:not(:disabled) > svg.lucide-circle-help {
+  transform: translateY(-1px) rotate(-8deg);
+}
+/* Panel toggles: the divider slides toward the panel's edge when closed. */
+svg.lucide-panel-left path,
+svg.lucide-panel-right path {
+  transition: transform var(--dur-med) var(--ease-spring);
+}
+[aria-pressed='false'] > svg.lucide-panel-left path {
+  transform: translateX(-3px);
+}
+[aria-pressed='false'] > svg.lucide-panel-right path {
+  transform: translateX(3px);
+}
+/* Copy icon lifts on hover. */
+button:hover:not(:disabled) > svg.lucide-copy {
+  transform: translate(-1px, -1px);
+}
+svg.lucide-copy {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+/* Tactile press for every button. */
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+button {
+  transition:
+    background-color var(--dur-fast) ease,
+    color var(--dur-fast) ease,
+    border-color var(--dur-fast) ease,
+    transform var(--dur-fast) var(--ease-out);
+}
+/* Commit button: a light sweep invites the click; the icon turns while writing. */
+.commit-button {
+  position: relative;
+  overflow: hidden;
+}
+.commit-button:not(:disabled)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, white 35%, transparent) 50%, transparent 70%);
+  transform: translateX(-100%);
+  pointer-events: none;
+}
+.commit-button:not(:disabled):hover::after {
+  animation: sweep 900ms var(--ease-out);
+}
+@keyframes sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+.commit-button[data-working='true'] svg {
+  animation: spin 1s linear infinite;
+}
+/* Working files slide in when they appear or move between groups. */
+.working-file {
+  animation: file-in var(--dur-slow) var(--ease-out);
+}
+@keyframes file-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+}
+/* Dialogs rise in. */
+dialog[open] {
+  animation: dialog-in var(--dur-slow) var(--ease-out);
+}
+dialog[open]::backdrop {
+  animation: fade-in var(--dur-med) ease;
+}
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
