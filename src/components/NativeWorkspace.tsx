@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type CSSProperties } from 'react';
 import { Channel } from '@tauri-apps/api/core';
-import { PanelLeft, PanelRight } from 'lucide-react';
+import { Command, FolderOpen, Palette, PanelLeft, PanelRight, Search, Settings as SettingsIcon, Sparkles } from 'lucide-react';
+import { CommandPalette, type PaletteCommand } from './CommandPalette';
+import { useSettings } from '../model/settings';
 import type { RepositoryLocation } from '../model/repository';
 import { RepositoryPicker } from './RepositoryPicker';
 import { Welcome } from './Welcome';
@@ -37,6 +39,17 @@ export function NativeWorkspace({ onDemo }: { onDemo: () => void }) {
   const [inspectorWidth, setInspectorWidth] = usePaneWidth('inspector', 400, 300, 640);
   const [sidebarWidth, setSidebarWidth] = usePaneWidth('sidebar', 240, 210, 340);
   const [notice, setNotice] = useState('');
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const { themes, theme, updateSettings, openSettings } = useSettings();
+  useEffect(() => {
+    const keyboard = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k' || document.querySelector('dialog[open]')) return;
+      event.preventDefault();
+      setPaletteOpen(true);
+    };
+    window.addEventListener('keydown', keyboard);
+    return () => window.removeEventListener('keydown', keyboard);
+  }, []);
   const [clone, dispatchClone] = useReducer(cloneReducer, { status: 'idle' });
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notify = useCallback((message: string) => {
@@ -95,12 +108,22 @@ export function NativeWorkspace({ onDemo }: { onDemo: () => void }) {
     onDemo();
   }
 
+  const workspaceCommands: PaletteCommand[] = [
+    { id: 'open', group: 'Workspace', label: 'Open repository…', icon: <FolderOpen size={15} />, run: () => setPicker(true) },
+    { id: 'sidebar', group: 'Workspace', label: `${sidebarOpen ? 'Hide' : 'Show'} references sidebar`, icon: <PanelLeft size={15} />, run: () => setSidebarOpen(!sidebarOpen) },
+    { id: 'inspector', group: 'Workspace', label: `${inspectorOpen ? 'Hide' : 'Show'} inspector`, icon: <PanelRight size={15} />, run: () => setInspectorOpen(!inspectorOpen) },
+    { id: 'settings', group: 'Workspace', label: 'Open settings', icon: <SettingsIcon size={15} />, run: () => openSettings() },
+    { id: 'demo', group: 'Workspace', label: 'Explore demo workspace', icon: <Sparkles size={15} />, disabled: anyBusy, run: requestDemo },
+    ...themes.filter(t => t.id !== theme.id).map(t => ({ id: `theme:${t.id}`, group: 'Theme', label: `Theme: ${t.name}`, hint: t.mode, icon: <Palette size={15} />, run: () => updateSettings({ themeMode: 'fixed', themeId: t.id }) })),
+  ];
+  const isMac = document.documentElement.dataset.platform === 'macos' || /Mac/.test(navigator.platform);
   const tabSummaries: RepositoryTabSummary[] = tabs.map(tab => ({ id: tab.id, title: tab.title, busy: tab.busy, branch: tab.branch, dirty: tab.dirty }));
   return <div className="app-shell native-shell" style={{ '--inspector-width': `${inspectorWidth}px`, '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
     <header className="titlebar" data-tauri-drag-region onMouseDown={handleWindowDrag}>
       <Brand />
       <RepositoryTabs tabs={tabSummaries} activeId={activeId} onSelect={selectTab} onClose={closeTab} onNew={() => setPicker(true)} />
       <div className="native-actions">
+        <button className="palette-trigger" aria-label="Search commands" aria-keyshortcuts={isMac ? 'Meta+K' : 'Control+K'} onClick={() => setPaletteOpen(true)}><Search size={14} /><span>Search commands</span><kbd>{isMac ? <><Command size={11} />K</> : 'Ctrl K'}</kbd></button>
         <button className="secondary-button" onClick={() => setPicker(true)}>Open repository…</button>
         <button className="text-button" disabled={anyBusy} title={anyBusy ? 'Finish or switch to the tab with a running operation first.' : undefined} onClick={requestDemo}>Demo</button>
         <SettingsButton />
@@ -118,8 +141,10 @@ export function NativeWorkspace({ onDemo }: { onDemo: () => void }) {
         <RepositoryPane tabId={tab.id} location={tab.location} active={tab.id === activeId}
           sidebarOpen={sidebarOpen} inspectorOpen={inspectorOpen} inspectorWidth={inspectorWidth} sidebarWidth={sidebarWidth}
           setInspectorWidth={setInspectorWidth} setSidebarWidth={setSidebarWidth} setInspectorOpen={setInspectorOpen}
-          onIdentity={handleIdentity} onBusyChange={handleBusyChange} onMeta={handleMeta} />
+          onIdentity={handleIdentity} onBusyChange={handleBusyChange} onMeta={handleMeta}
+          paletteOpen={paletteOpen} onClosePalette={() => setPaletteOpen(false)} workspaceCommands={workspaceCommands} />
       </div>)}
+    {!tabs.length && paletteOpen && <CommandPalette commands={workspaceCommands} onClose={() => setPaletteOpen(false)} />}
     {picker && <RepositoryPicker onOpen={openLocation} onClone={startClone} cloneBusy={cloneBusy} onClose={() => setPicker(false)} />}
   </div>;
 }

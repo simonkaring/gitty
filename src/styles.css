@@ -4815,6 +4815,152 @@ dialog[open]::backdrop {
   background: var(--green-wash);
   box-shadow: 0 0 0 8px color-mix(in srgb, var(--green-wash) 45%, transparent);
 }
+/* ==========================================================================
+   Command palette
+   ========================================================================== */
+.palette-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--h-compact);
+  min-width: 220px;
+  padding: 0 6px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  box-shadow: var(--edge-highlight);
+}
+.palette-trigger:hover:not(:disabled) {
+  color: var(--secondary);
+  border-color: var(--border-strong);
+  background: var(--bg);
+}
+.palette-trigger kbd {
+  margin-left: auto;
+  gap: 1px;
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 0 7px;
+  height: 18px;
+  font-size: 10px;
+}
+@media (max-width: 1100px) {
+  .palette-trigger {
+    min-width: 0;
+  }
+  .palette-trigger span {
+    display: none;
+  }
+}
+.command-palette {
+  width: min(640px, calc(100vw - 32px));
+  margin-top: 14vh;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--raised) 94%, transparent);
+  backdrop-filter: blur(20px) saturate(1.4);
+  box-shadow: var(--shadow-raised), 0 32px 80px -12px var(--shadow-color);
+}
+.command-palette::backdrop {
+  backdrop-filter: blur(2px);
+}
+.palette-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+.palette-search input {
+  flex: 1;
+  min-height: 52px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: var(--fs-lg);
+  outline: none !important;
+}
+.palette-results {
+  max-height: min(420px, 55vh);
+  overflow: auto;
+  padding: 6px;
+  scroll-padding: 28px 0 6px;
+}
+.palette-group {
+  padding: 10px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 38px;
+  padding: 0 10px;
+  border-radius: var(--r-md);
+  color: var(--secondary);
+  font-size: var(--fs-md);
+  cursor: pointer;
+}
+.palette-item[aria-selected='true'] {
+  background: var(--accent-wash);
+  color: var(--text);
+}
+.palette-item[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: default;
+}
+.palette-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  background: var(--subtle);
+  color: var(--muted);
+  transition:
+    background-color var(--dur-fast),
+    color var(--dur-fast),
+    transform var(--dur-med) var(--ease-spring);
+}
+.palette-item[aria-selected='true'] .palette-icon {
+  background: var(--accent-text);
+  color: var(--button-foreground);
+  transform: scale(1.06);
+}
+.palette-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-label mark {
+  background: none;
+  color: var(--accent-text);
+  font-weight: 650;
+}
+.palette-hint {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.palette-enter {
+  color: var(--muted);
+  animation: pop var(--dur-med) var(--ease-spring);
+}
+.palette-empty {
+  margin: 0;
+  padding: var(--sp-6) var(--sp-4);
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

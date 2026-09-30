@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { FileCode2, GitCommitHorizontal, LocateFixed, Search, X } from 'lucide-react';
+import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus, GitCommitHorizontal, Globe2, LocateFixed, RefreshCw, Search, Tag, Upload, X } from 'lucide-react';
+import { CommandPalette, type PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
 import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
 import { appendUnique, errorMessage, graphCommit, native, validateHistory, WORKING_ID } from '../model/native';
@@ -24,7 +25,7 @@ import { SwitchBlockedDialog } from './SwitchBlockedDialog';
 import { locationLabel, sessionKey } from '../model/tabs';
 import { useSettings } from '../model/settings';
 import { AUTO_FETCH_CHECK, autoFetchDue, isFetchingAction, type FetchStatus } from '../model/autoFetch';
-import { describeRemoteAction, needsPublish, type RemoteActionRequest, type SyncInfo } from '../model/remote';
+import { DEFAULT_PULL_MODE, describeRemoteAction, needsPublish, type RemoteActionRequest, type SyncInfo } from '../model/remote';
 
 export interface RepositoryPaneProps {
   tabId: string;
@@ -50,9 +51,13 @@ export interface RepositoryPaneProps {
   /** Current branch name and whether the working tree has any entries, for
    * the tab strip's branch/dirty indicators. */
   onMeta: (tabId: string, branch: string | null, dirty: boolean) => void;
+  /** Command palette is owned by the workspace; the active pane adds repository commands. */
+  paletteOpen?: boolean;
+  onClosePalette?: () => void;
+  workspaceCommands?: PaletteCommand[];
 }
 
-export function RepositoryPane({ tabId, location, active, sidebarOpen, inspectorOpen, inspectorWidth, sidebarWidth, setInspectorWidth, setSidebarWidth, setInspectorOpen, onIdentity, onBusyChange, onMeta }: RepositoryPaneProps) {
+export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {}, workspaceCommands = [], tabId, location, active, sidebarOpen, inspectorOpen, inspectorWidth, sidebarWidth, setInspectorWidth, setSidebarWidth, setInspectorOpen, onIdentity, onBusyChange, onMeta }: RepositoryPaneProps) {
   const { theme, settings } = useSettings();
   const [state, setState] = useState<RepositoryState | null>(null);
   const [status, setStatus] = useState<RepositoryStatus | null>(null);
@@ -399,7 +404,7 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
       if (!activeRef.current) return;
       if (document.querySelector('dialog[open]')) return;
       const editable = event.target instanceof HTMLElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName);
-      if ((event.key === '/' && !editable) || ((event.metaKey || event.ctrlKey) && event.key === 'k')) { event.preventDefault(); search.current?.focus(); }
+      if (event.key === '/' && !editable) { event.preventDefault(); search.current?.focus(); }
     };
     window.addEventListener('keydown', keyboard); return () => window.removeEventListener('keydown', keyboard);
   }, []);
@@ -427,7 +432,28 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
       {filtering && <button className="text-button" onClick={() => { setText(''); setBranch(''); setSince(''); setUntil(''); setPath(''); }}>Clear filters</button>}
     </div>
   </div>;
+  function paletteCommands(): PaletteCommand[] {
+    if (!state) return workspaceCommands;
+    const writeBlocked = mutationBusy || mutationBlocked;
+    const { head, headRef } = state.session;
+    const repo: PaletteCommand[] = [
+      { id: 'fetch', group: 'Repository', label: 'Fetch', icon: <RefreshCw size={15} />, disabled: writeBlocked, run: () => void runMenuRemote({ kind: 'fetch' }) },
+      { id: 'pull', group: 'Repository', label: 'Pull', icon: <Download size={15} />, disabled: writeBlocked || !headRef, run: () => void runMenuRemote({ kind: 'pull', pullMode: DEFAULT_PULL_MODE }) },
+      { id: 'push', group: 'Repository', label: 'Push', icon: <Upload size={15} />, disabled: writeBlocked || !headRef, run: () => { if (headRef) void pushFromMenu(headRef); } },
+      { id: 'new-branch', group: 'Repository', label: 'New branch…', icon: <GitBranchPlus size={15} />, disabled: writeBlocked, run: () => setActionContext({ oid: head ?? '', ref: headRef ?? undefined, initial: 'createBranch' }) },
+      { id: 'switch-branch', group: 'Repository', label: 'Switch branch…', icon: <GitBranch size={15} />, disabled: writeBlocked, run: () => setActionContext({ oid: head ?? '', initial: 'switchBranch' }) },
+      { id: 'stash', group: 'Repository', label: 'Stash…', icon: <Archive size={15} />, disabled: writeBlocked, run: () => setStashOpen(true) },
+      { id: 'working', group: 'Repository', label: 'Show working changes', icon: <FileDiff size={15} />, disabled: !status?.entries.length, run: () => reveal(WORKING_ID) },
+      { id: 'search', group: 'Repository', label: 'Search history', hint: '/', icon: <Search size={15} />, run: () => requestAnimationFrame(() => search.current?.focus()) },
+      { id: 'refresh', group: 'Repository', label: 'Refresh', icon: <RefreshCw size={15} />, disabled: busy, run: () => void refresh() },
+      ...(head ? [{ id: 'copy-head', group: 'Repository', label: 'Copy HEAD commit SHA', hint: head.slice(0, 7), icon: <Copy size={15} />, run: () => void copyMenuValue(head, 'Commit SHA') }] : []),
+    ];
+    const branches = state.refs.filter(ref => ref.kind === 'local' && ref.fullName !== headRef).map(ref => ({ id: `switch:${ref.fullName}`, group: 'Switch to branch', label: `Switch to ${ref.name}`, icon: <GitBranch size={15} />, disabled: writeBlocked, run: () => void switchBranch(ref.fullName) }));
+    const goTo = state.refs.filter(ref => ref.kind !== 'local').map(ref => ({ id: `goto:${ref.fullName}`, group: 'Go to', label: `Go to ${ref.name}`, hint: ref.kind === 'tag' ? 'tag' : 'remote', icon: ref.kind === 'tag' ? <Tag size={15} /> : <Globe2 size={15} />, run: () => reveal(ref.commitId) }));
+    return [...repo, ...branches, ...goTo, ...workspaceCommands];
+  }
   return <>
+    {active && paletteOpen && <CommandPalette commands={paletteCommands()} onClose={onClosePalette} />}
     {state && <RepositoryToolbar handle={state.session.handle} active={active} revision={revision} busy={mutationBusy || mutationBlocked} pickCount={pickOrder.length} pickMode={pickMode}
       onCreateBranch={() => setActionContext({ oid: state.session.head ?? '', ref: state.session.headRef ?? undefined, initial: 'createBranch' })}
       onSwitchBranch={() => setActionContext({ oid: state.session.head ?? '', initial: 'switchBranch' })}
