@@ -27,7 +27,7 @@ Install **Git 2.37+** and the [Tauri 2 prerequisites](https://v2.tauri.app/start
 
 - **macOS:** Xcode Command Line Tools; the first visual target. The app uses a standard native titlebar and a platform-neutral workspace beneath it.
 - **Windows:** Microsoft C++ Build Tools and WebView2. No POSIX shell assumptions or hard-coded filesystem paths in the backend.
-- **Linux:** the distribution’s WebKitGTK 4.1 and other Tauri development libraries. See the prerequisites link and the Ubuntu CI setup.
+- **Linux:** the distribution’s WebKitGTK 4.1 and other Tauri development libraries. See the prerequisites link for your distribution's setup.
 
 ```sh
 npm run desktop                 # Native development window + Vite
@@ -205,9 +205,12 @@ npm run preview                 # Serve the production build
 npm audit
 npm run check:rust              # Requires Rust/Cargo
 npm run test:rust               # Real temporary repository integration tests
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
 ```
 
-The CI workflow defines a macOS / Windows / Ubuntu matrix for frontend tests/builds, Rust tests, and native compilation. The matrix is not evidence that Windows or Linux runtime behavior has been verified locally. The verification notes below record results at the time of each implementation; they are not current test totals or claims that every historical browser scenario still matches the redesigned UI.
+Testing is local-only for now; pushes and pull requests do not trigger GitHub Actions checks. Run `npm run build` before the Rust checks so the frontend assets are available. For native compilation, run `npm run tauri -- build --no-bundle` on the target platform. Local checks validate the host platform; Windows and Linux runtime behavior require testing on those platforms. Automated cross-platform checks can be introduced in Azure DevOps when needed. The signed-release GitHub workflow remains manually triggered for release packaging.
+
+The verification notes below record results at the time of each implementation; they are not current test totals or claims that every historical browser scenario still matches the redesigned UI.
 
 ### Historical: tabs, sync, stashes, hunk staging, amend, and clone verification
 
