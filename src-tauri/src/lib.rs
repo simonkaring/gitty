@@ -10,6 +10,8 @@ mod dto;
 mod external;
 mod hunk;
 mod identity;
+#[cfg(target_os = "linux")]
+mod linux;
 mod mutate;
 mod operation_dto;
 mod operations;
@@ -473,6 +475,12 @@ pub fn run() {
             app.manage(Arc::new(Service::new(app.path().app_data_dir()?)));
             askpass::init(app.handle().clone())?;
             editor::init(app.handle().clone())?;
+            #[cfg(target_os = "linux")]
+            {
+                for (_, window) in app.webview_windows() {
+                    linux::configure_linux_window(&window);
+                }
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
