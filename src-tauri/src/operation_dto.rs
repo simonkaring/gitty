@@ -41,6 +41,10 @@ pub enum GitAction {
     },
     SwitchBranch {
         branch: String,
+        /// Carry staged/unstaged work to the target branch, merging it where
+        /// the branches differ. Conflicts are left for the conflict editor.
+        #[serde(default)]
+        carry_changes: bool,
     },
     Merge {
         source: String,

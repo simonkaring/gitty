@@ -256,10 +256,15 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
     switchPending.current = true;
     const token = epoch.current;
     try {
-      const request = await captureOperation(current.session.handle, { kind: 'switchBranch', branch: ref });
+      // Working changes travel with the switch; overlapping ones become conflicts for the editor.
+      const request = await captureOperation(current.session.handle, { kind: 'switchBranch', branch: ref, carryChanges: true });
       if (epoch.current !== token || session.current?.session.handle !== current.session.handle) return;
       await operationWrite('repository_run_operation', { request });
-      if (epoch.current === token) setNotice(`Switched to ${target.name}.`);
+      if (epoch.current !== token) return;
+      const after = await native<OperationState>('repository_operation_state', { handle: current.session.handle });
+      if (epoch.current !== token) return;
+      if (after.conflicts.length) { setNotice(`Switched to ${target.name} with conflicts to resolve.`); setConflictPath(after.conflicts[0]); }
+      else setNotice(`Switched to ${target.name}.`);
     } catch (error) {
       if (epoch.current === token) setBlockedSwitch({ branch: target.name, ref, oid: target.commitId, reason: errorMessage(error) });
     } finally { switchPending.current = false; }

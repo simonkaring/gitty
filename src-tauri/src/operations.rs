@@ -290,6 +290,28 @@ impl Repository {
         }
         Ok(())
     }
+    /// True when switching HEAD to `oid` touches a tracked path that has local changes.
+    fn switch_overlaps_changes(&self, oid: &str) -> Result<bool> {
+        let dirty = self.status_entries()?.entries;
+        if !dirty.iter().any(|e| !e.untracked) {
+            return Ok(false);
+        }
+        let changed = self.check_text(&[
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            "HEAD",
+            oid,
+            "--",
+        ])?;
+        let changed: std::collections::HashSet<&str> =
+            changed.split('\0').filter(|p| !p.is_empty()).collect();
+        Ok(dirty.iter().filter(|e| !e.untracked).any(|e| {
+            changed.contains(e.path.as_str())
+                || e.old_path.as_deref().is_some_and(|p| changed.contains(p))
+        }))
+    }
     pub(crate) fn protect_untracked(&self, targets: &[String]) -> Result<()> {
         // reset --hard (used internally by rebase) deletes obstructing untracked
         // files, including ignored files that porcelain status does not report.
@@ -404,7 +426,14 @@ impl Repository {
         if !control && before.kind != OperationKind::None {
             return Err(Error::new("operationInProgress", before.label));
         }
-        if !control && !self.status_entries()?.entries.is_empty() {
+        let carry = matches!(
+            request.action,
+            GitAction::SwitchBranch {
+                carry_changes: true,
+                ..
+            }
+        );
+        if !control && !carry && !self.status_entries()?.entries.is_empty() {
             return Err(Error::new("dirtyWorktree", "Commit or explicitly stash all staged, unstaged and untracked changes first. Gitty never automatically stashes."));
         }
         let mut input = Vec::new();
@@ -440,21 +469,26 @@ impl Repository {
                     a.extend(args(&["branch", "--", &name, &oid]));
                 }
             }
-            GitAction::SwitchBranch { branch } => {
+            GitAction::SwitchBranch {
+                branch,
+                carry_changes,
+            } => {
                 // The UI sends full ref names (refs/heads/x); accept short names too.
                 let branch = branch
                     .strip_prefix("refs/heads/")
                     .unwrap_or(&branch)
                     .to_string();
                 self.valid_name(&branch, "heads")?;
-                resolve(self.location(), &format!("refs/heads/{branch}"))?;
-                a.extend(args(&[
-                    "switch",
-                    "--no-overwrite-ignore",
-                    "--no-guess",
-                    "--",
-                    &branch,
-                ]));
+                let oid = resolve(self.location(), &format!("refs/heads/{branch}"))?;
+                a.extend(args(&["switch", "--no-overwrite-ignore", "--no-guess"]));
+                // Plain switch carries work Git can keep as-is. Only when the
+                // target changes a path that has local changes is a three-way
+                // merge needed (it leaves conflicts for the editor); using it
+                // otherwise would needlessly unstage unrelated staged changes.
+                if carry_changes && self.switch_overlaps_changes(&oid)? {
+                    a.push("--merge".into());
+                }
+                a.extend(args(&["--", &branch]));
             }
             GitAction::Merge {
                 source,

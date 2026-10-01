@@ -285,6 +285,7 @@ fn operations_branch_tag_ff_and_diverged_merge() {
     let side = f.commit("side");
     f.run(GitAction::SwitchBranch {
         branch: "refs/heads/main".into(),
+        carry_changes: false,
     })
     .unwrap();
     assert_eq!(f.merge("side", false).unwrap().head, Some(side.clone()));
@@ -312,6 +313,7 @@ fn operations_branch_tag_ff_and_diverged_merge() {
     f.commit("diverged");
     f.run(GitAction::SwitchBranch {
         branch: "main".into(),
+        carry_changes: false,
     })
     .unwrap();
     assert_eq!(
@@ -419,6 +421,7 @@ fn operations_external_merge_restart_abort_and_stale_expectations() {
     );
     let mut request = f.request(GitAction::SwitchBranch {
         branch: "side".into(),
+        carry_changes: false,
     });
     request.expected_head_ref = None;
     assert_eq!(
@@ -819,7 +822,8 @@ fn operations_switch_preserves_ignored_work() {
     f.write("local", "precious ignored work\n");
     assert!(f
         .run(GitAction::SwitchBranch {
-            branch: "side".into()
+            branch: "side".into(),
+            carry_changes: false,
         })
         .is_err());
     assert_eq!(
@@ -1771,4 +1775,46 @@ with socket.create_connection(("127.0.0.1", int(os.environ["GITTY_EDITOR_PORT"])
     assert_eq!(f.git(&["log", "-1", "--format=%s"]), "combined message");
     assert_eq!(f.git(&["rev-list", "--count", "side..main"]), "1");
     assert_eq!(f.git(&["show", "HEAD:second-file"]), "second");
+}
+
+#[test]
+fn operations_switch_carries_changes_and_surfaces_conflicts() {
+    let f = Fixture::new();
+    f.git(&["switch", "-c", "side"]);
+    f.write("file", "incoming\n");
+    f.commit("side");
+    f.git(&["switch", "main"]);
+    let switch = |f: &Fixture| {
+        f.run(GitAction::SwitchBranch {
+            branch: "refs/heads/side".into(),
+            carry_changes: true,
+        })
+    };
+    // Unrelated staged work is carried unchanged, still staged.
+    f.write("other", "mine\n");
+    f.git(&["add", "other"]);
+    let result = switch(&f).unwrap();
+    assert!(result.operation.conflicts.is_empty());
+    assert_eq!(f.git(&["symbolic-ref", "--short", "HEAD"]), "side");
+    assert_eq!(f.git(&["diff", "--cached", "--name-only"]), "other");
+    f.git(&["reset", "-q", "--hard"]);
+    f.git(&["switch", "main"]);
+    // Work overlapping the target's changes merges, leaving a conflict to resolve.
+    f.write("file", "mine\n");
+    let result = switch(&f).unwrap();
+    assert_eq!(f.git(&["symbolic-ref", "--short", "HEAD"]), "side");
+    assert_eq!(result.operation.conflicts, vec!["file".to_string()]);
+    // Without carry_changes, dirty work is still refused.
+    f.git(&["reset", "-q", "--hard"]);
+    f.git(&["switch", "main"]);
+    f.write("file", "mine\n");
+    assert_eq!(
+        f.run(GitAction::SwitchBranch {
+            branch: "side".into(),
+            carry_changes: false,
+        })
+        .unwrap_err()
+        .code,
+        "dirtyWorktree"
+    );
 }

@@ -342,7 +342,12 @@ remote's symbolic `HEAD` alias. These reads do not fetch or contact remotes.
   no in-progress operation. Bare repositories are rejected. Gitty never forces,
   automatically stashes, removes locks or automatically retries writes.
 - Branch creation resolves the start point to a commit; checkout is optional.
-  Switching accepts local branches only (`switch --no-guess`). Merges target the
+  Switching accepts local branches only (`switch --no-guess`). `switchBranch`
+  with `carryChanges: true` skips the clean-worktree requirement: Git's plain
+  switch carries staged/unstaged work, and `--merge` is used only when the target
+  changes a tracked path that has local changes, so conflicts return as an
+  `OperationResult` with `operation.conflicts` for the conflict editor (this can
+  restage merged paths). Untracked/ignored obstructions are still refused by Git. Merges target the
   current local branch with explicit `--ff` or `--no-ff`, and `--no-edit`.
   Switch/merge refuse ignored-file overwrites. Rebase/cherry-pick preflight
   destination/replay trees, including queued continuation steps, for obstructing
