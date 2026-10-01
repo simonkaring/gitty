@@ -15,6 +15,12 @@ impl Service {
         action: RemoteAction,
         askpass: Option<&crate::askpass::AskpassRegistry>,
     ) -> Result<ActionOutput> {
+        if matches!(action, RemoteAction::BackgroundFetch) {
+            // Only moves refs/remotes/*; Git's own ref locks suffice, and a slow
+            // network must not block local writes such as switching branches.
+            let repo = self.repo(handle)?;
+            return crate::process::without_read_deadline(|| repo.remote_action(action, askpass));
+        }
         self.mutate(handle, |repo| repo.remote_action(action, askpass))
     }
 }

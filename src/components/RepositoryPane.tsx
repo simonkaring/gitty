@@ -274,7 +274,9 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
     const isCurrent = () => epoch.current === token && session.current?.session.handle === current.session.handle;
     const kind = (args.action as { kind?: string } | undefined)?.kind;
     const fetching = command === 'repository_remote_action' && isFetchingAction(args.action);
-    mutationLock.current = true; setMutationBusy(true);
+    // Background fetch only moves remote-tracking refs: it must not block local writes such as switching branches.
+    const holdsLock = !options.quiet;
+    if (holdsLock) { mutationLock.current = true; setMutationBusy(true); }
     // Background fetch reports through the toolbar's fetch status instead of
     // clearing or replacing an error banner the user has not dismissed yet.
     if (!options.quiet) setActionError('');
@@ -302,7 +304,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
         if (fetching) setFetchStatus(previous => previous.kind === 'fetching' ? { kind: 'failed', at: Date.now(), message: errorMessage(e) } : previous);
       }
       throw e;
-    } finally { if (isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
+    } finally { if (holdsLock && isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
   }
   const remoteWriteRef = useRef(remoteWrite);
   remoteWriteRef.current = remoteWrite;
