@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { FolderGit2, GitBranch, Globe2, Tag } from 'lucide-react';
+import { FolderGit2, Globe2, Laptop, Tag } from 'lucide-react';
 import type { CommitSummary, RepositoryState } from '../model/repository';
 import { graphDropAction, REF_DRAG_TYPE, COMMIT_DRAG_TYPE } from './HistoryGraph';
 import type { ActionContext } from './OperationDialog';
@@ -16,7 +16,7 @@ interface NativeSidebarProps {
 }
 
 const GROUPS = [
-  { kind: 'local', label: 'Branches', Icon: GitBranch },
+  { kind: 'local', label: 'Branches', Icon: Laptop },
   { kind: 'remote', label: 'Remote branches', Icon: Globe2 },
   { kind: 'tag', label: 'Tags', Icon: Tag },
 ] as const;
@@ -26,7 +26,7 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
   return <aside className="sidebar native-sidebar" aria-label="Repository references">
     <div className="workspace-label"><FolderGit2 size={22} /><span>{session.name}<small title={session.root}>{session.root}</small></span></div>
     <div className="native-sidebar-meta">
-      <span className="badge" data-tone="accent"><GitBranch size={14} />{session.headRef?.replace('refs/heads/', '') ?? 'Detached / unborn HEAD'}</span>
+      <span className="badge" data-tone="accent"><Laptop size={14} />{session.headRef?.replace('refs/heads/', '') ?? 'Detached / unborn HEAD'}</span>
       {session.location.kind === 'wsl' && <span>WSL · {session.location.distribution}</span>}
       {session.linkedWorktree && <span>Linked worktree</span>}
       {session.bare && <span>Bare repository</span>}

@@ -1403,21 +1403,31 @@ button[data-danger='true']:hover:not(:disabled) {
   font: 600 var(--fs-2xs) / 1 var(--mono);
   cursor: default;
 }
+.commit-refs:hover,
+.commit-refs:focus-within {
+  z-index: 4;
+}
+/* Hovering the primary pill reveals its full name, overlaying the graph. */
+.commit-refs > .ref-pill:hover,
+.commit-refs > .ref-pill:focus-visible {
+  flex-shrink: 0;
+  max-width: none;
+}
+.commit-refs > .ref-pill:hover .ref-pill-name,
+.commit-refs > .ref-pill:focus-visible .ref-pill-name {
+  overflow: visible;
+}
+/* No visible container: the extra pills just stack below the primary one. */
 .ref-stack {
   display: none;
   position: absolute;
-  top: calc(50% + 12px);
+  top: 100%;
   left: 8px;
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
+  padding-top: 4px;
   max-width: min(420px, 70vw);
-  padding: 6px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm);
-  background: var(--raised);
-  box-shadow: var(--shadow);
-  z-index: 10;
 }
 .commit-refs:hover .ref-stack,
 .commit-refs:focus-within .ref-stack {
@@ -1425,6 +1435,11 @@ button[data-danger='true']:hover:not(:disabled) {
 }
 .ref-stack .ref-pill {
   max-width: 100%;
+  box-shadow: var(--shadow);
+}
+.commit-refs .ref-pill.remote-ref:hover,
+.ref-stack .ref-pill.remote-ref {
+  background: var(--raised);
 }
 .commit-graph-cell {
   min-width: 0;
@@ -3183,9 +3198,6 @@ button[data-danger='true']:hover:not(:disabled) {
     opacity: 0;
     transform: scale(3.2);
   }
-}
-.ref-pill:hover {
-  transform: translateY(-1px);
 }
 /* ==========================================================================
    Animated icons and micro-interactions (lucide SVGs + state attributes)

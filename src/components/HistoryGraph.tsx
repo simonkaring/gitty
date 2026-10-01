@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { GitBranch, GitMerge, Globe2, Settings as SettingsIcon, Tag } from 'lucide-react';
+import { GitMerge, Globe2, Laptop, Settings as SettingsIcon, Tag } from 'lucide-react';
 import { indexEdges, laneX, LANE_WIDTH, ROW_HEIGHT, type GraphLayout } from '../graph/layout';
 import { WORKING_ID } from '../model/native';
 import type { Commit, GitRef } from '../model/types';
@@ -27,6 +27,17 @@ const REF_ORDER = { local: 0, remote: 1, tag: 2 } as const;
 export function sortRefs<T extends GitRef & { fullName?: string }>(list: T[], headRef?: string | null): T[] {
   const rank = (ref: T) => ref.fullName && ref.fullName === headRef ? -1 : REF_ORDER[ref.kind as keyof typeof REF_ORDER] ?? 3;
   return [...list].sort((a, b) => rank(a) - rank(b));
+}
+// A local branch and its same-named remote-tracking ref on one commit share a single pill.
+export function groupRefs<T extends GitRef & { fullName?: string }>(list: T[], headRef?: string | null): { ref: T; remote?: T }[] {
+  const sorted = sortRefs(list, headRef), used = new Set<T>(), groups: { ref: T; remote?: T }[] = [];
+  for (const ref of sorted) {
+    if (used.has(ref)) continue;
+    const remote = ref.kind === 'local' ? sorted.find(other => other.kind === 'remote' && !used.has(other) && other.name.slice(other.name.indexOf('/') + 1) === ref.name) : undefined;
+    if (remote) used.add(remote);
+    groups.push({ ref, remote });
+  }
+  return groups;
 }
 interface Props {
   commits: Commit[];
@@ -97,9 +108,9 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const visibleEdges = useMemo(() => indexEdges(layout.edges, layout.edgeMaxTo), [layout.edges, layout.edgeMaxTo]);
   const colors = useMemo(() => Array.from({ length: 8 }, (_, index) => theme.colors[`graphLane${index + 1}`]), [theme]);
 
-  function renderRef(ref: GitRef & { fullName?: string }, commit: Commit) {
+  function renderRef({ ref, remote }: { ref: GitRef & { fullName?: string }; remote?: GitRef }, commit: Commit) {
     return <span key={ref.fullName ?? ref.name} className={`ref-pill ${ref.kind === 'tag' ? 'tag-ref' : ref.kind === 'remote' ? 'remote-ref' : ref.name === 'main' ? 'main-ref' : ''}`}
-                      data-name={ref.name} title={ref.name}
+                      data-name={ref.name} title={remote ? `${ref.name} + ${remote.name}` : ref.name}
                       role={onActions && ref.fullName ? 'button' : undefined} tabIndex={onActions && ref.fullName ? 0 : undefined} aria-label={onActions && ref.fullName ? `Graph actions for ${ref.name}` : undefined}
                       onKeyDown={event => { if (!ref.fullName) return; if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && onContextActions) { event.preventDefault(); event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); onContextActions({ oid: commit.id, ref: ref.fullName }, rect.left, rect.bottom, event.currentTarget); } else if (onActions && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.stopPropagation(); onActions({ oid: commit.id, ref: ref.fullName }); } }}
                       data-current={!!headRef && ref.fullName === headRef} draggable={!!onActions && !!ref.fullName && ref.kind !== 'tag'}
@@ -108,7 +119,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                       onDrop={event => { event.preventDefault(); event.stopPropagation(); stopDrag(); const action = graphDropAction(event.dataTransfer, ref.fullName, headRef, commits.slice(0, loaded), refs); if (action) onActions?.(action); }}
                       onContextMenu={event => { if (onContextActions && ref.fullName) { event.preventDefault(); event.stopPropagation(); onContextActions({ oid: commit.id, ref: ref.fullName }, event.clientX, event.clientY, event.currentTarget); } }} onClick={event => { if (onActions && ref.fullName) { event.stopPropagation(); if (ref.kind === 'local' && onSwitchBranch) { if (badgeAction.current) clearTimeout(badgeAction.current); if (event.detail < 2) badgeAction.current = setTimeout(() => { badgeAction.current = null; onActions({ oid: commit.id, ref: ref.fullName }); }, 500); } else onActions({ oid: commit.id, ref: ref.fullName }); } }}
                       onDoubleClick={event => { if (ref.kind === 'local' && ref.fullName && onSwitchBranch) { event.stopPropagation(); if (badgeAction.current) clearTimeout(badgeAction.current); badgeAction.current = null; onSwitchBranch(ref.fullName); } }}>
-                      {ref.kind === 'tag' ? <Tag size={10} /> : ref.kind === 'remote' ? <Globe2 size={10} /> : <GitBranch size={10} />}<span className="ref-pill-name">{ref.name}</span>
+                      {ref.kind === 'tag' ? <Tag size={10} /> : ref.kind === 'remote' ? <Globe2 size={10} /> : <Laptop size={10} />}{remote && <Globe2 size={10} />}<span className="ref-pill-name">{ref.name}</span>
                     </span>;
   }
 
@@ -351,8 +362,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
             const node = layout.nodes[row];
             const lane = node?.lane ?? 0;
             const branchColor = colors[lane % colors.length];
-            const badges = sortRefs(refs.filter(ref => ref.commitId === commit.id && !(ref.kind === 'remote' && ref.name.endsWith('/HEAD'))), headRef);
-            const primary = badges[0];
+            const badges = refs.filter(ref => ref.commitId === commit.id && !(ref.kind === 'remote' && ref.name.endsWith('/HEAD')));
+            const groups = groupRefs(badges, headRef);
             return <div key={commit.id} id={`commit-${commit.id}`} role="option" aria-selected={commit.id === selectedId}
               aria-posinset={row + 1} aria-setsize={commits.length}
               aria-label={`${commit.subject}, ${commit.author}, ${commit.id.slice(0, 7)}${commit.parents.length > 1 ? ', merge commit' : ''}${commit.id === head ? ', HEAD' : ''}${badges.length ? `, ${badges.map(b => b.name).join(', ')}` : ''}`}
@@ -366,9 +377,9 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
               {visibleColumns.map(col => {
                 if (col.id === 'refs') {
                   return <div key="refs" className="commit-refs">
-                    {primary && renderRef(primary, commit)}
-                    {badges.length > 1 && <button type="button" className="ref-more" aria-label={`${badges.length - 1} more ref${badges.length > 2 ? 's' : ''}`} onClick={event => event.stopPropagation()}>+{badges.length - 1}</button>}
-                    {badges.length > 1 && <div className="ref-stack">{badges.slice(1).map(ref => renderRef(ref, commit))}</div>}
+                    {groups[0] && renderRef(groups[0], commit)}
+                    {groups.length > 1 && <button type="button" className="ref-more" aria-label={`${groups.length - 1} more ref${groups.length > 2 ? 's' : ''}`} onClick={event => event.stopPropagation()}>+{groups.length - 1}</button>}
+                    {groups.length > 1 && <div className="ref-stack">{groups.slice(1).map(group => renderRef(group, commit))}</div>}
                   </div>;
                 }
                 if (col.id === 'graph') {

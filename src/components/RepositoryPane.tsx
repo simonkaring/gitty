@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus, GitCommitHorizontal, Globe2, LocateFixed, RefreshCw, Search, Tag, Upload, X } from 'lucide-react';
+import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus, GitCommitHorizontal, Globe2, Laptop, LocateFixed, RefreshCw, Search, Tag, Upload, X } from 'lucide-react';
 import { CommandPalette, type PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
 import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
@@ -451,7 +451,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
       { id: 'refresh', group: 'Repository', label: 'Refresh', icon: <RefreshCw size={15} />, disabled: busy, run: () => void refresh() },
       ...(head ? [{ id: 'copy-head', group: 'Repository', label: 'Copy HEAD commit SHA', hint: head.slice(0, 7), icon: <Copy size={15} />, run: () => void copyMenuValue(head, 'Commit SHA') }] : []),
     ];
-    const branches = state.refs.filter(ref => ref.kind === 'local' && ref.fullName !== headRef).map(ref => ({ id: `switch:${ref.fullName}`, group: 'Switch to branch', label: `Switch to ${ref.name}`, icon: <GitBranch size={15} />, disabled: writeBlocked, run: () => void switchBranch(ref.fullName) }));
+    const branches = state.refs.filter(ref => ref.kind === 'local' && ref.fullName !== headRef).map(ref => ({ id: `switch:${ref.fullName}`, group: 'Switch to branch', label: `Switch to ${ref.name}`, icon: <Laptop size={15} />, disabled: writeBlocked, run: () => void switchBranch(ref.fullName) }));
     const goTo = state.refs.filter(ref => ref.kind !== 'local').map(ref => ({ id: `goto:${ref.fullName}`, group: 'Go to', label: `Go to ${ref.name}`, hint: ref.kind === 'tag' ? 'tag' : 'remote', icon: ref.kind === 'tag' ? <Tag size={15} /> : <Globe2 size={15} />, run: () => reveal(ref.commitId) }));
     return [...repo, ...branches, ...goTo, ...workspaceCommands];
   }

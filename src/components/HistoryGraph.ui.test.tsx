@@ -5,7 +5,7 @@ import { expect, it, vi } from 'vitest';
 import { layoutHistory } from '../graph/layout';
 import { BUILTIN_THEMES } from '../model/themes';
 import { DEFAULT_HISTORY_COLUMNS } from '../model/settings';
-import { HistoryGraph, sortRefs } from './HistoryGraph';
+import { groupRefs, HistoryGraph, sortRefs } from './HistoryGraph';
 
 vi.mock('../model/settings', async importOriginal => {
   const original = await importOriginal<typeof import('../model/settings')>();
@@ -37,4 +37,10 @@ it('sortRefs orders current branch, local, remote, tags', () => {
     const sorted = sortRefs([r('v1', 'tag'), r('origin/x', 'remote'), r('x', 'local'), r('main', 'local')], 'refs/local/main');
     expect(sorted.map(ref => ref.name)).toEqual(['main', 'x', 'origin/x', 'v1']);
   }
+});
+
+it('groupRefs merges a local branch with its same-named remote ref', () => {
+  const r = (name: string, kind: 'local' | 'remote' | 'tag') => ({ name, kind, commitId: 'a' });
+  const groups = groupRefs([r('origin/x', 'remote'), r('x', 'local'), r('origin/y', 'remote'), r('v1', 'tag')]);
+  expect(groups.map(g => [g.ref.name, g.remote?.name])).toEqual([['x', 'origin/x'], ['origin/y', undefined], ['v1', undefined]]);
 });
