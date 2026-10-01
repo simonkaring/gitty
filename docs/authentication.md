@@ -30,16 +30,17 @@ Gitty's provider API integration or grant its pull-request features access.
 
 ## Register Gitty for provider features
 
-Set these **public client IDs** in the environment before compiling the desktop app:
+Put these **public client IDs** in a gitignored `.env` file in the repo root; `npm run desktop` and `npm run desktop:build` load it automatically:
 
 ```sh
-export GITTY_GITHUB_CLIENT_ID='your-github-client-id'
-export GITTY_GITLAB_CLIENT_ID='your-gitlab-application-id'
-export GITTY_AZURE_CLIENT_ID='your-entra-application-client-id'
-npm run desktop
+GITTY_GITHUB_CLIENT_ID=your-github-client-id
+GITTY_GITLAB_CLIENT_ID=your-gitlab-application-id
+GITTY_AZURE_CLIENT_ID=your-entra-application-client-id
 ```
 
-For release builds, set the same variables before `npm run desktop:build`.
+Use plain `KEY=value` lines (no `export`). Variables already exported in the
+shell take precedence over `.env` values. Direct `cargo` commands do not read
+`.env`.
 Cargo rebuilds when these values change. Missing IDs produce an actionable sign-in
 error; manual tokens and GCM-backed Git operations still work. Never embed client
 secrets: this implementation does not use them.

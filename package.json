@@ -11,8 +11,8 @@
     "test:watch": "vitest",
     "tauri": "tauri",
     "prepare:gcm": "node scripts/prepare-gcm.mjs",
-    "desktop": "npm run prepare:gcm && tauri dev",
-    "desktop:build": "tauri build",
+    "desktop": "npm run prepare:gcm && node --env-file-if-exists=.env node_modules/@tauri-apps/cli/tauri.js dev",
+    "desktop:build": "node --env-file-if-exists=.env node_modules/@tauri-apps/cli/tauri.js build",
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
   },
