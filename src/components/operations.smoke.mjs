@@ -188,7 +188,7 @@ try {
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   await page.locator('.ref-item[title="refs/heads/topic"]').click({ button: 'right' });
   const sidebarMenu = page.getByRole('menu', { name: 'Actions for topic' });
-  await sidebarMenu.getByRole('menuitem', { name: 'Switch to topic…' }).waitFor();
+  await sidebarMenu.getByRole('menuitem', { name: 'Switch to topic' }).waitFor();
   assert.equal(await sidebarMenu.getByRole('menuitem', { name: 'Create pull request…' }).count(), 1);
   assert.equal(await sidebarMenu.getByRole('menuitem', { name: 'Push / Publish…' }).count(), 0);
   await page.keyboard.press('Escape');

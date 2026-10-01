@@ -7,9 +7,9 @@ import { useDismiss } from './ui';
 
 export interface MenuTarget { context: ActionContext; x: number; y: number; trigger: HTMLElement }
 
-export function GraphContextMenu({ target, state, busy, onOperation, onShowDetails, onSetBase, onSetTarget, onCompare, onPullRequest, onRemoteAction, onPush, onCopy, onClose }: {
+export function GraphContextMenu({ target, state, busy, onOperation, onSwitchBranch, onShowDetails, onSetBase, onSetTarget, onCompare, onPullRequest, onRemoteAction, onPush, onCopy, onClose }: {
   target: MenuTarget; state: RepositoryState; busy: boolean;
-  onOperation: (context: ActionContext) => void; onShowDetails: (oid: string) => void;
+  onOperation: (context: ActionContext) => void; onSwitchBranch: (ref: string) => void; onShowDetails: (oid: string) => void;
   onSetBase: (oid: string) => void; onSetTarget: (oid: string) => void; onCompare: (oid: string) => void;
   onPullRequest: (ref: string) => void; onRemoteAction: (action: RemoteActionRequest) => void; onPush: () => void;
   onCopy: (value: string, label: string) => void; onClose: () => void;
@@ -52,7 +52,7 @@ export function GraphContextMenu({ target, state, busy, onOperation, onShowDetai
       <div className="menu-divider" role="separator" />
     </>}
     {tracking && <><button role="menuitem" disabled={busy} onClick={() => onRemoteAction({ kind: 'fetch', remote: tracking, branch: ref!.fullName.slice(`refs/remotes/${tracking}/`.length) })}>Fetch this remote branch</button><div className="menu-divider" role="separator" /></>}
-    {ref?.kind === 'local' && !current && <button role="menuitem" onClick={() => operation('switchBranch')}>Switch to {ref.name}…</button>}
+    {ref?.kind === 'local' && !current && <button role="menuitem" disabled={busy} onClick={() => onSwitchBranch(ref.fullName)}>Switch to {ref.name}</button>}
     {!current && context.oid !== state.session.head && <><button role="menuitem" onClick={() => operation('merge')}>Merge into current…</button><button role="menuitem" onClick={() => operation('rebase')}>Rebase current onto this…</button><button role="menuitem" onClick={() => operation('cherryPick')}>Cherry-pick {ref ? 'tip commit' : 'commit'}…</button></>}
     <button role="menuitem" onClick={() => operation('createBranch')}>Create branch here…</button>
     <button role="menuitem" onClick={() => operation('createTag')}>Create tag here…</button>
