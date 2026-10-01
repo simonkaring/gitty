@@ -194,3 +194,31 @@ describe('tabsReducer', () => {
     expect(tabsReducer(state, { type: 'noticeShown' }).notice).toBeNull();
   });
 });
+
+describe('start tab', () => {
+  const empty: TabsState = { tabs: [], activeId: null, notice: null };
+  const repo: RepositoryLocation = { kind: 'native', path: '/repo' };
+  it('opens one start tab and refocuses it instead of adding another', () => {
+    const once = tabsReducer(empty, { type: 'start' });
+    expect(once.tabs).toHaveLength(1);
+    expect(once.tabs[0].location).toBeNull();
+    const twice = tabsReducer(tabsReducer(once, { type: 'open', location: repo }), { type: 'start' });
+    expect(twice.tabs).toHaveLength(2);
+    expect(twice.activeId).toBe(once.tabs[0].id);
+  });
+  it('is replaced in place by the repository opened from it', () => {
+    const withRepo = tabsReducer(empty, { type: 'open', location: { kind: 'native', path: '/other' } });
+    const started = tabsReducer(withRepo, { type: 'start' });
+    const startId = started.activeId!;
+    const opened = tabsReducer(started, { type: 'open', location: repo, fromTabId: startId });
+    expect(opened.tabs.map(tab => tab.location?.path)).toEqual(['/other', '/repo']);
+    expect(opened.activeId).toBe(opened.tabs[1].id);
+  });
+  it('closes and focuses the existing tab when its repository is already open', () => {
+    const withRepo = tabsReducer(empty, { type: 'open', location: repo });
+    const started = tabsReducer(withRepo, { type: 'start' });
+    const opened = tabsReducer(started, { type: 'open', location: repo, fromTabId: started.activeId! });
+    expect(opened.tabs).toHaveLength(1);
+    expect(opened.activeId).toBe(withRepo.activeId);
+  });
+});

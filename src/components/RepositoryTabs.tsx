@@ -1,7 +1,7 @@
 import type { KeyboardEvent } from 'react';
 import { FolderGit2, Loader2, Plus, X } from 'lucide-react';
 
-export interface RepositoryTabSummary { id: string; title: string; busy: boolean; branch: string | null; dirty: boolean }
+export interface RepositoryTabSummary { id: string; title: string; busy: boolean; branch: string | null; dirty: boolean; start?: boolean }
 
 /** Standard roving-tabindex tablist keyboard pattern: only the active tab is
  * in the Tab order; Left/Right/Home/End move focus and, matching most tab
@@ -29,7 +29,7 @@ export function RepositoryTabs({ tabs, activeId, onSelect, onClose, onNew }: {
         const selected = tab.id === activeId;
         return <div key={tab.id} className="repository-tab" data-selected={selected}>
           <button id={`tab-${tab.id}`} className="repository-tab-select" role="tab" type="button" aria-selected={selected} aria-controls={`tabpanel-${tab.id}`} tabIndex={selected ? 0 : -1} onClick={() => onSelect(tab.id)} title={tab.branch ? `${tab.title} · ${tab.branch}` : tab.title}>
-            <FolderGit2 size={14} className="repository-tab-icon" />
+            {tab.start ? <Plus size={14} className="repository-tab-icon" /> : <FolderGit2 size={14} className="repository-tab-icon" />}
             {tab.busy && <span className="repository-tab-busy" aria-hidden="true" title="An operation is running" />}
             {tab.dirty && !tab.busy && <span className="repository-tab-dirty" aria-hidden="true" title="Uncommitted changes" />}
             <span className="repository-tab-text"><span className="repository-tab-title">{tab.title}</span>{tab.branch && <span className="repository-tab-branch">{tab.branch}</span>}</span>
@@ -40,6 +40,6 @@ export function RepositoryTabs({ tabs, activeId, onSelect, onClose, onNew }: {
         </div>;
       })}
     </nav>
-    <button className="icon-button repository-tab-new" aria-label="Open another repository in a new tab" title="New tab" onClick={onNew}><Plus size={16} /></button>
+    <button className="icon-button repository-tab-new" aria-label="New tab" title="New tab" onClick={onNew}><Plus size={16} /></button>
   </div>;
 }

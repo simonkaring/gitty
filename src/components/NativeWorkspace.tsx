@@ -4,8 +4,7 @@ import { Command, FolderOpen, Palette, PanelLeft, PanelRight, Search, Settings a
 import { CommandPalette, type PaletteCommand } from './CommandPalette';
 import { useSettings } from '../model/settings';
 import type { RepositoryLocation } from '../model/repository';
-import { RepositoryPicker } from './RepositoryPicker';
-import { Welcome } from './Welcome';
+import { StartPage } from './Welcome';
 import { Brand, usePaneWidth } from './WorkspaceControls';
 import { SettingsButton } from './Settings';
 import { Toast, ToastProvider, ToastRegion } from './ui';
@@ -35,7 +34,6 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
   // never matched `activeId` and stayed permanently hidden. Routing every
   // transition through one reducer call removes that whole class of bug.
   const [{ tabs, activeId, notice: pendingNotice }, dispatch] = useReducer(tabsReducer, demo, initialTabsState);
-  const [picker, setPicker] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 1000);
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 900);
   const [inspectorWidth, setInspectorWidth] = usePaneWidth('inspector', 400, 300, 640);
@@ -61,24 +59,23 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
     noticeTimer.current = setTimeout(() => setNotice(''), 4500);
   }, []);
   useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current); }, []);
-  useEffect(() => { if (!demo) savePersistedTabs(window.localStorage, { tabs: tabs.map(tab => ({ id: tab.id, location: tab.location })), activeId }); }, [tabs, activeId, demo]);
+  useEffect(() => { if (!demo) savePersistedTabs(window.localStorage, { tabs: tabs.flatMap(tab => tab.location ? [{ id: tab.id, location: tab.location }] : []), activeId: tabs.find(tab => tab.id === activeId)?.location ? activeId : null }); }, [tabs, activeId, demo]);
   // The only place a tab-strip notice is ever shown: the reducer just records
   // the message in state, and this effect (not the reducer, not an updater
   // callback) is what actually calls `notify`.
   useEffect(() => { if (pendingNotice) { notify(pendingNotice); dispatch({ type: 'noticeShown' }); } }, [pendingNotice, notify]);
 
-  const openLocation = useCallback((location: RepositoryLocation) => { dispatch({ type: 'open', location }); setPicker(false); }, []);
-  const startClone = useCallback((request: CloneRequest) => {
+  const openLocation = useCallback((location: RepositoryLocation, fromTabId?: string) => dispatch({ type: 'open', location, fromTabId }), []);
+  const startClone = useCallback((request: CloneRequest, fromTabId?: string) => {
     if (clone.status === 'running' || clone.status === 'cancelling') return;
     if (demo) { notify('Cloning requires the desktop app.'); return; }
     const operationId = crypto.randomUUID();
     const onProgress = new Channel<CloneProgress>();
     onProgress.onmessage = progress => dispatchClone({ type: 'progress', operationId, progress });
     dispatchClone({ type: 'start', operationId, request });
-    setPicker(false);
     void native<RepositoryLocation>('repository_clone', { operationId, request, onProgress }).then(location => {
       dispatchClone({ type: 'finish', operationId });
-      dispatch({ type: 'open', location });
+      dispatch({ type: 'open', location, fromTabId });
       notify(`Cloned ${request.directoryName}.`);
     }).catch(error => {
       if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'cancelled') {
@@ -113,7 +110,7 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
   }
 
   const workspaceCommands: PaletteCommand[] = [
-    { id: 'open', group: 'Workspace', label: 'Open repository…', icon: <FolderOpen size={15} />, run: () => setPicker(true) },
+    { id: 'open', group: 'Workspace', label: 'Open repository…', icon: <FolderOpen size={15} />, run: () => dispatch({ type: 'start' }) },
     { id: 'sidebar', group: 'Workspace', label: `${sidebarOpen ? 'Hide' : 'Show'} references sidebar`, icon: <PanelLeft size={15} />, run: () => setSidebarOpen(!sidebarOpen) },
     { id: 'inspector', group: 'Workspace', label: `${inspectorOpen ? 'Hide' : 'Show'} inspector`, icon: <PanelRight size={15} />, run: () => setInspectorOpen(!inspectorOpen) },
     { id: 'settings', group: 'Workspace', label: 'Open settings', icon: <SettingsIcon size={15} />, run: () => openSettings() },
@@ -121,14 +118,15 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
     ...themes.filter(t => t.id !== theme.id).map(t => ({ id: `theme:${t.id}`, group: 'Theme', label: `Theme: ${t.name}`, hint: t.mode, icon: <Palette size={15} />, run: () => updateSettings({ themeMode: 'fixed', themeId: t.id }) })),
   ];
   const isMac = document.documentElement.dataset.platform === 'macos' || /Mac/.test(navigator.platform);
-  const tabSummaries: RepositoryTabSummary[] = tabs.map(tab => ({ id: tab.id, title: tab.title, busy: tab.busy, branch: tab.branch, dirty: tab.dirty }));
+  const tabSummaries: RepositoryTabSummary[] = tabs.map(tab => ({ id: tab.id, title: tab.title, busy: tab.busy, branch: tab.branch, dirty: tab.dirty, start: !tab.location }));
+  const activeTab = tabs.find(tab => tab.id === activeId);
+  const startPage = (fromTabId?: string) => <StartPage onOpen={location => openLocation(location, fromTabId)} onClone={request => startClone(request, fromTabId)} cloneBusy={cloneBusy} onDemo={onToggleDemo && requestDemo} />;
   return <ToastProvider value={toastRoot}><div className="app-shell native-shell" style={{ '--inspector-width': `${inspectorWidth}px`, '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
     <header className="titlebar" data-tauri-drag-region onMouseDown={handleWindowDrag}>
       <Brand demo={demo} />
-      <RepositoryTabs tabs={tabSummaries} activeId={activeId} onSelect={selectTab} onClose={closeTab} onNew={() => setPicker(true)} />
+      <RepositoryTabs tabs={tabSummaries} activeId={activeId} onSelect={selectTab} onClose={closeTab} onNew={() => dispatch({ type: 'start' })} />
       <div className="native-actions">
         <button className="palette-trigger" aria-label="Search commands" aria-keyshortcuts={isMac ? 'Meta+K' : 'Control+K'} onClick={() => setPaletteOpen(true)}><Search size={14} /><span>Search commands</span><kbd>{isMac ? <><Command size={11} />K</> : 'Ctrl K'}</kbd></button>
-        <button className="secondary-button" onClick={() => setPicker(true)}>Open repository…</button>
         {onToggleDemo && <button className="text-button" disabled={anyBusy} title={anyBusy ? 'Finish or switch to the tab with a running operation first.' : undefined} onClick={requestDemo}>{demo ? 'Exit demo' : 'Demo'}</button>}
         <SettingsButton />
         <button className="icon-button" aria-label="Toggle references sidebar" aria-pressed={sidebarOpen} onClick={() => setSidebarOpen(!sidebarOpen)}><PanelLeft size={18} /></button>
@@ -142,16 +140,15 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
       {clone.progress?.percent !== null && clone.progress?.percent !== undefined && <progress max="100" value={clone.progress.percent}>{clone.progress.percent}%</progress>}
     </Toast>}
     {clone.status === 'error' && <Toast tone="error" onDismiss={() => dispatchClone({ type: 'dismiss' })}>Clone failed: {clone.message}</Toast>}
-    {!tabs.length ? <Welcome showRecent={!picker} onOpenPicker={() => setPicker(true)} onOpen={openLocation} onDemo={onToggleDemo && requestDemo} />
+    {!tabs.length ? startPage()
       : tabs.map(tab => <div key={tab.id} id={`tabpanel-${tab.id}`} role="tabpanel" aria-labelledby={`tab-${tab.id}`} hidden={tab.id !== activeId} className="tab-pane-host">
-        <RepositoryPane tabId={tab.id} location={tab.location} active={tab.id === activeId}
+        {!tab.location ? startPage(tab.id) : <RepositoryPane tabId={tab.id} location={tab.location} active={tab.id === activeId}
           sidebarOpen={sidebarOpen} inspectorOpen={inspectorOpen} inspectorWidth={inspectorWidth} sidebarWidth={sidebarWidth}
           setInspectorWidth={setInspectorWidth} setSidebarWidth={setSidebarWidth} setInspectorOpen={setInspectorOpen}
           onIdentity={handleIdentity} onBusyChange={handleBusyChange} onMeta={handleMeta}
-          paletteOpen={paletteOpen} onClosePalette={() => setPaletteOpen(false)} workspaceCommands={workspaceCommands} />
+          paletteOpen={paletteOpen} onClosePalette={() => setPaletteOpen(false)} workspaceCommands={workspaceCommands} />}
       </div>)}
-    {!tabs.length && paletteOpen && <CommandPalette commands={workspaceCommands} onClose={() => setPaletteOpen(false)} />}
-    {picker && <RepositoryPicker onOpen={openLocation} onClone={startClone} cloneBusy={cloneBusy} onClose={() => setPicker(false)} />}
+    {!activeTab?.location && paletteOpen && <CommandPalette commands={workspaceCommands} onClose={() => setPaletteOpen(false)} />}
     <ToastRegion onMount={setToastRoot} />
   </div></ToastProvider>;
 }
