@@ -162,6 +162,7 @@ src/
     Inspector.tsx                Commit metadata, files, mock diff
   graph/
     layout.ts                    Pure renderer-independent appendable lane layout
+    branchColor.ts               Name-based branch palette and first-parent color ownership
     layout.worker.ts             Off-main-thread layout for loaded history pages
     useGraphLayout.ts            Worker lifecycle and stale-page handoff
     layout.test.ts               DAG, lane, append-stability, clipping invariants

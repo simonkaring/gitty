@@ -1529,7 +1529,7 @@ button[data-danger='true']:hover:not(:disabled) {
 }
 .ref-pill svg {
   flex-shrink: 0;
-  color: var(--muted);
+  color: var(--branch-color, var(--muted));
 }
 .ref-pill-name {
   overflow: hidden;

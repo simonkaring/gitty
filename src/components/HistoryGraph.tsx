@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { GitMerge, Globe2, Laptop, Settings as SettingsIcon, Tag } from 'lucide-react';
 import { indexEdges, laneX, LANE_WIDTH, ROW_HEIGHT, type GraphLayout } from '../graph/layout';
+import { assignBranchColors, branchName } from '../graph/branchColor';
 import { WORKING_ID } from '../model/native';
 import type { Commit, GitRef } from '../model/types';
 import type { ActionContext } from './OperationDialog';
@@ -116,9 +117,12 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const loadedIds = useMemo(() => new Set(commits.slice(0, loaded).map(commit => commit.id)), [commits, loaded]);
   const visibleEdges = useMemo(() => indexEdges(layout.edges, layout.edgeMaxTo), [layout.edges, layout.edgeMaxTo]);
   const colors = useMemo(() => Array.from({ length: 8 }, (_, index) => theme.colors[`graphLane${index + 1}`]), [theme]);
+  const branchColors = useMemo(() => assignBranchColors(commits, refs, WORKING_ID), [commits, refs]);
 
   function renderRef({ ref, remote }: { ref: GitRef & { fullName?: string }; remote?: GitRef }, commit: Commit) {
+    const name = branchName(ref);
     return <span key={ref.fullName ?? ref.name} className={`ref-pill ${ref.kind === 'tag' ? 'tag-ref' : ref.kind === 'remote' ? 'remote-ref' : ''}`}
+                      style={name !== null ? { '--branch-color': colors[branchColors.branches.get(name)!] } as React.CSSProperties : undefined}
                       data-name={ref.name} title={remote ? `${ref.name} + ${remote.name}` : ref.name}
                       role={onActions && ref.fullName ? 'button' : undefined} tabIndex={onActions && ref.fullName ? 0 : undefined} aria-label={onActions && ref.fullName ? `Graph actions for ${ref.name}` : undefined}
                       onKeyDown={event => { if (!ref.fullName) return; if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && onContextActions) { event.preventDefault(); event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); onContextActions({ oid: commit.id, ref: ref.fullName }, rect.left, rect.bottom, event.currentTarget); } else if (onActions && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.stopPropagation(); onActions({ oid: commit.id, ref: ref.fullName }); } }}
@@ -198,7 +202,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       for (const edge of visibleEdges(Math.floor(scrollTop / ROW_HEIGHT) - 1, Math.min(loaded, Math.ceil((scrollTop + height) / ROW_HEIGHT) + 1))) {
         const x1 = laneX(edge.fromLane), xt = laneX(edge.track), x2 = laneX(edge.toLane);
         const y1 = y(edge.fromRow), y2 = y(edge.toRow);
-        ctx.strokeStyle = colors[edge.track % colors.length];
+        const colorRow = commits[edge.fromRow]?.parents[0] === edge.to ? edge.fromRow : edge.toRow;
+        ctx.strokeStyle = colors[branchColors.rows[colorRow] ?? branchColors.rows[edge.fromRow] ?? edge.track % colors.length];
         ctx.globalAlpha = matches ? 0.3 : 0.78;
         ctx.beginPath();
         ctx.moveTo(x1, y1);
@@ -221,7 +226,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
         const node = layout.nodes[row];
         const commit = commits[row];
         const x = laneX(node.lane), cy = y(row);
-        const lane = colors[node.lane % colors.length];
+        const lane = colors[branchColors.rows[row] ?? node.lane % colors.length];
         ctx.globalAlpha = matches && !matches.has(node.id) ? 0.3 : 1;
         ctx.beginPath();
         if (commit.id === WORKING_ID) ctx.roundRect(x - 5, cy - 5, 10, 10, 2.5);
@@ -242,7 +247,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     };
     paint();
     return () => cancelAnimationFrame(haloFrame.current);
-  }, [commits, layout, visibleEdges, start, end, scrollTop, height, graphWidth, graphX, selectedId, head, theme, matches, loaded, colors]);
+  }, [commits, layout, visibleEdges, start, end, scrollTop, height, graphWidth, graphX, selectedId, head, theme, matches, loaded, colors, branchColors]);
 
   useEffect(() => {
     const node = layout.nodes[selectedIndex];
@@ -397,7 +402,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
             const row = start + offset;
             const node = layout.nodes[row];
             const lane = node?.lane ?? 0;
-            const branchColor = colors[lane % colors.length];
+            const branchColor = colors[branchColors.rows[row] ?? lane % colors.length];
             const badges = refs.filter(ref => ref.commitId === commit.id && !(ref.kind === 'remote' && ref.name.endsWith('/HEAD')));
             const groups = groupRefs(badges, headRef);
             return <div key={commit.id} id={`commit-${commit.id}`} role="option" aria-selected={commit.id === selectedId}

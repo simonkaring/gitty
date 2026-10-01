@@ -40,9 +40,12 @@ async function painted(page, mode, bg, graph) {
     const canvas = document.querySelector('.graph-canvas');
     if (!canvas?.width || !canvas.height) return false;
     const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
-    const rgb = [1, 3, 5].map(i => parseInt(graph.slice(i, i + 2), 16));
+    const palette = Array.from({ length: 8 }, (_, index) => {
+      const color = getComputedStyle(root).getPropertyValue(`--graph-lane${index + 1}`).trim();
+      return [1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16));
+    });
     for (let i = 0; i < pixels.length; i += 4) {
-      if (pixels[i] === rgb[0] && pixels[i + 1] === rgb[1] && pixels[i + 2] === rgb[2] && pixels[i + 3] === 255) return true;
+      if (pixels[i + 3] === 255 && palette.some(rgb => pixels[i] === rgb[0] && pixels[i + 1] === rgb[1] && pixels[i + 2] === rgb[2])) return true;
     }
     return false;
   }, { mode, bg, graph });
