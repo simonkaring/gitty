@@ -42,26 +42,26 @@ export function GraphContextMenu({ target, state, busy, onOperation, onShowDetai
   const current = context.ref === state.session.headRef;
   const tracking = ref?.kind === 'remote' ? [...state.remotes].sort((a, b) => b.length - a.length).find(remote => ref.fullName.startsWith(`refs/remotes/${remote}/`)) : undefined;
   function operation(kind: GitAction['kind']) { onOperation({ ...context, initial: kind }); }
-  return <div ref={menu} className="graph-context-menu" role="menu" aria-label={ref ? `Actions for ${ref.name}` : 'Commit actions'} style={position}>
+  return <div ref={menu} className="menu graph-context-menu" role="menu" aria-label={ref ? `Actions for ${ref.name}` : 'Commit actions'} style={position}>
     <button role="menuitem" onClick={() => onShowDetails(context.oid)}>Show commit details</button>
-    <div className="graph-menu-divider" role="separator" />
+    <div className="menu-divider" role="separator" />
     {current && ref?.kind === 'local' && !!state.remotes.length && <>
       <button role="menuitem" disabled={busy} onClick={() => onRemoteAction({ kind: 'fetch' })}>Fetch</button>
       {(Object.keys(PULL_MODE_LABELS) as PullMode[]).map(mode => <button key={mode} role="menuitem" disabled={busy} onClick={() => onRemoteAction({ kind: 'pull', pullMode: mode })}>{PULL_MODE_LABELS[mode]}{mode === DEFAULT_PULL_MODE && ' (default)'}</button>)}
       <button role="menuitem" disabled={busy} onClick={onPush}>Push / Publish…</button>
-      <div className="graph-menu-divider" role="separator" />
+      <div className="menu-divider" role="separator" />
     </>}
-    {tracking && <><button role="menuitem" disabled={busy} onClick={() => onRemoteAction({ kind: 'fetch', remote: tracking, branch: ref!.fullName.slice(`refs/remotes/${tracking}/`.length) })}>Fetch this remote branch</button><div className="graph-menu-divider" role="separator" /></>}
+    {tracking && <><button role="menuitem" disabled={busy} onClick={() => onRemoteAction({ kind: 'fetch', remote: tracking, branch: ref!.fullName.slice(`refs/remotes/${tracking}/`.length) })}>Fetch this remote branch</button><div className="menu-divider" role="separator" /></>}
     {ref?.kind === 'local' && !current && <button role="menuitem" onClick={() => operation('switchBranch')}>Switch to {ref.name}…</button>}
     {!current && context.oid !== state.session.head && <><button role="menuitem" onClick={() => operation('merge')}>Merge into current…</button><button role="menuitem" onClick={() => operation('rebase')}>Rebase current onto this…</button><button role="menuitem" onClick={() => operation('cherryPick')}>Cherry-pick {ref ? 'tip commit' : 'commit'}…</button></>}
     <button role="menuitem" onClick={() => operation('createBranch')}>Create branch here…</button>
     <button role="menuitem" onClick={() => operation('createTag')}>Create tag here…</button>
     {ref?.kind === 'local' && <button role="menuitem" onClick={() => onPullRequest(ref.fullName)}>Create pull request…</button>}
-    <div className="graph-menu-divider" role="separator" />
+    <div className="menu-divider" role="separator" />
     {state.session.head && context.oid !== state.session.head && <button role="menuitem" onClick={() => onCompare(context.oid)}>Compare with current</button>}
     <button role="menuitem" onClick={() => onSetBase(context.oid)}>Set as comparison base</button>
     <button role="menuitem" onClick={() => onSetTarget(context.oid)}>Set as comparison target</button>
-    <div className="graph-menu-divider" role="separator" />
+    <div className="menu-divider" role="separator" />
     <button role="menuitem" onClick={() => onCopy(context.oid, 'Commit SHA')}>Copy commit SHA</button>
     {ref && <button role="menuitem" onClick={() => onCopy(ref.fullName, 'Reference name')}>Copy reference name</button>}
     <button role="menuitem" onClick={() => onOperation(context)}>More Git actions…</button>

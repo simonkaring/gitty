@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { ArrowDown, ArrowUp, X } from 'lucide-react';
+import { Dialog } from './ui';
 import { errorMessage } from '../model/native';
 import type { GitAction, OperationRequest, OperationState, RebaseStep } from '../model/operations';
 import type { CommitSummary, RepositoryState } from '../model/repository';
@@ -29,7 +31,6 @@ export function OperationDialog({ state, operation, context, commits, busy, onWr
   state: RepositoryState; operation: OperationState | null; context: ActionContext; commits: CommitSummary[]; busy: boolean;
   onWrite: OperationWrite; onCompare: (source: string) => void; onPullRequest: (source: string) => void; onClose: () => void;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
   const [kind, setKind] = useState<GitAction['kind']>(context.initial ?? (context.ref ? context.ref === state.session.headRef ? 'createBranch' : 'merge' : 'cherryPick'));
   const [source, setSource] = useState(context.ref ?? context.oid);
   const [name, setName] = useState('');
@@ -44,7 +45,7 @@ export function OperationDialog({ state, operation, context, commits, busy, onWr
   const pendingRef = useRef(false);
   const [error, setError] = useState('');
   const live = useRef(true);
-  useEffect(() => { live.current = true; dialog.current?.showModal(); return () => { live.current = false; }; }, []);
+  useEffect(() => { live.current = true; return () => { live.current = false; }; }, []);
   const baseId = state.refs.find(ref => ref.fullName === source || ref.name === source)?.commitId ?? source;
   const range = state.session.head ? linearRebaseRange(state.session.head, baseId, commits) : null;
   const steps: RebaseStep[] = plan?.base === baseId ? plan.steps : range?.map(commit => ({ oid: commit.id, instruction: 'pick' })) ?? [];
@@ -85,42 +86,43 @@ export function OperationDialog({ state, operation, context, commits, busy, onWr
   const current = state.session.headRef?.replace('refs/heads/', '') ?? 'detached HEAD';
   const prBranch = state.refs.find(ref => ref.fullName === context.ref && ref.kind === 'local');
   const prReason = prBranch ? '' : context.ref?.startsWith('refs/tags/') ? 'Tags cannot be pull-request source branches. Choose a local branch.' : context.ref?.startsWith('refs/remotes/') ? 'Pull requests require a local source branch. Create or check out a local branch from this remote-tracking ref first.' : 'Choose an existing local branch as the pull-request source.';
-  return <dialog ref={dialog} className="dialog operation-dialog" aria-label="Git actions" onCancel={e => { if (pending) e.preventDefault(); else onClose(); }}>
-    <h2>{review ? 'Review Git operation' : 'Git actions'}</h2><p>{review ? 'Reviewed target' : 'Current target'}: <strong>{review ? review.expectedHeadRef?.replace(/^refs\/heads\//, '') ?? 'detached HEAD' : current}</strong></p>
-    {error && <p role="alert">{error}</p>}
-    {review ? <><OperationSummary request={review} commits={commits} /><details><summary>Raw operation details</summary><pre className="operation-review">{JSON.stringify(review.action, null, 2)}</pre></details><p>Reviewed HEAD: <code>{review.expectedHead ?? 'unborn'}</code></p><p>Execution checks this captured HEAD, branch and operation fingerprint. Changes require a new review.</p><button disabled={pending || busy} onClick={() => setReview(null)}>Back</button><button className="primary-button" disabled={pending || busy} onClick={() => void execute()}>{pending ? 'Executing…' : 'Execute operation'}</button></> : <>
-      <fieldset className="action-radio-group" disabled={pending} aria-label="Action">
-        <legend>Action</legend>
-        <div className="action-radio-options">
-          <label><input type="radio" name="operation-action" value="merge" checked={kind === 'merge'} onChange={() => setKind('merge')} /> Merge source into {current}</label>
-          <label><input type="radio" name="operation-action" value="rebase" checked={kind === 'rebase'} onChange={() => setKind('rebase')} /> Rebase {current} onto source</label>
-          <label><input type="radio" name="operation-action" value="interactiveRebase" checked={kind === 'interactiveRebase'} onChange={() => setKind('interactiveRebase')} /> Edit recent commits (interactive rebase)</label>
-          <label><input type="radio" name="operation-action" value="switchBranch" checked={kind === 'switchBranch'} onChange={() => setKind('switchBranch')} /> Switch branch</label>
-          <label><input type="radio" name="operation-action" value="createBranch" checked={kind === 'createBranch'} onChange={() => setKind('createBranch')} /> Create branch</label>
-          <label><input type="radio" name="operation-action" value="cherryPick" checked={kind === 'cherryPick'} onChange={() => setKind('cherryPick')} /> Cherry-pick commits</label>
-          <label><input type="radio" name="operation-action" value="createTag" checked={kind === 'createTag'} onChange={() => setKind('createTag')} /> Create tag</label>
-          {operation?.kind !== 'none' && <>
-            <label><input type="radio" name="operation-action" value="continue" checked={kind === 'continue'} onChange={() => setKind('continue')} /> Continue operation</label>
-            <label><input type="radio" name="operation-action" value="skip" checked={kind === 'skip'} onChange={() => setKind('skip')} /> Skip current commit</label>
-            <label><input type="radio" name="operation-action" value="abort" checked={kind === 'abort'} onChange={() => setKind('abort')} /> Abort operation</label>
-          </>}
-        </div>
+  const close = () => { if (!pending) onClose(); };
+  const choice = (value: GitAction['kind'], label: ReactNode) => <label key={value} className="choice"><input type="radio" name="operation-action" value={value} checked={kind === value} onChange={() => setKind(value)} />{label}</label>;
+  const footer = review ? <>
+    <button className="secondary-button" disabled={pending || busy} onClick={() => setReview(null)}>Back</button>
+    <span className="spacer" />
+    <button className="secondary-button" disabled={pending} onClick={close}>Cancel</button>
+    <button className="primary-button" disabled={pending || busy} onClick={() => void execute()}>{pending ? 'Executing…' : 'Execute operation'}</button>
+  </> : <>
+    <button className="secondary-button" disabled={!state.session.head || pending} onClick={() => onCompare(context.oid)}>Compare with current</button>
+    <button className="secondary-button" disabled={!prBranch || pending} title={prReason || undefined} aria-describedby={prReason && context.ref ? 'pr-source-reason' : undefined} onClick={() => { if (prBranch && !pendingRef.current) onPullRequest(prBranch.fullName); }}>Create pull request…</button>
+    <span className="spacer" />
+    <button className="secondary-button" disabled={pending} onClick={close}>Cancel</button>
+    <button className="primary-button" disabled={pending || busy || !!reason} onClick={() => void capture()}>{pending ? 'Capturing state…' : 'Review operation'}</button>
+  </>;
+  return <Dialog title={review ? 'Review Git operation' : 'Git actions'} size="lg" className="operation-dialog" onClose={close} footer={footer}>
+    <p className="muted">{review ? 'Reviewed target' : 'Current target'} <span className="badge" data-tone="accent">{review ? review.expectedHeadRef?.replace(/^refs\/heads\//, '') ?? 'detached HEAD' : current}</span></p>
+    {error && <p className="alert" role="alert">{error}</p>}
+    {review ? <><OperationSummary request={review} commits={commits} /><details><summary>Raw operation details</summary><pre className="operation-review">{JSON.stringify(review.action, null, 2)}</pre></details><p className="muted">Reviewed HEAD <code>{review.expectedHead ?? 'unborn'}</code>. Execution checks this captured HEAD, branch and operation fingerprint; changes require a new review.</p></> : <>
+      <fieldset className="choice-group" disabled={pending}>
+        <legend className="section-label">Action</legend>
+        {choice('merge', <>Merge source into {current}</>)}{choice('rebase', <>Rebase {current} onto source</>)}{choice('interactiveRebase', 'Edit recent commits (interactive rebase)')}{choice('switchBranch', 'Switch branch')}{choice('createBranch', 'Create branch')}{choice('cherryPick', 'Cherry-pick commits')}{choice('createTag', 'Create tag')}
+        {operation?.kind !== 'none' && <>{choice('continue', 'Continue operation')}{choice('skip', 'Skip current commit')}{choice('abort', 'Abort operation')}</>}
       </fieldset>
-      {['merge', 'rebase', 'interactiveRebase', 'createBranch', 'switchBranch'].includes(kind) && <label>{kind === 'switchBranch' ? 'Local branch' : kind === 'interactiveRebase' ? 'Base commit (ancestor of HEAD)' : 'Source / starting revision'}<input list="operation-refs" value={source} onChange={e => setSource(e.target.value)} /><datalist id="operation-refs">{state.refs.filter(ref => kind !== 'switchBranch' || ref.kind === 'local').map(ref => <option key={ref.fullName} value={ref.fullName}>{ref.name}</option>)}</datalist></label>}
-      {['createBranch', 'createTag'].includes(kind) && <label>Name<input autoFocus value={name} onChange={e => setName(e.target.value)} /></label>}
-      {kind === 'createBranch' && <label><input type="checkbox" checked={checkout} onChange={e => setCheckout(e.target.checked)} /> Switch to new branch</label>}
-      {kind === 'merge' && <label><input type="checkbox" checked={noFastForward} onChange={e => setNoFastForward(e.target.checked)} /> Always create a merge commit</label>}
-      {kind === 'rebase' && <p>Replays the current branch onto the source and rewrites its commit IDs.</p>}
-      {kind === 'interactiveRebase' && <><p>Reorder, drop, reword, squash, or fixup the commits since this base. Existing commit IDs will change; publish rewritten branches separately.</p><ol aria-label="Interactive rebase sequence">{steps.map((step, index) => <li key={step.oid}><code>{step.oid.slice(0, 12)}</code> {commits.find(commit => commit.id === step.oid)?.subject}<label>Action <select aria-label={`Action for ${step.oid.slice(0, 12)}`} value={step.instruction} onChange={event => updateStep(index, { instruction: event.target.value as RebaseStep['instruction'] })}>{(['pick', 'drop', 'reword', 'squash', 'fixup'] as const).map(value => <option key={value} value={value}>{value}</option>)}</select></label><span className="operation-order"><button type="button" aria-label={`Move ${step.oid.slice(0, 7)} earlier`} disabled={!index} onClick={() => setPlan({ base: baseId, steps: moveCommit(steps, index, -1) })}>↑</button><button type="button" aria-label={`Move ${step.oid.slice(0, 7)} later`} disabled={index === steps.length - 1} onClick={() => setPlan({ base: baseId, steps: moveCommit(steps, index, 1) })}>↓</button></span></li>)}</ol></>}
-      {kind === 'abort' && <p>Abort the in-progress operation and discard its resolution progress.</p>}
-      {kind === 'skip' && <p>Skip the current commit; its changes will not be included.</p>}
-      {kind === 'createTag' && <label>Annotation (empty for lightweight tag)<textarea value={message} onChange={e => setMessage(e.target.value)} /></label>}
-      {kind === 'cherryPick' && <><p>Application order (first to last). Use graph checkboxes to build a sequence.</p><ol>{order.map((oid, index) => <li key={oid}><code>{oid.slice(0, 12)}</code> {commits.find(commit => commit.id === oid)?.subject}<span className="operation-order"><button aria-label={`Move ${oid.slice(0, 7)} earlier`} disabled={!index} onClick={() => setOrder(moveCommit(order, index, -1))}>↑</button><button aria-label={`Move ${oid.slice(0, 7)} later`} disabled={index === order.length - 1} onClick={() => setOrder(moveCommit(order, index, 1))}>↓</button><button aria-label={`Remove ${oid.slice(0, 7)}`} onClick={() => setOrder(order.filter(value => value !== oid))}>×</button></span></li>)}</ol>{!!merges.length && <label>Mainline parent (applies to each merge in this sequence)<select value={mainline} onChange={e => setMainline(e.target.value)}><option value="">Choose explicitly…</option>{Array.from({ length: Math.min(...merges.map(commit => commit!.parents.length)) }, (_, index) => <option key={index} value={index + 1}>Parent {index + 1}: {merges.map(commit => commit!.parents[index].slice(0, 12)).join(', ')}</option>)}</select></label>}</>}
-      {reason && <p role="status">{reason}</p>}<div className="operation-buttons"><button className="primary-button" disabled={pending || busy || !!reason} onClick={() => void capture()}>{pending ? 'Capturing state…' : 'Review operation'}</button><button disabled={!state.session.head || pending} onClick={() => onCompare(context.oid)}>Compare with current</button><button disabled={!prBranch || pending} aria-describedby={prReason ? 'pr-source-reason' : undefined} onClick={() => { if (prBranch && !pendingRef.current) onPullRequest(prBranch.fullName); }}>Create pull request…</button></div>
-      {prReason && <p id="pr-source-reason">{prReason}</p>}
+      {['merge', 'rebase', 'interactiveRebase', 'createBranch', 'switchBranch'].includes(kind) && <label className="field">{kind === 'switchBranch' ? 'Local branch' : kind === 'interactiveRebase' ? 'Base commit (ancestor of HEAD)' : 'Source / starting revision'}<input list="operation-refs" value={source} onChange={e => setSource(e.target.value)} /><datalist id="operation-refs">{state.refs.filter(ref => kind !== 'switchBranch' || ref.kind === 'local').map(ref => <option key={ref.fullName} value={ref.fullName}>{ref.name}</option>)}</datalist></label>}
+      {['createBranch', 'createTag'].includes(kind) && <label className="field">Name<input autoFocus value={name} onChange={e => setName(e.target.value)} /></label>}
+      {kind === 'createBranch' && <label className="check"><input type="checkbox" checked={checkout} onChange={e => setCheckout(e.target.checked)} /> Switch to new branch</label>}
+      {kind === 'merge' && <label className="check"><input type="checkbox" checked={noFastForward} onChange={e => setNoFastForward(e.target.checked)} /> Always create a merge commit</label>}
+      {kind === 'rebase' && <p className="muted">Replays the current branch onto the source and rewrites its commit IDs.</p>}
+      {kind === 'interactiveRebase' && <><p className="muted">Reorder, drop, reword, squash, or fixup the commits since this base. Existing commit IDs will change; publish rewritten branches separately.</p><ol className="sequence" aria-label="Interactive rebase sequence">{steps.map((step, index) => <li key={step.oid}><code>{step.oid.slice(0, 12)}</code><span className="sequence-subject">{commits.find(commit => commit.id === step.oid)?.subject}</span><select aria-label={`Action for ${step.oid.slice(0, 12)}`} value={step.instruction} onChange={event => updateStep(index, { instruction: event.target.value as RebaseStep['instruction'] })}>{(['pick', 'drop', 'reword', 'squash', 'fixup'] as const).map(value => <option key={value} value={value}>{value}</option>)}</select><button type="button" className="icon-button sm" aria-label={`Move ${step.oid.slice(0, 7)} earlier`} disabled={!index} onClick={() => setPlan({ base: baseId, steps: moveCommit(steps, index, -1) })}><ArrowUp size={14} /></button><button type="button" className="icon-button sm" aria-label={`Move ${step.oid.slice(0, 7)} later`} disabled={index === steps.length - 1} onClick={() => setPlan({ base: baseId, steps: moveCommit(steps, index, 1) })}><ArrowDown size={14} /></button></li>)}</ol></>}
+      {kind === 'abort' && <p className="muted">Abort the in-progress operation and discard its resolution progress.</p>}
+      {kind === 'skip' && <p className="muted">Skip the current commit; its changes will not be included.</p>}
+      {kind === 'createTag' && <label className="field">Annotation (empty for lightweight tag)<textarea value={message} onChange={e => setMessage(e.target.value)} /></label>}
+      {kind === 'cherryPick' && <><p className="muted">Application order (first to last). Use graph checkboxes to build a sequence.</p><ol className="sequence">{order.map((oid, index) => <li key={oid}><code>{oid.slice(0, 12)}</code><span className="sequence-subject">{commits.find(commit => commit.id === oid)?.subject}</span><button className="icon-button sm" aria-label={`Move ${oid.slice(0, 7)} earlier`} disabled={!index} onClick={() => setOrder(moveCommit(order, index, -1))}><ArrowUp size={14} /></button><button className="icon-button sm" aria-label={`Move ${oid.slice(0, 7)} later`} disabled={index === order.length - 1} onClick={() => setOrder(moveCommit(order, index, 1))}><ArrowDown size={14} /></button><button className="icon-button sm" aria-label={`Remove ${oid.slice(0, 7)}`} onClick={() => setOrder(order.filter(value => value !== oid))}><X size={14} /></button></li>)}</ol>{!!merges.length && <label className="field">Mainline parent (applies to each merge in this sequence)<select value={mainline} onChange={e => setMainline(e.target.value)}><option value="">Choose explicitly…</option>{Array.from({ length: Math.min(...merges.map(commit => commit!.parents.length)) }, (_, index) => <option key={index} value={index + 1}>Parent {index + 1}: {merges.map(commit => commit!.parents[index].slice(0, 12)).join(', ')}</option>)}</select></label>}</>}
+      {reason && <p className="alert" data-tone="amber" role="status">{reason}</p>}
+      {prReason && context.ref && <p id="pr-source-reason" className="muted small">{prReason}</p>}
     </>}
-    <button className="text-button" disabled={pending} onClick={onClose}>Cancel</button>
-  </dialog>;
+  </Dialog>;
 }
 
 function revisionLabel(value: string): string {

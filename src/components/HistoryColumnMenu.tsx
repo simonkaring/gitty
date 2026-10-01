@@ -55,7 +55,7 @@ export function HistoryColumnMenu({ columns, triggerRef, onChange, onClose }: Hi
   return (
     <div
       ref={menuRef}
-      className="history-column-menu"
+      className="menu history-column-menu"
       role="dialog"
       aria-label="History columns settings"
       onClick={e => e.stopPropagation()}

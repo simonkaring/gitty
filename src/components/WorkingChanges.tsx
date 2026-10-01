@@ -180,7 +180,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
       {session.bare && <div className="workflow-alert" role="status">Bare repository.</div>}
       {!!groups.conflict.length && <div className="workflow-alert" role="status"><AlertTriangle size={15} />Unresolved conflicts.</div>}
       {outcome?.error && <div className="workflow-alert error" role="alert">{outcome.error}</div>}
-      {outcome?.refreshError && <div className="workflow-alert error" role="alert">Refresh failed: {outcome.refreshError} <button onClick={() => void refresh()}>Retry</button></div>}
+      {outcome?.refreshError && <div className="workflow-alert error" role="alert">Refresh failed: {outcome.refreshError} <button className="text-button" onClick={() => void refresh()}>Retry</button></div>}
       {success && <div className="workflow-status" role="status"><Check size={14} />{success}</div>}
       <div className="working-sidebar-content">
         <div className="file-list-actions">
@@ -207,7 +207,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
                     {partial && <small>Partially staged</small>}
                   </span>
                 </button>
-                {kind === 'conflict' && onResolve && <button disabled={busy} onClick={() => onResolve(entry.path)}>Resolve…</button>}
+                {kind === 'conflict' && onResolve && <button className="secondary-button compact" disabled={busy} onClick={() => onResolve(entry.path)}>Resolve…</button>}
                 {kind !== 'conflict' && <button className="icon-button sm file-stage-button" disabled={blocked} title={partial ? kind === 'staged' ? 'Unstage all indexed changes for this path' : 'Stage the remaining working-tree changes for this path' : undefined} aria-label={`${kind === 'staged' ? 'Unstage' : 'Stage'} ${entry.path}`} onClick={() => { const operationKind = kind === 'staged' ? 'unstage' : 'stage'; void perform({ kind: operationKind, paths: operationPaths([entry], operationKind) }); }}>{kind === 'staged' ? <Minus size={16} /> : <Plus size={16} />}</button>}
               </div>;
             })}

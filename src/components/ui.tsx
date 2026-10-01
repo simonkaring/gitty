@@ -33,7 +33,11 @@ export function Dialog({ title, onClose, size = 'md', footer, onSubmit, classNam
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
-  useEffect(() => { if (!ref.current?.open) ref.current?.showModal(); }, []);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    if (!ref.current?.open) ref.current?.showModal();
+    return () => previous?.focus({ preventScroll: true });
+  }, []);
   const content = <>
     <div className="dialog-body">{children}</div>
     {footer && <footer className="dialog-footer">{footer}</footer>}
