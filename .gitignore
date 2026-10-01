@@ -9,3 +9,5 @@ playwright-report/
 *.tsbuildinfo
 src-tauri/icons/android/
 src-tauri/icons/ios/
+src-tauri/resources/gcm/*
+!src-tauri/resources/gcm/README.txt

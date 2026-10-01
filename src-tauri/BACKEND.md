@@ -264,21 +264,24 @@ operation IDs are UUIDs, and closing the main window cancels registered clones.
 ## Remote tracking and authentication
 
 Connected cloud-provider accounts are managed through `list_provider_accounts`,
-`provider_connect_token`, and `provider_disconnect`. The account metadata file
-in app data contains provider, username and an opaque ID only; access tokens
+`provider_connect_token`, `provider_oauth_start`, `provider_oauth_poll`,
+`provider_oauth_cancel`, and `provider_disconnect`. The account metadata file
+in app data contains provider, username, an opaque ID and an OAuth flag; access/refresh tokens
 are stored in the OS credential store under that ID. GitHub, GitLab and
 Bitbucket tokens are checked against the provider's user endpoint on connect.
-Azure DevOps PATs are checked when used against an organization. Browser OAuth
-sign-in requires registered provider applications and is not implemented yet.
+Azure DevOps PATs are checked when used against an organization. GitHub/GitLab.com
+and Microsoft Entra work/school accounts support public-client device authorization,
+configured using build-time client IDs. Only request IDs, user codes, approved
+verification URLs and timing information cross IPC. Device codes stay in Rust;
+tokens are saved only after account verification and refresh before API use.
 
-For an unambiguous connected account matching the exact HTTPS host of a
-remote, fetch/pull/push and native clone use a per-operation askpass token to
-provide the account username and access token. That Git invocation clears
-other credential helpers to prevent stale Keychain entries taking precedence;
-it never puts the access token in Git arguments, remote URLs or browser
-preferences. A prompt for another host is rejected. With no connected match,
-the existing Git helper/SSH behavior applies. WSL keeps its own distribution
-credential handling. `provider_pull_requests` and
+Provider accounts authorize provider APIs independently of Git operations. Native
+HTTPS clone/fetch/pull/push append bundled Git Credential Manager as a fallback
+after existing helpers, unless GCM is already configured or helpers are explicitly
+disabled. Gitty does not modify global Git configuration, and provider tokens do
+not override existing helpers. Tokens never appear in Git arguments, remote URLs
+or browser preferences. WSL keeps its own distribution credential handling.
+`provider_pull_requests` and
 `provider_create_pull_request` call bounded, host-specific HTTPS provider APIs
 for a selected connected account. PR creation is explicit and does not push.
 
@@ -287,8 +290,9 @@ for a selected connected account. PR creation is explicit and does not push.
   uses an explicit `refs/heads/*:refs/remotes/<remote>/*` refspec with `--no-tags`
   and no pruning; it never moves local heads, checks out, merges, or rebases.
   The normal mutation lock and post-action refresh apply even on failure.
-- Background fetch and clone remain noninteractive and can use existing credential
-  helpers and SSH agents. Explicit fetch/pull/push on native repositories can use
+- Background fetch remains noninteractive (`credential.interactive=false` plus
+  `GCM_INTERACTIVE=false`) and can use existing credentials and SSH agents.
+  Explicit clone/fetch/pull/push allow helper sign-in. Native operations can use
   a local per-app askpass bridge when those cannot supply credentials. Gitty
   keeps answers in memory only. A cancelled or expired prompt fails the helper,
   and a prompt has a 90-second response deadline within Git's write deadline.

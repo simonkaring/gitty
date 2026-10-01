@@ -9,26 +9,13 @@ use crate::{
 };
 
 impl Service {
-    #[cfg(test)]
     pub fn remote_action(
         &self,
         handle: &str,
         action: RemoteAction,
         askpass: Option<&crate::askpass::AskpassRegistry>,
     ) -> Result<ActionOutput> {
-        self.remote_action_using_accounts(handle, action, askpass, None)
-    }
-
-    pub fn remote_action_using_accounts(
-        &self,
-        handle: &str,
-        action: RemoteAction,
-        askpass: Option<&crate::askpass::AskpassRegistry>,
-        accounts: Option<&crate::provider_accounts::AccountStore>,
-    ) -> Result<ActionOutput> {
-        self.mutate(handle, |repo| {
-            repo.remote_action_with_accounts(action, askpass, accounts)
-        })
+        self.mutate(handle, |repo| repo.remote_action(action, askpass))
     }
 }
 
@@ -185,11 +172,10 @@ impl Repository {
         Ok(remote.into())
     }
 
-    pub(crate) fn remote_action_with_accounts(
+    pub(crate) fn remote_action(
         &self,
         action: RemoteAction,
         askpass: Option<&crate::askpass::AskpassRegistry>,
-        accounts: Option<&crate::provider_accounts::AccountStore>,
     ) -> Result<ActionOutput> {
         let wsl = matches!(self.location(), RepositoryLocation::Wsl { .. });
         self.require_writable()?;
@@ -236,23 +222,9 @@ impl Repository {
         } else {
             self.check_text(&["remote", "get-url", "--", &remote])?
         };
-        let credential = if !wsl {
-            accounts
-                .map(|store| store.for_remote(account_url.trim_end()))
-                .transpose()?
-                .flatten()
-        } else {
-            None
-        };
-        let scoped = if let (Some(registry), Some((account, token))) = (askpass, credential) {
-            Some(registry.start_credential_operation(
-                account.provider.host(),
-                account.username,
-                token,
-            ))
-        } else {
-            None
-        };
+        // Provider API accounts do not override the user's Git authentication.
+        let mut helper_args = Vec::new();
+        crate::credentials::configure(&mut helper_args, self.location(), account_url.trim_end())?;
 
         #[cfg(windows)]
         let wsl_bridge =
@@ -272,20 +244,8 @@ impl Repository {
                 network_args_wsl(path, registry, guard.token())
             }
             _ => {
-                let (mut args, mut env) = network_args(
-                    interactive || scoped.is_some(),
-                    if wsl { None } else { askpass },
-                );
-                if let Some(guard) = &scoped {
-                    // Clear external helpers only for an explicitly connected
-                    // HTTPS host, so stale Keychain entries cannot win.
-                    args.extend(crate::process::args(&["-c", "credential.helper="]));
-                    if let Some((_, token)) =
-                        env.iter_mut().find(|(key, _)| key == "GITTY_ASKPASS_TOKEN")
-                    {
-                        *token = guard.token().into();
-                    }
-                }
+                let (mut args, env) = network_args(interactive, if wsl { None } else { askpass });
+                args.extend(helper_args.clone());
                 if wsl && interactive {
                     allow_credential_helper_ui(&mut args);
                 }
@@ -547,6 +507,10 @@ pub(crate) fn network_args(
     ]);
 
     let mut env = Vec::new();
+    if !interactive {
+        // GCM environment settings override Git configuration; background work must stay silent.
+        env.push(("GCM_INTERACTIVE".into(), "false".into()));
+    }
 
     if let Some(registry) = askpass_registry.filter(|_| interactive) {
         a.extend(args(&[
@@ -570,7 +534,11 @@ pub(crate) fn network_args(
     } else {
         a.extend(args(&[
             "-c",
-            "credential.interactive=false",
+            if interactive {
+                "credential.interactive=true"
+            } else {
+                "credential.interactive=false"
+            },
             "-c",
             "core.askPass=",
             "-c",
@@ -587,6 +555,7 @@ pub(crate) fn network_args_wsl(
     token: &str,
 ) -> (Vec<String>, Vec<(String, String)>) {
     let (mut args, mut env) = network_args(false, None);
+    env.retain(|(key, _)| key != "GCM_INTERACTIVE");
     args.extend(crate::process::args(&[
         "-c",
         "credential.interactive=true",
@@ -606,6 +575,22 @@ pub(crate) fn network_args_wsl(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_clone_can_sign_in_but_background_fetch_cannot() {
+        let (interactive, _) = network_args(true, None);
+        assert!(interactive
+            .iter()
+            .any(|v| v == "credential.interactive=true"));
+        let (background, env) = network_args(false, None);
+        assert!(background
+            .iter()
+            .any(|v| v == "credential.interactive=false"));
+        assert!(background.iter().any(|v| v == "core.askPass="));
+        assert!(env
+            .iter()
+            .any(|(key, value)| key == "GCM_INTERACTIVE" && value == "false"));
+    }
 
     #[test]
     fn credential_helper_ui_keeps_every_other_prompt_disabled() {
