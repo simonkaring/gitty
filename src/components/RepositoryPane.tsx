@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus, GitCommitHorizontal, Globe2, LocateFixed, RefreshCw, Search, Tag, Upload, X } from 'lucide-react';
+import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus, GitCommitHorizontal, Globe2, Laptop, LocateFixed, RefreshCw, Search, Tag, Upload, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { CommandPalette, type PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
 import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
@@ -25,6 +25,7 @@ import { SwitchBlockedDialog } from './SwitchBlockedDialog';
 import { Segmented, Toast } from './ui';
 import { locationLabel, sessionKey } from '../model/tabs';
 import { useSettings } from '../model/settings';
+import { SCALES, applyScale, loadScale } from '../model/scale';
 import { AUTO_FETCH_CHECK, autoFetchDue, isFetchingAction, type FetchStatus } from '../model/autoFetch';
 import { DEFAULT_PULL_MODE, describeRemoteAction, needsPublish, type RemoteActionRequest, type SyncInfo } from '../model/remote';
 
@@ -62,6 +63,9 @@ export interface RepositoryPaneProps {
 
 export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {}, workspaceCommands = [], tabId, location, active, sidebarOpen, inspectorOpen, inspectorWidth, sidebarWidth, setInspectorWidth, setSidebarWidth, setInspectorOpen, onIdentity, onBusyChange, onMeta }: RepositoryPaneProps) {
   const { theme, settings } = useSettings();
+  const [scale, setScale] = useState(loadScale);
+  const changeScale = (next: number) => { setScale(next); applyScale(next); };
+  const stepScale = (dir: number) => changeScale(SCALES[Math.min(SCALES.length - 1, Math.max(0, SCALES.indexOf(scale as typeof SCALES[number]) + dir))]);
   const [state, setState] = useState<RepositoryState | null>(null);
   const [status, setStatus] = useState<RepositoryStatus | null>(null);
   const [commits, setCommits] = useState<CommitSummary[]>([]);
@@ -451,7 +455,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
       { id: 'refresh', group: 'Repository', label: 'Refresh', icon: <RefreshCw size={15} />, disabled: busy, run: () => void refresh() },
       ...(head ? [{ id: 'copy-head', group: 'Repository', label: 'Copy HEAD commit SHA', hint: head.slice(0, 7), icon: <Copy size={15} />, run: () => void copyMenuValue(head, 'Commit SHA') }] : []),
     ];
-    const branches = state.refs.filter(ref => ref.kind === 'local' && ref.fullName !== headRef).map(ref => ({ id: `switch:${ref.fullName}`, group: 'Switch to branch', label: `Switch to ${ref.name}`, icon: <GitBranch size={15} />, disabled: writeBlocked, run: () => void switchBranch(ref.fullName) }));
+    const branches = state.refs.filter(ref => ref.kind === 'local' && ref.fullName !== headRef).map(ref => ({ id: `switch:${ref.fullName}`, group: 'Switch to branch', label: `Switch to ${ref.name}`, icon: <Laptop size={15} />, disabled: writeBlocked, run: () => void switchBranch(ref.fullName) }));
     const goTo = state.refs.filter(ref => ref.kind !== 'local').map(ref => ({ id: `goto:${ref.fullName}`, group: 'Go to', label: `Go to ${ref.name}`, hint: ref.kind === 'tag' ? 'tag' : 'remote', icon: ref.kind === 'tag' ? <Tag size={15} /> : <Globe2 size={15} />, run: () => reveal(ref.commitId) }));
     return [...repo, ...branches, ...goTo, ...workspaceCommands];
   }
@@ -571,7 +575,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
         </div>
       </div>
     </main>}
-    <footer className="statusbar"><span><span className="live-dot" />{mutationBusy ? 'Updating repository…' : isDemoHandle(state?.session.handle) ? 'Demo workspace · changes are simulated in memory' : 'Local workspace · automatic refresh'}</span><span className="status-keys"><kbd>/</kbd> search <kbd>{navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'} K</kbd> commands</span></footer>
+    <footer className="statusbar"><span><span className="live-dot" />{mutationBusy ? 'Updating repository…' : isDemoHandle(state?.session.handle) ? 'Demo workspace · changes are simulated in memory' : 'Local workspace · automatic refresh'}</span><span className="status-keys"><span className="scale-control"><button className="icon-button sm" aria-label="Zoom out" disabled={scale === SCALES[0]} onClick={() => stepScale(-1)}><ZoomOut size={13} /></button><select className="scale-value" aria-label="Interface zoom" value={scale} onChange={event => changeScale(Number(event.target.value))}>{SCALES.map(s => <option key={s} value={s}>{s}%</option>)}</select><button className="icon-button sm" aria-label="Zoom in" disabled={scale === SCALES[SCALES.length - 1]} onClick={() => stepScale(1)}><ZoomIn size={13} /></button></span><kbd>/</kbd> search <kbd>{navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'} K</kbd> commands</span></footer>
     {state && menuTarget && <GraphContextMenu target={menuTarget} state={state} busy={mutationBusy || mutationBlocked} onClose={() => setMenuTarget(null)} onOperation={context => { setMenuTarget(null); setActionContext(context); }} onShowDetails={oid => { reveal(oid); setInspectorOpen(true); setMenuTarget(null); }} onSetBase={oid => setComparison(oid, 'base')} onSetTarget={oid => setComparison(oid, 'target')} onCompare={compareWithCurrent} onPullRequest={ref => { setMenuTarget(null); setPrSource(ref); }} onRemoteAction={action => void runMenuRemote(action)} onPush={() => void pushFromMenu(menuTarget.context.ref!)} onCopy={(value, label) => void copyMenuValue(value, label)} />}
     {state && publishInfo && <PublishDialog remotes={publishInfo.remotes} branch={publishInfo.branch ?? ''} onPublish={async (remote, branch) => { const action: RemoteActionRequest = { kind: 'push', remote, branch, setUpstream: true }; const output = await remoteWrite('repository_remote_action', { action }); setNotice(output || 'Publish complete.'); }} onClose={() => setPublishInfo(null)} />}
     {state && actionContext && <OperationDialog key={state.session.handle} state={state} operation={operation} context={actionContext} commits={commits} busy={mutationBusy || mutationBlocked} onWrite={operationWrite} onClose={() => setActionContext(null)} onCompare={compareWithCurrent} onPullRequest={source => { setPrSource(source); setActionContext(null); }} />}

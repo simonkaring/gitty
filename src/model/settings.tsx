@@ -36,7 +36,7 @@ export const DEFAULT_HISTORY_COLUMNS: HistoryColumnConfig[] = [
   { id: 'hash', visible: true },
   { id: 'date', visible: false },
 ];
-export const DEFAULT_SETTINGS: Settings = { version: 1, themeMode: 'system', themeId: 'gitty-light', lightThemeId: 'gitty-light', darkThemeId: 'gitty-dark', customThemes: [], diffView: 'unified', diffWrap: false, fontSize: 13, monoFont: MONO_FONTS[0], paneWidths: { sidebar: 240, inspector: 400 }, historyColumns: DEFAULT_HISTORY_COLUMNS, commitProfiles: [], repositoryCommitProfiles: {} };
+export const DEFAULT_SETTINGS: Settings = { version: 1, themeMode: 'fixed', themeId: 'gitty-dark', lightThemeId: 'gitty-light', darkThemeId: 'gitty-dark', customThemes: [], diffView: 'unified', diffWrap: false, fontSize: 13, monoFont: MONO_FONTS[0], paneWidths: { sidebar: 240, inspector: 400 }, historyColumns: DEFAULT_HISTORY_COLUMNS, commitProfiles: [], repositoryCommitProfiles: {} };
 export function validateSettings(value: unknown): Settings {
   if (!value || typeof value !== 'object') throw new Error('Invalid settings.');
   const s = value as Settings;

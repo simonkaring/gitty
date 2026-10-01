@@ -20,7 +20,7 @@
         "minHeight": 540,
         "center": true,
         "resizable": true,
-        "backgroundColor": "#f8f9fb",
+        "backgroundColor": "#141416",
         "titleBarStyle": "Overlay",
         "hiddenTitle": true
       }

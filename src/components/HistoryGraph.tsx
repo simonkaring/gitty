@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { GitBranch, GitMerge, Globe2, Settings as SettingsIcon, Tag } from 'lucide-react';
+import { GitMerge, Globe2, Laptop, Settings as SettingsIcon, Tag } from 'lucide-react';
 import { indexEdges, laneX, LANE_WIDTH, ROW_HEIGHT, type GraphLayout } from '../graph/layout';
 import { WORKING_ID } from '../model/native';
 import type { Commit, GitRef } from '../model/types';
@@ -22,6 +22,22 @@ export function graphDropAction(data: DataTransfer, targetRef: string | undefine
   }
   const oid = data.getData(COMMIT_DRAG_TYPE);
   return oid !== WORKING_ID && commits.some(commit => commit.id === oid) ? { oid, commits: [oid], initial: 'cherryPick' } : null;
+}
+const REF_ORDER = { local: 0, remote: 1, tag: 2 } as const;
+export function sortRefs<T extends GitRef & { fullName?: string }>(list: T[], headRef?: string | null): T[] {
+  const rank = (ref: T) => ref.fullName && ref.fullName === headRef ? -1 : REF_ORDER[ref.kind as keyof typeof REF_ORDER] ?? 3;
+  return [...list].sort((a, b) => rank(a) - rank(b));
+}
+// A local branch and its same-named remote-tracking ref on one commit share a single pill.
+export function groupRefs<T extends GitRef & { fullName?: string }>(list: T[], headRef?: string | null): { ref: T; remote?: T }[] {
+  const sorted = sortRefs(list, headRef), used = new Set<T>(), groups: { ref: T; remote?: T }[] = [];
+  for (const ref of sorted) {
+    if (used.has(ref)) continue;
+    const remote = ref.kind === 'local' ? sorted.find(other => other.kind === 'remote' && !used.has(other) && other.name.slice(other.name.indexOf('/') + 1) === ref.name) : undefined;
+    if (remote) used.add(remote);
+    groups.push({ ref, remote });
+  }
+  return groups;
 }
 interface Props {
   commits: Commit[];
@@ -46,6 +62,7 @@ interface Props {
   onTogglePick?: (oid: string) => void;
 }
 
+const MIN_GRAPH_WIDTH = laneX(2) + 14; // three lanes plus the selection halo; also fits the "GRAPH" label
 export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, loaded, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onContextActions, onSwitchBranch, pickOrder, onTogglePick }, ref) {
   const { settings, updateSettings } = useSettings();
   const scroller = useRef<HTMLDivElement>(null);
@@ -53,12 +70,15 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const columnSettingsButton = useRef<HTMLButtonElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [scrollLeft, setScrollLeft] = useState(0);
+  const [graphScroll, setGraphScroll] = useState(0);
+  const [hbar, setHbar] = useState(0);
+  const graphScroller = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(600);
   const [viewportWidth, setViewportWidth] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [widths, setWidths] = useState<Record<HistoryColumnId, number>>({ refs: 170, graph: 0, message: 130, author: 110, hash: 90, date: 120 });
+  const [widths, setWidths] = useState<Record<HistoryColumnId, number>>({ refs: 170, graph: MIN_GRAPH_WIDTH, message: 130, author: 110, hash: 90, date: 120 });
   type Column = HistoryColumnId;
-  const limits: Record<Column, [number, number]> = { refs: [90, 420], graph: [0, 360], message: [100, 600], author: [70, 260], hash: [70, 180], date: [80, 220] };
+  const limits: Record<Column, [number, number]> = { refs: [90, 420], graph: [MIN_GRAPH_WIDTH, 600], message: [100, 600], author: [70, 260], hash: [70, 180], date: [80, 220] };
   function resize(column: Column, delta: number) {
     setWidths(current => ({ ...current, [column]: Math.max(limits[column][0], Math.min(limits[column][1], current[column] + delta)) }));
   }
@@ -84,13 +104,32 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     else dragFrame.current = 0;
   }
   useEffect(() => { window.addEventListener('dragend', stopDrag); window.addEventListener('drop', stopDrag, true); return () => { stopDrag(); if (badgeAction.current) clearTimeout(badgeAction.current); window.removeEventListener('dragend', stopDrag); window.removeEventListener('drop', stopDrag, true); }; }, []);
-  const graphWidth = Math.max(112, layout.laneCount * LANE_WIDTH + 32) + widths.graph;
+  // The column keeps its own width however wide the lane tree gets; the canvas shows a window scrolled by graphScroll.
+  const graphContent = Math.max(112, layout.laneCount * LANE_WIDTH + 32);
+  const graphWidth = widths.graph;
+  const graphScrollMax = Math.max(0, graphContent - graphWidth);
+  const graphX = Math.min(graphScroll, graphScrollMax);
   const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - 8);
   const end = Math.min(loaded, Math.ceil((scrollTop + height) / ROW_HEIGHT) + 8);
   const selectedIndex = commits.findIndex(commit => commit.id === selectedId);
   const loadedIds = useMemo(() => new Set(commits.slice(0, loaded).map(commit => commit.id)), [commits, loaded]);
   const visibleEdges = useMemo(() => indexEdges(layout.edges, layout.edgeMaxTo), [layout.edges, layout.edgeMaxTo]);
   const colors = useMemo(() => Array.from({ length: 8 }, (_, index) => theme.colors[`graphLane${index + 1}`]), [theme]);
+
+  function renderRef({ ref, remote }: { ref: GitRef & { fullName?: string }; remote?: GitRef }, commit: Commit) {
+    return <span key={ref.fullName ?? ref.name} className={`ref-pill ${ref.kind === 'tag' ? 'tag-ref' : ref.kind === 'remote' ? 'remote-ref' : ref.name === 'main' ? 'main-ref' : ''}`}
+                      data-name={ref.name} title={remote ? `${ref.name} + ${remote.name}` : ref.name}
+                      role={onActions && ref.fullName ? 'button' : undefined} tabIndex={onActions && ref.fullName ? 0 : undefined} aria-label={onActions && ref.fullName ? `Graph actions for ${ref.name}` : undefined}
+                      onKeyDown={event => { if (!ref.fullName) return; if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && onContextActions) { event.preventDefault(); event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); onContextActions({ oid: commit.id, ref: ref.fullName }, rect.left, rect.bottom, event.currentTarget); } else if (onActions && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.stopPropagation(); onActions({ oid: commit.id, ref: ref.fullName }); } }}
+                      data-current={!!headRef && ref.fullName === headRef} draggable={!!onActions && !!ref.fullName && ref.kind !== 'tag'}
+                      onDragStart={event => { event.stopPropagation(); if (onActions && ref.fullName && ref.kind !== 'tag') { event.dataTransfer.clearData(COMMIT_DRAG_TYPE); event.dataTransfer.setData(REF_DRAG_TYPE, ref.fullName); event.dataTransfer.effectAllowed = 'copy'; } else event.preventDefault(); }} onDragEnd={stopDrag}
+                      onDragOver={event => { if (ref.fullName === headRef && [REF_DRAG_TYPE, COMMIT_DRAG_TYPE].some(type => event.dataTransfer.types.includes(type))) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
+                      onDrop={event => { event.preventDefault(); event.stopPropagation(); stopDrag(); const action = graphDropAction(event.dataTransfer, ref.fullName, headRef, commits.slice(0, loaded), refs); if (action) onActions?.(action); }}
+                      onContextMenu={event => { if (onContextActions && ref.fullName) { event.preventDefault(); event.stopPropagation(); onContextActions({ oid: commit.id, ref: ref.fullName }, event.clientX, event.clientY, event.currentTarget); } }} onClick={event => { if (onActions && ref.fullName) { event.stopPropagation(); if (ref.kind === 'local' && onSwitchBranch) { if (badgeAction.current) clearTimeout(badgeAction.current); if (event.detail < 2) badgeAction.current = setTimeout(() => { badgeAction.current = null; onActions({ oid: commit.id, ref: ref.fullName }); }, 500); } else onActions({ oid: commit.id, ref: ref.fullName }); } }}
+                      onDoubleClick={event => { if (ref.kind === 'local' && ref.fullName && onSwitchBranch) { event.stopPropagation(); if (badgeAction.current) clearTimeout(badgeAction.current); badgeAction.current = null; onSwitchBranch(ref.fullName); } }}>
+                      {ref.kind === 'tag' ? <Tag size={10} /> : ref.kind === 'remote' ? <Globe2 size={10} /> : <Laptop size={10} />}{remote && <Globe2 size={10} />}<span className="ref-pill-name">{ref.name}</span>
+                    </span>;
+  }
 
   function scrollTo(row: number) {
     const el = scroller.current;
@@ -117,6 +156,9 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     setViewportWidth(el.clientWidth);
     return () => observer.disconnect();
   }, []);
+
+  // Sit above the list's own horizontal scrollbar when it is showing.
+  useLayoutEffect(() => { const el = scroller.current; if (el) setHbar(el.offsetHeight - el.clientHeight); });
 
   // Selection halo glides between rows instead of snapping (skipped under reduced motion).
   const halo = useRef<{ id: string; from: [number, number]; to: [number, number]; start: number } | null>(null);
@@ -148,8 +190,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     const bg = theme.colors.bg;
     const paint = () => {
       const now = performance.now();
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, graphWidth, height);
+      ctx.setTransform(dpr, 0, 0, dpr, -graphX * dpr, 0);
+      ctx.clearRect(graphX, 0, graphWidth, height);
       ctx.lineWidth = 1.8;
       ctx.lineCap = 'round';
       for (const edge of visibleEdges(Math.floor(scrollTop / ROW_HEIGHT) - 1, Math.min(loaded, Math.ceil((scrollTop + height) / ROW_HEIGHT) + 1))) {
@@ -199,7 +241,16 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     };
     paint();
     return () => cancelAnimationFrame(haloFrame.current);
-  }, [commits, layout, visibleEdges, start, end, scrollTop, height, graphWidth, selectedId, head, theme, matches, loaded, colors]);
+  }, [commits, layout, visibleEdges, start, end, scrollTop, height, graphWidth, graphX, selectedId, head, theme, matches, loaded, colors]);
+
+  useEffect(() => {
+    const node = layout.nodes[selectedIndex];
+    const el = graphScroller.current;
+    if (!node || !el) return;
+    const x = laneX(node.lane);
+    if (x < graphX + 12) el.scrollLeft = Math.max(0, x - 24);
+    else if (x > graphX + graphWidth - 12) el.scrollLeft = x - graphWidth + 24;
+  }, [selectedIndex, layout.nodes]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Commits prepended by a refresh (new commit, fetch) slide in once.
   const seenIds = useRef<Set<string> | null>(null);
@@ -256,6 +307,21 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     }
     return offset;
   }, [visibleColumns, widths, graphWidth, viewportWidth, totalWidth]);
+
+  // Shift+wheel or a horizontal trackpad swipe over the graph column pans the graph, not the whole list.
+  useEffect(() => {
+    const list = scroller.current;
+    if (!list || !graphScrollMax) return;
+    const wheel = (event: WheelEvent) => {
+      const x = event.clientX - list.getBoundingClientRect().left + list.scrollLeft;
+      const delta = event.shiftKey && !event.deltaX ? event.deltaY : event.deltaX;
+      if (!delta || Math.abs(event.deltaX) < Math.abs(event.deltaY) && !event.shiftKey || x < graphOffset || x > graphOffset + graphWidth || !graphScroller.current) return;
+      event.preventDefault();
+      graphScroller.current.scrollLeft += delta;
+    };
+    list.addEventListener('wheel', wheel, { passive: false });
+    return () => list.removeEventListener('wheel', wheel);
+  }, [graphScrollMax, graphOffset, graphWidth]);
 
   const isGraphVisible = visibleColumns.some(c => c.id === 'graph');
 
@@ -331,7 +397,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
             const node = layout.nodes[row];
             const lane = node?.lane ?? 0;
             const branchColor = colors[lane % colors.length];
-            const badges = refs.filter(ref => ref.commitId === commit.id);
+            const badges = refs.filter(ref => ref.commitId === commit.id && !(ref.kind === 'remote' && ref.name.endsWith('/HEAD')));
+            const groups = groupRefs(badges, headRef);
             return <div key={commit.id} id={`commit-${commit.id}`} role="option" aria-selected={commit.id === selectedId}
               aria-posinset={row + 1} aria-setsize={commits.length}
               aria-label={`${commit.subject}, ${commit.author}, ${commit.id.slice(0, 7)}${commit.parents.length > 1 ? ', merge commit' : ''}${commit.id === head ? ', HEAD' : ''}${badges.length ? `, ${badges.map(b => b.name).join(', ')}` : ''}`}
@@ -345,22 +412,13 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
               {visibleColumns.map(col => {
                 if (col.id === 'refs') {
                   return <div key="refs" className="commit-refs">
-                    {badges.map(ref => <span key={ref.fullName ?? ref.name} className={`ref-pill ${ref.kind === 'tag' ? 'tag-ref' : ref.kind === 'remote' ? 'remote-ref' : ref.name === 'main' ? 'main-ref' : ''}`}
-                      data-name={ref.name} title={ref.name}
-                      role={onActions && ref.fullName ? 'button' : undefined} tabIndex={onActions && ref.fullName ? 0 : undefined} aria-label={onActions && ref.fullName ? `Graph actions for ${ref.name}` : undefined}
-                      onKeyDown={event => { if (!ref.fullName) return; if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && onContextActions) { event.preventDefault(); event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); onContextActions({ oid: commit.id, ref: ref.fullName }, rect.left, rect.bottom, event.currentTarget); } else if (onActions && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.stopPropagation(); onActions({ oid: commit.id, ref: ref.fullName }); } }}
-                      data-current={!!headRef && ref.fullName === headRef} draggable={!!onActions && !!ref.fullName && ref.kind !== 'tag'}
-                      onDragStart={event => { event.stopPropagation(); if (onActions && ref.fullName && ref.kind !== 'tag') { event.dataTransfer.clearData(COMMIT_DRAG_TYPE); event.dataTransfer.setData(REF_DRAG_TYPE, ref.fullName); event.dataTransfer.effectAllowed = 'copy'; } else event.preventDefault(); }} onDragEnd={stopDrag}
-                      onDragOver={event => { if (ref.fullName === headRef && [REF_DRAG_TYPE, COMMIT_DRAG_TYPE].some(type => event.dataTransfer.types.includes(type))) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
-                      onDrop={event => { event.preventDefault(); event.stopPropagation(); stopDrag(); const action = graphDropAction(event.dataTransfer, ref.fullName, headRef, commits.slice(0, loaded), refs); if (action) onActions?.(action); }}
-                      onContextMenu={event => { if (onContextActions && ref.fullName) { event.preventDefault(); event.stopPropagation(); onContextActions({ oid: commit.id, ref: ref.fullName }, event.clientX, event.clientY, event.currentTarget); } }} onClick={event => { if (onActions && ref.fullName) { event.stopPropagation(); if (ref.kind === 'local' && onSwitchBranch) { if (badgeAction.current) clearTimeout(badgeAction.current); if (event.detail < 2) badgeAction.current = setTimeout(() => { badgeAction.current = null; onActions({ oid: commit.id, ref: ref.fullName }); }, 500); } else onActions({ oid: commit.id, ref: ref.fullName }); } }}
-                      onDoubleClick={event => { if (ref.kind === 'local' && ref.fullName && onSwitchBranch) { event.stopPropagation(); if (badgeAction.current) clearTimeout(badgeAction.current); badgeAction.current = null; onSwitchBranch(ref.fullName); } }}>
-                      {ref.kind === 'tag' ? <Tag size={10} /> : ref.kind === 'remote' ? <Globe2 size={10} /> : <GitBranch size={10} />}<span className="ref-pill-name">{ref.name}</span>
-                    </span>)}
+                    {groups[0] && renderRef(groups[0], commit)}
+                    {groups.length > 1 && <button type="button" className="ref-more" aria-label={`${groups.length - 1} more ref${groups.length > 2 ? 's' : ''}`} onClick={event => event.stopPropagation()}>+{groups.length - 1}</button>}
+                    {groups.length > 1 && <div className="ref-stack">{groups.slice(1).map(group => renderRef(group, commit))}</div>}
                   </div>;
                 }
                 if (col.id === 'graph') {
-                  return <div key="graph" className="commit-graph-cell" aria-hidden="true">{commit.id === head && <span className="graph-head-pulse" style={{ left: laneX(lane) }} />}</div>;
+                  return <div key="graph" className="commit-graph-cell" aria-hidden="true">{commit.id === head && <span className="graph-head-pulse" style={{ left: laneX(lane) - graphX }} />}</div>;
                 }
                 if (col.id === 'message') {
                   return <div key="message" className="commit-message">
@@ -387,6 +445,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
           })}
         </div>
       </div>
+      {isGraphVisible && graphScrollMax > 0 && <div ref={graphScroller} className="graph-hscroll" aria-label="Scroll graph horizontally" style={{ width: graphWidth, left: graphOffset - scrollLeft, bottom: hbar }} onScroll={event => setGraphScroll(event.currentTarget.scrollLeft)}><div style={{ width: graphContent }} /></div>}
       {isGraphVisible && <canvas ref={canvas} className="graph-canvas" aria-hidden="true" style={{ width: graphWidth, height, left: graphOffset - scrollLeft }} />}
     </div>
     <div className="history-bottom"><span><span className="live-dot" />{(loaded - (commits[0]?.id === WORKING_ID ? 1 : 0)).toLocaleString()} commits loaded{shallow ? ' · Shallow repository boundary' : ''}</span>

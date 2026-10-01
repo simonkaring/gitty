@@ -193,7 +193,9 @@ try {
   assert.equal(await sidebarMenu.getByRole('menuitem', { name: 'Push / Publish…' }).count(), 0);
   await page.keyboard.press('Escape');
   assert.equal(await sidebarMenu.count(), 0);
-  await page.locator('.ref-pill[data-name="origin/topic"]').click({ button: 'right' });
+  // `topic` and `origin/topic` share one graph pill, so remote actions are reached from the sidebar.
+  await page.locator('summary').filter({ hasText: 'Remote branches' }).click();
+  await page.locator('.ref-item[title="refs/remotes/origin/topic"]').click({ button: 'right' });
   await page.getByRole('menu', { name: 'Actions for origin/topic' }).getByRole('menuitem', { name: 'Fetch this remote branch' }).click();
   await page.waitForFunction(() => window.fixture.calls.some(call => call.command === 'repository_remote_action' && call.args.action.kind === 'fetch' && call.args.action.remote === 'origin' && call.args.action.branch === 'topic'));
 
@@ -202,7 +204,6 @@ try {
   assert.equal(await page.getByRole('button', { name: 'Create pull request…' }).isDisabled(), true);
   await page.getByText('Tags cannot be pull-request source branches.', { exact: false }).waitFor();
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await page.locator('summary').filter({ hasText: 'Remote branches' }).click();
   await page.getByRole('button', { name: 'Actions for origin/topic', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: 'Create pull request…' }).isDisabled(), true);
   await page.getByText('Create or check out a local branch from this remote-tracking ref first.', { exact: false }).waitFor();
