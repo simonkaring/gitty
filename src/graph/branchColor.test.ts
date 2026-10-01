@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assignBranchColors, branchName } from './branchColor';
+import { assignBranchColors, branchName, CURRENT_COLOR } from './branchColor';
 import type { GitRef } from '../model/types';
 
 const ref = (name: string, commitId: string, kind: GitRef['kind'] = 'local'): GitRef => ({ name, commitId, kind });
@@ -50,5 +50,15 @@ describe('branch colors', () => {
     expect(develop.rows[1]).toBe(develop.branches.get('develop'));
     const main = assignBranchColors(chain, [ref('main', 'feature'), ref('release', 'base')]);
     expect(main.rows[1]).toBe(main.branches.get('main'));
+  });
+
+  it('paints the checked-out branch with the accent slot without shifting other branches', () => {
+    const base = assignBranchColors(commits, refs, 'working');
+    const onFeature = assignBranchColors(commits, refs, 'working', 'feat/git');
+    expect(onFeature.branches.get('feat/git')).toBe(CURRENT_COLOR);
+    expect(onFeature.branches.get('main')).toBe(base.branches.get('main'));
+    for (const row of [3, 4]) expect(onFeature.rows[row]).toBe(CURRENT_COLOR);
+    expect(onFeature.rows[2]).toBe(base.rows[2]);
+    expect(assignBranchColors(commits, refs, 'working', 'gone').rows).toEqual(base.rows);
   });
 });

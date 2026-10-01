@@ -2,6 +2,8 @@ import type { GitRef } from '../model/types';
 import type { GraphCommit } from './layout';
 
 const PALETTE_SIZE = 8;
+/** Palette index for the checked-out branch: one past the lane colors, rendered as the theme accent. */
+export const CURRENT_COLOR = PALETTE_SIZE;
 const trunk = (name: string) => name === 'main' || name === 'master';
 const compare = (a: string, b: string) => Number(trunk(b)) - Number(trunk(a)) || (a < b ? -1 : a > b ? 1 : 0);
 
@@ -16,7 +18,7 @@ function hashIndex(name: string): number {
   return (hash >>> 0) % PALETTE_SIZE;
 }
 
-export function assignBranchColors(commits: readonly GraphCommit[], refs: readonly GitRef[], workingId?: string) {
+export function assignBranchColors(commits: readonly GraphCommit[], refs: readonly GitRef[], workingId?: string, current?: string | null) {
   const names = [...new Set(refs.map(branchName).filter((name): name is string => name !== null))].sort(compare);
   const branches = new Map<string, number>();
   for (const name of names) {
@@ -25,6 +27,8 @@ export function assignBranchColors(commits: readonly GraphCommit[], refs: readon
     if (branches.size < PALETTE_SIZE) while ([...branches.values()].includes(index)) index = (index + 1) % PALETTE_SIZE;
     branches.set(name, index);
   }
+  // Assigned after the palette so other branches keep their colors when HEAD moves.
+  if (current && branches.has(current)) branches.set(current, CURRENT_COLOR);
   type Owner = { name: string; named: boolean };
   const owners = new Map<string, Owner>();
   const tips = new Map<string, string>();
