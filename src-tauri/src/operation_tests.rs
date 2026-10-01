@@ -284,7 +284,7 @@ fn operations_branch_tag_ff_and_diverged_merge() {
     f.write("other", "side\n");
     let side = f.commit("side");
     f.run(GitAction::SwitchBranch {
-        branch: "main".into(),
+        branch: "refs/heads/main".into(),
     })
     .unwrap();
     assert_eq!(f.merge("side", false).unwrap().head, Some(side.clone()));

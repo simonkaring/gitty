@@ -441,6 +441,11 @@ impl Repository {
                 }
             }
             GitAction::SwitchBranch { branch } => {
+                // The UI sends full ref names (refs/heads/x); accept short names too.
+                let branch = branch
+                    .strip_prefix("refs/heads/")
+                    .unwrap_or(&branch)
+                    .to_string();
                 self.valid_name(&branch, "heads")?;
                 resolve(self.location(), &format!("refs/heads/{branch}"))?;
                 a.extend(args(&[
