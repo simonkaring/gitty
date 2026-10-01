@@ -1,4 +1,4 @@
-import type { ChangedFile, Commit, HistoryProvider, RepositorySnapshot } from './types';
+import type { ChangedFile, Commit, RepositorySnapshot } from './types';
 
 const authors = ['Alex Morgan', 'Jamie Chen', 'Sam Rivera', 'Taylor Kim', 'Jordan Lee'];
 const subjects = [
@@ -105,8 +105,3 @@ export function createDemoHistory(seed = 1, rounds = 140): RepositorySnapshot {
     ],
   };
 }
-
-export const demoProvider: HistoryProvider = {
-  kind: 'demo',
-  async snapshot(repository) { return createDemoHistory(repository === 'gitty' ? 1 : repository === 'orbit-design' ? 7 : 13); },
-};

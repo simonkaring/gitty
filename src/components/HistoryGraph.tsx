@@ -118,6 +118,9 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     return () => observer.disconnect();
   }, []);
 
+  // Selection halo glides between rows instead of snapping (skipped under reduced motion).
+  const halo = useRef<{ id: string; from: [number, number]; to: [number, number]; start: number } | null>(null);
+  const haloFrame = useRef(0);
   useEffect(() => {
     const element = canvas.current;
     if (!element) return;
@@ -126,48 +129,91 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     const dpr = window.devicePixelRatio || 1;
     element.width = graphWidth * dpr;
     element.height = height * dpr;
-    ctx.scale(dpr, dpr);
-    ctx.clearRect(0, 0, graphWidth, height);
     const y = (row: number) => row * ROW_HEIGHT + ROW_HEIGHT / 2 - scrollTop;
-    ctx.lineWidth = 1.7;
-    ctx.lineCap = 'round';
-    for (const edge of visibleEdges(Math.floor(scrollTop / ROW_HEIGHT) - 1, Math.min(loaded, Math.ceil((scrollTop + height) / ROW_HEIGHT) + 1))) {
-      const x1 = laneX(edge.fromLane), xt = laneX(edge.track), x2 = laneX(edge.toLane);
-      const y1 = y(edge.fromRow), y2 = y(edge.toRow);
-      ctx.strokeStyle = colors[edge.track % colors.length];
-      ctx.globalAlpha = matches ? 0.33 : 0.72;
-      ctx.beginPath();
-      ctx.moveTo(x1, y1);
-      const bend = ROW_HEIGHT / 4, reach = ROW_HEIGHT * 5 / 12;
-      ctx.bezierCurveTo(x1, y1 + bend, xt, y1 + bend, xt, y1 + reach);
-      ctx.lineTo(xt, y2 - reach);
-      ctx.bezierCurveTo(xt, y2 - bend, x2, y2 - bend, x2, y2);
-      ctx.stroke();
-    }
-    // The worker can still be laying out newly loaded history when this effect
-    // runs. Rows remain visible, but their canvas nodes must wait for layout.
-    for (let row = start; row < Math.min(end, layout.nodes.length, commits.length); row++) {
-      const node = layout.nodes[row];
-      const commit = commits[row];
-      const x = laneX(node.lane), cy = y(row);
-      const selected = node.id === selectedId;
-      ctx.globalAlpha = matches && !matches.has(node.id) ? 0.3 : 1;
-      if (selected) {
-        ctx.beginPath(); ctx.arc(x, cy, 9, 0, Math.PI * 2);
+    const selectedRow = commits.findIndex(commit => commit.id === selectedId);
+    const target: [number, number] | null = selectedRow >= 0 && layout.nodes[selectedRow] ? [laneX(layout.nodes[selectedRow].lane), selectedRow] : null;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const ease = (t: number) => 1 - (1 - t) ** 3;
+    const haloAt = (now: number): [number, number] | null => {
+      const h = halo.current;
+      if (!h || !target) return target;
+      const t = Math.min(1, (now - h.start) / 180);
+      return [h.from[0] + (h.to[0] - h.from[0]) * ease(t), h.from[1] + (h.to[1] - h.from[1]) * ease(t)];
+    };
+    if (target && halo.current?.id !== selectedId) {
+      const previous = halo.current ? haloAt(performance.now()) : null;
+      const from = !reduce && previous && Math.abs(previous[1] - target[1]) < 24 ? previous : target;
+      halo.current = { id: selectedId, from, to: target, start: performance.now() };
+    } else if (target && halo.current) halo.current.to = target;
+    const bg = theme.colors.bg;
+    const paint = () => {
+      const now = performance.now();
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, graphWidth, height);
+      ctx.lineWidth = 1.8;
+      ctx.lineCap = 'round';
+      for (const edge of visibleEdges(Math.floor(scrollTop / ROW_HEIGHT) - 1, Math.min(loaded, Math.ceil((scrollTop + height) / ROW_HEIGHT) + 1))) {
+        const x1 = laneX(edge.fromLane), xt = laneX(edge.track), x2 = laneX(edge.toLane);
+        const y1 = y(edge.fromRow), y2 = y(edge.toRow);
+        ctx.strokeStyle = colors[edge.track % colors.length];
+        ctx.globalAlpha = matches ? 0.3 : 0.78;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        const bend = ROW_HEIGHT / 4, reach = ROW_HEIGHT * 5 / 12;
+        ctx.bezierCurveTo(x1, y1 + bend, xt, y1 + bend, xt, y1 + reach);
+        ctx.lineTo(xt, y2 - reach);
+        ctx.bezierCurveTo(xt, y2 - bend, x2, y2 - bend, x2, y2);
+        ctx.stroke();
+      }
+      const at = haloAt(now);
+      if (at) {
+        ctx.globalAlpha = 0.22;
+        ctx.beginPath(); ctx.arc(at[0], at[1] * ROW_HEIGHT + ROW_HEIGHT / 2 - scrollTop, 11, 0, Math.PI * 2);
         ctx.fillStyle = theme.colors.graphSelection; ctx.fill();
+        ctx.globalAlpha = 1; ctx.lineWidth = 1.5; ctx.strokeStyle = theme.colors.graphSelection; ctx.stroke();
       }
-      ctx.beginPath();
-      if (commit.id === WORKING_ID) ctx.rect(x - 4, cy - 4, 8, 8);
-      else ctx.arc(x, cy, commit.parents.length > 1 ? 4.6 : 4, 0, Math.PI * 2);
-      ctx.fillStyle = commit.parents.length > 1 ? theme.colors.graphMerge : colors[node.lane % colors.length];
-      ctx.fill(); ctx.strokeStyle = colors[node.lane % colors.length]; ctx.lineWidth = 1.8; ctx.stroke();
-      if (node.id === head) {
-        ctx.beginPath(); ctx.arc(x, cy, 1.5, 0, Math.PI * 2);
-        ctx.fillStyle = theme.colors.graphHead; ctx.fill();
+      // The worker can still be laying out newly loaded history when this effect
+      // runs. Rows remain visible, but their canvas nodes must wait for layout.
+      for (let row = start; row < Math.min(end, layout.nodes.length, commits.length); row++) {
+        const node = layout.nodes[row];
+        const commit = commits[row];
+        const x = laneX(node.lane), cy = y(row);
+        const lane = colors[node.lane % colors.length];
+        ctx.globalAlpha = matches && !matches.has(node.id) ? 0.3 : 1;
+        ctx.beginPath();
+        if (commit.id === WORKING_ID) ctx.roundRect(x - 5, cy - 5, 10, 10, 2.5);
+        else ctx.arc(x, cy, commit.parents.length > 1 ? 5.5 : 5, 0, Math.PI * 2);
+        // Merges and the working tree are hollow rings; ordinary commits are solid with a background gap ring.
+        const hollow = commit.parents.length > 1 || commit.id === WORKING_ID;
+        ctx.fillStyle = hollow ? bg : lane; ctx.fill();
+        ctx.lineWidth = hollow ? 2 : 2.5; ctx.strokeStyle = hollow ? lane : bg; ctx.stroke();
+        if (!hollow) { ctx.beginPath(); ctx.arc(x, cy, 5, 0, Math.PI * 2); ctx.lineWidth = 1; ctx.strokeStyle = lane; ctx.stroke(); }
+        if (node.id === head) {
+          ctx.beginPath(); ctx.arc(x, cy, 2, 0, Math.PI * 2);
+          ctx.fillStyle = hollow ? theme.colors.graphHead : bg; ctx.fill();
+        }
       }
-    }
-    ctx.globalAlpha = 1;
+      ctx.globalAlpha = 1;
+      const h = halo.current;
+      haloFrame.current = h && now - h.start < 180 ? requestAnimationFrame(paint) : 0;
+    };
+    paint();
+    return () => cancelAnimationFrame(haloFrame.current);
   }, [commits, layout, visibleEdges, start, end, scrollTop, height, graphWidth, selectedId, head, theme, matches, loaded, colors]);
+
+  // Commits prepended by a refresh (new commit, fetch) slide in once.
+  const seenIds = useRef<Set<string> | null>(null);
+  const [freshIds, setFreshIds] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    const seen = seenIds.current;
+    seenIds.current = new Set(commits.map(commit => commit.id));
+    if (!seen) return;
+    const firstSeen = commits.findIndex(commit => seen.has(commit.id));
+    if (firstSeen <= 0) return;
+    setFreshIds(new Set(commits.slice(0, firstSeen).map(commit => commit.id)));
+    const timer = setTimeout(() => setFreshIds(new Set()), 1200);
+    return () => clearTimeout(timer);
+  }, [commits]);
 
   function navigate(row: number) {
     if (!loaded) return;
@@ -249,7 +295,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
         <button
           ref={columnSettingsButton}
           type="button"
-          className="history-column-settings-btn"
+          className="icon-button sm"
           aria-label="Customize columns"
           title="Customize columns"
           onClick={() => setMenuOpen(open => !open)}
@@ -289,7 +335,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
             return <div key={commit.id} id={`commit-${commit.id}`} role="option" aria-selected={commit.id === selectedId}
               aria-posinset={row + 1} aria-setsize={commits.length}
               aria-label={`${commit.subject}, ${commit.author}, ${commit.id.slice(0, 7)}${commit.parents.length > 1 ? ', merge commit' : ''}${commit.id === head ? ', HEAD' : ''}${badges.length ? `, ${badges.map(b => b.name).join(', ')}` : ''}`}
-              className={`commit-row ${commit.id === selectedId ? 'selected' : ''} ${matches && !matches.has(commit.id) ? 'dimmed' : ''}`}
+              className={`commit-row ${commit.id === selectedId ? 'selected' : ''} ${matches && !matches.has(commit.id) ? 'dimmed' : ''} ${freshIds.has(commit.id) ? 'fresh' : ''}`}
               style={{
                 top: row * ROW_HEIGHT,
                 height: ROW_HEIGHT,
@@ -314,7 +360,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                   </div>;
                 }
                 if (col.id === 'graph') {
-                  return <div key="graph" className="commit-graph-cell" aria-hidden="true" />;
+                  return <div key="graph" className="commit-graph-cell" aria-hidden="true">{commit.id === head && <span className="graph-head-pulse" style={{ left: laneX(lane) }} />}</div>;
                 }
                 if (col.id === 'message') {
                   return <div key="message" className="commit-message">
@@ -322,7 +368,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                     {commit.parents.length > 1 && <GitMerge size={13} className="merge-icon" />}
                     <span className="subject" title={commit.subject} draggable={!!onActions && commit.id !== WORKING_ID}
                       onDragStart={event => { event.stopPropagation(); if (!onActions || commit.id === WORKING_ID) { event.preventDefault(); return; } event.dataTransfer.clearData(REF_DRAG_TYPE); event.dataTransfer.setData(COMMIT_DRAG_TYPE, commit.id); event.dataTransfer.effectAllowed = 'copy'; }} onDragEnd={stopDrag}>{commit.subject}</span>
-                    {onActions && commit.id !== WORKING_ID && <button className="graph-action-button" aria-label={`Actions for ${commit.id.slice(0, 7)}`} onClick={event => { event.stopPropagation(); onActions({ oid: commit.id }); }}>…</button>}
+                    {onActions && commit.id !== WORKING_ID && <button className="icon-button sm graph-action-button" aria-label={`Actions for ${commit.id.slice(0, 7)}`} onClick={event => { event.stopPropagation(); onActions({ oid: commit.id }); }}>…</button>}
                     {hasMore !== undefined && commit.parents.some(parent => !loadedIds.has(parent)) && <span className="boundary-label">{hasMore ? 'unloaded parent' : shallow ? 'shallow boundary' : 'unavailable parent'}</span>}
                   </div>;
                 }
@@ -343,7 +389,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       </div>
       {isGraphVisible && <canvas ref={canvas} className="graph-canvas" aria-hidden="true" style={{ width: graphWidth, height, left: graphOffset - scrollLeft }} />}
     </div>
-    <div className="history-bottom"><span><span className="live-dot" />{loaded.toLocaleString()} loaded{shallow ? ' · Shallow repository boundary' : ''}</span>
+    <div className="history-bottom"><span><span className="live-dot" />{(loaded - (commits[0]?.id === WORKING_ID ? 1 : 0)).toLocaleString()} commits loaded{shallow ? ' · Shallow repository boundary' : ''}</span>
       {(hasMore ?? loaded < commits.length) ? <button className="text-button" disabled={paging} onClick={onLoadMore}>{paging ? 'Loading…' : 'Load older history ↓'}</button> : <span className="muted">{shallow ? 'Available history loaded' : 'All history loaded'}</span>}
     </div>
     <span id="history-keyboard-help" className="sr-only">Use Up and Down to select commits, Page Up and Page Down to move a page, Home and End to move to the loaded boundaries. Press Enter to open details.{onActions && ' Press Shift+F10 for commit actions. Tab to a branch badge and press Enter or Shift+F10 for branch actions.'}{onSwitchBranch && ' Double-click a local branch badge to switch branches.'}</span>

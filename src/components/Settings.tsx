@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ButtonHTMLAttributes } from 'react';
-import { Settings as SettingsIcon, X } from 'lucide-react';
+import { Settings as SettingsIcon } from 'lucide-react';
+import { Dialog } from './ui';
 import { DEFAULT_SETTINGS, MONO_FONTS, useSettings } from '../model/settings';
 import { COLOR_KEYS, MAX_CUSTOM_THEMES, MAX_THEME_FILE_BYTES, contrastRatio, exportTheme, importTheme, isColor, validateTheme, type ThemeDefinition } from '../model/themes';
 import { MAX_COMMIT_PROFILES, validateCommitProfile, type CommitProfile } from '../model/commitProfiles';
@@ -16,7 +17,6 @@ type Section = typeof sections[number];
 export function SettingsDialog() {
   const api = useSettings();
   const { settings, theme, themes, updateSettings } = api;
-  const dialog = useRef<HTMLDialogElement>(null);
   const [section, setSection] = useState<Section>('Appearance');
   const [draft, setDraft] = useState<ThemeDefinition | null>(null);
   const [profileDraft, setProfileDraft] = useState<CommitProfile | null>(null);
@@ -30,13 +30,6 @@ export function SettingsDialog() {
   const importGeneration = useRef(0);
   const [importing, setImporting] = useState(false);
   const dirty = draft !== null && (JSON.stringify(draft) !== JSON.stringify(baseline) || !settings.customThemes.some(t => t.id === draft.id) || Object.keys(colorErrors).length > 0);
-  useEffect(() => {
-    const element = dialog.current;
-    if (!element || !api.isSettingsOpen) return;
-    const previous = document.activeElement as HTMLElement | null;
-    if (!element.open) element.showModal();
-    return () => { element.close(); previous?.focus({ preventScroll: true }); };
-  }, [api.isSettingsOpen]);
   useEffect(() => { if (api.isSettingsOpen && api.settingsSection) setSection(api.settingsSection); }, [api.isSettingsOpen, api.settingsSection]);
   function finish() {
     importGeneration.current += 1; setImporting(false);
@@ -97,8 +90,8 @@ export function SettingsDialog() {
     setProfileDraft(null); setMessage('Commit profile deleted.');
   }
   const choice = (label: string, value: string, onChange: (id: string) => void, mode?: 'light' | 'dark') => <label className="settings-field">{label}<select value={value} disabled={!!draft} onChange={e => onChange(e.target.value)}>{themes.filter(t => !mode || t.mode === mode).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>;
-  return <dialog ref={dialog} className="dialog settings-dialog" aria-labelledby="settings-title" onCancel={e => { e.preventDefault(); requestClose(); }} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Escape' && !e.nativeEvent.isComposing) { e.preventDefault(); requestClose(); } }}>
-    <header className="settings-heading"><div><h2 id="settings-title">Settings</h2><p>Personalize Gitty across all repositories and workspaces.</p></div><button className="icon-button" aria-label="Close settings" onClick={requestClose}><X size={20} /></button></header>
+  if (!api.isSettingsOpen) return null;
+  return <Dialog title="Settings" size="lg" className="settings-dialog" onClose={requestClose}>
     {confirmClose && <div className="settings-notice" role="alert"><p>Discard your unsaved theme edits?</p><button className="secondary-button" onClick={() => setConfirmClose(false)} autoFocus>Keep editing</button> <button className="secondary-button" onClick={finish}>Discard and close</button></div>}
     {api.storageError && <div className="settings-notice" role="alert">{api.storageError} <button className="text-button" onClick={api.retryPersistence}>Retry saving</button></div>}
     <div className="settings-layout"><nav aria-label="Settings sections">{sections.map(s => <button key={s} aria-current={section === s ? 'page' : undefined} onClick={() => setSection(s)}>{s}</button>)}</nav>
@@ -131,7 +124,7 @@ export function SettingsDialog() {
       <section hidden={section !== 'About / shortcuts'} aria-labelledby="about-heading"><h3 id="about-heading">About Gitty</h3><p>Gitty 0.1.0 — a graph-first desktop Git client.</p><p>Preferences are shared by the native and demo workspaces on this device. Fonts and themes are bundled locally. Theme import and export use local JSON files.</p><h3>Settings shortcuts</h3><dl className="settings-shortcuts"><dt><kbd>⌘ / Ctrl</kbd> + <kbd>,</kbd></dt><dd>Open settings from anywhere</dd><dt><kbd>Esc</kbd></dt><dd>Close settings (unsaved theme edits prompt first)</dd><dt><kbd>Tab</kbd> / <kbd>Shift Tab</kbd></dt><dd>Move between controls inside the dialog</dd></dl><p>Standard controls support arrow keys, Space, and Enter. Changes to preferences save immediately; custom theme edits save only when you choose Save theme.</p></section>
       <p role="status" className="settings-status">{message}</p>{error && <p role="alert" className="settings-error">{error}</p>}
     </div></div>
-  </dialog>;
+  </Dialog>;
 }
 
 function ThemePreview({ theme }: { theme: ThemeDefinition }) {

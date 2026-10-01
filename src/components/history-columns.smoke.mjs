@@ -15,7 +15,7 @@ try {
   const menu = page.getByRole('dialog', { name: 'History columns settings' });
   await menu.getByRole('checkbox', { name: 'Date' }).check();
   assert.equal(await page.locator('.history-columns .date-column').count(), 1);
-  assert.equal(await page.locator('.commit-row .row-date').first().isVisible(), true);
+  assert.equal(await page.locator('.commit-row .row-date').nth(1).isVisible(), true); // row 0 is the undated working-changes row
   await menu.getByRole('checkbox', { name: 'Branch / tag' }).uncheck();
   assert.equal(await page.locator('.history-columns').getByText('Branch / tag').count(), 0);
   assert.equal(await page.locator('.commit-row .commit-refs').count(), 0);

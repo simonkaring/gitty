@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
+import { Dialog } from './ui';
 
 interface AskPassPrompt {
   requestId: number;
@@ -25,14 +26,6 @@ export function AskPassDialog() {
       void unlistenExpired.then(fn => fn());
     };
   }, []);
-
-  const dialogRef = useRef<HTMLDialogElement>(null);
-
-  useEffect(() => {
-    if (prompts.length > 0 && !dialogRef.current?.open) {
-      dialogRef.current?.showModal();
-    }
-  }, [prompts.length]);
 
   const current = prompts[0];
   useEffect(() => {
@@ -59,54 +52,22 @@ export function AskPassDialog() {
       setSubmitting(false);
     }
   }
-  const onSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
+  const onSubmit = () => {
     void answer(passwordRef.current?.value ?? '');
   };
   const onCancel = () => { void answer(null); };
   const username = /username/i.test(current.prompt);
 
-  return (
-    <dialog
-      ref={dialogRef}
-      className="dialog"
-      aria-label="Authentication Required"
-      onCancel={(e) => { e.preventDefault(); onCancel(); }}
-    >
-      <div className="dialog-heading">
-        <span className="dialog-icon">🔒</span>
-        <button type="button" className="icon-button" aria-label="Cancel" disabled={submitting} onClick={onCancel}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-        </button>
-      </div>
-      <form onSubmit={onSubmit}>
-        <h2>Authentication Required</h2>
-        <p className="dialog-prompt">{current.prompt}</p>
-        <div className="dialog-field">
-          <label htmlFor="askpass-answer">
-            {username ? 'Username' : /github\.com/i.test(current.prompt) ? 'Personal access token' : 'Token or SSH passphrase'}
-          </label>
-          <input
-            key={current.requestId}
-            id="askpass-answer"
-            ref={passwordRef}
-            type={username ? 'text' : 'password'}
-            required
-            autoComplete={username ? 'username' : 'current-password'}
-            autoFocus
-          />
-        </div>
-        {!username && /github\.com/i.test(current.prompt) && <p>GitHub does not accept your account password for Git. Use a personal access token, or connect an account in Settings → Integrations.</p>}
-        {error && <p role="alert">{error}</p>}
-        <div className="dialog-actions">
-          <button type="button" className="secondary-button" disabled={submitting} onClick={onCancel}>
-            Cancel
-          </button>
-          <button type="submit" className="primary-button" disabled={submitting}>
-            Submit
-          </button>
-        </div>
-      </form>
-    </dialog>
-  );
+  const secretLabel = username ? 'Username' : /github\.com/i.test(current.prompt) ? 'Personal access token' : 'Token or SSH passphrase';
+  return <Dialog title="Authentication required" size="sm" onClose={onCancel} onSubmit={onSubmit} footer={<>
+    <button type="button" className="secondary-button" disabled={submitting} onClick={onCancel}>Cancel</button>
+    <button type="submit" className="primary-button" disabled={submitting}>Submit</button>
+  </>}>
+    <p className="muted">{current.prompt}</p>
+    <label className="field">{secretLabel}
+      <input key={current.requestId} ref={passwordRef} type={username ? 'text' : 'password'} required autoComplete={username ? 'username' : 'current-password'} autoFocus />
+    </label>
+    {!username && /github\.com/i.test(current.prompt) && <p className="muted">GitHub does not accept your account password for Git. Use a personal access token, or connect an account in Settings → Integrations.</p>}
+    {error && <p className="alert" role="alert">{error}</p>}
+  </Dialog>;
 }

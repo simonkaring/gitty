@@ -91,10 +91,11 @@ export function findDuplicateTab<T extends KeyedTab>(tabs: T[], tabId: string, k
 /** A single repository tab. `branch`/`dirty` are display-only, reported by
  * the pane after each refresh; `key` is the canonical session identity (null
  * until the first `repository_open` resolves); `busy` guards closing a tab
- * mid-write. */
+ * mid-write. A null `location` is a start tab (the new-tab page), which is
+ * never persisted and is replaced in place by the repository opened from it. */
 export interface TabRecord {
   id: string;
-  location: RepositoryLocation;
+  location: RepositoryLocation | null;
   title: string;
   key: string | null;
   busy: boolean;
@@ -104,7 +105,8 @@ export interface TabRecord {
 export interface TabsState { tabs: TabRecord[]; activeId: string | null; notice: string | null }
 export type TabsAction =
   | { type: 'restore'; tabs: TabRecord[]; activeId: string | null }
-  | { type: 'open'; location: RepositoryLocation }
+  | { type: 'open'; location: RepositoryLocation; fromTabId?: string }
+  | { type: 'start' }
   | { type: 'identity'; tabId: string; key: string | null; title: string | null }
   | { type: 'busy'; tabId: string; busy: boolean }
   | { type: 'meta'; tabId: string; branch: string | null; dirty: boolean }
@@ -112,8 +114,9 @@ export type TabsAction =
   | { type: 'select'; tabId: string }
   | { type: 'noticeShown' };
 
-function newTab(location: RepositoryLocation): TabRecord {
-  return { id: createTabId(), location, title: locationLabel(location), key: null, busy: false, branch: null, dirty: false };
+export const START_TITLE = 'New tab';
+function newTab(location: RepositoryLocation | null): TabRecord {
+  return { id: createTabId(), location, title: location ? locationLabel(location) : START_TITLE, key: null, busy: false, branch: null, dirty: false };
 }
 
 /** Pure state transition for the tab strip. Deliberately has no side effects
@@ -130,9 +133,18 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
     case 'restore':
       return { tabs: action.tabs, activeId: action.activeId, notice: null };
     case 'open': {
-      const existing = state.tabs.find(tab => sameLocation(tab.location, action.location));
-      if (existing) return existing.id === state.activeId ? state : { ...state, activeId: existing.id };
+      // Opening from a start tab replaces that tab, like a browser's new-tab page.
+      const start = state.tabs.find(tab => tab.id === action.fromTabId && !tab.location);
+      const existing = state.tabs.find(tab => tab.location && sameLocation(tab.location, action.location));
+      if (existing && !start) return existing.id === state.activeId ? state : { ...state, activeId: existing.id };
+      if (existing) return { ...state, tabs: state.tabs.filter(tab => tab !== start), activeId: existing.id };
       const tab = newTab(action.location);
+      return { ...state, tabs: start ? state.tabs.map(value => value === start ? tab : value) : [...state.tabs, tab], activeId: tab.id };
+    }
+    case 'start': {
+      const existing = state.tabs.find(tab => !tab.location);
+      if (existing) return existing.id === state.activeId ? state : { ...state, activeId: existing.id };
+      const tab = newTab(null);
       return { ...state, tabs: [...state.tabs, tab], activeId: tab.id };
     }
     case 'identity': {

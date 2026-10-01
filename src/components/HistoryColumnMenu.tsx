@@ -1,4 +1,5 @@
-import { useEffect, useRef, type RefObject } from 'react';
+import { useRef, type RefObject } from 'react';
+import { useDismiss } from './ui';
 import { ArrowDown, ArrowUp, RotateCcw, X } from 'lucide-react';
 import type { HistoryColumnConfig, HistoryColumnId } from '../model/settings';
 import { DEFAULT_HISTORY_COLUMNS } from '../model/settings';
@@ -22,26 +23,7 @@ interface HistoryColumnMenuProps {
 export function HistoryColumnMenu({ columns, triggerRef, onChange, onClose }: HistoryColumnMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    function handlePointerDown(e: PointerEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node) && !triggerRef.current?.contains(e.target as Node)) {
-        onClose();
-      }
-    }
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-      }
-    }
-    document.addEventListener('pointerdown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown, true);
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown, true);
-    };
-  }, [onClose, triggerRef]);
+  useDismiss(true, onClose, [menuRef, triggerRef], triggerRef);
 
   const toggleVisible = (id: HistoryColumnId) => {
     const visibleCount = columns.filter(c => c.visible).length;
@@ -73,7 +55,7 @@ export function HistoryColumnMenu({ columns, triggerRef, onChange, onClose }: Hi
   return (
     <div
       ref={menuRef}
-      className="history-column-menu"
+      className="menu history-column-menu"
       role="dialog"
       aria-label="History columns settings"
       onClick={e => e.stopPropagation()}
@@ -82,7 +64,7 @@ export function HistoryColumnMenu({ columns, triggerRef, onChange, onClose }: Hi
         <span>Columns</span>
         <button
           type="button"
-          className="icon-button"
+          className="icon-button sm"
           aria-label="Close column settings"
           onClick={onClose}
         >
@@ -109,7 +91,7 @@ export function HistoryColumnMenu({ columns, triggerRef, onChange, onClose }: Hi
               <div className="history-column-menu-actions">
                 <button
                   type="button"
-                  className="icon-button history-column-order-btn"
+                  className="icon-button sm"
                   aria-label={`Move ${COLUMN_LABELS[col.id]} up`}
                   disabled={index === 0}
                   onClick={() => move(index, -1)}
@@ -118,7 +100,7 @@ export function HistoryColumnMenu({ columns, triggerRef, onChange, onClose }: Hi
                 </button>
                 <button
                   type="button"
-                  className="icon-button history-column-order-btn"
+                  className="icon-button sm"
                   aria-label={`Move ${COLUMN_LABELS[col.id]} down`}
                   disabled={index === columns.length - 1}
                   onClick={() => move(index, 1)}

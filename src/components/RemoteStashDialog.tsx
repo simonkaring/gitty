@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { native, errorMessage } from '../model/native';
+import { Dialog } from './ui';
 import { describeStashAction, sortStashes, type StashActionRequest, type StashEntry } from '../model/remote';
 
 export function RemoteStashDialog({ handle, onWrite, onClose, notify }: {
   handle: string; onWrite: (command: string, args: Record<string, unknown>) => Promise<string>; onClose: () => void; notify: (message: string) => void;
 }) {
-  const dialog = useRef<HTMLDialogElement>(null);
   const [stashes, setStashes] = useState<StashEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -15,7 +15,7 @@ export function RemoteStashDialog({ handle, onWrite, onClose, notify }: {
   const [pending, setPending] = useState<string | null>(null);
   const [confirmingOid, setConfirmingOid] = useState<string | null>(null);
   const alive = useRef(true);
-  useEffect(() => { alive.current = true; dialog.current?.showModal(); return () => { alive.current = false; }; }, []);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   useEffect(() => {
     let live = true; setLoading(true); setError('');
     native<StashEntry[]>('repository_stashes', { handle }).then(values => { if (live) setStashes(sortStashes(values)); }).catch(e => { if (live) setError(errorMessage(e)); }).finally(() => { if (live) setLoading(false); });
@@ -39,28 +39,26 @@ export function RemoteStashDialog({ handle, onWrite, onClose, notify }: {
   // Closing while an action is pending does not cancel it: the write keeps
   // running against this repository and its result (or error) still surfaces
   // here as a notice, bound to this tab, whether or not the dialog is open.
-  return <dialog ref={dialog} className="dialog operation-dialog" aria-label="Stashes" onCancel={onClose}>
-    <h2>Stash</h2>
-    <p>Save working changes aside, or apply, pop, or drop a saved stash. Stash operations run locally only.</p>
-    {pending && <p role="status">You can close this dialog; the action keeps running and its result appears in this repository.</p>}
-    <label>Message (optional)<input value={message} disabled={!!pending} onChange={e => setMessage(e.target.value)} placeholder="Work in progress" /></label>
-    <label><input type="checkbox" checked={includeUntracked} disabled={!!pending} onChange={e => setIncludeUntracked(e.target.checked)} /> Include untracked files</label>
-    <button className="primary-button" disabled={!!pending} onClick={() => void save()}>{pending === 'save' ? 'Saving stash…' : 'Save stash'}</button>
-    {error && <p role="alert">{error}</p>}
-    {loading ? <p role="status">Reading stashes…</p> : <>
-      {!stashes.length && <p className="stash-empty">No stashes.</p>}
+  return <Dialog title="Stashes" onClose={onClose} footer={<button className="secondary-button" onClick={onClose}>Close</button>}>
+    <p className="muted">Set working changes aside, or apply, pop, or drop a saved stash. Stash operations run locally only.</p>
+    <form className="field-row" onSubmit={event => { event.preventDefault(); void save(); }}>
+      <input aria-label="Stash message (optional)" value={message} disabled={!!pending} onChange={e => setMessage(e.target.value)} placeholder="Message (optional)" />
+      <button className="primary-button" disabled={!!pending}>{pending === 'save' ? 'Saving…' : 'Save stash'}</button>
+    </form>
+    <label className="check"><input type="checkbox" checked={includeUntracked} disabled={!!pending} onChange={e => setIncludeUntracked(e.target.checked)} /> Include untracked files</label>
+    {pending && <p className="muted" role="status">You can close this dialog; the action keeps running and its result appears in this repository.</p>}
+    {error && <p className="alert" role="alert">{error}</p>}
+    <h3 className="section-label">Saved stashes {!loading && <span className="count">{stashes.length}</span>}</h3>
+    {loading ? <p className="muted" role="status">Reading stashes…</p> : !stashes.length ? <div className="empty-state compact"><p>No stashes.</p>{!error && <button className="text-button" onClick={() => setRetry(value => value + 1)}>Reload</button>}</div> :
       <ul className="stash-list">
         {stashes.map(stash => <li key={stash.oid} className="stash-entry">
-          <div className="stash-entry-message"><span className="stash-entry-selector">{stash.selector}</span><br />{stash.message}</div>
+          <div className="stash-entry-message"><span className="badge">{stash.selector}</span><span>{stash.message}</span></div>
           <div className="stash-entry-actions">
-            <button disabled={!!pending} onClick={() => void run({ kind: 'apply', oid: stash.oid }, `apply:${stash.oid}`)}>{pending === `apply:${stash.oid}` ? 'Applying…' : 'Apply'}</button>
-            <button disabled={!!pending} onClick={() => void run({ kind: 'pop', oid: stash.oid }, `pop:${stash.oid}`)}>{pending === `pop:${stash.oid}` ? 'Popping…' : 'Pop'}</button>
-            <button data-danger="true" disabled={!!pending} onClick={() => requestDrop(stash.oid)}>{pending === `drop:${stash.oid}` ? 'Dropping…' : confirmingOid === stash.oid ? 'Confirm drop' : 'Drop'}</button>
+            <button className="secondary-button" disabled={!!pending} onClick={() => void run({ kind: 'apply', oid: stash.oid }, `apply:${stash.oid}`)}>{pending === `apply:${stash.oid}` ? 'Applying…' : 'Apply'}</button>
+            <button className="secondary-button" disabled={!!pending} onClick={() => void run({ kind: 'pop', oid: stash.oid }, `pop:${stash.oid}`)}>{pending === `pop:${stash.oid}` ? 'Popping…' : 'Pop'}</button>
+            <button className="secondary-button" data-danger="true" disabled={!!pending} onClick={() => requestDrop(stash.oid)}>{pending === `drop:${stash.oid}` ? 'Dropping…' : confirmingOid === stash.oid ? 'Confirm drop' : 'Drop'}</button>
           </div>
         </li>)}
-      </ul>
-    </>}
-    {!loading && !stashes.length && !error && <button onClick={() => setRetry(value => value + 1)}>Reload stashes</button>}
-    <button onClick={onClose}>Close</button>
-  </dialog>;
+      </ul>}
+  </Dialog>;
 }

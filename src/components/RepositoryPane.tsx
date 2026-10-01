@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { FileCode2, FolderGit2, GitBranch, Globe2, LocateFixed, Search, Tag, X } from 'lucide-react';
+import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus, GitCommitHorizontal, Globe2, LocateFixed, RefreshCw, Search, Tag, Upload, X } from 'lucide-react';
+import { CommandPalette, type PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
 import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
-import { appendUnique, errorMessage, graphCommit, native, validateHistory, WORKING_ID } from '../model/native';
-import { HistoryGraph, graphDropAction, REF_DRAG_TYPE, COMMIT_DRAG_TYPE, type GraphAnchor, type GraphHandle } from './HistoryGraph';
+import { appendUnique, errorMessage, graphCommit, isDemoHandle, native, validateHistory, WORKING_ID } from '../model/native';
+import { HistoryGraph, type GraphAnchor, type GraphHandle } from './HistoryGraph';
 import { NativeInspector } from './NativeInspector';
+import { NativeSidebar } from './NativeSidebar';
 import { PaneResizer } from './WorkspaceControls';
 import { DiffPreview, WorkingChanges, type ActiveDiffState } from './WorkingChanges';
 import { writeAndRefresh, type MutationOutcome } from '../model/workflow';
@@ -20,10 +22,13 @@ import { RemoteStashDialog } from './RemoteStashDialog';
 import { toggleCommit } from '../model/operationUi';
 import { captureOperation, operationAndRefresh, readOperationSnapshot } from '../model/operationFlow';
 import { SwitchBlockedDialog } from './SwitchBlockedDialog';
+import { Segmented, Toast } from './ui';
 import { locationLabel, sessionKey } from '../model/tabs';
 import { useSettings } from '../model/settings';
 import { AUTO_FETCH_CHECK, autoFetchDue, isFetchingAction, type FetchStatus } from '../model/autoFetch';
-import { describeRemoteAction, needsPublish, type RemoteActionRequest, type SyncInfo } from '../model/remote';
+import { DEFAULT_PULL_MODE, describeRemoteAction, needsPublish, type RemoteActionRequest, type SyncInfo } from '../model/remote';
+
+const GROUP_TONE = { staged: 'green', unstaged: 'amber', untracked: 'accent', conflict: 'red' } as const;
 
 export interface RepositoryPaneProps {
   tabId: string;
@@ -49,9 +54,13 @@ export interface RepositoryPaneProps {
   /** Current branch name and whether the working tree has any entries, for
    * the tab strip's branch/dirty indicators. */
   onMeta: (tabId: string, branch: string | null, dirty: boolean) => void;
+  /** Command palette is owned by the workspace; the active pane adds repository commands. */
+  paletteOpen?: boolean;
+  onClosePalette?: () => void;
+  workspaceCommands?: PaletteCommand[];
 }
 
-export function RepositoryPane({ tabId, location, active, sidebarOpen, inspectorOpen, inspectorWidth, sidebarWidth, setInspectorWidth, setSidebarWidth, setInspectorOpen, onIdentity, onBusyChange, onMeta }: RepositoryPaneProps) {
+export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {}, workspaceCommands = [], tabId, location, active, sidebarOpen, inspectorOpen, inspectorWidth, sidebarWidth, setInspectorWidth, setSidebarWidth, setInspectorOpen, onIdentity, onBusyChange, onMeta }: RepositoryPaneProps) {
   const { theme, settings } = useSettings();
   const [state, setState] = useState<RepositoryState | null>(null);
   const [status, setStatus] = useState<RepositoryStatus | null>(null);
@@ -62,6 +71,8 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
   const [notice, setNotice] = useState('');
+  // Notices are transient toasts; errors stay until dismissed.
+  useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 6000); return () => clearTimeout(timer); }, [notice]);
   const [revision, setRevision] = useState(0);
   const [activeDiff, setActiveDiff] = useState<ActiveDiffState | null>(null);
   const [split, setSplit] = useState(settings.diffView === 'split');
@@ -396,7 +407,7 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
       if (!activeRef.current) return;
       if (document.querySelector('dialog[open]')) return;
       const editable = event.target instanceof HTMLElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName);
-      if ((event.key === '/' && !editable) || ((event.metaKey || event.ctrlKey) && event.key === 'k')) { event.preventDefault(); search.current?.focus(); }
+      if (event.key === '/' && !editable) { event.preventDefault(); search.current?.focus(); }
     };
     window.addEventListener('keydown', keyboard); return () => window.removeEventListener('keydown', keyboard);
   }, []);
@@ -405,7 +416,7 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
       <div className="search-field">
         <Search size={14} aria-hidden="true" />
         <input ref={search} aria-label="Search full history" placeholder="Search commits…" value={text} onChange={event => setText(event.target.value)} />
-        {text ? <button className="icon-button" aria-label="Clear search" onClick={() => setText('')}><X size={13} /></button> : <kbd>/</kbd>}
+        {text ? <button className="icon-button sm" aria-label="Clear search" onClick={() => setText('')}><X size={13} /></button> : <kbd>/</kbd>}
       </div>
       <select aria-label="Branch scope" title={branch ? state?.refs.find(ref => ref.fullName === branch)?.name ?? branch : 'All branches'} value={branch} onChange={event => setBranch(event.target.value)}>
         <option value="">All branches</option>
@@ -424,7 +435,28 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
       {filtering && <button className="text-button" onClick={() => { setText(''); setBranch(''); setSince(''); setUntil(''); setPath(''); }}>Clear filters</button>}
     </div>
   </div>;
+  function paletteCommands(): PaletteCommand[] {
+    if (!state) return workspaceCommands;
+    const writeBlocked = mutationBusy || mutationBlocked;
+    const { head, headRef } = state.session;
+    const repo: PaletteCommand[] = [
+      { id: 'fetch', group: 'Repository', label: 'Fetch', icon: <RefreshCw size={15} />, disabled: writeBlocked, run: () => void runMenuRemote({ kind: 'fetch' }) },
+      { id: 'pull', group: 'Repository', label: 'Pull', icon: <Download size={15} />, disabled: writeBlocked || !headRef, run: () => void runMenuRemote({ kind: 'pull', pullMode: DEFAULT_PULL_MODE }) },
+      { id: 'push', group: 'Repository', label: 'Push', icon: <Upload size={15} />, disabled: writeBlocked || !headRef, run: () => { if (headRef) void pushFromMenu(headRef); } },
+      { id: 'new-branch', group: 'Repository', label: 'New branch…', icon: <GitBranchPlus size={15} />, disabled: writeBlocked, run: () => setActionContext({ oid: head ?? '', ref: headRef ?? undefined, initial: 'createBranch' }) },
+      { id: 'switch-branch', group: 'Repository', label: 'Switch branch…', icon: <GitBranch size={15} />, disabled: writeBlocked, run: () => setActionContext({ oid: head ?? '', initial: 'switchBranch' }) },
+      { id: 'stash', group: 'Repository', label: 'Stash…', icon: <Archive size={15} />, disabled: writeBlocked, run: () => setStashOpen(true) },
+      { id: 'working', group: 'Repository', label: 'Show working changes', icon: <FileDiff size={15} />, disabled: !status?.entries.length, run: () => reveal(WORKING_ID) },
+      { id: 'search', group: 'Repository', label: 'Search history', hint: '/', icon: <Search size={15} />, run: () => requestAnimationFrame(() => search.current?.focus()) },
+      { id: 'refresh', group: 'Repository', label: 'Refresh', icon: <RefreshCw size={15} />, disabled: busy, run: () => void refresh() },
+      ...(head ? [{ id: 'copy-head', group: 'Repository', label: 'Copy HEAD commit SHA', hint: head.slice(0, 7), icon: <Copy size={15} />, run: () => void copyMenuValue(head, 'Commit SHA') }] : []),
+    ];
+    const branches = state.refs.filter(ref => ref.kind === 'local' && ref.fullName !== headRef).map(ref => ({ id: `switch:${ref.fullName}`, group: 'Switch to branch', label: `Switch to ${ref.name}`, icon: <GitBranch size={15} />, disabled: writeBlocked, run: () => void switchBranch(ref.fullName) }));
+    const goTo = state.refs.filter(ref => ref.kind !== 'local').map(ref => ({ id: `goto:${ref.fullName}`, group: 'Go to', label: `Go to ${ref.name}`, hint: ref.kind === 'tag' ? 'tag' : 'remote', icon: ref.kind === 'tag' ? <Tag size={15} /> : <Globe2 size={15} />, run: () => reveal(ref.commitId) }));
+    return [...repo, ...branches, ...goTo, ...workspaceCommands];
+  }
   return <>
+    {active && paletteOpen && <CommandPalette commands={paletteCommands()} onClose={onClosePalette} />}
     {state && <RepositoryToolbar handle={state.session.handle} active={active} revision={revision} busy={mutationBusy || mutationBlocked} pickCount={pickOrder.length} pickMode={pickMode}
       onCreateBranch={() => setActionContext({ oid: state.session.head ?? '', ref: state.session.headRef ?? undefined, initial: 'createBranch' })}
       onSwitchBranch={() => setActionContext({ oid: state.session.head ?? '', initial: 'switchBranch' })}
@@ -436,18 +468,23 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
       onWrite={remoteWrite}
       fetchStatus={fetchStatus}
       notify={setNotice} />}
-    {actionError && <div className="native-banner" role="alert">{actionError} <button onClick={() => setActionError('')}>Dismiss operation error</button></div>}
-    {error && <div className="native-banner" role="alert">{error} <button disabled={busy} onClick={() => state ? void refresh() : void open()}>Retry</button></div>}
-    {busy && !state && <div className="native-banner" role="status">Opening {locationLabel(location)}…{location.kind === 'wsl' && ' A stopped WSL distribution can take a few seconds to start.'}</div>}{notice && <div className="native-banner" role="status">{notice}</div>}
-    {mutationBlocked && <div className="operation-banner" role="alert">Refresh failed after a write. Further writes are blocked until a successful refresh.<button onClick={() => void refresh()}>Refresh now</button></div>}
-    {state && operation && (operation.kind !== 'none' || !!operation.conflicts.length) && <div className="operation-banner" role="status"><strong>{operation.label || operation.kind}</strong><span>{operation.current} {operation.incoming && `← ${operation.incoming}`}{operation.step !== null && ` · Step ${operation.step}${operation.total !== null ? ` / ${operation.total}` : ''}`}</span>{(['continue', 'skip', 'abort'] as const).map(kind => <button key={kind} disabled={mutationBusy || mutationBlocked || operation.kind === 'unsupported' || (kind === 'continue' && !operation.canContinue) || (kind === 'skip' && !operation.canSkip)} onClick={() => setActionContext({ oid: state.session.head ?? '', initial: kind })}>{kind === 'continue' ? 'Continue' : kind === 'skip' ? 'Skip' : 'Abort'}</button>)}{operation.conflicts.map(path => <button key={path} onClick={() => setConflictPath(path)}>Resolve {path}</button>)}</div>}
-    {state && selected && selected !== WORKING_ID && !commits.some(commit => commit.id === selected) && <div className="native-banner" role="status">Selected commit {selected.slice(0, 12)} is {cursor ? 'outside the loaded history' : 'no longer reachable from the current references'}. Its inspector remains open by object ID.{cursor && <button disabled={busy} onClick={() => reveal(selected)}>Reveal selected commit</button>}</div>}
-    {!state ? <main className="native-welcome"><span className="eyebrow">OPENING REPOSITORY</span><h1>{locationLabel(location)}</h1><p>{error ? 'This repository could not be opened. Use Retry above once the problem is resolved.' : 'Reading repository state…'}</p></main> : <main className="workspace">
-       {sidebarOpen && <><aside className="sidebar native-sidebar" aria-label="Repository references"><div className="workspace-label"><FolderGit2 size={22} /><span>{state.session.name}<small title={state.session.root}>{state.session.root}</small></span></div><div className="native-sidebar-meta"><span className="branch-heading"><GitBranch size={14} />{state.session.headRef?.replace('refs/heads/', '') ?? 'Detached / unborn HEAD'}</span>{state.session.location.kind === 'wsl' && <span>WSL · {state.session.location.distribution}</span>}{state.session.linkedWorktree && <span>Linked worktree</span>}{state.session.bare && <span>Bare repository</span>}{state.session.shallow && <span>Shallow clone</span>}</div><div className="sidebar-divider" />{filters}{(['local', 'remote', 'tag'] as const).map(kind => { const refs = state.refs.filter(ref => ref.kind === kind); const Icon = kind === 'tag' ? Tag : kind === 'remote' ? Globe2 : GitBranch; return <details className="reference-group" key={kind} open={kind === 'local'}><summary>{kind === 'local' ? 'Branches' : kind === 'remote' ? 'Remote branches' : 'Tags'}<span className="count">{refs.length}</span></summary>{refs.map(ref => <div className="ref-action-row" key={ref.fullName} onContextMenu={event => { event.preventDefault(); openMenu({ oid: ref.commitId, ref: ref.fullName }, event.clientX, event.clientY, event.currentTarget.querySelector('button')!); }}><button className="ref-item" title={ref.fullName} disabled={busy} draggable={ref.kind !== 'tag'}
-        onDragStart={event => { event.stopPropagation(); if (ref.kind === 'tag') { event.preventDefault(); return; } event.dataTransfer.clearData(COMMIT_DRAG_TYPE); event.dataTransfer.setData(REF_DRAG_TYPE, ref.fullName); event.dataTransfer.effectAllowed = 'copy'; }}
-        onDragOver={event => { if (ref.fullName === state.session.headRef && [REF_DRAG_TYPE, COMMIT_DRAG_TYPE].some(type => event.dataTransfer.types.includes(type))) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
-        onDrop={event => { event.preventDefault(); event.stopPropagation(); const action = graphDropAction(event.dataTransfer, ref.fullName, state.session.headRef, commits, state.refs); if (action) setActionContext(action); }}
-         onClick={() => reveal(ref.commitId)} onDoubleClick={() => { if (ref.kind === 'local') void switchBranch(ref.fullName); }} onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openMenu({ oid: ref.commitId, ref: ref.fullName }, rect.left, rect.bottom, event.currentTarget); } }}><Icon size={15} /><span>{ref.name}</span>{ref.fullName === state.session.headRef && <span className="current-branch-dot" />}</button><button aria-label={`Actions for ${ref.name}`} onClick={() => setActionContext({ oid: ref.commitId, ref: ref.fullName })}>…</button></div>)}{!refs.length && <p className="empty-category">No references</p>}</details>; })}{state.remotes.length > 0 && <details className="reference-group"><summary>Remotes<span className="count">{state.remotes.length}</span></summary>{state.remotes.map(remote => <p key={remote}>{remote}</p>)}</details>}<div className="sidebar-bottom"><span className="eyebrow">LOCAL FIRST</span><p>Repository data stays on your machine.</p></div></aside><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
+    {active && <>
+      {actionError && <Toast tone="error" onDismiss={() => setActionError('')}>{actionError}</Toast>}
+      {error && <Toast tone="error" action={<button className="secondary-button" disabled={busy} onClick={() => state ? void refresh() : void open()}>Retry</button>}>{error}</Toast>}
+      {busy && !state && <Toast tone="progress">Opening {locationLabel(location)}…{location.kind === 'wsl' && ' A stopped WSL distribution can take a few seconds to start.'}</Toast>}
+      {notice && <Toast onDismiss={() => setNotice('')}>{notice}</Toast>}
+      {state && selected && selected !== WORKING_ID && !commits.some(commit => commit.id === selected) && <Toast action={cursor && <button className="secondary-button" disabled={busy} onClick={() => reveal(selected)}>Reveal</button>}>Selected commit {selected.slice(0, 12)} is {cursor ? 'outside the loaded history' : 'no longer reachable from the current references'}. Its inspector remains open by object ID.</Toast>}
+    </>}
+    {mutationBlocked && <div className="operation-banner" role="alert">Refresh failed after a write. Further writes are blocked until a successful refresh.<button className="secondary-button compact" onClick={() => void refresh()}>Refresh now</button></div>}
+    {state && operation && (operation.kind !== 'none' || !!operation.conflicts.length) && <div className="operation-banner" role="status"><strong>{operation.label || operation.kind}</strong><span>{operation.current} {operation.incoming && `← ${operation.incoming}`}{operation.step !== null && ` · Step ${operation.step}${operation.total !== null ? ` / ${operation.total}` : ''}`}</span>{(['continue', 'skip', 'abort'] as const).map(kind => <button key={kind} className="secondary-button compact" disabled={mutationBusy || mutationBlocked || operation.kind === 'unsupported' || (kind === 'continue' && !operation.canContinue) || (kind === 'skip' && !operation.canSkip)} onClick={() => setActionContext({ oid: state.session.head ?? '', initial: kind })}>{kind === 'continue' ? 'Continue' : kind === 'skip' ? 'Skip' : 'Abort'}</button>)}{operation.conflicts.map(path => <button key={path} className="secondary-button compact" onClick={() => setConflictPath(path)}>Resolve {path}</button>)}</div>}
+    {!state ? <main className="repo-skeleton" aria-busy={!error}>
+      <div className="skeleton-sidebar" aria-hidden="true">{[70, 45, 90, 60, 80, 50].map((w, i) => <span key={i} className="skeleton" style={{ width: `${w}%` }} />)}</div>
+      <div className="skeleton-history">
+        <p role="status"><strong>{locationLabel(location)}</strong>{error ? 'This repository could not be opened. Use Retry once the problem is resolved.' : 'Reading repository state…'}</p>
+        {!error && Array.from({ length: 12 }, (_, i) => <div key={i} className="skeleton-row" aria-hidden="true" style={{ animationDelay: `${i * 60}ms` }}><span className="skeleton-node" style={{ marginLeft: `${[0, 18, 0, 36, 18, 0][i % 6]}px` }} /><span className="skeleton" style={{ width: `${40 + ((i * 37) % 45)}%` }} /><span className="skeleton" style={{ width: 70 }} /></div>)}
+      </div>
+    </main> : <main className="workspace">
+       {sidebarOpen && <><NativeSidebar state={state} commits={commits} filters={filters} busy={busy} reveal={reveal} switchBranch={ref => void switchBranch(ref)} openMenu={openMenu} onAction={setActionContext} /><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
       <div className="workspace-main">
         {!sidebarOpen && filters}
         <div className="history-workspace">
@@ -457,7 +494,7 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
                 <div className="diff-view-file">
                   <FileCode2 size={16} />
                   <span className="diff-view-filepath">{activeDiff.path}</span>
-                  {activeDiff.group && <span className={`diff-view-group-badge ${activeDiff.group}`}>{activeDiff.group}</span>}
+                  {activeDiff.group && <span className="badge" data-tone={GROUP_TONE[activeDiff.group]}>{activeDiff.group}</span>}
                 </div>
                 <div className="diff-view-actions">
                   {activeDiff.onToggleStage && (
@@ -465,9 +502,7 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
                       {activeDiff.isStaged ? 'Unstage File' : 'Stage File'}
                     </button>
                   )}
-                  <button className="secondary-button" aria-pressed={split} onClick={() => setSplit(!split)}>
-                    {split ? 'Unified' : 'Side by side'}
-                  </button>
+                  <Segmented label="Diff layout" value={split ? 'split' : 'unified'} options={[['unified', 'Unified'], ['split', 'Split']]} onChange={value => setSplit(value === 'split')} />
                   <button className="icon-button" aria-label="Close diff and show tree" title="Close diff" onClick={() => setActiveDiff(null)}>
                     <X size={17} />
                   </button>
@@ -490,15 +525,14 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
           ) : (
             <section className="history-pane" aria-label="Repository history">
               {filtering && <div className="native-search-results"><p role="status">{searchBusy ? 'Searching full history…' : `${result?.commits.length ?? 0} matches${result?.truncated ? ' · Results truncated; narrow the query' : ''}`} · Ancestry preserved</p>{searchError && <p role="alert">{searchError} <button onClick={() => setSearchRetry(value => value + 1)}>Retry search</button></p>}<div>{result?.commits.map(commit => <button key={commit.id} disabled={busy} onClick={() => reveal(commit.id)}>{commit.id.slice(0, 7)} {commit.subject}</button>)}</div></div>}
-              {!graphCommits.length && <p className="native-banner">This repository has no commits or working changes.</p>}
+              {!graphCommits.length && <div className="empty-state"><GitCommitHorizontal size={28} /><h2>No commits yet</h2><p>This repository has no commits or working changes. Add files, stage them, and make your first commit.</p></div>}
                <HistoryGraph ref={graph} commits={graphCommits} layout={layout} refs={state.refs} selectedId={selected} head={state.session.head ?? ''} headRef={state.session.headRef} onActions={context => setActionContext(context)} onContextActions={openMenu} onSwitchBranch={ref => void switchBranch(ref)} pickOrder={pickOrder} onTogglePick={pickMode ? id => setPickOrder(order => toggleCommit(order, id)) : undefined} loaded={graphCommits.length} matches={matches} onSelect={id => reveal(id)} onLoadMore={() => void load()} onOpenDetails={() => setInspectorOpen(true)} theme={theme} hasMore={!!cursor} paging={busy} shallow={state.session.shallow} />
-              <div className="native-repo-meta">{cursor ? 'Unloaded ancestry continues below. Load older history to reveal parents.' : state.session.shallow ? 'Shallow boundary: earlier ancestry is unavailable locally.' : 'End of available history.'}</div>
             </section>
           )}
           {inspectorOpen && <>
-            <PaneResizer label="Resize inspector" width={inspectorWidth} onChange={setInspectorWidth} min={280} max={640} />
+            <PaneResizer label="Resize inspector" width={inspectorWidth} onChange={setInspectorWidth} min={300} max={640} />
             {selected === WORKING_ID || (!selected && (status?.entries.length ?? 0) > 0) ? (
-              <aside className="working-inspector-sidebar" style={{ width: `${inspectorWidth}px` }}>
+              <aside className="working-inspector-sidebar">
                 <WorkingChanges
                   key={state.session.handle}
                   session={state.session}
@@ -509,7 +543,6 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
                   onMutation={mutate}
                   onRefresh={() => refresh(true)}
                   onResolve={setConflictPath}
-                  sidebarMode
                   activePath={activeDiff?.path ?? null}
                   onActiveDiffChange={setActiveDiff}
                   onClose={() => setInspectorOpen(false)}
@@ -520,7 +553,6 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
                 key={state.session.handle}
                 session={state.session}
                 selected={selected}
-                status={status}
                 revision={revision}
                 base={base}
                 target={target}
@@ -539,7 +571,7 @@ export function RepositoryPane({ tabId, location, active, sidebarOpen, inspector
         </div>
       </div>
     </main>}
-    <footer className="statusbar"><span><span className="live-dot" />{mutationBusy ? 'Updating repository…' : 'Local workspace · automatic refresh'}</span><span>{state ? `${commits.length} commits loaded` : 'No repository open'}</span></footer>
+    <footer className="statusbar"><span><span className="live-dot" />{mutationBusy ? 'Updating repository…' : isDemoHandle(state?.session.handle) ? 'Demo workspace · changes are simulated in memory' : 'Local workspace · automatic refresh'}</span><span className="status-keys"><kbd>/</kbd> search <kbd>{navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'} K</kbd> commands</span></footer>
     {state && menuTarget && <GraphContextMenu target={menuTarget} state={state} busy={mutationBusy || mutationBlocked} onClose={() => setMenuTarget(null)} onOperation={context => { setMenuTarget(null); setActionContext(context); }} onShowDetails={oid => { reveal(oid); setInspectorOpen(true); setMenuTarget(null); }} onSetBase={oid => setComparison(oid, 'base')} onSetTarget={oid => setComparison(oid, 'target')} onCompare={compareWithCurrent} onPullRequest={ref => { setMenuTarget(null); setPrSource(ref); }} onRemoteAction={action => void runMenuRemote(action)} onPush={() => void pushFromMenu(menuTarget.context.ref!)} onCopy={(value, label) => void copyMenuValue(value, label)} />}
     {state && publishInfo && <PublishDialog remotes={publishInfo.remotes} branch={publishInfo.branch ?? ''} onPublish={async (remote, branch) => { const action: RemoteActionRequest = { kind: 'push', remote, branch, setUpstream: true }; const output = await remoteWrite('repository_remote_action', { action }); setNotice(output || 'Publish complete.'); }} onClose={() => setPublishInfo(null)} />}
     {state && actionContext && <OperationDialog key={state.session.handle} state={state} operation={operation} context={actionContext} commits={commits} busy={mutationBusy || mutationBlocked} onWrite={operationWrite} onClose={() => setActionContext(null)} onCompare={compareWithCurrent} onPullRequest={source => { setPrSource(source); setActionContext(null); }} />}

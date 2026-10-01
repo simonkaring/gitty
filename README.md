@@ -6,7 +6,7 @@ A graph-first desktop Git client built with **Tauri 2, React 19, TypeScript, and
 
 ## The redesigned workspace
 
-Warm paper and charcoal themes, teal accents, and locally bundled **Fraunces**, **Inter**, and **Geist Mono** give Gitty a consistent visual language. Interface text defaults to 15px, history/file rows use 14px text, and diffs and meaningful metadata use 13px text. The graph uses aligned 48px rows.
+Neutral light and dark themes with a single burnt-orange accent, locally bundled **Geist** and **Geist Mono**, and restrained motion (disabled under `prefers-reduced-motion`) give Gitty a consistent visual language. Interface text defaults to 15px, history/file rows use 14px text, and diffs and meaningful metadata use 13px text. The graph uses aligned 48px rows.
 
 The graph is the main workspace. Select a commit to inspect its files in the right panel, or select the **Working changes** graph entry to review files, stage changes, and compose a commit there. Selecting a file opens its diff in the center pane; close the diff to return to the graph. The repository action toolbar remains above the workspace. Sidebar and inspector widths persist; narrow windows use collapsible/overlay panes rather than reducing text size. Native history search, branch scope, and date/path filters sit above the graph; the demo's search and reference controls sit in its sidebar.
 
@@ -126,7 +126,8 @@ Open the gear button or **Cmd/Ctrl+,** from either workspace, including the nati
 
 | Key                                 | Action                                |
 | ----------------------------------- | ------------------------------------- |
-| `/` or `Cmd/Ctrl K`                 | Focus search                          |
+| `/`                                 | Focus search (demo: also `Cmd/Ctrl K`) |
+| `Cmd/Ctrl K` (desktop)              | Command palette                       |
 | `Enter` / `Shift Enter` in search   | Next / previous match                 |
 | `↑` / `↓` in history                | Previous / next commit                |
 | `Page Up` / `Page Down` in history  | Move one visible page                 |
