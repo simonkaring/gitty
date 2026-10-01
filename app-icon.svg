@@ -1,4 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- macOS icon grid: the body is 824px of the 1024 canvas, so scale the 960px artwork by .86 -->
+  <g transform="translate(512 512) scale(.86) translate(-512 -512)">
   <rect x="32" y="32" width="960" height="960" rx="226" fill="#29292d"/>
   <rect x="62" y="62" width="900" height="900" rx="205" fill="#141416"/>
   <g fill="none" stroke="#f07a3d" stroke-width="48" stroke-linecap="round" stroke-linejoin="round">
@@ -6,5 +8,6 @@
     <circle cx="363" cy="302" r="65" fill="#141416"/>
     <circle cx="665" cy="302" r="65" fill="#141416"/>
     <circle cx="363" cy="722" r="65" fill="#141416"/>
+  </g>
   </g>
 </svg>
