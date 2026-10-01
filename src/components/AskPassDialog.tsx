@@ -67,7 +67,7 @@ export function AskPassDialog() {
     <label className="field">{secretLabel}
       <input key={current.requestId} ref={passwordRef} type={username ? 'text' : 'password'} required autoComplete={username ? 'username' : 'current-password'} autoFocus />
     </label>
-    {!username && /github\.com/i.test(current.prompt) && <p className="muted">GitHub does not accept your account password for Git. Use a personal access token, or connect an account in Settings → Integrations.</p>}
+    {!username && /github\.com/i.test(current.prompt) && <p className="muted">GitHub does not accept your account password for Git. Use a personal access token, or configure Git Credential Manager for browser sign-in.</p>}
     {error && <p className="alert" role="alert">{error}</p>}
   </Dialog>;
 }

@@ -126,16 +126,15 @@ impl Service {
         request: CloneRequest,
         emit: impl Fn(CloneProgress) + Send + Sync + 'static,
     ) -> Result<RepositoryLocation> {
-        self.clone_repository_with_accounts(operation_id, request, emit, None, None)
+        self.clone_repository_with_askpass(operation_id, request, emit, None)
     }
 
-    pub fn clone_repository_with_accounts(
+    pub fn clone_repository_with_askpass(
         &self,
         operation_id: &str,
         request: CloneRequest,
         emit: impl Fn(CloneProgress) + Send + Sync + 'static,
         askpass: Option<&crate::askpass::AskpassRegistry>,
-        accounts: Option<&crate::provider_accounts::AccountStore>,
     ) -> Result<RepositoryLocation> {
         if uuid::Uuid::parse_str(operation_id).is_err() {
             return Err(Error::new("invalidRequest", "Invalid clone operation ID"));
@@ -157,14 +156,7 @@ impl Service {
             }
             operations.insert(operation_id.to_string(), control.clone());
         }
-        let result = clone_repository(
-            request,
-            operation_id,
-            control,
-            Arc::new(emit),
-            askpass,
-            accounts,
-        );
+        let result = clone_repository(request, operation_id, control, Arc::new(emit), askpass);
         lock(&self.clone_operations)?.remove(operation_id);
         result
     }
@@ -237,7 +229,6 @@ fn clone_repository(
     control: Arc<CloneControl>,
     emit: Arc<dyn Fn(CloneProgress) + Send + Sync>,
     askpass: Option<&crate::askpass::AskpassRegistry>,
-    accounts: Option<&crate::provider_accounts::AccountStore>,
 ) -> Result<RepositoryLocation> {
     validate_request(&request)?;
     let temporary_name = format!(".gitty-clone-{operation_id}");
@@ -279,29 +270,15 @@ fn clone_repository(
     };
     ensure_absent(&request.parent, &destination)?;
 
-    let credential = if matches!(request.parent, RepositoryLocation::Native { .. }) {
-        accounts
-            .map(|store| store.for_remote(&request.source))
-            .transpose()?
-            .flatten()
-    } else {
-        None
-    };
-    let scoped = if let (Some(registry), Some((account, token))) = (askpass, credential) {
-        Some(registry.start_credential_operation(account.provider.host(), account.username, token))
-    } else {
-        None
-    };
-    let (mut args, mut env) = network_args(
-        scoped.is_some(),
-        if scoped.is_some() { askpass } else { None },
+    let (mut args, env) = network_args(
+        true,
+        if matches!(request.parent, RepositoryLocation::Native { .. }) {
+            askpass
+        } else {
+            None
+        },
     );
-    if let Some(guard) = &scoped {
-        args.extend(crate::process::args(&["-c", "credential.helper="]));
-        if let Some((_, value)) = env.iter_mut().find(|(key, _)| key == "GITTY_ASKPASS_TOKEN") {
-            *value = guard.token().into();
-        }
-    }
+    crate::credentials::configure(&mut args, &request.parent, &request.source)?;
     args.extend(crate::process::args(&[
         "clone",
         "--progress",

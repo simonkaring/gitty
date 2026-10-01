@@ -10,35 +10,9 @@ use tauri::{AppHandle, Emitter, State};
 pub struct AskpassRegistry {
     requests: Mutex<HashMap<usize, PendingPrompt>>,
     active_tokens: Mutex<std::collections::HashSet<String>>,
-    credentials: Mutex<HashMap<String, ScopedCredential>>,
     pub port: u16,
     pub token: String,
     pub script_path: std::path::PathBuf,
-}
-
-struct ScopedCredential {
-    host: String,
-    username: String,
-    password: String,
-}
-
-fn credential_prompt<'a>(prompt: &str, credential: &'a ScopedCredential) -> Option<&'a str> {
-    let (kind, target) = prompt.split_once(" for '")?;
-    let target = target.strip_suffix("':")?;
-    let url = url::Url::parse(target).ok()?;
-    if url.scheme() != "https"
-        || url.host_str() != Some(&credential.host)
-        || url.port().is_some()
-        || url.password().is_some()
-        || (!url.username().is_empty() && url.username() != credential.username)
-    {
-        return None;
-    }
-    match kind {
-        "Username" => Some(&credential.username),
-        "Password" => Some(&credential.password),
-        _ => None,
-    }
 }
 
 struct PendingPrompt {
@@ -67,11 +41,6 @@ impl AskpassGuard<'_> {
 impl Drop for AskpassGuard<'_> {
     fn drop(&mut self) {
         self.registry
-            .credentials
-            .lock()
-            .unwrap()
-            .remove(&self.token);
-        self.registry
             .active_tokens
             .lock()
             .unwrap()
@@ -92,7 +61,6 @@ impl AskpassRegistry {
         Self {
             requests: Mutex::new(HashMap::new()),
             active_tokens: Mutex::new(std::collections::HashSet::new()),
-            credentials: Mutex::new(HashMap::new()),
             port,
             token,
             script_path,
@@ -109,30 +77,11 @@ impl AskpassRegistry {
         }
     }
 
-    pub fn start_credential_operation(
-        &self,
-        host: &str,
-        username: String,
-        password: String,
-    ) -> AskpassGuard<'_> {
-        let guard = self.start_operation();
-        self.credentials.lock().unwrap().insert(
-            guard.token.clone(),
-            ScopedCredential {
-                host: host.into(),
-                username,
-                password,
-            },
-        );
-        guard
-    }
-
     pub fn cancel_all(&self) {
         for (_, pending) in self.requests.lock().unwrap().drain() {
             let _ = pending.reply.send(None);
         }
         self.active_tokens.lock().unwrap().clear();
-        self.credentials.lock().unwrap().clear();
     }
 }
 
@@ -207,16 +156,6 @@ pub fn init(app: AppHandle) -> std::io::Result<()> {
                     let mut prompt = String::new();
                     if reader.read_line(&mut prompt).is_ok() {
                         let prompt = prompt.trim_end().to_string();
-
-                        // Only a prompt for the exact HTTPS host selected for
-                        // this operation may receive a stored credential. Git
-                        // redirects or other subprocesses must not receive it.
-                        if let Some(credential) = registry.credentials.lock().unwrap().get(supplied)
-                        {
-                            let answer = credential_prompt(&prompt, credential).map(String::from);
-                            let _ = stream.write_all(&encode_response(answer));
-                            return;
-                        }
 
                         let (tx, rx) = std::sync::mpsc::channel();
                         {
@@ -349,66 +288,6 @@ mod tests {
             .unwrap(),
             serde_json::json!({ "requestId": 7, "prompt": "Username for example" })
         );
-    }
-
-    #[test]
-    fn scoped_credentials_match_only_the_selected_https_host_and_user() {
-        let credential = super::ScopedCredential {
-            host: "github.com".into(),
-            username: "alice".into(),
-            password: "token".into(),
-        };
-        assert_eq!(
-            super::credential_prompt("Username for 'https://github.com':", &credential),
-            Some("alice")
-        );
-        assert_eq!(
-            super::credential_prompt("Password for 'https://alice@github.com':", &credential),
-            Some("token")
-        );
-        for prompt in [
-            "Password for 'https://github.com.evil.test':",
-            "Password for 'http://github.com':",
-            "Password for 'https://bob@github.com':",
-            "Password for 'https://github.com:1234':",
-        ] {
-            assert_eq!(super::credential_prompt(prompt, &credential), None);
-        }
-    }
-
-    #[test]
-    fn scoped_credentials_disappear_with_the_git_operation() {
-        let registry = AskpassRegistry::new(4521, "app-token".into(), "unused".into());
-        let operation_token = {
-            let guard = registry.start_credential_operation(
-                "github.com",
-                "alice".into(),
-                "private-token".into(),
-            );
-            assert_eq!(
-                super::credential_prompt(
-                    "Password for 'https://alice@github.com':",
-                    registry
-                        .credentials
-                        .lock()
-                        .unwrap()
-                        .get(guard.token())
-                        .unwrap(),
-                ),
-                Some("private-token"),
-            );
-            guard.token().to_owned()
-        };
-        assert!(!registry
-            .active_tokens
-            .lock()
-            .unwrap()
-            .contains(&operation_token));
-        assert!(!registry
-            .credentials
-            .lock()
-            .unwrap()
-            .contains_key(&operation_token));
     }
 
     #[test]

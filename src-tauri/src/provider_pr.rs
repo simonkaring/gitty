@@ -122,6 +122,7 @@ pub(crate) fn verify_token(provider: Provider, username: &str, token: &str) -> R
         id: String::new(),
         provider,
         username: username.into(),
+        oauth: false,
     };
     let client = client()?;
     let result = response_json(
@@ -169,6 +170,7 @@ fn authorized(
 ) -> reqwest::blocking::RequestBuilder {
     let request = client.request(method, api);
     match account.provider {
+        Provider::AzureDevops if account.oauth => request.bearer_auth(token),
         Provider::AzureDevops => request.basic_auth("", Some(token)),
         Provider::Bitbucket => request.basic_auth(&account.username, Some(token)),
         Provider::Github | Provider::Gitlab => request.bearer_auth(token),

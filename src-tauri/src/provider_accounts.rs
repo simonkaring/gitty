@@ -34,6 +34,8 @@ pub struct ProviderAccount {
     pub id: String,
     pub provider: Provider,
     pub username: String,
+    #[serde(default)]
+    pub oauth: bool,
 }
 
 pub struct AccountStore {
@@ -118,6 +120,33 @@ impl AccountStore {
             ));
         }
         crate::provider_pr::verify_token(provider, &username, &token)?;
+        self.connect(provider, username, token, false)
+    }
+
+    pub fn connect_oauth(
+        &self,
+        provider: Provider,
+        username: String,
+        tokens: &crate::provider_oauth::Tokens,
+    ) -> Result<ProviderAccount> {
+        if username.is_empty() || username.len() > 254 || username.chars().any(char::is_control) {
+            return Err(Error::new(
+                "invalidAccount",
+                "The provider returned an invalid account name",
+            ));
+        }
+        let secret = serde_json::to_string(tokens)
+            .map_err(|_| Error::new("oauth", "Could not encode sign-in credentials"))?;
+        self.connect(provider, username, secret, true)
+    }
+
+    fn connect(
+        &self,
+        provider: Provider,
+        username: String,
+        token: String,
+        oauth: bool,
+    ) -> Result<ProviderAccount> {
         let _guard = self
             .lock
             .lock()
@@ -136,6 +165,7 @@ impl AccountStore {
             id: uuid::Uuid::new_v4().to_string(),
             provider,
             username,
+            oauth,
         };
         Self::key(&account.id)?.set_password(&token).map_err(|_| {
             Error::new(
@@ -174,8 +204,12 @@ impl AccountStore {
     }
 
     pub fn credential(&self, id: &str) -> Result<(ProviderAccount, String)> {
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| Error::new("worker", "Account lock poisoned"))?;
         let account = self
-            .list()?
+            .read()?
             .into_iter()
             .find(|account| account.id == id)
             .ok_or_else(|| Error::new("invalidAccount", "Account not found"))?;
@@ -185,31 +219,19 @@ impl AccountStore {
                 "Stored credential is missing; reconnect this account",
             )
         })?;
-        Ok((account, token))
-    }
-
-    /// Ambiguous accounts are never chosen automatically. A future per-remote
-    /// selection can disambiguate them without leaking a token to the wrong user.
-    pub fn for_remote(&self, remote_url: &str) -> Result<Option<(ProviderAccount, String)>> {
-        let Ok(url) = url::Url::parse(remote_url) else {
-            return Ok(None);
-        };
-        if url.scheme() != "https"
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.port().is_some()
-        {
-            return Ok(None);
-        }
-        let candidates: Vec<_> = self
-            .list()?
-            .into_iter()
-            .filter(|account| url.host_str() == Some(account.provider.host()))
-            .collect();
-        if candidates.len() == 1 {
-            self.credential(&candidates[0].id).map(Some)
+        if account.oauth {
+            let (access, updated) = crate::provider_oauth::access_token(account.provider, &token)?;
+            if let Some(updated) = updated {
+                Self::key(id)?.set_password(&updated).map_err(|_| {
+                    Error::new(
+                        "credentialStore",
+                        "Could not save refreshed sign-in; reconnect this account",
+                    )
+                })?;
+            }
+            Ok((account, access))
         } else {
-            Ok(None)
+            Ok((account, token))
         }
     }
 }
@@ -219,7 +241,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn metadata_is_token_free_and_unrelated_hosts_never_select_an_account() {
+    fn metadata_is_token_free_and_legacy_accounts_remain_readable() {
         let dir = tempfile::tempdir().unwrap();
         let store = AccountStore::new(dir.path().join("accounts.json"));
         store
@@ -227,18 +249,16 @@ mod tests {
                 id: "account-id".into(),
                 provider: Provider::Github,
                 username: "alice".into(),
+                oauth: false,
             }])
             .unwrap();
         let data = std::fs::read_to_string(&store.path).unwrap();
         assert!(!data.contains("token"));
         assert_eq!(store.list().unwrap()[0].username, "alice");
-        for url in [
-            "https://github.com.evil.test/a/b",
-            "http://github.com/a/b",
-            "https://alice@github.com/a/b",
-            "https://github.com:444/a/b",
-        ] {
-            assert!(store.for_remote(url).unwrap().is_none());
-        }
+        let legacy: ProviderAccount = serde_json::from_value(
+            serde_json::json!({"id":"old", "provider":"github", "username":"alice"}),
+        )
+        .unwrap();
+        assert!(!legacy.oauth);
     }
 }

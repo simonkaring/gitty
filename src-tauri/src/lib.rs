@@ -5,6 +5,7 @@ mod clone;
 mod clone_dto;
 mod commit;
 mod conflicts;
+mod credentials;
 mod diff;
 mod dto;
 mod external;
@@ -17,6 +18,7 @@ mod operation_dto;
 mod operations;
 mod process;
 mod provider_accounts;
+mod provider_oauth;
 mod provider_pr;
 mod remote;
 mod remote_dto;
@@ -62,6 +64,35 @@ async fn provider_disconnect(state: tauri::State<'_, Accounts>, id: String) -> R
 }
 
 #[tauri::command]
+async fn provider_oauth_start(
+    state: tauri::State<'_, Arc<provider_oauth::OAuth>>,
+    provider: provider_accounts::Provider,
+) -> Result<provider_oauth::DeviceAuthorization> {
+    let oauth = state.inner().clone();
+    blocking(move || oauth.start(provider)).await
+}
+
+#[tauri::command]
+async fn provider_oauth_poll(
+    state: tauri::State<'_, Arc<provider_oauth::OAuth>>,
+    accounts: tauri::State<'_, Accounts>,
+    id: String,
+) -> Result<provider_oauth::PollResult> {
+    let oauth = state.inner().clone();
+    let accounts = accounts.inner().clone();
+    blocking(move || oauth.poll(&accounts, &id)).await
+}
+
+#[tauri::command]
+async fn provider_oauth_cancel(
+    state: tauri::State<'_, Arc<provider_oauth::OAuth>>,
+    id: String,
+) -> Result<()> {
+    let oauth = state.inner().clone();
+    blocking(move || oauth.cancel(&id)).await
+}
+
+#[tauri::command]
 async fn provider_pull_requests(
     state: tauri::State<'_, Shared>,
     accounts: tauri::State<'_, Accounts>,
@@ -94,23 +125,20 @@ async fn provider_create_pull_request(
 #[tauri::command]
 async fn repository_clone(
     state: tauri::State<'_, Shared>,
-    accounts: tauri::State<'_, Accounts>,
     askpass: tauri::State<'_, Arc<askpass::AskpassRegistry>>,
     operation_id: String,
     request: CloneRequest,
     on_progress: tauri::ipc::Channel<CloneProgress>,
 ) -> Result<RepositoryLocation> {
-    let accounts = accounts.inner().clone();
     let askpass = askpass.inner().clone();
     with_service(state, move |service| {
-        service.clone_repository_with_accounts(
+        service.clone_repository_with_askpass(
             &operation_id,
             request,
             move |progress| {
                 let _ = on_progress.send(progress);
             },
             Some(&askpass),
-            Some(&accounts),
         )
     })
     .await
@@ -130,14 +158,12 @@ async fn repository_sync_info(state: tauri::State<'_, Shared>, handle: String) -
 async fn repository_remote_action(
     state: tauri::State<'_, Shared>,
     registry: tauri::State<'_, Arc<crate::askpass::AskpassRegistry>>,
-    accounts: tauri::State<'_, Accounts>,
     handle: String,
     action: RemoteAction,
 ) -> Result<ActionOutput> {
     let registry = Some(registry.inner().clone());
-    let accounts = accounts.inner().clone();
     with_service(state, move |s| {
-        s.remote_action_using_accounts(&handle, action, registry.as_deref(), Some(&accounts))
+        s.remote_action(&handle, action, registry.as_deref())
     })
     .await
 }
@@ -469,6 +495,8 @@ fn app_start_dragging(window: tauri::WebviewWindow) -> Result<()> {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            credentials::init(app.path().resource_dir()?);
+            app.manage(Arc::new(provider_oauth::OAuth::default()));
             app.manage(Arc::new(provider_accounts::AccountStore::new(
                 app.path().app_data_dir()?.join("provider-accounts.json"),
             )));
@@ -499,6 +527,9 @@ pub fn run() {
             backend_info,
             list_provider_accounts,
             provider_connect_token,
+            provider_oauth_start,
+            provider_oauth_poll,
+            provider_oauth_cancel,
             provider_disconnect,
             provider_pull_requests,
             provider_create_pull_request,
