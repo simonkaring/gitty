@@ -3,5 +3,5 @@
   "identifier": "main-window",
   "description": "Minimal window capability; repository commands are application commands, not plugin commands",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:webview:allow-set-webview-zoom"]
 }

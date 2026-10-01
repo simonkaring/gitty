@@ -4,6 +4,9 @@ import App from './App';
 import './styles.css';
 import { SettingsProvider } from './model/settings';
 import { SettingsDialog } from './components/Settings';
+import { applyScale, loadScale } from './model/scale';
+
+applyScale(loadScale());
 
 const isMac = typeof navigator !== 'undefined' && (/Mac|iPhone|iPod|iPad/i.test(navigator.userAgent) || (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform === 'macOS');
 if (isMac && typeof document !== 'undefined') {

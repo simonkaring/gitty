@@ -82,6 +82,10 @@
 * {
   box-sizing: border-box;
 }
+html,
+body {
+  overscroll-behavior: none;
+}
 body {
   margin: 0;
   color: var(--text);
@@ -493,7 +497,7 @@ button[data-danger='true']:hover:not(:disabled) {
    App shell, title bar, repository tabs, toolbar
    ========================================================================== */
 .app-shell {
-  height: 100dvh;
+  height: calc(100dvh / var(--zoom, 1));
   min-height: 480px;
   display: flex;
   flex-direction: column;
@@ -2519,6 +2523,19 @@ button[data-danger='true']:hover:not(:disabled) {
   height: 17px;
   min-width: 17px;
   padding: 0 4px;
+}
+.statusbar .scale-control {
+  gap: 2px;
+  margin-right: 8px;
+}
+.statusbar .scale-value {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  appearance: none;
+  text-align: center;
+  cursor: pointer;
 }
 .version span {
   font-family: var(--mono);
