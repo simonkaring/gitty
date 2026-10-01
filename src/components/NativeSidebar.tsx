@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { FolderGit2, Globe2, Laptop, Tag } from 'lucide-react';
+import { Check, FolderGit2, Globe2, Laptop, Tag } from 'lucide-react';
 import type { CommitSummary, RepositoryState } from '../model/repository';
 import { graphDropAction, REF_DRAG_TYPE, COMMIT_DRAG_TYPE } from './HistoryGraph';
 import type { ActionContext } from './OperationDialog';
@@ -16,7 +16,7 @@ interface NativeSidebarProps {
 }
 
 const GROUPS = [
-  { kind: 'local', label: 'Branches', Icon: Laptop },
+  { kind: 'local', label: 'Local branches', Icon: Laptop },
   { kind: 'remote', label: 'Remote branches', Icon: Globe2 },
   { kind: 'tag', label: 'Tags', Icon: Tag },
 ] as const;
@@ -37,16 +37,16 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
     {GROUPS.map(({ kind, label, Icon }) => {
       const refs = state.refs.filter(ref => ref.kind === kind);
       return <details className="reference-group" key={kind} open={kind === 'local'}>
-        <summary>{label}<span className="count">{refs.length}</span></summary>
-        {refs.map(ref => <div className="ref-action-row" key={ref.fullName} onContextMenu={event => { event.preventDefault(); openMenu({ oid: ref.commitId, ref: ref.fullName }, event.clientX, event.clientY, event.currentTarget.querySelector('button')!); }}>
-          <button className="ref-item" title={ref.fullName} disabled={busy} draggable={ref.kind !== 'tag'}
+        <summary>{kind !== 'tag' && <Icon size={15} aria-hidden="true" />}{label}<span className="count">{refs.length}</span></summary>
+        {refs.map(ref => <div className={`ref-action-row${ref.fullName === session.headRef ? ' current' : ''}`} key={ref.fullName} onContextMenu={event => { event.preventDefault(); openMenu({ oid: ref.commitId, ref: ref.fullName }, event.clientX, event.clientY, event.currentTarget.querySelector('button')!); }}>
+          <button className="ref-item" title={ref.fullName} aria-current={ref.fullName === session.headRef ? 'true' : undefined} disabled={busy} draggable={ref.kind !== 'tag'}
             onDragStart={event => { event.stopPropagation(); if (ref.kind === 'tag') { event.preventDefault(); return; } event.dataTransfer.clearData(COMMIT_DRAG_TYPE); event.dataTransfer.setData(REF_DRAG_TYPE, ref.fullName); event.dataTransfer.effectAllowed = 'copy'; }}
             onDragOver={event => { if (ref.fullName === session.headRef && [REF_DRAG_TYPE, COMMIT_DRAG_TYPE].some(type => event.dataTransfer.types.includes(type))) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
             onDrop={event => { event.preventDefault(); event.stopPropagation(); const action = graphDropAction(event.dataTransfer, ref.fullName, session.headRef, commits, state.refs); if (action) onAction(action); }}
             onClick={() => reveal(ref.commitId)}
             onDoubleClick={() => { if (ref.kind === 'local') switchBranch(ref.fullName); }}
             onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openMenu({ oid: ref.commitId, ref: ref.fullName }, rect.left, rect.bottom, event.currentTarget); } }}>
-            <Icon size={15} /><span>{ref.name}</span>{ref.fullName === session.headRef && <span className="current-branch-dot" />}
+            {kind === 'tag' && <Icon size={15} />}{ref.fullName === session.headRef && <Check className="current-branch-check" size={15} aria-hidden="true" />}<span>{ref.name}</span>
           </button>
           <button className="icon-button sm" aria-label={`Actions for ${ref.name}`} onClick={() => onAction({ oid: ref.commitId, ref: ref.fullName })}>…</button>
         </div>)}

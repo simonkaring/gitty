@@ -918,13 +918,17 @@ button[data-danger='true']:hover:not(:disabled) {
   background: var(--selected);
   color: var(--text);
 }
-.current-branch-dot {
-  width: 7px;
-  height: 7px;
-  background: var(--accent);
-  border-radius: 50%;
-  margin-left: auto;
-  flex-shrink: 0;
+.current-branch-check {
+  position: absolute;
+  left: 5px;
+}
+.current-branch-check polyline {
+  stroke-dasharray: 24;
+  animation: branch-check-in 350ms var(--ease-out) both;
+}
+@keyframes branch-check-in {
+  from { stroke-dashoffset: 24; }
+  to { stroke-dashoffset: 0; }
 }
 
 /* Reference tree: section headers in UI type, entries in mono. */
@@ -985,6 +989,7 @@ button[data-danger='true']:hover:not(:disabled) {
   color: var(--muted);
 }
 .ref-item {
+  position: relative;
   width: 100%;
   display: flex;
   gap: 8px;
@@ -3133,7 +3138,7 @@ button[data-danger='true']:hover:not(:disabled) {
   }
 }
 
-/* Sidebar: groups animate open, rows slide on hover, current branch glows. */
+/* Sidebar: groups animate open, rows slide on hover, current branch is highlighted. */
 .reference-group::details-content {
   block-size: 0;
   overflow: clip;
@@ -3150,10 +3155,13 @@ button[data-danger='true']:hover:not(:disabled) {
 .ref-action-row:hover .ref-item > span:first-of-type {
   transform: translateX(2px);
 }
-.ref-item:has(.current-branch-dot) {
+.ref-action-row.current {
+  background: var(--selected);
+}
+.ref-action-row.current .ref-item {
   color: var(--text);
 }
-.ref-item:has(.current-branch-dot) svg {
+.ref-item .current-branch-check {
   color: var(--accent-text);
 }
 /* ==========================================================================
