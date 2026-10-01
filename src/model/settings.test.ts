@@ -68,7 +68,7 @@ describe('local preferences', () => {
     expect(readSettings(store)).toMatchObject({ settings: { historyColumns }, error: null });
   });
   it('resolves system pairs and fixed themes independently of OS appearance', () => {
-    const settings = { ...DEFAULT_SETTINGS, lightThemeId: 'catppuccin-latte', darkThemeId: 'nord' };
+    const settings = { ...DEFAULT_SETTINGS, themeMode: 'system' as const, lightThemeId: 'catppuccin-latte', darkThemeId: 'nord' };
     expect(resolveTheme(settings, false).id).toBe('catppuccin-latte');
     expect(resolveTheme(settings, true).id).toBe('nord');
     expect(resolveTheme({ ...settings, themeMode: 'fixed', themeId: 'dracula' }, false).id).toBe('dracula');

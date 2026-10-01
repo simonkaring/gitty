@@ -1445,8 +1445,21 @@ button[data-danger='true']:hover:not(:disabled) {
 .ref-stack .ref-pill.remote-ref {
   background: var(--raised);
 }
+.graph-hscroll {
+  position: absolute;
+  bottom: 0;
+  height: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  z-index: 3;
+  background: var(--subtle);
+}
+.graph-hscroll > div {
+  height: 1px;
+}
 .commit-graph-cell {
   min-width: 0;
+  overflow: hidden;
   position: relative;
   align-self: stretch;
 }
