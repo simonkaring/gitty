@@ -40,7 +40,8 @@ GITTY_AZURE_CLIENT_ID=your-entra-application-client-id
 
 Use plain `KEY=value` lines (no `export`). Variables already exported in the
 shell take precedence over `.env` values. Direct `cargo` commands do not read
-`.env`.
+`.env`. The release workflow reads the same names from repository variables
+(Settings, Secrets and variables, Actions, Variables).
 Cargo rebuilds when these values change. Missing IDs produce an actionable sign-in
 error; manual tokens and GCM-backed Git operations still work. Never embed client
 secrets: this implementation does not use them.
