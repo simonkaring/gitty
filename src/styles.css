@@ -693,16 +693,14 @@ button[data-danger='true']:hover:not(:disabled) {
   color: inherit;
   opacity: 0.6;
 }
-
 .repository-toolbar {
   display: flex;
   flex: 0 0 auto;
   flex-wrap: wrap;
   align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
   border-bottom: 1px solid var(--border);
-  justify-content: flex-start;
-  gap: var(--sp-2);
-  padding: 6px var(--sp-3);
   background: var(--bg);
 }
 .repository-toolbar-group {
@@ -721,7 +719,7 @@ button[data-danger='true']:hover:not(:disabled) {
   background: transparent;
   border-color: transparent;
   color: var(--text);
-  padding: 0 12px;
+  padding: 0 8px;
   min-height: var(--h-compact);
   border-radius: var(--r-md);
 }
@@ -732,9 +730,18 @@ button[data-danger='true']:hover:not(:disabled) {
   background: var(--hover);
   border-color: var(--border);
 }
-.repository-toolbar .secondary-button {
-  border-color: transparent;
-  background: transparent;
+.repository-toolbar button.icon-button {
+  padding: 0;
+  color: var(--secondary);
+}
+.repository-toolbar > .badge {
+  margin: 0 4px 0 8px;
+}
+.toolbar-sep {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--border);
 }
 .repository-fetch-status {
   font-size: var(--fs-xs);
@@ -1174,16 +1181,6 @@ button[data-danger='true']:hover:not(:disabled) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.native-repo-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 20px;
-  border-top: 1px solid var(--border);
-  color: var(--muted);
-  font-size: var(--fs-xs);
-  overflow-wrap: anywhere;
 }
 .history-body {
   position: relative;
@@ -1912,22 +1909,6 @@ button[data-danger='true']:hover:not(:disabled) {
   line-height: 1.6;
   color: inherit;
 }
-.inspector-footer {
-  min-height: 34px;
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 4px 16px;
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
-  color: var(--muted);
-  font-size: var(--fs-xs);
-  background: var(--sidebar);
-}
-.inspector-footer > span:last-child {
-  margin-left: auto;
-  font-family: var(--mono);
-}
 
 /* ==========================================================================
    Diffs
@@ -2162,6 +2143,7 @@ button[data-danger='true']:hover:not(:disabled) {
    Working changes (sidebar inspector and full workspace)
    ========================================================================== */
 .working-inspector-sidebar {
+  width: var(--inspector-width);
   flex-shrink: 0;
   display: flex;
   min-height: 0;
@@ -3079,10 +3061,6 @@ button[data-danger='true']:hover:not(:disabled) {
   }
 }
 
-/* Toolbar: each group is a quiet segmented control. */
-.repository-toolbar-group:last-of-type {
-  margin-left: auto;
-}
 .repository-toolbar button:active:not(:disabled) {
   transform: scale(0.97);
 }
@@ -4018,9 +3996,6 @@ dialog[open]::backdrop {
   }
 }
 @media (max-width: 540px) {
-  .repository-toolbar {
-    justify-content: flex-start;
-  }
   .history-body {
     --visible-hash-width: 0px;
   }

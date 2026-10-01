@@ -167,7 +167,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   return <section className="working-inspector" aria-label="Working changes inspector" aria-busy={!!operation}>
       <div className="working-sidebar-header">
         <div>
-          <span className="eyebrow">{demo ? 'DEMO WORKSPACE' : session.headRef?.replace('refs/heads/', '') ?? 'DETACHED HEAD'}</span>
+          <span className="eyebrow">{session.headRef?.replace('refs/heads/', '') ?? 'Detached HEAD'}</span>
           <h2>Working changes <span className="count">{status?.entries.length ?? 0}</span></h2>
         </div>
         <div className="working-sidebar-actions">

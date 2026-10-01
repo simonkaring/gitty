@@ -527,13 +527,12 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
               {filtering && <div className="native-search-results"><p role="status">{searchBusy ? 'Searching full history…' : `${result?.commits.length ?? 0} matches${result?.truncated ? ' · Results truncated; narrow the query' : ''}`} · Ancestry preserved</p>{searchError && <p role="alert">{searchError} <button onClick={() => setSearchRetry(value => value + 1)}>Retry search</button></p>}<div>{result?.commits.map(commit => <button key={commit.id} disabled={busy} onClick={() => reveal(commit.id)}>{commit.id.slice(0, 7)} {commit.subject}</button>)}</div></div>}
               {!graphCommits.length && <div className="empty-state"><GitCommitHorizontal size={28} /><h2>No commits yet</h2><p>This repository has no commits or working changes. Add files, stage them, and make your first commit.</p></div>}
                <HistoryGraph ref={graph} commits={graphCommits} layout={layout} refs={state.refs} selectedId={selected} head={state.session.head ?? ''} headRef={state.session.headRef} onActions={context => setActionContext(context)} onContextActions={openMenu} onSwitchBranch={ref => void switchBranch(ref)} pickOrder={pickOrder} onTogglePick={pickMode ? id => setPickOrder(order => toggleCommit(order, id)) : undefined} loaded={graphCommits.length} matches={matches} onSelect={id => reveal(id)} onLoadMore={() => void load()} onOpenDetails={() => setInspectorOpen(true)} theme={theme} hasMore={!!cursor} paging={busy} shallow={state.session.shallow} />
-              <div className="native-repo-meta">{cursor ? 'Unloaded ancestry continues below. Load older history to reveal parents.' : state.session.shallow ? 'Shallow boundary: earlier ancestry is unavailable locally.' : 'End of available history.'}</div>
             </section>
           )}
           {inspectorOpen && <>
-            <PaneResizer label="Resize inspector" width={inspectorWidth} onChange={setInspectorWidth} min={280} max={640} />
+            <PaneResizer label="Resize inspector" width={inspectorWidth} onChange={setInspectorWidth} min={300} max={640} />
             {selected === WORKING_ID || (!selected && (status?.entries.length ?? 0) > 0) ? (
-              <aside className="working-inspector-sidebar" style={{ width: `${inspectorWidth}px` }}>
+              <aside className="working-inspector-sidebar">
                 <WorkingChanges
                   key={state.session.handle}
                   session={state.session}
@@ -572,7 +571,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
         </div>
       </div>
     </main>}
-    <footer className="statusbar"><span><span className="live-dot" />{mutationBusy ? 'Updating repository…' : isDemoHandle(state?.session.handle) ? 'Demo workspace · changes are simulated in memory' : 'Local workspace · automatic refresh'}</span><span>{state ? `${commits.length} commits loaded` : 'No repository open'}</span></footer>
+    <footer className="statusbar"><span><span className="live-dot" />{mutationBusy ? 'Updating repository…' : isDemoHandle(state?.session.handle) ? 'Demo workspace · changes are simulated in memory' : 'Local workspace · automatic refresh'}</span><span className="status-keys"><kbd>/</kbd> search <kbd>{navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'} K</kbd> commands</span></footer>
     {state && menuTarget && <GraphContextMenu target={menuTarget} state={state} busy={mutationBusy || mutationBlocked} onClose={() => setMenuTarget(null)} onOperation={context => { setMenuTarget(null); setActionContext(context); }} onShowDetails={oid => { reveal(oid); setInspectorOpen(true); setMenuTarget(null); }} onSetBase={oid => setComparison(oid, 'base')} onSetTarget={oid => setComparison(oid, 'target')} onCompare={compareWithCurrent} onPullRequest={ref => { setMenuTarget(null); setPrSource(ref); }} onRemoteAction={action => void runMenuRemote(action)} onPush={() => void pushFromMenu(menuTarget.context.ref!)} onCopy={(value, label) => void copyMenuValue(value, label)} />}
     {state && publishInfo && <PublishDialog remotes={publishInfo.remotes} branch={publishInfo.branch ?? ''} onPublish={async (remote, branch) => { const action: RemoteActionRequest = { kind: 'push', remote, branch, setUpstream: true }; const output = await remoteWrite('repository_remote_action', { action }); setNotice(output || 'Publish complete.'); }} onClose={() => setPublishInfo(null)} />}
     {state && actionContext && <OperationDialog key={state.session.handle} state={state} operation={operation} context={actionContext} commits={commits} busy={mutationBusy || mutationBlocked} onWrite={operationWrite} onClose={() => setActionContext(null)} onCompare={compareWithCurrent} onPullRequest={source => { setPrSource(source); setActionContext(null); }} />}

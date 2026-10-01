@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CommitDetail, DiffFile, FileDiff, RepositorySession } from '../model/repository';
-import { errorMessage, inspectorSpec, isDemoHandle, native } from '../model/native';
+import { errorMessage, inspectorSpec, native } from '../model/native';
 import { ArrowUpRight, Check, ChevronDown, Copy, FileCode2, GitCommitHorizontal, GitMerge, X } from 'lucide-react';
 import type { ActiveDiffState } from './WorkingChanges';
 
@@ -244,9 +244,9 @@ export function NativeInspector({
                 </div>
               )}
 
-              <div className="native-actions inspector-block">
-                <button className="secondary-button" onClick={onBase}>Set as base</button>
-                <button className="secondary-button" onClick={onTarget}>Set as target</button>
+              <div className="button-row inspector-block">
+                <button className="secondary-button compact" onClick={onBase}>Set as compare base</button>
+                <button className="secondary-button compact" onClick={onTarget}>Set as compare target</button>
               </div>
 
               {(base || target) && (
@@ -259,9 +259,9 @@ export function NativeInspector({
                       ? 'Changes that turn the base commit into the target commit. Removed lines belong to base; added lines belong to target.'
                       : 'Choose both commits to compare. Currently showing the selected commit’s changes.'}
                   </p>
-                  <div className="native-actions">
-                    <button className="secondary-button" disabled={!base || !target} onClick={onSwap}>Swap direction</button>
-                    <button className="secondary-button" onClick={onClear}>Clear comparison</button>
+                  <div className="button-row">
+                    <button className="secondary-button compact" disabled={!base || !target} onClick={onSwap}>Swap direction</button>
+                    <button className="secondary-button compact" onClick={onClear}>Clear comparison</button>
                   </div>
                 </div>
               )}
@@ -309,9 +309,6 @@ export function NativeInspector({
           <FileCode2 size={17} />
           <p>{activePath ? <>Viewing <strong>{activePath.split('/').at(-1)}</strong> in the main pane.</> : 'Select a file above to inspect its diff in the main pane.'}</p>
         </div>
-      </div>
-      <div className="inspector-footer">
-        <span className="live-dot" /> {isDemoHandle(session.handle) ? 'Demo repository' : 'Native repository'} <span>{session.location.kind === 'wsl' ? `WSL · ${session.location.distribution}` : 'Local'}</span>
       </div>
     </aside>
   );

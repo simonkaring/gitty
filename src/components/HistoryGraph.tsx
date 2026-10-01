@@ -389,7 +389,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       </div>
       {isGraphVisible && <canvas ref={canvas} className="graph-canvas" aria-hidden="true" style={{ width: graphWidth, height, left: graphOffset - scrollLeft }} />}
     </div>
-    <div className="history-bottom"><span><span className="live-dot" />{loaded.toLocaleString()} loaded{shallow ? ' · Shallow repository boundary' : ''}</span>
+    <div className="history-bottom"><span><span className="live-dot" />{(loaded - (commits[0]?.id === WORKING_ID ? 1 : 0)).toLocaleString()} commits loaded{shallow ? ' · Shallow repository boundary' : ''}</span>
       {(hasMore ?? loaded < commits.length) ? <button className="text-button" disabled={paging} onClick={onLoadMore}>{paging ? 'Loading…' : 'Load older history ↓'}</button> : <span className="muted">{shallow ? 'Available history loaded' : 'All history loaded'}</span>}
     </div>
     <span id="history-keyboard-help" className="sr-only">Use Up and Down to select commits, Page Up and Page Down to move a page, Home and End to move to the loaded boundaries. Press Enter to open details.{onActions && ' Press Shift+F10 for commit actions. Tab to a branch badge and press Enter or Shift+F10 for branch actions.'}{onSwitchBranch && ' Double-click a local branch badge to switch branches.'}</span>
