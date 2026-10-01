@@ -68,6 +68,8 @@ try {
   // the local branch's pill specifically.
   const topic = page.getByRole('button', { name: 'Graph actions for topic', exact: true });
   const main = page.locator('.ref-pill[data-current=true]');
+  // Non-primary refs live in a hover stack; hover the refs cell to reveal them.
+  const reveal = pill => pill.locator('xpath=ancestor::div[contains(@class,"commit-refs")]').hover();
   const beforeScroll = await page.locator('.history-scroll').evaluate(el => el.scrollTop);
   const drop = async (target, source, type = 'application/x-gitty-ref') => { const dataTransfer = await page.evaluateHandle(({ value, type }) => { const data = new DataTransfer(); data.setData(type, value); return data; }, { value: source, type }); await target.dispatchEvent('drop', { dataTransfer }); await dataTransfer.dispose(); };
   for (const invalid of ['c2', 'refs/heads/missing', 'refs/tags/v1', 'refs/heads/main']) {
@@ -193,11 +195,13 @@ try {
   assert.equal(await sidebarMenu.getByRole('menuitem', { name: 'Push / Publish…' }).count(), 0);
   await page.keyboard.press('Escape');
   assert.equal(await sidebarMenu.count(), 0);
+  await reveal(page.locator('.ref-pill[data-name="origin/topic"]'));
   await page.locator('.ref-pill[data-name="origin/topic"]').click({ button: 'right' });
   await page.getByRole('menu', { name: 'Actions for origin/topic' }).getByRole('menuitem', { name: 'Fetch this remote branch' }).click();
   await page.waitForFunction(() => window.fixture.calls.some(call => call.command === 'repository_remote_action' && call.args.action.kind === 'fetch' && call.args.action.remote === 'origin' && call.args.action.branch === 'topic'));
 
   // Tags and remote-tracking refs have explicit PR restrictions; no prefix guessing.
+  await reveal(page.getByRole('button', { name: 'Graph actions for v1', exact: true }));
   await page.getByRole('button', { name: 'Graph actions for v1', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: 'Create pull request…' }).isDisabled(), true);
   await page.getByText('Tags cannot be pull-request source branches.', { exact: false }).waitFor();

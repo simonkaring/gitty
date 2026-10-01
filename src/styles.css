@@ -1362,8 +1362,8 @@ button[data-danger='true']:hover:not(:disabled) {
   background: color-mix(in srgb, var(--branch-color, var(--hover)) 7%, transparent);
   box-shadow: inset 2px 0 color-mix(in srgb, var(--branch-color, var(--accent)) 55%, transparent);
 }
-.commit-row:has(.ref-pill:hover),
-.commit-row:has(.ref-pill:focus-visible) {
+.commit-row:has(.commit-refs:hover),
+.commit-row:has(.commit-refs:focus-within) {
   z-index: 3;
 }
 .commit-row.selected {
@@ -1386,7 +1386,45 @@ button[data-danger='true']:hover:not(:disabled) {
   gap: 4px;
   min-width: 0;
   padding: 0 8px;
-  overflow: hidden;
+  position: relative;
+}
+.commit-refs > .ref-pill {
+  flex: 0 1 auto;
+}
+.ref-more {
+  flex: none;
+  height: 20px;
+  min-width: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-pill);
+  background: var(--raised);
+  color: var(--secondary);
+  font: 600 var(--fs-2xs) / 1 var(--mono);
+  cursor: default;
+}
+.ref-stack {
+  display: none;
+  position: absolute;
+  top: calc(50% + 12px);
+  left: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  max-width: min(420px, 70vw);
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--raised);
+  box-shadow: var(--shadow);
+  z-index: 10;
+}
+.commit-refs:hover .ref-stack,
+.commit-refs:focus-within .ref-stack {
+  display: flex;
+}
+.ref-stack .ref-pill {
+  max-width: 100%;
 }
 .commit-graph-cell {
   min-width: 0;
@@ -1437,6 +1475,7 @@ button[data-danger='true']:hover:not(:disabled) {
   gap: 4px;
   min-width: 0;
   max-width: 100%;
+  flex-shrink: 1;
   height: 20px;
   padding: 0 8px;
   border-radius: var(--r-pill);
@@ -1459,25 +1498,6 @@ button[data-danger='true']:hover:not(:disabled) {
 .ref-pill-name {
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.ref-pill:hover::after,
-.ref-pill:focus-visible::after {
-  content: attr(data-name);
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  width: max-content;
-  max-width: min(420px, 70vw);
-  overflow-wrap: anywhere;
-  white-space: normal;
-  padding: 4px 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--r-sm);
-  background: var(--raised);
-  color: var(--text);
-  box-shadow: var(--shadow);
-  z-index: 10;
-  line-height: 1.4;
 }
 .ref-pill.main-ref {
   color: var(--accent-text);
@@ -4006,7 +4026,7 @@ dialog[open]::backdrop {
     flex: 1 1 100%;
     justify-content: space-between;
   }
-  .ref-pill {
+  .commit-refs > .ref-pill {
     max-width: 95px;
   }
   .history-bottom {

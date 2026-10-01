@@ -5,7 +5,7 @@ import { expect, it, vi } from 'vitest';
 import { layoutHistory } from '../graph/layout';
 import { BUILTIN_THEMES } from '../model/themes';
 import { DEFAULT_HISTORY_COLUMNS } from '../model/settings';
-import { HistoryGraph } from './HistoryGraph';
+import { HistoryGraph, sortRefs } from './HistoryGraph';
 
 vi.mock('../model/settings', async importOriginal => {
   const original = await importOriginal<typeof import('../model/settings')>();
@@ -28,5 +28,13 @@ it('renders pending history without drawing nodes the layout worker has not retu
     await act(async () => { root.unmount(); });
     canvas.mockRestore();
     globalThis.ResizeObserver = originalObserver;
+  }
+});
+
+it('sortRefs orders current branch, local, remote, tags', () => {
+  {
+    const r = (name: string, kind: 'local' | 'remote' | 'tag') => ({ name, kind, commitId: 'a', fullName: `refs/${kind}/${name}` });
+    const sorted = sortRefs([r('v1', 'tag'), r('origin/x', 'remote'), r('x', 'local'), r('main', 'local')], 'refs/local/main');
+    expect(sorted.map(ref => ref.name)).toEqual(['main', 'x', 'origin/x', 'v1']);
   }
 });
