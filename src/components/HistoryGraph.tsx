@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { GitMerge, Globe2, Laptop, Settings as SettingsIcon, Tag } from 'lucide-react';
+import { Check, GitMerge, Globe2, Laptop, Settings as SettingsIcon, Tag } from 'lucide-react';
 import { indexEdges, laneX, LANE_WIDTH, ROW_HEIGHT, type GraphLayout } from '../graph/layout';
 import { assignBranchColors, branchName } from '../graph/branchColor';
 import { WORKING_ID } from '../model/native';
@@ -134,7 +134,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                       onDrop={event => { event.preventDefault(); event.stopPropagation(); stopDrag(); const action = graphDropAction(event.dataTransfer, ref.fullName, headRef, commits.slice(0, loaded), refs); if (action) onActions?.(action); }}
                       onContextMenu={event => { if (onContextActions && ref.fullName) { event.preventDefault(); event.stopPropagation(); onContextActions({ oid: commit.id, ref: ref.fullName }, event.clientX, event.clientY, event.currentTarget); } }} onClick={event => { if (onActions && ref.fullName) { event.stopPropagation(); if (ref.kind === 'local' && onSwitchBranch) { if (badgeAction.current) clearTimeout(badgeAction.current); if (event.detail < 2) badgeAction.current = setTimeout(() => { badgeAction.current = null; onActions({ oid: commit.id, ref: ref.fullName }); }, 500); } else onActions({ oid: commit.id, ref: ref.fullName }); } }}
                       onDoubleClick={event => { if (ref.kind === 'local' && ref.fullName && onSwitchBranch) { event.stopPropagation(); if (badgeAction.current) clearTimeout(badgeAction.current); badgeAction.current = null; onSwitchBranch(ref.fullName); } }}>
-                      {ref.kind === 'tag' ? <Tag size={10} /> : ref.kind === 'remote' ? <Globe2 size={10} /> : <Laptop size={10} />}{remote && <Globe2 size={10} />}<span className="ref-pill-name">{ref.name}</span>
+                      {!!headRef && ref.fullName === headRef && <Check size={10} strokeWidth={3} aria-hidden="true" />}{ref.kind === 'tag' ? <Tag size={10} /> : ref.kind === 'remote' ? <Globe2 size={10} /> : <Laptop size={10} />}{remote && <Globe2 size={10} />}<span className="ref-pill-name">{ref.name}</span>
                     </span>;
   }
 

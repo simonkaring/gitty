@@ -3163,6 +3163,20 @@ button[data-danger='true']:hover:not(:disabled) {
 }
 .ref-item .current-branch-check {
   color: var(--accent-text);
+  transform-origin: 50% 100%;
+}
+/* Hover: the check hops, lands with a squash, and settles with a wiggle. */
+.ref-action-row:hover .current-branch-check,
+.ref-pill[data-current='true']:hover svg.lucide-check {
+  animation: check-hop 520ms ease-out;
+}
+.ref-pill[data-current='true'] svg.lucide-check {
+  transform-origin: 50% 100%;
+}
+@keyframes check-hop {
+  30% { transform: translateY(-3px) rotate(-12deg); }
+  55% { transform: scale(1.2, 0.75); }
+  75% { transform: translateY(-1px) rotate(6deg); }
 }
 /* ==========================================================================
    Graph polish: lane-tinted rows, HEAD pulse, fresh-commit entrance, ref pills
