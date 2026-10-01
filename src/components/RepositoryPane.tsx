@@ -3,7 +3,7 @@ import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus,
 import { CommandPalette, type PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
 import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
-import { appendUnique, errorMessage, graphCommit, native, validateHistory, WORKING_ID } from '../model/native';
+import { appendUnique, errorMessage, graphCommit, isDemoHandle, native, validateHistory, WORKING_ID } from '../model/native';
 import { HistoryGraph, type GraphAnchor, type GraphHandle } from './HistoryGraph';
 import { NativeInspector } from './NativeInspector';
 import { NativeSidebar } from './NativeSidebar';
@@ -542,7 +542,6 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
                   onMutation={mutate}
                   onRefresh={() => refresh(true)}
                   onResolve={setConflictPath}
-                  sidebarMode
                   activePath={activeDiff?.path ?? null}
                   onActiveDiffChange={setActiveDiff}
                   onClose={() => setInspectorOpen(false)}
@@ -572,7 +571,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
         </div>
       </div>
     </main>}
-    <footer className="statusbar"><span><span className="live-dot" />{mutationBusy ? 'Updating repository…' : 'Local workspace · automatic refresh'}</span><span>{state ? `${commits.length} commits loaded` : 'No repository open'}</span></footer>
+    <footer className="statusbar"><span><span className="live-dot" />{mutationBusy ? 'Updating repository…' : isDemoHandle(state?.session.handle) ? 'Demo workspace · changes are simulated in memory' : 'Local workspace · automatic refresh'}</span><span>{state ? `${commits.length} commits loaded` : 'No repository open'}</span></footer>
     {state && menuTarget && <GraphContextMenu target={menuTarget} state={state} busy={mutationBusy || mutationBlocked} onClose={() => setMenuTarget(null)} onOperation={context => { setMenuTarget(null); setActionContext(context); }} onShowDetails={oid => { reveal(oid); setInspectorOpen(true); setMenuTarget(null); }} onSetBase={oid => setComparison(oid, 'base')} onSetTarget={oid => setComparison(oid, 'target')} onCompare={compareWithCurrent} onPullRequest={ref => { setMenuTarget(null); setPrSource(ref); }} onRemoteAction={action => void runMenuRemote(action)} onPush={() => void pushFromMenu(menuTarget.context.ref!)} onCopy={(value, label) => void copyMenuValue(value, label)} />}
     {state && publishInfo && <PublishDialog remotes={publishInfo.remotes} branch={publishInfo.branch ?? ''} onPublish={async (remote, branch) => { const action: RemoteActionRequest = { kind: 'push', remote, branch, setUpstream: true }; const output = await remoteWrite('repository_remote_action', { action }); setNotice(output || 'Publish complete.'); }} onClose={() => setPublishInfo(null)} />}
     {state && actionContext && <OperationDialog key={state.session.handle} state={state} operation={operation} context={actionContext} commits={commits} busy={mutationBusy || mutationBlocked} onWrite={operationWrite} onClose={() => setActionContext(null)} onCompare={compareWithCurrent} onPullRequest={source => { setPrSource(source); setActionContext(null); }} />}

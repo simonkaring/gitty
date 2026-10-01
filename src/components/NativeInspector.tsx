@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CommitDetail, DiffFile, FileDiff, RepositorySession, RepositoryStatus } from '../model/repository';
-import { errorMessage, inspectorSpec, native, statusGroups, WORKING_ID, type WorkingGroup } from '../model/native';
+import { errorMessage, inspectorSpec, isDemoHandle, native, statusGroups, WORKING_ID, type WorkingGroup } from '../model/native';
 import { ArrowUpRight, Check, ChevronDown, Copy, FileCode2, GitCommitHorizontal, GitMerge, X } from 'lucide-react';
 import { DiffPreview, type ActiveDiffState } from './WorkingChanges';
 import { useSettings } from '../model/settings';
@@ -379,7 +379,7 @@ export function NativeInspector({
         )}
       </div>
       <div className="inspector-footer">
-        <span className="live-dot" /> Native repository <span>{session.location.kind === 'wsl' ? `WSL · ${session.location.distribution}` : 'Local'}</span>
+        <span className="live-dot" /> {isDemoHandle(session.handle) ? 'Demo repository' : 'Native repository'} <span>{session.location.kind === 'wsl' ? `WSL · ${session.location.distribution}` : 'Local'}</span>
       </div>
     </aside>
   );

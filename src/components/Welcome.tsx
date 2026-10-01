@@ -18,7 +18,7 @@ function GraphArt() {
   </svg>;
 }
 
-export function Welcome({ showRecent, onOpenPicker, onOpen, onDemo }: { showRecent: boolean; onOpenPicker: () => void; onOpen: (location: RepositoryLocation) => void; onDemo: () => void }) {
+export function Welcome({ showRecent, onOpenPicker, onOpen, onDemo }: { showRecent: boolean; onOpenPicker: () => void; onOpen: (location: RepositoryLocation) => void; onDemo?: () => void }) {
   const [recent, setRecent] = useState<RepositoryLocation[]>([]);
   // ponytail: recent list is a nicety; a failed read just leaves it empty.
   useEffect(() => { let live = true; native<RepositoryLocation[]>('repository_recent').then(v => { if (live && Array.isArray(v)) setRecent(v.slice(0, 6)); }).catch(() => {}); return () => { live = false; }; }, []);
@@ -30,7 +30,7 @@ export function Welcome({ showRecent, onOpenPicker, onOpen, onDemo }: { showRece
       <p>See every branch as a graph, stage exactly what you mean, and commit with confidence.</p>
       <div className="welcome-actions">
         <button className="primary-button" onClick={onOpenPicker}><FolderOpen size={16} />Open repository</button>
-        <button className="text-button" onClick={onDemo}><Sparkles size={15} />Explore a demo workspace</button>
+        {onDemo && <button className="text-button" onClick={onDemo}><Sparkles size={15} />Explore a demo workspace</button>}
       </div>
       {showRecent && recent.length > 0 && <nav className="welcome-recent" aria-label="Recent repositories">
         <h2>Recent</h2>

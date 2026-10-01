@@ -30,9 +30,3 @@ export interface RepositorySnapshot {
   refs: GitRef[];
   head: string;
 }
-
-/** Boundary for future native Git and WSL transports. All IDs are opaque. */
-export interface HistoryProvider {
-  readonly kind: 'demo' | 'native' | 'wsl';
-  snapshot(repository: string): Promise<RepositorySnapshot>;
-}
