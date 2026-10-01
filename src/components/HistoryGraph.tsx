@@ -6,6 +6,7 @@ import type { Commit, GitRef } from '../model/types';
 import type { ActionContext } from './OperationDialog';
 import { DEFAULT_HISTORY_COLUMNS, useSettings, type HistoryColumnId, type ThemeDefinition } from '../model/settings';
 import { HistoryColumnMenu } from './HistoryColumnMenu';
+import { initials } from './ui';
 
 export interface GraphAnchor { id: string; offset: number }
 export interface GraphHandle { scrollTo: (row: number) => void; focus: () => void; anchor: () => GraphAnchor | null; restore: (anchor: GraphAnchor) => void }
@@ -117,7 +118,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const colors = useMemo(() => Array.from({ length: 8 }, (_, index) => theme.colors[`graphLane${index + 1}`]), [theme]);
 
   function renderRef({ ref, remote }: { ref: GitRef & { fullName?: string }; remote?: GitRef }, commit: Commit) {
-    return <span key={ref.fullName ?? ref.name} className={`ref-pill ${ref.kind === 'tag' ? 'tag-ref' : ref.kind === 'remote' ? 'remote-ref' : ref.name === 'main' ? 'main-ref' : ''}`}
+    return <span key={ref.fullName ?? ref.name} className={`ref-pill ${ref.kind === 'tag' ? 'tag-ref' : ref.kind === 'remote' ? 'remote-ref' : ''}`}
                       data-name={ref.name} title={remote ? `${ref.name} + ${remote.name}` : ref.name}
                       role={onActions && ref.fullName ? 'button' : undefined} tabIndex={onActions && ref.fullName ? 0 : undefined} aria-label={onActions && ref.fullName ? `Graph actions for ${ref.name}` : undefined}
                       onKeyDown={event => { if (!ref.fullName) return; if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && onContextActions) { event.preventDefault(); event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); onContextActions({ oid: commit.id, ref: ref.fullName }, rect.left, rect.bottom, event.currentTarget); } else if (onActions && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.stopPropagation(); onActions({ oid: commit.id, ref: ref.fullName }); } }}
@@ -431,7 +432,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                   </div>;
                 }
                 if (col.id === 'author') {
-                  return <span key="author" className="row-author author-column"><span className={`avatar tiny color-${commit.author.charCodeAt(0) % 5}`}>{commit.author.split(' ').map(n => n[0]).join('')}</span><span>{commit.author.split(' ')[0]}</span></span>;
+                  return <span key="author" className="row-author author-column"><span className="avatar tiny">{initials(commit.author)}</span><span>{commit.author.split(' ')[0]}</span></span>;
                 }
                 if (col.id === 'hash') {
                   return <span key="hash" className="row-hash hash-column">{commit.id === WORKING_ID ? 'Working' : commit.id.slice(0, 7)}</span>;

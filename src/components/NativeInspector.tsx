@@ -3,6 +3,7 @@ import type { CommitDetail, DiffFile, FileDiff, RepositorySession } from '../mod
 import { errorMessage, inspectorSpec, native } from '../model/native';
 import { ArrowUpRight, Check, ChevronDown, Copy, FileCode2, GitCommitHorizontal, GitMerge, X } from 'lucide-react';
 import type { ActiveDiffState } from './WorkingChanges';
+import { initials } from './ui';
 
 function statusClass(status: string): string {
   const s = status.toUpperCase();
@@ -186,9 +187,7 @@ export function NativeInspector({
                 <h2>{detail?.subject || (busy ? 'Loading commit…' : selected)}</h2>
                 {detail && (
                   <div className="author-block">
-                    <span className={`avatar color-${detail.author ? detail.author.charCodeAt(0) % 5 : 0}`}>
-                      {detail.author ? detail.author.split(' ').map(n => n[0]).join('').slice(0, 3) : ''}
-                    </span>
+                    <span className="avatar">{initials(detail.author)}</span>
                     <div>
                       <strong>{detail.author}</strong>
                       <span>{date} UTC</span>
