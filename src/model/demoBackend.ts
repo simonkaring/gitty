@@ -48,7 +48,7 @@ function commitFiles(r: DemoRepo, spec: DiffSpec): ChangedFile[] {
   return r.commits.find(commit => commit.id === oid)?.files ?? [];
 }
 
-const unsupported = (what: string) => { throw { code: 'unsupported', message: `${what} requires the desktop app. The demo simulates staging and committing only.` }; };
+const unsupported = (what: string) => { throw { code: 'unsupported', message: `Not available in the demo: ${what}. The demo simulates staging and committing only.` }; };
 
 export async function demoInvoke(command: string, args: Record<string, unknown>): Promise<unknown> {
   const r = () => repo(args.handle);
@@ -111,15 +111,15 @@ export async function demoInvoke(command: string, args: Record<string, unknown>)
       current.files = current.files.filter(file => file.index !== null || file.working !== null).map(file => ({ ...file, head: file.index }));
       return { oid: id };
     }
-    case 'repository_pick': case 'repository_pick_clone_parent': return unsupported('Opening folders');
-    case 'repository_clone': return unsupported('Cloning');
-    case 'repository_stage_hunk': case 'repository_unstage_hunk': return unsupported('Hunk staging');
-    case 'repository_amend_commit': return unsupported('Amending');
+    case 'repository_pick': case 'repository_pick_clone_parent': return unsupported('opening folders');
+    case 'repository_clone': return unsupported('cloning');
+    case 'repository_stage_hunk': case 'repository_unstage_hunk': return unsupported('hunk staging');
+    case 'repository_amend_commit': return unsupported('amending');
     case 'repository_remote_action': {
       const kind = (args.action as { kind: string }).kind;
       if (kind === 'fetch' || kind === 'backgroundFetch') return { output: kind === 'fetch' ? 'Already up to date (demo remote).' : '' };
-      return unsupported('Pull and push');
+      return unsupported('pull and push');
     }
-    default: return unsupported('This action');
+    default: return unsupported('this action');
   }
 }

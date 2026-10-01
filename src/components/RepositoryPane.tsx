@@ -22,10 +22,13 @@ import { RemoteStashDialog } from './RemoteStashDialog';
 import { toggleCommit } from '../model/operationUi';
 import { captureOperation, operationAndRefresh, readOperationSnapshot } from '../model/operationFlow';
 import { SwitchBlockedDialog } from './SwitchBlockedDialog';
+import { Segmented, Toast } from './ui';
 import { locationLabel, sessionKey } from '../model/tabs';
 import { useSettings } from '../model/settings';
 import { AUTO_FETCH_CHECK, autoFetchDue, isFetchingAction, type FetchStatus } from '../model/autoFetch';
 import { DEFAULT_PULL_MODE, describeRemoteAction, needsPublish, type RemoteActionRequest, type SyncInfo } from '../model/remote';
+
+const GROUP_TONE = { staged: 'green', unstaged: 'amber', untracked: 'accent', conflict: 'red' } as const;
 
 export interface RepositoryPaneProps {
   tabId: string;
@@ -413,7 +416,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
       <div className="search-field">
         <Search size={14} aria-hidden="true" />
         <input ref={search} aria-label="Search full history" placeholder="Search commits…" value={text} onChange={event => setText(event.target.value)} />
-        {text ? <button className="icon-button" aria-label="Clear search" onClick={() => setText('')}><X size={13} /></button> : <kbd>/</kbd>}
+        {text ? <button className="icon-button sm" aria-label="Clear search" onClick={() => setText('')}><X size={13} /></button> : <kbd>/</kbd>}
       </div>
       <select aria-label="Branch scope" title={branch ? state?.refs.find(ref => ref.fullName === branch)?.name ?? branch : 'All branches'} value={branch} onChange={event => setBranch(event.target.value)}>
         <option value="">All branches</option>
@@ -465,12 +468,13 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
       onWrite={remoteWrite}
       fetchStatus={fetchStatus}
       notify={setNotice} />}
-    <div className="toast-region">
-    {actionError && <div className="native-banner" role="alert">{actionError} <button onClick={() => setActionError('')}>Dismiss operation error</button></div>}
-    {error && <div className="native-banner" role="alert">{error} <button disabled={busy} onClick={() => state ? void refresh() : void open()}>Retry</button></div>}
-    {busy && !state && <div className="native-banner" role="status">Opening {locationLabel(location)}…{location.kind === 'wsl' && ' A stopped WSL distribution can take a few seconds to start.'}</div>}{notice && <div className="native-banner" role="status">{notice}<button className="toast-dismiss" aria-label="Dismiss notification" onClick={() => setNotice('')}><X size={14} /></button></div>}
-    {state && selected && selected !== WORKING_ID && !commits.some(commit => commit.id === selected) && <div className="native-banner" role="status">Selected commit {selected.slice(0, 12)} is {cursor ? 'outside the loaded history' : 'no longer reachable from the current references'}. Its inspector remains open by object ID.{cursor && <button disabled={busy} onClick={() => reveal(selected)}>Reveal selected commit</button>}</div>}
-    </div>
+    {active && <>
+      {actionError && <Toast tone="error" onDismiss={() => setActionError('')}>{actionError}</Toast>}
+      {error && <Toast tone="error" action={<button className="secondary-button" disabled={busy} onClick={() => state ? void refresh() : void open()}>Retry</button>}>{error}</Toast>}
+      {busy && !state && <Toast tone="progress">Opening {locationLabel(location)}…{location.kind === 'wsl' && ' A stopped WSL distribution can take a few seconds to start.'}</Toast>}
+      {notice && <Toast onDismiss={() => setNotice('')}>{notice}</Toast>}
+      {state && selected && selected !== WORKING_ID && !commits.some(commit => commit.id === selected) && <Toast action={cursor && <button className="secondary-button" disabled={busy} onClick={() => reveal(selected)}>Reveal</button>}>Selected commit {selected.slice(0, 12)} is {cursor ? 'outside the loaded history' : 'no longer reachable from the current references'}. Its inspector remains open by object ID.</Toast>}
+    </>}
     {mutationBlocked && <div className="operation-banner" role="alert">Refresh failed after a write. Further writes are blocked until a successful refresh.<button onClick={() => void refresh()}>Refresh now</button></div>}
     {state && operation && (operation.kind !== 'none' || !!operation.conflicts.length) && <div className="operation-banner" role="status"><strong>{operation.label || operation.kind}</strong><span>{operation.current} {operation.incoming && `← ${operation.incoming}`}{operation.step !== null && ` · Step ${operation.step}${operation.total !== null ? ` / ${operation.total}` : ''}`}</span>{(['continue', 'skip', 'abort'] as const).map(kind => <button key={kind} disabled={mutationBusy || mutationBlocked || operation.kind === 'unsupported' || (kind === 'continue' && !operation.canContinue) || (kind === 'skip' && !operation.canSkip)} onClick={() => setActionContext({ oid: state.session.head ?? '', initial: kind })}>{kind === 'continue' ? 'Continue' : kind === 'skip' ? 'Skip' : 'Abort'}</button>)}{operation.conflicts.map(path => <button key={path} onClick={() => setConflictPath(path)}>Resolve {path}</button>)}</div>}
     {!state ? <main className="repo-skeleton" aria-busy={!error}>
@@ -490,7 +494,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
                 <div className="diff-view-file">
                   <FileCode2 size={16} />
                   <span className="diff-view-filepath">{activeDiff.path}</span>
-                  {activeDiff.group && <span className={`diff-view-group-badge ${activeDiff.group}`}>{activeDiff.group}</span>}
+                  {activeDiff.group && <span className="badge" data-tone={GROUP_TONE[activeDiff.group]}>{activeDiff.group}</span>}
                 </div>
                 <div className="diff-view-actions">
                   {activeDiff.onToggleStage && (
@@ -498,9 +502,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
                       {activeDiff.isStaged ? 'Unstage File' : 'Stage File'}
                     </button>
                   )}
-                  <button className="secondary-button" aria-pressed={split} onClick={() => setSplit(!split)}>
-                    {split ? 'Unified' : 'Side by side'}
-                  </button>
+                  <Segmented label="Diff layout" value={split ? 'split' : 'unified'} options={[['unified', 'Unified'], ['split', 'Split']]} onChange={value => setSplit(value === 'split')} />
                   <button className="icon-button" aria-label="Close diff and show tree" title="Close diff" onClick={() => setActiveDiff(null)}>
                     <X size={17} />
                   </button>
@@ -552,7 +554,6 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
                 key={state.session.handle}
                 session={state.session}
                 selected={selected}
-                status={status}
                 revision={revision}
                 base={base}
                 target={target}

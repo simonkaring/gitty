@@ -26,7 +26,7 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
   return <aside className="sidebar native-sidebar" aria-label="Repository references">
     <div className="workspace-label"><FolderGit2 size={22} /><span>{session.name}<small title={session.root}>{session.root}</small></span></div>
     <div className="native-sidebar-meta">
-      <span className="branch-heading"><GitBranch size={14} />{session.headRef?.replace('refs/heads/', '') ?? 'Detached / unborn HEAD'}</span>
+      <span className="badge" data-tone="accent"><GitBranch size={14} />{session.headRef?.replace('refs/heads/', '') ?? 'Detached / unborn HEAD'}</span>
       {session.location.kind === 'wsl' && <span>WSL · {session.location.distribution}</span>}
       {session.linkedWorktree && <span>Linked worktree</span>}
       {session.bare && <span>Bare repository</span>}
@@ -48,7 +48,7 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
             onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openMenu({ oid: ref.commitId, ref: ref.fullName }, rect.left, rect.bottom, event.currentTarget); } }}>
             <Icon size={15} /><span>{ref.name}</span>{ref.fullName === session.headRef && <span className="current-branch-dot" />}
           </button>
-          <button aria-label={`Actions for ${ref.name}`} onClick={() => onAction({ oid: ref.commitId, ref: ref.fullName })}>…</button>
+          <button className="icon-button sm" aria-label={`Actions for ${ref.name}`} onClick={() => onAction({ oid: ref.commitId, ref: ref.fullName })}>…</button>
         </div>)}
         {!refs.length && <p className="empty-category">No references</p>}
       </details>;

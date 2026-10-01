@@ -3,6 +3,7 @@ import type { GitAction } from '../model/operations';
 import type { RepositoryState } from '../model/repository';
 import { DEFAULT_PULL_MODE, PULL_MODE_LABELS, type PullMode, type RemoteActionRequest } from '../model/remote';
 import type { ActionContext } from './OperationDialog';
+import { useDismiss } from './ui';
 
 export interface MenuTarget { context: ActionContext; x: number; y: number; trigger: HTMLElement }
 
@@ -21,9 +22,7 @@ export function GraphContextMenu({ target, state, busy, onOperation, onShowDetai
     menu.current?.querySelector('button')?.focus();
   }, [target]);
   useEffect(() => {
-    function dismiss(event: PointerEvent) { if (!menu.current?.contains(event.target as Node)) onClose(); }
     function keydown(event: KeyboardEvent) {
-      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose(); target.trigger.focus(); }
       if (event.key === 'Tab') onClose();
       if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) && menu.current?.contains(document.activeElement)) {
         event.preventDefault();
@@ -32,10 +31,12 @@ export function GraphContextMenu({ target, state, busy, onOperation, onShowDetai
         items[event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
       }
     }
-    document.addEventListener('pointerdown', dismiss);
     document.addEventListener('keydown', keydown, true);
-    return () => { document.removeEventListener('pointerdown', dismiss); document.removeEventListener('keydown', keydown, true); };
+    return () => document.removeEventListener('keydown', keydown, true);
   }, [onClose, target]);
+  const trigger = useRef<HTMLElement | null>(target.trigger);
+  trigger.current = target.trigger;
+  useDismiss(true, onClose, [menu], trigger);
   const context = target.context;
   const ref = state.refs.find(value => value.fullName === context.ref);
   const current = context.ref === state.session.headRef;

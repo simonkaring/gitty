@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useDismiss } from './ui';
 import { Check, ChevronDown, Download, GitBranch, RefreshCw, Upload, UserRound } from 'lucide-react';
 import { native, errorMessage } from '../model/native';
 import { DEFAULT_PULL_MODE, PULL_MODE_LABELS, describeRemoteAction, needsPublish, syncSummary, type PullMode, type RemoteActionRequest, type SyncInfo } from '../model/remote';
@@ -24,25 +25,6 @@ export interface RepositoryToolbarProps {
   onWrite: (command: string, args: Record<string, unknown>) => Promise<string>;
   notify: (message: string) => void;
   fetchStatus?: FetchStatus;
-}
-
-/** Closes an open dropdown on outside pointerdown or Escape, and returns
- * focus to its toggle so keyboard users never lose their place. Used for
- * both the Pull and Branch menus below. */
-function useMenuDismiss(open: boolean, close: () => void, menuRef: RefObject<HTMLElement | null>, toggleRef: RefObject<HTMLElement | null>) {
-  useEffect(() => {
-    if (!open) return;
-    function onPointerDown(event: PointerEvent) { if (!menuRef.current?.contains(event.target as Node)) close(); }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== 'Escape') return;
-      event.stopPropagation();
-      close();
-      toggleRef.current?.focus();
-    }
-    window.addEventListener('pointerdown', onPointerDown);
-    window.addEventListener('keydown', onKeyDown, true);
-    return () => { window.removeEventListener('pointerdown', onPointerDown); window.removeEventListener('keydown', onKeyDown, true); };
-  }, [open, close, menuRef, toggleRef]);
 }
 
 const IDLE_FETCH: FetchStatus = { kind: 'idle' };
@@ -79,8 +61,8 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
     native<SyncInfo>('repository_sync_info', { handle }).then(value => { if (live) { setSync(value); setSyncError(''); } }).catch(e => { if (live) setSyncError(errorMessage(e)); });
     return () => { live = false; };
   }, [handle, revision, active]);
-  useMenuDismiss(pullMenuOpen, () => setPullMenuOpen(false), pullMenuRef, pullToggleRef);
-  useMenuDismiss(branchMenuOpen, () => setBranchMenuOpen(false), branchMenuRef, branchToggleRef);
+  useDismiss(pullMenuOpen, () => setPullMenuOpen(false), [pullMenuRef], pullToggleRef);
+  useDismiss(branchMenuOpen, () => setBranchMenuOpen(false), [branchMenuRef], branchToggleRef);
   // Deactivating the tab makes the browser force-close any top-layer publish
   // dialog in it; keep menus/dialog state in sync rather than leaving a
   // dropdown open behind a hidden pane.
@@ -121,7 +103,7 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
         </div>}
       </div>
       <button className="sync-button push" data-pending={pending === 'push'} disabled={disabled || !!pending} onClick={push}>{done === 'push' ? <Check size={15} className="done-check" /> : <Upload size={15} />}{pending === 'push' ? 'Pushing…' : needsPublish(sync) ? 'Publish…' : 'Push'}</button>
-      <span className="repository-sync-badge" data-error={!sync && !!syncError} role="status">{sync ? syncSummary(sync) : syncError ? 'Sync info unavailable' : 'Reading sync info…'}</span>
+      <span className="badge" data-tone={!sync && syncError ? 'red' : undefined} role="status">{sync ? syncSummary(sync) : syncError ? 'Sync info unavailable' : 'Reading sync info…'}</span>
       {fetchLabel && <span className="repository-fetch-status" data-error={fetchStatus.kind === 'failed'} title={fetchStatus.kind === 'failed' ? fetchStatus.message : undefined}>{fetchLabel}{fetchStatus.kind === 'failed' && <span className="sr-only">: {fetchStatus.message}</span>}</span>}
     </div>
     <span className="repository-toolbar-divider" aria-hidden="true" />

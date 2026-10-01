@@ -295,7 +295,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
         <button
           ref={columnSettingsButton}
           type="button"
-          className="history-column-settings-btn"
+          className="icon-button sm"
           aria-label="Customize columns"
           title="Customize columns"
           onClick={() => setMenuOpen(open => !open)}
@@ -368,7 +368,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                     {commit.parents.length > 1 && <GitMerge size={13} className="merge-icon" />}
                     <span className="subject" title={commit.subject} draggable={!!onActions && commit.id !== WORKING_ID}
                       onDragStart={event => { event.stopPropagation(); if (!onActions || commit.id === WORKING_ID) { event.preventDefault(); return; } event.dataTransfer.clearData(REF_DRAG_TYPE); event.dataTransfer.setData(COMMIT_DRAG_TYPE, commit.id); event.dataTransfer.effectAllowed = 'copy'; }} onDragEnd={stopDrag}>{commit.subject}</span>
-                    {onActions && commit.id !== WORKING_ID && <button className="graph-action-button" aria-label={`Actions for ${commit.id.slice(0, 7)}`} onClick={event => { event.stopPropagation(); onActions({ oid: commit.id }); }}>…</button>}
+                    {onActions && commit.id !== WORKING_ID && <button className="icon-button sm graph-action-button" aria-label={`Actions for ${commit.id.slice(0, 7)}`} onClick={event => { event.stopPropagation(); onActions({ oid: commit.id }); }}>…</button>}
                     {hasMore !== undefined && commit.parents.some(parent => !loadedIds.has(parent)) && <span className="boundary-label">{hasMore ? 'unloaded parent' : shallow ? 'shallow boundary' : 'unavailable parent'}</span>}
                   </div>;
                 }

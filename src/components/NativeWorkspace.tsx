@@ -8,6 +8,7 @@ import { RepositoryPicker } from './RepositoryPicker';
 import { Welcome } from './Welcome';
 import { Brand, usePaneWidth } from './WorkspaceControls';
 import { SettingsButton } from './Settings';
+import { Toast, ToastProvider, ToastRegion } from './ui';
 import { RepositoryPane } from './RepositoryPane';
 import { RepositoryTabs, type RepositoryTabSummary } from './RepositoryTabs';
 import { loadPersistedTabs, locationLabel, savePersistedTabs, tabsReducer, type TabsState } from '../model/tabs';
@@ -41,6 +42,7 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
   const [sidebarWidth, setSidebarWidth] = usePaneWidth('sidebar', 240, 210, 340);
   const [notice, setNotice] = useState('');
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [toastRoot, setToastRoot] = useState<HTMLElement | null>(null);
   const { themes, theme, updateSettings, openSettings } = useSettings();
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
@@ -120,7 +122,7 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
   ];
   const isMac = document.documentElement.dataset.platform === 'macos' || /Mac/.test(navigator.platform);
   const tabSummaries: RepositoryTabSummary[] = tabs.map(tab => ({ id: tab.id, title: tab.title, busy: tab.busy, branch: tab.branch, dirty: tab.dirty }));
-  return <div className="app-shell native-shell" style={{ '--inspector-width': `${inspectorWidth}px`, '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
+  return <ToastProvider value={toastRoot}><div className="app-shell native-shell" style={{ '--inspector-width': `${inspectorWidth}px`, '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
     <header className="titlebar" data-tauri-drag-region onMouseDown={handleWindowDrag}>
       <Brand demo={demo} />
       <RepositoryTabs tabs={tabSummaries} activeId={activeId} onSelect={selectTab} onClose={closeTab} onNew={() => setPicker(true)} />
@@ -133,11 +135,13 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
         <button className="icon-button" aria-label="Toggle working changes and inspector" aria-pressed={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><PanelRight size={18} /></button>
       </div>
     </header>
-    <div className="toast-region">
-    {notice && <div className="native-banner" role="status">{notice}</div>}
-    {cloneBusy && <div className="clone-progress" role="status" aria-live="polite"><div><strong>{clone.status === 'cancelling' ? 'Cancelling clone…' : `Cloning ${clone.destinationName}`}</strong><span>{clone.progress?.message ?? 'Starting Git…'}</span>{clone.progress?.percent !== null && clone.progress?.percent !== undefined && <progress max="100" value={clone.progress.percent}>{clone.progress.percent}%</progress>}</div><button disabled={clone.status === 'cancelling'} onClick={cancelClone}>Cancel clone</button></div>}
-    {clone.status === 'error' && <div className="native-banner" role="alert">Clone failed: {clone.message} <button onClick={() => dispatchClone({ type: 'dismiss' })}>Dismiss</button></div>}
-    </div>
+    {notice && <Toast onDismiss={() => setNotice('')}>{notice}</Toast>}
+    {cloneBusy && <Toast tone="progress" action={<button className="secondary-button" disabled={clone.status === 'cancelling'} onClick={cancelClone}>Cancel clone</button>}>
+      <strong>{clone.status === 'cancelling' ? 'Cancelling clone…' : `Cloning ${clone.destinationName}`}</strong>
+      <span>{clone.progress?.message ?? 'Starting Git…'}</span>
+      {clone.progress?.percent !== null && clone.progress?.percent !== undefined && <progress max="100" value={clone.progress.percent}>{clone.progress.percent}%</progress>}
+    </Toast>}
+    {clone.status === 'error' && <Toast tone="error" onDismiss={() => dispatchClone({ type: 'dismiss' })}>Clone failed: {clone.message}</Toast>}
     {!tabs.length ? <Welcome showRecent={!picker} onOpenPicker={() => setPicker(true)} onOpen={openLocation} onDemo={onToggleDemo && requestDemo} />
       : tabs.map(tab => <div key={tab.id} id={`tabpanel-${tab.id}`} role="tabpanel" aria-labelledby={`tab-${tab.id}`} hidden={tab.id !== activeId} className="tab-pane-host">
         <RepositoryPane tabId={tab.id} location={tab.location} active={tab.id === activeId}
@@ -148,5 +152,6 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
       </div>)}
     {!tabs.length && paletteOpen && <CommandPalette commands={workspaceCommands} onClose={() => setPaletteOpen(false)} />}
     {picker && <RepositoryPicker onOpen={openLocation} onClone={startClone} cloneBusy={cloneBusy} onClose={() => setPicker(false)} />}
-  </div>;
+    <ToastRegion onMount={setToastRoot} />
+  </div></ToastProvider>;
 }

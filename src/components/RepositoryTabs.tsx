@@ -34,12 +34,12 @@ export function RepositoryTabs({ tabs, activeId, onSelect, onClose, onNew }: {
             {tab.dirty && !tab.busy && <span className="repository-tab-dirty" aria-hidden="true" title="Uncommitted changes" />}
             <span className="repository-tab-text"><span className="repository-tab-title">{tab.title}</span>{tab.branch && <span className="repository-tab-branch">{tab.branch}</span>}</span>
           </button>
-          <button className="repository-tab-close" tabIndex={selected ? 0 : -1} aria-label={tab.busy ? `Cannot close ${tab.title}: an operation is running` : `Close ${tab.title}`} disabled={tab.busy} title={tab.busy ? 'An operation is running in this tab' : 'Close tab'} onClick={() => onClose(tab.id)}>
+          <button className="icon-button sm repository-tab-close" tabIndex={selected ? 0 : -1} aria-label={tab.busy ? `Cannot close ${tab.title}: an operation is running` : `Close ${tab.title}`} disabled={tab.busy} title={tab.busy ? 'An operation is running in this tab' : 'Close tab'} onClick={() => onClose(tab.id)}>
             {tab.busy ? <Loader2 size={13} className="spin" /> : <X size={13} />}
           </button>
         </div>;
       })}
     </nav>
-    <button className="repository-tab-new" aria-label="Open another repository in a new tab" title="New tab" onClick={onNew}><Plus size={16} /></button>
+    <button className="icon-button repository-tab-new" aria-label="Open another repository in a new tab" title="New tab" onClick={onNew}><Plus size={16} /></button>
   </div>;
 }

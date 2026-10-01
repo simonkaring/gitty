@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CommitDetail, DiffFile, FileDiff, RepositorySession, RepositoryStatus } from '../model/repository';
-import { errorMessage, inspectorSpec, isDemoHandle, native, statusGroups, WORKING_ID, type WorkingGroup } from '../model/native';
+import type { CommitDetail, DiffFile, FileDiff, RepositorySession } from '../model/repository';
+import { errorMessage, inspectorSpec, isDemoHandle, native } from '../model/native';
 import { ArrowUpRight, Check, ChevronDown, Copy, FileCode2, GitCommitHorizontal, GitMerge, X } from 'lucide-react';
-import { DiffPreview, type ActiveDiffState } from './WorkingChanges';
-import { useSettings } from '../model/settings';
+import type { ActiveDiffState } from './WorkingChanges';
 
 function statusClass(status: string): string {
   const s = status.toUpperCase();
@@ -19,7 +18,6 @@ function statusLabel(status: string): string {
 export function NativeInspector({
   session,
   selected,
-  status,
   revision,
   base,
   target,
@@ -35,7 +33,6 @@ export function NativeInspector({
 }: {
   session: RepositorySession;
   selected: string;
-  status: RepositoryStatus | null;
   revision: number;
   base: string;
   target: string;
@@ -45,13 +42,12 @@ export function NativeInspector({
   onSwap: () => void;
   onClear: () => void;
   onClose: () => void;
-  activePath?: string | null;
-  onActiveDiffChange?: (diff: ActiveDiffState | null) => void;
+  activePath: string | null;
+  onActiveDiffChange: (diff: ActiveDiffState | null) => void;
   notify?: (message: string) => void;
 }) {
   const [detail, setDetail] = useState<CommitDetail | null>(null);
   const [parent, setParent] = useState('');
-  const [group, setGroup] = useState<WorkingGroup>('unstaged');
   const [files, setFiles] = useState<DiffFile[]>([]);
   const [path, setPath] = useState('');
   const previousActivePath = useRef(activePath);
@@ -63,12 +59,6 @@ export function NativeInspector({
   const [busy, setBusy] = useState(false);
   const [diffBusy, setDiffBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const { settings } = useSettings();
-  const [split, setSplit] = useState(settings.diffView === 'split');
-  useEffect(() => setSplit(settings.diffView === 'split'), [settings.diffView]);
-  const [expanded, setExpanded] = useState(false);
-  const working = selected === WORKING_ID;
-  const groups = statusGroups(status?.entries ?? []);
 
   useEffect(() => {
     setParent('');
@@ -80,7 +70,7 @@ export function NativeInspector({
   }, [selected]);
 
   const validParent = detail?.id === selected && detail.parents.includes(parent) ? parent : undefined;
-  const spec = useMemo(() => inspectorSpec(selected, group, base, target, validParent), [base, target, group, selected, validParent]);
+  const spec = useMemo(() => inspectorSpec(selected, 'unstaged', base, target, validParent), [base, target, selected, validParent]);
   const comparing = spec.kind === 'compare';
   const scope = JSON.stringify([selected, spec, revision, retry]);
 
@@ -94,14 +84,14 @@ export function NativeInspector({
     setFilesScope('');
     setDiff(null);
     Promise.all([
-      !working && selected ? native<CommitDetail>('repository_commit', { handle: session.handle, oid: selected }) : Promise.resolve(null),
+      selected ? native<CommitDetail>('repository_commit', { handle: session.handle, oid: selected }) : Promise.resolve(null),
       selected ? native<DiffFile[]>('repository_diff_files', { handle: session.handle, spec }) : Promise.resolve([]),
     ]).then(([commit, list]) => {
       if (live) {
         setDetail(commit);
         setFiles(list);
         setFilesScope(scope);
-        setPath(old => (old && list.some(file => file.path === old) ? old : onActiveDiffChange ? '' : list[0]?.path ?? ''));
+        setPath(old => (old && list.some(file => file.path === old) ? old : ''));
       }
     }).catch(e => {
       if (live) setError(errorMessage(e));
@@ -109,7 +99,7 @@ export function NativeInspector({
       if (live) setBusy(false);
     });
     return () => { live = false; };
-  }, [session.handle, selected, working, spec, revision, retry, scope, onActiveDiffChange]);
+  }, [session.handle, selected, spec, revision, retry, scope, onActiveDiffChange]);
 
   useEffect(() => {
     if (previousActivePath.current && activePath === null) setPath('');
@@ -117,7 +107,6 @@ export function NativeInspector({
   }, [activePath]);
 
   useEffect(() => {
-    if (!onActiveDiffChange) return;
     if (!path) {
       onActiveDiffChange(null);
       return;
@@ -168,7 +157,7 @@ export function NativeInspector({
     : '';
 
   return (
-    <aside className={`inspector native-inspector ${expanded ? 'expanded' : ''}`} aria-label={working ? 'Working changes' : comparing ? 'Commit comparison' : 'Commit inspector'}>
+    <aside className="inspector native-inspector" aria-label={comparing ? 'Commit comparison' : 'Commit inspector'}>
       <div className="inspector-content">
         {(error || diffError) && (
           <div className="workflow-alert error inspector-alert" role="alert">
@@ -176,28 +165,7 @@ export function NativeInspector({
           </div>
         )}
 
-        {working ? (
-          <div className="commit-summary">
-            <div className="commit-eyebrow">
-              <strong>Working changes</strong>
-              <div className="commit-actions">
-                <button className="icon-button" aria-label="Close commit inspector" title="Close commit inspector" onClick={onClose}><X size={15} /></button>
-              </div>
-            </div>
-            <p className="working-intro">
-              {group === 'staged' ? 'Staged: changes from HEAD to the index (staging area).' : group === 'unstaged' ? 'Unstaged: changes from the index to the working tree.' : group === 'untracked' ? 'Untracked: files in the working tree that are not in the index.' : 'Conflicts: unresolved paths in the index and working tree.'}
-            </p>
-            {base && target && <p className="working-intro muted">Saved commit comparison is paused while viewing working changes.</p>}
-            <div className="working-groups" aria-label="Working change categories">
-              {(Object.keys(groups) as WorkingGroup[]).map(kind => (
-                <button key={kind} aria-pressed={group === kind} onClick={() => setGroup(kind)}>
-                  {kind} ({groups[kind].length})
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          selected && (
+        {selected && (
             <>
               <div className="commit-summary">
                 <div className="commit-eyebrow">
@@ -205,13 +173,8 @@ export function NativeInspector({
                     {detail && detail.parents.length > 1 ? <GitMerge size={14} /> : <GitCommitHorizontal size={15} />}
                     {selected.slice(0, 7)}
                   </span>
-                  {session.head && selected === session.head && <span className="head-label">HEAD</span>}
+                  {session.head && selected === session.head && <span className="badge" data-tone="accent">HEAD</span>}
                   <div className="commit-actions">
-                    {!onActiveDiffChange && (
-                      <button className="secondary-button" onClick={() => setExpanded(!expanded)} aria-pressed={expanded}>
-                        {expanded ? 'Reduce width' : 'Expand diff'}
-                      </button>
-                    )}
                     <button className="icon-button" aria-label="Copy full commit SHA" title="Copy full commit SHA" onClick={copy}>
                       {copied ? <Check size={14} /> : <Copy size={14} />}
                     </button>
@@ -303,7 +266,6 @@ export function NativeInspector({
                 </div>
               )}
             </>
-          )
         )}
 
         <section className="changed-files" aria-label="Changed files">
@@ -343,40 +305,10 @@ export function NativeInspector({
           </p>
         )}
 
-        {onActiveDiffChange ? (
-          activePath ? (
-            <div className="inspector-tip">
-              <FileCode2 size={17} />
-              <p>Viewing <strong>{activePath.split('/').at(-1)}</strong> in the main pane.</p>
-            </div>
-          ) : (
-            <div className="inspector-tip">
-              <FileCode2 size={17} />
-              <p>Select a file above to inspect its diff in the main pane.</p>
-            </div>
-          )
-        ) : (
-          <>
-            {path && filesScope === scope && (
-              <div className="diff-section" aria-label={`Diff for ${path}`}>
-                <div className="diff-heading">
-                  <span>{path.split('/').at(-1)}</span>
-                  <button aria-pressed={split} onClick={() => setSplit(!split)}>
-                    {split ? 'Unified' : 'Side by side'}
-                  </button>
-                </div>
-                {diffBusy && <p className="diff-placeholder" role="status">Loading diff…</p>}
-                {diff && <DiffPreview diff={diff} split={split} />}
-              </div>
-            )}
-            {!path && (
-              <div className="inspector-tip">
-                <FileCode2 size={17} />
-                <p>Select a file to inspect its changes.</p>
-              </div>
-            )}
-          </>
-        )}
+        <div className="inspector-tip">
+          <FileCode2 size={17} />
+          <p>{activePath ? <>Viewing <strong>{activePath.split('/').at(-1)}</strong> in the main pane.</> : 'Select a file above to inspect its diff in the main pane.'}</p>
+        </div>
       </div>
       <div className="inspector-footer">
         <span className="live-dot" /> {isDemoHandle(session.handle) ? 'Demo repository' : 'Native repository'} <span>{session.location.kind === 'wsl' ? `WSL · ${session.location.distribution}` : 'Local'}</span>
