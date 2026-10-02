@@ -3705,6 +3705,38 @@ dialog[open]::backdrop {
   background: var(--border-strong);
 }
 
+/* While the next commit loads the previous one stays in place. It only dims if the load runs long,
+   so quick row-to-row switches show no flicker at all (snaps back when data lands; reduced motion skips it). */
+.native-inspector .inspector-content[data-stale] {
+  animation: inspector-stale var(--dur-med) ease 150ms both;
+}
+@keyframes inspector-stale {
+  to {
+    opacity: 0.55;
+  }
+}
+
+/* First-load placeholders reuse the real markup with transparent text, so line heights match
+   exactly and nothing shifts when data lands. They stay invisible for --dur-fast so fast loads never flash. */
+.native-inspector .skeleton-text {
+  color: transparent;
+  user-select: none;
+  background: linear-gradient(var(--subtle), var(--subtle)) center / 100% 10px no-repeat;
+}
+.native-inspector h2.skeleton-text {
+  background-size: 100% 14px;
+}
+.native-inspector .avatar.skeleton-text,
+.native-inspector .file-status.skeleton-text {
+  background: var(--subtle);
+}
+.native-inspector .skeleton,
+.native-inspector .skeleton-text {
+  animation:
+    fade-in var(--dur-med) ease var(--dur-fast) both,
+    skeleton-pulse 1.4s ease-in-out var(--dur-fast) infinite;
+}
+
 /* Loading diffs show a pulsing hunk silhouette under the status text. */
 .diff-placeholder[role='status']::after {
   content: '';

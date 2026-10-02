@@ -63,7 +63,6 @@ export function NativeInspector({
 
   useEffect(() => {
     setParent('');
-    setDetail(null);
     setError('');
     setDiffError('');
     setDiffBusy(false);
@@ -81,9 +80,9 @@ export function NativeInspector({
     setError('');
     setDiffError('');
     setDiffBusy(false);
-    setFiles([]);
-    setFilesScope('');
     setDiff(null);
+    // The previous commit/files stay on screen (dimmed) until this fetch lands; every guard below
+    // still compares against `selected`/`scope`, so stale data is never treated as current.
     Promise.all([
       selected ? native<CommitDetail>('repository_commit', { handle: session.handle, oid: selected }) : Promise.resolve(null),
       selected ? native<DiffFile[]>('repository_diff_files', { handle: session.handle, spec }) : Promise.resolve([]),
@@ -95,7 +94,12 @@ export function NativeInspector({
         setPath(old => (old && list.some(file => file.path === old) ? old : ''));
       }
     }).catch(e => {
-      if (live) setError(errorMessage(e));
+      if (live) {
+        setError(errorMessage(e));
+        setDetail(null);
+        setFiles([]);
+        setFilesScope('');
+      }
     }).finally(() => {
       if (live) setBusy(false);
     });
@@ -139,7 +143,7 @@ export function NativeInspector({
 
   async function copy() {
     try {
-      await navigator.clipboard.writeText(selected);
+      await navigator.clipboard.writeText(viewId);
       setCopied(true);
       notify?.('Full commit SHA copied');
     } catch {
@@ -151,6 +155,12 @@ export function NativeInspector({
     setPath(current => current === filePath ? '' : filePath);
   }
 
+  // Placeholders only when there is nothing to show yet (first load / after an error). On later
+  // selections the previous snapshot stays put and is marked stale, so rows switch without a blank frame.
+  const loading = !error && !!selected && !detail;
+  const filesLoading = !error && !!selected && !filesScope;
+  const stale = !error && !!detail && (detail.id !== selected || filesScope !== scope);
+  const viewId = detail?.id ?? selected;
   const additions = files.reduce((n, f) => n + (f.additions ?? 0), 0);
   const deletions = files.reduce((n, f) => n + (f.deletions ?? 0), 0);
   const date = detail
@@ -158,8 +168,8 @@ export function NativeInspector({
     : '';
 
   return (
-    <aside className="inspector native-inspector" aria-label={comparing ? 'Commit comparison' : 'Commit inspector'}>
-      <div className="inspector-content">
+    <aside className="inspector native-inspector" aria-label={comparing ? 'Commit comparison' : 'Commit inspector'} aria-busy={loading || filesLoading || stale}>
+      <div className="inspector-content" data-stale={stale || undefined}>
         {(error || diffError) && (
           <div className="workflow-alert error inspector-alert" role="alert">
             {error || diffError} <button className="secondary-button" onClick={() => setRetry(retry + 1)}>Retry inspection</button>
@@ -172,9 +182,9 @@ export function NativeInspector({
                 <div className="commit-eyebrow">
                   <span>
                     {detail && detail.parents.length > 1 ? <GitMerge size={14} /> : <GitCommitHorizontal size={15} />}
-                    {selected.slice(0, 7)}
+                    {viewId.slice(0, 7)}
                   </span>
-                  {session.head && selected === session.head && <span className="badge" data-tone="accent">HEAD</span>}
+                  {session.head && viewId === session.head && <span className="badge" data-tone="accent">HEAD</span>}
                   <div className="commit-actions">
                     <button className="icon-button" aria-label="Copy full commit SHA" title="Copy full commit SHA" onClick={copy}>
                       {copied ? <Check size={14} /> : <Copy size={14} />}
@@ -184,7 +194,16 @@ export function NativeInspector({
                     </button>
                   </div>
                 </div>
-                <h2>{detail?.subject || (busy ? 'Loading commit…' : selected)}</h2>
+                {loading ? <h2 className="skeleton-text" style={{ width: '65%' }}>Loading commit…</h2> : <h2>{detail?.subject || viewId}</h2>}
+                {loading && (
+                  <div className="author-block" aria-hidden="true">
+                    <span className="avatar skeleton-text" />
+                    <div>
+                      <strong className="skeleton-text" style={{ width: '60%' }}>Author name</strong>
+                      <span className="skeleton-text">Jan 1, 2025, 12:00 PM UTC</span>
+                    </div>
+                  </div>
+                )}
                 {detail && (
                   <div className="author-block">
                     <span className="avatar">{initials(detail.author)}</span>
@@ -201,17 +220,23 @@ export function NativeInspector({
               <dl className="commit-metadata">
                 <div>
                   <dt>Commit</dt>
-                  <dd className="full-sha" title={selected}>
-                    <code className="native-sha">{selected}</code>
+                  <dd className="full-sha" title={viewId}>
+                    <code className="native-sha">{viewId}</code>
                   </dd>
                 </div>
+                {loading && (
+                  <>
+                    <div aria-hidden="true"><dt>Parent</dt><dd><span className="skeleton-text" style={{ fontSize: 'var(--fs-xs)' }}>0000000</span></dd></div>
+                    <div aria-hidden="true"><dt>Author</dt><dd><span className="skeleton-text">author@example.com</span></dd></div>
+                  </>
+                )}
                 {detail && (
                   <div>
                     <dt>{detail.parents.length === 1 ? 'Parent' : 'Parents'}</dt>
                     <dd>
                       {detail.parents.length ? (
                         detail.parents.map(id => (
-                          <button className="parent-link" key={id} onClick={() => onJump(id)}>
+                          <button className="parent-link" key={id} disabled={stale} onClick={() => onJump(id)}>
                             {id.slice(0, 7)}
                             <ArrowUpRight size={11} />
                           </button>
@@ -234,7 +259,7 @@ export function NativeInspector({
                 <div className="inspector-block">
                   <label>
                     Diff against parent:
-                    <select value={validParent ?? detail.parents[0]} onChange={e => setParent(e.target.value)}>
+                    <select disabled={stale} value={validParent ?? detail.parents[0]} onChange={e => setParent(e.target.value)}>
                       {detail.parents.map((id, index) => (
                         <option key={id} value={id}>Parent {index + 1}: {id.slice(0, 7)}</option>
                       ))}
@@ -269,12 +294,22 @@ export function NativeInspector({
 
         <section className="changed-files" aria-label="Changed files">
           <div className="section-heading">
-            <span><ChevronDown size={13} /> Changed files <span className="count">{files.length}</span></span>
+            <span><ChevronDown size={13} /> Changed files {!filesLoading && <span className="count">{files.length}</span>}</span>
             <span className="change-totals">
               {additions > 0 && <span className="added">+{additions}</span>}
               {deletions > 0 && <span className="removed">−{deletions}</span>}
             </span>
           </div>
+          {filesLoading && [18, 26, 12, 22].map((n, i) => (
+            <div className="file-row" key={i} aria-hidden="true">
+              <span className="skeleton" style={{ width: 15, height: 15, flexShrink: 0 }} />
+              <span className="file-name">
+                <strong className="skeleton-text">{'x'.repeat(n)}</strong>
+                <span className="skeleton-text">{'x'.repeat(n + 8)}</span>
+              </span>
+              <span className="file-status skeleton-text" />
+            </div>
+          ))}
           {files.map(f => {
             const isSelected = activePath ? f.path === activePath : f.path === path;
             const filename = f.path.split('/').at(-1);
@@ -298,7 +333,7 @@ export function NativeInspector({
           })}
         </section>
 
-        {!busy && !files.length && (
+        {!filesLoading && !files.length && (
           <p className="diff-placeholder">
             No changed files in this comparison.
           </p>
