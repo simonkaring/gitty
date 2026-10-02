@@ -83,6 +83,9 @@ pub fn configure(args: &mut Vec<String>, location: &RepositoryLocation, url: &st
         args.extend([
             "-c".into(),
             format!("credential.helper={}", helper_value(path)),
+            // ponytail: GCM needs the Azure DevOps org from the path; scope this to dev.azure.com.
+            "-c".into(),
+            "credential.https://dev.azure.com.useHttpPath=true".into(),
         ]);
         #[cfg(target_os = "linux")]
         {
@@ -112,6 +115,62 @@ pub fn configure(args: &mut Vec<String>, location: &RepositoryLocation, url: &st
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bundled_helper_passes_azure_devops_path_to_gcm_only() {
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy().into_owned();
+        let location = crate::dto::RepositoryLocation::Native { path };
+        assert!(Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap()
+            .success());
+        // A non-GCM local helper forces the bundled fallback regardless of user config.
+        assert!(Command::new("git")
+            .args(["config", "credential.https://dev.azure.com.helper", "store"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap()
+            .success());
+        super::BUNDLED.set(dir.path().join("bundled-gcm")).unwrap();
+        let mut args = Vec::new();
+        super::configure(
+            &mut args,
+            &location,
+            "https://dev.azure.com/org/proj/_git/repo",
+        )
+        .unwrap();
+
+        for (url, expected) in [
+            ("https://dev.azure.com/org/proj/_git/repo", Some("true")),
+            ("https://github.com/a/b", None),
+        ] {
+            let output = Command::new("git")
+                .args(&args)
+                .args(["config", "--get-urlmatch", "credential.useHttpPath", url])
+                .current_dir(dir.path())
+                .env(
+                    "GIT_CONFIG_GLOBAL",
+                    if cfg!(windows) { "NUL" } else { "/dev/null" },
+                )
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env_remove("GIT_CONFIG_COUNT")
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(if expected.is_some() { 0 } else { 1 })
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                expected.unwrap_or("")
+            );
+        }
+    }
+
     #[test]
     fn helper_paths_escape_git_command_metacharacters() {
         assert_eq!(
