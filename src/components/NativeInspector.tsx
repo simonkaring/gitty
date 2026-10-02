@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CommitDetail, DiffFile, FileDiff, RepositorySession } from '../model/repository';
 import { errorMessage, inspectorSpec, native } from '../model/native';
-import { ArrowUpRight, Check, ChevronDown, Copy, FileCode2, GitCommitHorizontal, GitMerge, X } from 'lucide-react';
+import { AlertTriangle, ArrowUpRight, Check, ChevronDown, Copy, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, GitMerge, X } from 'lucide-react';
 import type { ActiveDiffState } from './WorkingChanges';
 import { initials } from './ui';
 
@@ -14,6 +14,11 @@ function statusClass(status: string): string {
 
 function statusLabel(status: string): string {
   return status[0]?.toUpperCase() ?? 'M';
+}
+
+function fileIcon(status: string) {
+  const s = status.toUpperCase();
+  return s.startsWith('A') ? FilePlus2 : s.startsWith('D') ? FileMinus2 : s.startsWith('R') ? FileSymlink : s.startsWith('C') ? FilePlus2 : s.startsWith('U') ? AlertTriangle : FilePenLine;
 }
 
 export function NativeInspector({
@@ -314,6 +319,8 @@ export function NativeInspector({
             const isSelected = activePath ? f.path === activePath : f.path === path;
             const filename = f.path.split('/').at(-1);
             const dirname = f.path.split('/').slice(0, -1).join('/');
+            const Icon = fileIcon(f.status);
+            const iconStatus = f.status.toUpperCase().startsWith('A') ? 'added' : f.status.toUpperCase().startsWith('D') ? 'deleted' : f.status.toUpperCase().startsWith('R') ? 'renamed' : f.status.toUpperCase().startsWith('U') ? 'conflict' : 'modified';
             return (
               <button
                 key={f.path}
@@ -322,7 +329,7 @@ export function NativeInspector({
                 title={isSelected ? `Close diff for ${f.path}` : `View diff for ${f.path}`}
                 aria-pressed={isSelected}
               >
-                <FileCode2 size={15} />
+                <Icon size={15} data-status={iconStatus} aria-label={`${iconStatus} file`} />
                 <span className="file-name">
                   <strong>{filename}</strong>
                   <span>{dirname ? `${dirname}/` : ''}</span>
