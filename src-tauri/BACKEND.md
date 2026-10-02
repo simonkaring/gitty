@@ -311,6 +311,17 @@ for a selected connected account. PR creation is explicit and does not push.
   repository opens, when its tab or the window regains focus, and on a 30-second
   check, at most once per five minutes. Explicit fetch and pull reset that clock.
   Background fetch failures appear as a toolbar fetch status, not an error banner.
+- Pull (`RemoteAction::Pull`) no longer requires an entirely clean worktree.
+  Fast-forward and merge pulls preserve existing working changes whenever Git can
+  safely carry them, while `--no-overwrite-ignore` and Git's untracked collision
+  checks protect untracked and ignored files from being overwritten. If incoming
+  changes conflict with uncommitted local work, Git refuses the integration with
+  its path-specific explanation. Rebase pulls (`PullMode::Rebase`) refuse tracked
+  staged or unstaged changes (`dirtyWorktree`), while allowing untracked files
+  provided they do not collide with incoming commits (`protect_untracked`).
+  No automatic stashing is performed. Callers refresh repository state on every
+  outcome, and conflicts between local commits and incoming commits leave the
+  operation in progress for existing conflict controls.
 
 ## Graph operations and full conflict editor
 

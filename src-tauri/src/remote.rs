@@ -342,9 +342,6 @@ impl Repository {
                 let current = info.branch.as_ref().ok_or_else(|| {
                     Error::new("detachedHead", "Switch to a local branch before pulling.")
                 })?;
-                if !self.status_entries()?.entries.is_empty() {
-                    return Err(Error::new("dirtyWorktree", "Commit or explicitly stash staged, unstaged and untracked changes before pulling."));
-                }
                 let branch = branch.or(tracking_branch).ok_or_else(|| {
                     Error::new(
                         "noUpstream",
@@ -405,6 +402,17 @@ impl Repository {
                         ]));
                     }
                     PullMode::Rebase => {
+                        if self
+                            .status_entries()?
+                            .entries
+                            .iter()
+                            .any(|entry| !entry.untracked)
+                        {
+                            return Err(Error::new(
+                                "dirtyWorktree",
+                                "Commit or stash staged and unstaged changes before pulling with rebase.",
+                            ));
+                        }
                         let range = format!("{incoming}..HEAD");
                         if !self
                             .check_text(&["rev-list", "--merges", &range, "--"])?

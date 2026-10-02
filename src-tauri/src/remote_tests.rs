@@ -428,11 +428,22 @@ fn remote_inputs_dirty_worktrees_and_in_progress_are_guarded() {
             "invalidRemote"
         );
     }
-    f.write("file", "dirty\n");
+    let peer = f.peer(_bare.path());
+    peer.write("file", "peer incoming\n");
+    peer.commit("incoming");
+    peer.remote(json!({"kind":"push"})).unwrap();
+    let before_head = f.git(&["rev-parse", "HEAD"]);
+    f.write("file", "dirty local\n");
+    let err = f.remote(json!({"kind":"pull"})).unwrap_err();
+    assert_eq!(err.code, "git");
+    assert!(err.message.contains("file"));
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), before_head);
     assert_eq!(
-        f.remote(json!({"kind":"pull"})).unwrap_err().code,
-        "dirtyWorktree"
+        std::fs::read_to_string(f.dir.path().join("file")).unwrap(),
+        "dirty local\n"
     );
+    f.git(&["checkout", "HEAD", "--", "file"]);
+    f.remote(json!({"kind":"pull"})).unwrap();
     f.remote(json!({"kind":"fetch"})).unwrap();
     f.remote(json!({"kind":"push"})).unwrap();
     std::fs::write(
@@ -895,5 +906,205 @@ fn untracked_protection_catches_both_file_directory_collision_directions() {
             std::fs::read_to_string(f.dir.path().join(precious)).unwrap(),
             "preserve me"
         );
+    }
+}
+
+#[test]
+fn pull_fast_forward_preserves_unrelated_working_changes() {
+    for mode in ["ffOnly", "merge"] {
+        let f = Fixture::new();
+        let bare = f.bare_remote();
+        f.publish();
+        let peer = f.peer(bare.path());
+        peer.write("b.txt", "incoming b\n");
+        let incoming = peer.commit("incoming b");
+        peer.remote(json!({"kind":"push"})).unwrap();
+
+        f.write("a.txt", "local unstaged\n");
+        f.write("d.txt", "local staged\n");
+        f.git(&["add", "d.txt"]);
+        f.write("c.txt", "local untracked\n");
+
+        f.remote(json!({"kind":"pull", "pullMode":mode})).unwrap();
+
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), incoming);
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join("a.txt")).unwrap(),
+            "local unstaged\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join("c.txt")).unwrap(),
+            "local untracked\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join("d.txt")).unwrap(),
+            "local staged\n"
+        );
+        let status = f.git(&["status", "--porcelain"]);
+        assert!(
+            status.contains("?? a.txt")
+                || status.contains(" M a.txt")
+                || status.contains("?? c.txt")
+                || status.contains("A  d.txt")
+        );
+        assert_eq!(f.git(&["diff", "--cached", "--name-only"]), "d.txt");
+    }
+}
+
+#[test]
+fn pull_true_merge_preserves_unrelated_unstaged_and_untracked_changes() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+
+    let peer = f.peer(bare.path());
+    peer.write("b.txt", "incoming b\n");
+    peer.commit("incoming b");
+    peer.remote(json!({"kind":"push"})).unwrap();
+
+    f.write("a.txt", "local committed\n");
+    let local_head = f.commit("local a");
+
+    f.write("a.txt", "local unstaged edit\n");
+    f.write("c.txt", "local untracked\n");
+
+    f.remote(json!({"kind":"pull", "pullMode":"merge"}))
+        .unwrap();
+
+    let new_head = f.git(&["rev-parse", "HEAD"]);
+    assert_ne!(new_head, local_head);
+    let parents = f.git(&["rev-parse", "HEAD^1", "HEAD^2"]);
+    assert_eq!(parents.lines().count(), 2);
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("a.txt")).unwrap(),
+        "local unstaged edit\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("c.txt")).unwrap(),
+        "local untracked\n"
+    );
+}
+
+#[test]
+fn pull_true_merge_refuses_ordinary_unrelated_staged_changes() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+
+    let peer = f.peer(bare.path());
+    peer.write("b.txt", "incoming b\n");
+    peer.commit("incoming b");
+    peer.remote(json!({"kind":"push"})).unwrap();
+
+    f.write("a.txt", "local committed\n");
+    let local_head = f.commit("local a");
+
+    f.write("d.txt", "local staged\n");
+    f.git(&["add", "d.txt"]);
+
+    let err = f
+        .remote(json!({"kind":"pull", "pullMode":"merge"}))
+        .unwrap_err();
+    assert_eq!(err.code, "git");
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), local_head);
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("d.txt")).unwrap(),
+        "local staged\n"
+    );
+    assert_eq!(f.git(&["diff", "--cached", "--name-only"]), "d.txt");
+}
+
+#[test]
+fn pull_rebase_refuses_staged_and_unstaged_tracked_changes() {
+    for stage in [false, true] {
+        let f = Fixture::new();
+        let bare = f.bare_remote();
+        f.publish();
+
+        let peer = f.peer(bare.path());
+        peer.write("b.txt", "incoming b\n");
+        peer.commit("incoming b");
+        peer.remote(json!({"kind":"push"})).unwrap();
+
+        f.write("tracked.txt", "tracked\n");
+        let local_head = f.commit("track file");
+
+        f.write("tracked.txt", "modified\n");
+        if stage {
+            f.git(&["add", "tracked.txt"]);
+        }
+
+        let err = f
+            .remote(json!({"kind":"pull", "pullMode":"rebase"}))
+            .unwrap_err();
+        assert_eq!(err.code, "dirtyWorktree");
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), local_head);
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join("tracked.txt")).unwrap(),
+            "modified\n"
+        );
+    }
+}
+
+#[test]
+fn pull_refuses_overwriting_conflicting_working_changes() {
+    for mode in ["ffOnly", "merge"] {
+        for stage in [false, true] {
+            let f = Fixture::new();
+            let bare = f.bare_remote();
+            f.publish();
+
+            f.write("a.txt", "base a\n");
+            let local_head = f.commit("base");
+            f.remote(json!({"kind":"push"})).unwrap();
+
+            let peer = f.peer(bare.path());
+            peer.write("a.txt", "incoming peer edit\n");
+            peer.commit("incoming edit");
+            peer.remote(json!({"kind":"push"})).unwrap();
+
+            f.write("a.txt", "conflicting local edit\n");
+            if stage {
+                f.git(&["add", "a.txt"]);
+            }
+
+            let err = f
+                .remote(json!({"kind":"pull", "pullMode":mode}))
+                .unwrap_err();
+            assert_eq!(err.code, "git");
+            assert!(err.message.contains("a.txt"));
+            assert_eq!(f.git(&["rev-parse", "HEAD"]), local_head);
+            assert_eq!(
+                std::fs::read_to_string(f.dir.path().join("a.txt")).unwrap(),
+                "conflicting local edit\n"
+            );
+        }
+    }
+}
+
+#[test]
+fn pull_already_up_to_date_accepts_dirty_worktrees() {
+    for mode in ["ffOnly", "merge"] {
+        let f = Fixture::new();
+        let _bare = f.bare_remote();
+        f.publish();
+
+        f.write("unstaged.txt", "dirty unstaged\n");
+        f.write("staged.txt", "dirty staged\n");
+        f.git(&["add", "staged.txt"]);
+        let head = f.git(&["rev-parse", "HEAD"]);
+
+        f.remote(json!({"kind":"pull", "pullMode":mode})).unwrap();
+
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), head);
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join("unstaged.txt")).unwrap(),
+            "dirty unstaged\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join("staged.txt")).unwrap(),
+            "dirty staged\n"
+        );
+        assert_eq!(f.git(&["diff", "--cached", "--name-only"]), "staged.txt");
     }
 }
