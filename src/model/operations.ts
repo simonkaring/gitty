@@ -16,7 +16,7 @@ export interface OperationState {
 export type GitAction =
   | { kind: 'createBranch'; name: string; startPoint: string; checkout: boolean }
   | { kind: 'switchBranch'; branch: string; carryChanges?: boolean }
-  | { kind: 'merge'; source: string; noFastForward: boolean }
+  | { kind: 'merge'; source: string; destination?: string; noFastForward: boolean }
   | { kind: 'rebase'; onto: string }
   | { kind: 'interactiveRebase'; onto: string; steps: RebaseStep[] }
   | { kind: 'cherryPick'; commits: string[]; mainline?: number }
@@ -62,6 +62,7 @@ export interface EditorPromptPayload {
 
 /* Commands (camelCase arguments):
  * repository_operation_state({handle}) -> OperationState
+ * repository_branch_relation({handle, first, second}) -> [firstOnly, secondOnly]
  * repository_run_operation({handle, request: OperationRequest}) -> OperationResult
  * repository_conflict_file({handle, path}) -> ConflictFile
  * repository_resolve_conflict({handle, path, fingerprint, resolution: ConflictResolution}) -> void

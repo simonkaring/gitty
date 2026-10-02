@@ -32,6 +32,28 @@ impl Service {
 }
 
 impl Repository {
+    pub fn branch_relation(&self, first: &str, second: &str) -> Result<(usize, usize)> {
+        let first = resolve(self.location(), first)?;
+        let second = resolve(self.location(), second)?;
+        let counts = self.check_text(&[
+            "rev-list",
+            "--left-right",
+            "--count",
+            &format!("{first}...{second}"),
+            "--",
+        ])?;
+        let mut values = counts.split_whitespace().map(str::parse::<usize>);
+        let ahead = values
+            .next()
+            .and_then(|value| value.ok())
+            .ok_or_else(|| Error::new("git", "Could not compare branch history."))?;
+        let behind = values
+            .next()
+            .and_then(|value| value.ok())
+            .ok_or_else(|| Error::new("git", "Could not compare branch history."))?;
+        Ok((ahead, behind))
+    }
+
     pub(crate) fn metadata(&self, name: &str) -> Result<Option<Vec<u8>>> {
         // Only backend constants reach this function, never IPC paths.
         let path = format!("{}/{}", self.session.git_dir, name);
@@ -492,6 +514,7 @@ impl Repository {
             }
             GitAction::Merge {
                 source,
+                destination,
                 no_fast_forward,
             } => {
                 if state.session.head_ref.is_none() {
@@ -499,6 +522,25 @@ impl Repository {
                         "detachedHead",
                         "Switch to a local branch before merging.",
                     ));
+                }
+                if let Some(destination) = destination {
+                    let branch = destination
+                        .strip_prefix("refs/heads/")
+                        .unwrap_or(&destination);
+                    self.valid_name(branch, "heads")?;
+                    if format!("refs/heads/{branch}")
+                        != state.session.head_ref.as_deref().unwrap_or_default()
+                    {
+                        resolve(self.location(), &format!("refs/heads/{branch}"))?;
+                        let switch = args(&[
+                            "switch",
+                            "--no-overwrite-ignore",
+                            "--no-guess",
+                            "--",
+                            branch,
+                        ]);
+                        self.write(&switch, &[], &[], 0)?;
+                    }
                 }
                 let oid = resolve(self.location(), &source)?;
                 a.extend(args(&[

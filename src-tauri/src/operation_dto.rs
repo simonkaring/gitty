@@ -48,6 +48,7 @@ pub enum GitAction {
     },
     Merge {
         source: String,
+        destination: Option<String>,
         no_fast_forward: bool,
     },
     Rebase {

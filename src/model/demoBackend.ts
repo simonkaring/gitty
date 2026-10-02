@@ -64,6 +64,7 @@ export async function demoInvoke(command: string, args: Record<string, unknown>)
     }
     case 'repository_state': return state(r());
     case 'repository_operation_state': return { kind: 'none', label: '', current: null, incoming: null, step: null, total: null, conflicts: [], canContinue: false, canSkip: false, fingerprint: 'none' };
+    case 'repository_branch_relation': return [1, 0];
     case 'repository_status': return demoStatus(r().files, r().head);
     case 'repository_history': {
       const { commits, head } = r();

@@ -106,6 +106,7 @@ impl Fixture {
     fn merge(&self, source: &str, no_fast_forward: bool) -> Result<OperationResult> {
         self.run(GitAction::Merge {
             source: source.into(),
+            destination: None,
             no_fast_forward,
         })
     }
@@ -409,6 +410,7 @@ fn operations_external_merge_restart_abort_and_stale_expectations() {
     assert_eq!(f.git(&["rev-parse", "HEAD"]), head);
     let request = f.request(GitAction::Merge {
         source: "side".into(),
+        destination: None,
         no_fast_forward: false,
     });
     f.git(&["tag", "changed"]);
@@ -1255,6 +1257,7 @@ fn operations_merge_and_cherry_pick_abort_preserve_unrelated_edits() {
         } else {
             GitAction::Merge {
                 source: side,
+                destination: None,
                 no_fast_forward: false,
             }
         })
