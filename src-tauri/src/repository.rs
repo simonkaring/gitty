@@ -61,7 +61,7 @@ impl Walk {
         let stream = if tips.is_empty() {
             None
         } else {
-            let mut a = args(&["rev-list", "--topo-order"]);
+            let mut a = args(&["rev-list", "--date-order"]);
             a.extend(tips);
             a.push("--".into());
             Some(crate::stream::GitStream::git(location, &a, b'\n', 128)?)

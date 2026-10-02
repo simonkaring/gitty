@@ -42,7 +42,9 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   state, search, status, and diff reads run independently. Closing invalidates the
   handle immediately; acquired requests may finish before resources are released.
 - History resolves current local/remote/tag refs and HEAD to concrete commit IDs,
-  then starts **one** `rev-list --topo-order <captured IDs> --` process per generation.
+  then starts **one** `rev-list --date-order <captured IDs> --` process per generation.
+  History rows use committer timestamps, matching this ordering; original author dates
+  remain in the underlying commit objects.
   It consumes only the requested page plus one lookahead ID. Backpressure pauses
   stdout consumption between pages. Consumed IDs are spooled to an anonymous temp
   file, so replaying a cursor uses exactly the same order without keeping the entire

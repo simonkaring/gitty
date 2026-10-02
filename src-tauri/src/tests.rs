@@ -807,7 +807,14 @@ fn batched_history_preserves_topology_unicode_large_bodies_and_detail_parity() {
             "{subject}\n\n{}\nno trailing newline",
             "工作 🦀\n".repeat(10_000)
         );
-        let raw = format!("tree {tree}\n{parents}author Zoë 工作 <zoe@example.org> 1700000000 +1245\ncommitter Test <test@example.org> 1700000001 +0000\n\n{body}");
+        let committer_date = match subject {
+            "Røøt" => 1_700_000_001,
+            "Left 🦀" => 1_700_000_003,
+            "Right 工作" => 1_700_000_004,
+            "Merge é" => 1_700_000_002,
+            _ => unreachable!(),
+        };
+        let raw = format!("tree {tree}\n{parents}author Zoë 工作 <zoe@example.org> 1700000000 +1245\ncommitter Test <test@example.org> {committer_date} +0000\n\n{body}");
         (store_commit(d.path(), raw.as_bytes()), body)
     };
     let root = make(&[], "Røøt");
@@ -815,7 +822,7 @@ fn batched_history_preserves_topology_unicode_large_bodies_and_detail_parity() {
     let right = make(&[&root.0], "Right 工作");
     let merge = make(&[&left.0, &right.0], "Merge é");
     git(d.path(), &["update-ref", "refs/heads/main", &merge.0]);
-    let expected = git(d.path(), &["rev-list", "--topo-order", "HEAD"]);
+    let expected = git(d.path(), &["rev-list", "--date-order", "HEAD"]);
     let data = tempfile::tempdir().unwrap();
     let mut service = Service::new(data.path().into());
     let state = open(&mut service, d.path());
@@ -831,6 +838,11 @@ fn batched_history_preserves_topology_unicode_large_bodies_and_detail_parity() {
     assert_eq!(
         page.commits[0].parents,
         vec![left.0.clone(), right.0.clone()]
+    );
+    assert!(
+        page.commits.iter().position(|c| c.id == right.0).unwrap()
+            < page.commits.iter().position(|c| c.id == left.0).unwrap(),
+        "newer committer date should order the right branch first"
     );
     assert!(page.cursor.is_none());
     for (id, body) in [root, left, right, merge] {

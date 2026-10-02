@@ -88,14 +88,16 @@ pub fn parse(id: &str, bytes: &[u8]) -> Result<CommitDetail> {
     let (name, rest) = author
         .rsplit_once(" <")
         .ok_or_else(|| Error::new("gitParse", "Malformed author"))?;
-    let (email, date) = rest
+    let (email, _) = rest
         .rsplit_once("> ")
         .ok_or_else(|| Error::new("gitParse", "Malformed author date"))?;
-    let timestamp = date
-        .split_whitespace()
-        .next()
+    let timestamp = headers
+        .lines()
+        .find_map(|line| line.strip_prefix("committer "))
+        .and_then(|committer| committer.rsplit_once("> ").map(|(_, date)| date))
+        .and_then(|date| date.split_whitespace().next())
         .and_then(|s| s.parse().ok())
-        .ok_or_else(|| Error::new("gitParse", "Malformed timestamp"))?;
+        .ok_or_else(|| Error::new("gitParse", "Malformed committer timestamp"))?;
     Ok(CommitDetail {
         summary: CommitSummary {
             id: id.into(),
@@ -122,7 +124,7 @@ mod tests {
 
     #[test]
     fn batch_framing_uses_bytes_and_preserves_original_metadata() {
-        // Both supported OID widths, signed-header continuation, UTF-8 and NULs.
+        // Both OID widths, UTF-8 and NULs; timestamp comes from committer, not author.
         for width in [40, 64] {
             let ids = vec!["a".repeat(width), "b".repeat(width)];
             let body = format!("tree {}\nparent {}\nparent {}\nauthor Zoë 工作 <zoe@example.org> 1700000000 +1245\ncommitter Other <c@example.org> 1700000001 +0000\ngpgsig signature\n author Not an author\n\nRésumé 🦀\n\n{} commit 123\nNUL\0end without newline", ids[0], ids[0], ids[1], ids[1]);
@@ -138,7 +140,7 @@ mod tests {
                 assert_eq!(summary.parents, ids);
                 assert_eq!(summary.subject, "Résumé 🦀");
                 assert_eq!(summary.author, "Zoë 工作");
-                assert_eq!(summary.timestamp, 1_700_000_000);
+                assert_eq!(summary.timestamp, 1_700_000_001);
             }
             assert!(parse(&ids[0], body.as_bytes())
                 .unwrap()
