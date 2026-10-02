@@ -1,8 +1,13 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { createElement, type ReactElement, type ReactNode } from 'react';
-import { DiffPreview } from './WorkingChanges';
-import type { FileDiff } from '../model/repository';
+import { createRoot } from 'react-dom/client';
+import { act, createElement, type ReactElement, type ReactNode } from 'react';
+import { DiffPreview, WorkingChanges } from './WorkingChanges';
+import type { FileDiff, RepositorySession, StatusEntry } from '../model/repository';
+import { DEFAULT_SETTINGS } from '../model/settings';
+
+vi.mock('../model/settings', async importOriginal => ({ ...await importOriginal<typeof import('../model/settings')>(), useSettings: () => ({ settings: DEFAULT_SETTINGS, updateSettings: vi.fn(), openSettings: vi.fn() }) }));
 
 const diff: FileDiff = {
   path: 'file.txt', binary: false, truncated: false, message: null,
@@ -29,6 +34,45 @@ function buttons(node: ReactNode): ReactElement<{ disabled?: boolean; onClick?: 
 
 const hunkButtons = (tree: ReactNode) => buttons(tree).filter(b => b.props.className === 'hunk-action-button');
 const lineButtons = (tree: ReactNode) => buttons(tree).filter(b => b.props.className === 'line-select-toggle');
+
+it('combines unstaged and new files while preserving diff and staging actions', async () => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const session: RepositorySession = { handle: 'repo', location: { kind: 'native', path: '/repo' }, name: 'repo', root: '/repo', gitDir: '/repo/.git', commonDir: '/repo/.git', linkedWorktree: false, shallow: false, bare: false, head: 'head', headRef: 'refs/heads/main' };
+  const modified: StatusEntry = { path: 'z.txt', oldPath: null, indexStatus: '.', worktreeStatus: 'M', conflicted: false, untracked: false };
+  const added = { ...modified, path: 'a.txt', untracked: true };
+  const staged = { ...modified, path: 'staged.txt', indexStatus: 'A', worktreeStatus: '.' };
+  const deleted = { ...modified, path: 'deleted.txt', worktreeStatus: 'D' };
+  const stagedDeleted = { ...modified, path: 'staged-deleted.txt', indexStatus: 'D', worktreeStatus: '.' };
+  const renamed = { ...staged, path: 'renamed.txt', oldPath: 'old.txt', indexStatus: 'R' };
+  const copied = { ...staged, path: 'copied.txt', oldPath: 'source.txt', indexStatus: 'C' };
+  const conflict = { ...modified, path: 'conflict.txt', indexStatus: 'U', worktreeStatus: 'U', conflicted: true };
+  const onMutation = vi.fn(async () => ({}));
+  const loadDiff = vi.fn(async () => diff);
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  try {
+    await act(async () => { root.render(createElement(WorkingChanges, { session, status: { entries: [modified, added, staged, deleted, stagedDeleted, renamed, copied, conflict], head: 'head', headRef: session.headRef, fingerprint: 'status' }, revision: 0, busy: false, onMutation, loadDiff, onRefresh: async () => {} })); });
+    expect(host.querySelector('[aria-label="Untracked files"]')).toBeNull();
+    const unstaged = host.querySelector('[aria-label="Unstaged files"]')!;
+    expect(unstaged.querySelector('h2')?.textContent).toBe('Unstaged3');
+    expect([...unstaged.querySelectorAll('strong')].map(node => node.textContent)).toEqual(['a.txt', 'deleted.txt', 'z.txt']);
+    expect(unstaged.querySelector('[aria-label="New file"]')).not.toBeNull();
+    expect(unstaged.querySelector('[aria-label="Modified file"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="Staged files"] [aria-label="New file"]')).not.toBeNull();
+    expect(unstaged.querySelector('[aria-label="Deleted file"]')?.getAttribute('data-status')).toBe('deleted');
+    expect(host.querySelector('[aria-label="Staged files"] [aria-label="Deleted file"]')?.getAttribute('data-status')).toBe('deleted');
+    expect(host.querySelector('[aria-label="Staged: renamed.txt"] [aria-label="Renamed file"]')?.getAttribute('data-status')).toBe('renamed');
+    expect(host.querySelector('[aria-label="Staged: copied.txt"] [aria-label="Copied file"]')?.getAttribute('data-status')).toBe('copied');
+    expect(host.querySelector('[aria-label="Conflicts: conflict.txt"] [aria-label="Conflict file"]')?.getAttribute('data-status')).toBe('conflict');
+    expect(host.querySelector('.working-file .badge')).toBeNull();
+    await act(async () => { (host.querySelector('[aria-label="Untracked: a.txt"]') as HTMLButtonElement).click(); });
+    expect(loadDiff).toHaveBeenLastCalledWith('repo', { kind: 'untracked' }, 'a.txt');
+    await act(async () => { (host.querySelector('[aria-label="Stage a.txt"]') as HTMLButtonElement).click(); });
+    expect(onMutation).toHaveBeenCalledWith({ kind: 'stage', paths: ['a.txt'] });
+    await act(async () => { (host.querySelector('[aria-label="Unstaged: z.txt"]') as HTMLButtonElement).click(); });
+    expect(loadDiff).toHaveBeenLastCalledWith('repo', { kind: 'unstaged' }, 'z.txt');
+  } finally { await act(async () => { root.unmount(); }); }
+});
 
 describe('hunk preview actions', () => {
   it.each([false, true])('routes the selected complete hunk in split=%s', split => {

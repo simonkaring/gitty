@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { AlertTriangle, Check, FileCode2, GitCommitHorizontal, Minus, Plus, RotateCw, X } from 'lucide-react';
+import { AlertTriangle, Check, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, Minus, Plus, RotateCw, X } from 'lucide-react';
 import type { CommitDetail, DiffSpec, FileDiff, RepositoryMutation, RepositorySession, RepositoryStatus } from '../model/repository';
 import { errorMessage, isDemoHandle, native, statusGroups, type WorkingGroup } from '../model/native';
 import { clearSubmittedDraft, commitMessage, draftFromCommitMessage, draftKey, operationPaths, readDraft, saveDraft, type CommitDraft, type MutationOutcome } from '../model/workflow';
@@ -192,17 +192,25 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
           </button>
         </div>
         <div className="working-files-list">
-          {(['conflict', 'unstaged', 'untracked', 'staged'] as WorkingGroup[]).map(kind => <section className={`working-category ${kind}`} key={kind} aria-label={`${labels[kind]} files`}>
-            <h2>{labels[kind]}<span className="count">{groups[kind].length}</span></h2>
-            {!groups[kind].length && <p className="empty-category">No {labels[kind].toLowerCase()} files</p>}
-            {groups[kind].map(entry => {
+          {(['conflict', 'unstaged', 'staged'] as const).map(sectionKind => {
+            const entries = sectionKind === 'unstaged' ? [...groups.unstaged, ...groups.untracked].sort((a, b) => a.path.localeCompare(b.path)) : groups[sectionKind];
+            return <section className={`working-category ${sectionKind}`} key={sectionKind} aria-label={`${labels[sectionKind]} files`}>
+            <h2>{labels[sectionKind]}<span className="count">{entries.length}</span></h2>
+            {!entries.length && <p className="empty-category">No {labels[sectionKind].toLowerCase()} files</p>}
+            {entries.map(entry => {
+              const kind = entry.untracked ? 'untracked' : sectionKind;
+              const fileStatus = kind === 'staged' ? entry.indexStatus : entry.worktreeStatus;
+              const isDeleted = fileStatus === 'D';
+              const isNew = !isDeleted && (entry.untracked || entry.indexStatus === 'A');
+              const iconStatus = entry.conflicted ? 'conflict' : isDeleted ? 'deleted' : isNew ? 'added' : fileStatus === 'C' ? 'copied' : fileStatus === 'R' ? 'renamed' : fileStatus === 'M' ? 'modified' : 'changed';
+              const FileIcon = iconStatus === 'conflict' ? AlertTriangle : iconStatus === 'deleted' ? FileMinus2 : iconStatus === 'added' || iconStatus === 'copied' ? FilePlus2 : iconStatus === 'renamed' ? FileSymlink : iconStatus === 'modified' ? FilePenLine : FileCode2;
               const partial = groups.staged.some(item => item.path === entry.path) && groups.unstaged.some(item => item.path === entry.path);
               const isSelected = active?.group === kind && active.path === entry.path;
               return <div className={`working-file ${isSelected ? 'selected' : ''}`} key={entry.path}>
                 <button className="working-file-select" aria-pressed={isSelected} aria-label={`${labels[kind]}: ${entry.path}`} onClick={() => setSelection(current => current?.group === kind && current.path === entry.path ? null : { group: kind, path: entry.path })}>
-                  <FileCode2 size={15} />
+                  <FileIcon size={15} data-status={iconStatus} aria-label={iconStatus === 'added' ? 'New file' : `${iconStatus.charAt(0).toUpperCase()}${iconStatus.slice(1)} file`} />
                   <span>
-                    <strong>{entry.path}</strong>
+                     <strong>{entry.path}</strong>
                     {entry.oldPath && <small>{(entry.indexStatus === 'C' || (entry.indexStatus !== 'R' && entry.worktreeStatus === 'C')) ? 'Copied' : 'Renamed'} from {entry.oldPath}</small>}
                     {partial && <small>Partially staged</small>}
                   </span>
@@ -211,7 +219,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
                 {kind !== 'conflict' && <button className="icon-button sm file-stage-button" disabled={blocked} title={partial ? kind === 'staged' ? 'Unstage all indexed changes for this path' : 'Stage the remaining working-tree changes for this path' : undefined} aria-label={`${kind === 'staged' ? 'Unstage' : 'Stage'} ${entry.path}`} onClick={() => { const operationKind = kind === 'staged' ? 'unstage' : 'stage'; void perform({ kind: operationKind, paths: operationPaths([entry], operationKind) }); }}>{kind === 'staged' ? <Minus size={16} /> : <Plus size={16} />}</button>}
               </div>;
             })}
-          </section>)}
+          </section>; })}
         </div>
         <form className="commit-composer" aria-label="Commit composer" onSubmit={event => { event.preventDefault(); if (!composerDraft.subject.trim() || groups.conflict.length) return; if (amending && amendReady && status && session.head) void perform({ kind: 'amend', message: commitMessage(composerDraft), identity, expectedHead: session.head, expectedHeadRef: session.headRef, expectedStatusFingerprint: status.fingerprint }); else if (!amending && stagedCount) void perform({ kind: 'commit', message: commitMessage(composerDraft), identity }); }}>
           <div className="composer-heading"><h2><GitCommitHorizontal size={18} />{amending ? 'Rewrite last commit' : 'Create commit'}</h2><span>{stagedCount} staged</span></div>

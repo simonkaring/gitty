@@ -2306,6 +2306,20 @@ button[data-danger='true']:hover:not(:disabled) {
 .working-file.selected .working-file-select svg {
   color: var(--accent-text);
 }
+.working-file .working-file-select svg[data-status='added'],
+.working-file .working-file-select svg[data-status='copied'] {
+  color: var(--green);
+}
+.working-file .working-file-select svg[data-status='modified'] {
+  color: #e99445;
+}
+.working-file .working-file-select svg[data-status='deleted'],
+.working-file .working-file-select svg[data-status='conflict'] {
+  color: var(--red);
+}
+.working-file .working-file-select svg[data-status='renamed'] {
+  color: #60a5fa;
+}
 .working-file-select span {
   min-width: 0;
 }
