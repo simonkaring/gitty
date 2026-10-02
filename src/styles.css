@@ -2320,6 +2320,11 @@ button[data-danger='true']:hover:not(:disabled) {
 .working-file .working-file-select svg[data-status='renamed'] {
   color: #60a5fa;
 }
+.native-inspector .file-row svg[data-status='added'] { color: var(--green); }
+.native-inspector .file-row svg[data-status='modified'] { color: #e99445; }
+.native-inspector .file-row svg[data-status='deleted'],
+.native-inspector .file-row svg[data-status='conflict'] { color: var(--red); }
+.native-inspector .file-row svg[data-status='renamed'] { color: #60a5fa; }
 .working-file-select span {
   min-width: 0;
 }
@@ -3215,28 +3220,6 @@ button[data-danger='true']:hover:not(:disabled) {
 @keyframes row-flash {
   to {
     opacity: 0;
-  }
-}
-.graph-head-pulse {
-  position: absolute;
-  top: 50%;
-  width: 10px;
-  height: 10px;
-  margin: -4px 0 0 -4px;
-  border-radius: 50%;
-  background: var(--graph-head, var(--accent));
-  opacity: 0;
-  animation: head-pulse 2.6s var(--ease-out) infinite;
-}
-@keyframes head-pulse {
-  0% {
-    opacity: 0.55;
-    transform: scale(1);
-  }
-  70%,
-  100% {
-    opacity: 0;
-    transform: scale(3.2);
   }
 }
 /* ==========================================================================
