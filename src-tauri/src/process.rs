@@ -110,6 +110,67 @@ impl Drop for ProcessJob {
         }
     }
 }
+/// One finished Git write, for the activity log. `command` is the Git arguments
+/// without `-c` configuration overrides, which carry credential helper wiring.
+/// `stdin` is the text fed to Git (pathspecs, commit messages), never a patch.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLog {
+    pub command: String,
+    pub stdin: Option<String>,
+    pub success: bool,
+    pub code: Option<i32>,
+    pub millis: u64,
+}
+static GIT_LOG: std::sync::OnceLock<Box<dyn Fn(GitLog) + Send + Sync>> = std::sync::OnceLock::new();
+pub fn set_git_log(sink: impl Fn(GitLog) + Send + Sync + 'static) {
+    let _ = GIT_LOG.set(Box::new(sink));
+}
+fn display_git(args: &[String]) -> String {
+    let mut shown = vec!["git".to_string()];
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        if arg == "-c" {
+            rest.next();
+        } else {
+            shown.push(arg.clone());
+        }
+    }
+    shown.join(" ")
+}
+/// Callers bound their input (1 MiB of pathspecs, 64 KiB of message). Patches are
+/// file content, not metadata, so `git apply` input is never reported.
+fn display_stdin(args: &[String], input: &[u8]) -> Option<String> {
+    if input.is_empty() || args.iter().any(|arg| arg == "apply") {
+        return None;
+    }
+    std::str::from_utf8(input)
+        .ok()
+        .map(|text| text.replace('\0', "\n"))
+}
+/// Reports a Git write to the activity log once it has finished, whatever its outcome.
+pub(crate) fn logged(
+    args: &[String],
+    input: &[u8],
+    run: impl FnOnce() -> Result<Output>,
+) -> Result<Output> {
+    let start = Instant::now();
+    let result = run();
+    if let Some(sink) = GIT_LOG.get() {
+        let (success, code) = result
+            .as_ref()
+            .map_or((false, None), |o| (o.success, o.code));
+        sink(GitLog {
+            command: display_git(args),
+            stdin: display_stdin(args, input),
+            success,
+            code,
+            millis: start.elapsed().as_millis() as u64,
+        });
+    }
+    result
+}
+
 pub struct Output {
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
@@ -500,6 +561,38 @@ mod tests {
             text(vec![b'x', 0xff]).unwrap_err().code,
             "unsupportedEncoding"
         );
+    }
+    #[test]
+    fn logged_command_omits_config_overrides() {
+        let args: Vec<String> = [
+            "-c",
+            "credential.helper=secret",
+            "fetch",
+            "--",
+            "origin",
+            "-c",
+        ]
+        .map(String::from)
+        .into();
+        assert_eq!(display_git(&args), "git fetch -- origin");
+    }
+    #[test]
+    fn logged_stdin_shows_paths_and_messages_but_never_patches() {
+        let add: Vec<String> = ["add", "--pathspec-from-file=-"].map(String::from).into();
+        let apply: Vec<String> = ["-c", "x=y", "apply", "--cached", "-"]
+            .map(String::from)
+            .into();
+        assert_eq!(
+            display_stdin(&add, b"a.txt\0b c.txt"),
+            Some("a.txt\nb c.txt".into())
+        );
+        assert_eq!(
+            display_stdin(&add, "fix: caf\u{e9}\n\nbody".as_bytes()),
+            Some("fix: caf\u{e9}\n\nbody".into())
+        );
+        assert_eq!(display_stdin(&add, b""), None);
+        assert_eq!(display_stdin(&add, &[0xff, 0xfe]), None);
+        assert_eq!(display_stdin(&apply, b"+secret = 1"), None);
     }
     #[test]
     fn output_capture_is_bounded() {

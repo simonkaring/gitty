@@ -377,7 +377,10 @@ impl Repository {
                 crate::askpass::wsl_env_mapping(std::env::var("WSLENV").ok().as_deref()),
             );
         }
-        process::run_with_input_for(command, input, MUTATION_TIMEOUT, max_input).map_err(unverified)
+        process::logged(a, input, || {
+            process::run_with_input_for(command, input, MUTATION_TIMEOUT, max_input)
+        })
+        .map_err(unverified)
     }
     fn write_commit(
         &self,
@@ -400,12 +403,14 @@ impl Repository {
             ]);
         }
         let command = process::git_commit_command(self.location(), args, &vars)?;
-        process::run_with_input_for(
-            command,
-            message.as_bytes(),
-            MUTATION_TIMEOUT,
-            MAX_MESSAGE_BYTES,
-        )
+        process::logged(args, message.as_bytes(), || {
+            process::run_with_input_for(
+                command,
+                message.as_bytes(),
+                MUTATION_TIMEOUT,
+                MAX_MESSAGE_BYTES,
+            )
+        })
         .map_err(unverified)
     }
     /// `--pathspec-from-file=-` with **empty** input means every file to Git, which

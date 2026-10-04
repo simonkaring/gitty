@@ -2,14 +2,27 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Commit } from './types';
 import { demoInvoke } from './demoBackend';
 import type { CommitSummary, DiffSpec, HistoryPage, RepositoryState, RepositoryStatus, StatusEntry } from './repository';
+import { recordCommandEnd, recordCommandStart } from './activity';
 
 let demoMode = false;
 /** While on, handle-less calls (open, recents, pickers) go to the in-memory demo backend. */
 export function setDemoMode(on: boolean) { demoMode = on; }
 export const isDemoHandle = (handle: unknown) => typeof handle === 'string' && handle.startsWith('demo:');
-/** Session calls route by handle, so a pane closing after a mode switch still reaches the backend that owns it. */
-export const native = <T,>(command: string, args: Record<string, unknown> = {}): Promise<T> =>
+const dispatch = <T,>(command: string, args: Record<string, unknown> = {}): Promise<T> =>
   ('handle' in args ? isDemoHandle(args.handle) : demoMode) ? demoInvoke(command, args) as Promise<T> : invoke<T>(command, args);
+/** Session calls route by handle, so a pane closing after a mode switch still reaches the backend that owns it. */
+export const native = async <T,>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
+  const activityId = recordCommandStart(command, args);
+  const start = performance.now();
+  try {
+    const result = await dispatch<T>(command, args);
+    recordCommandEnd(activityId, 'success', performance.now() - start);
+    return result;
+  } catch (error) {
+    recordCommandEnd(activityId, 'error', performance.now() - start, errorMessage(error));
+    throw error;
+  }
+};
 export function errorMessage(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'message' in error) return String(error.message);
   return String(error);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus, GitCommitHorizontal, Globe2, Laptop, LocateFixed, RefreshCw, Search, Tag, Upload, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus, GitCommitHorizontal, Globe2, Laptop, LocateFixed, RefreshCw, ScrollText, Search, Tag, Upload, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { CommandPalette, type PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
 import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
@@ -13,6 +13,7 @@ import { writeAndRefresh, type MutationOutcome } from '../model/workflow';
 import { remoteAndRefresh } from '../model/remoteFlow';
 import type { OperationState } from '../model/operations';
 import { OperationDialog, type ActionContext } from './OperationDialog';
+import { ActivityLogDialog } from './ActivityLogDialog';
 import { GraphContextMenu, type MenuTarget } from './GraphContextMenu';
 import { ConflictEditor } from './ConflictEditor';
 import { PullRequestDialog } from './PullRequestDialog';
@@ -95,6 +96,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
   const [pickOrder, setPickOrder] = useState<string[]>([]);
   const [pickMode, setPickMode] = useState(false);
   const [stashOpen, setStashOpen] = useState(false);
+  const [activityLogOpen, setActivityLogOpen] = useState(false);
   const [mutationBlocked, setMutationBlocked] = useState(false);
   const blockedRef = useRef(false);
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>({ kind: 'idle' });
@@ -582,7 +584,8 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
         </div>
       </div>
     </main>}
-    <footer className="statusbar"><span><span className="live-dot" />{mutationBusy ? 'Updating repository…' : isDemoHandle(state?.session.handle) ? 'Demo workspace · changes are simulated in memory' : 'Local workspace · automatic refresh'}</span><span className="status-keys"><span className="scale-control"><button className="icon-button sm" aria-label="Zoom out" disabled={scale === SCALES[0]} onClick={() => stepScale(-1)}><ZoomOut size={13} /></button><select className="scale-value" aria-label="Interface zoom" value={scale} onChange={event => changeScale(Number(event.target.value))}>{SCALES.map(s => <option key={s} value={s}>{s}%</option>)}</select><button className="icon-button sm" aria-label="Zoom in" disabled={scale === SCALES[SCALES.length - 1]} onClick={() => stepScale(1)}><ZoomIn size={13} /></button></span><kbd>/</kbd> search <kbd>{navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'} K</kbd> commands</span></footer>
+    <footer className="statusbar"><span><button type="button" className="text-button" onClick={() => setActivityLogOpen(true)}><ScrollText size={13} /> Activity</button><span className="live-dot" />{mutationBusy ? 'Updating repository…' : isDemoHandle(state?.session.handle) ? 'Demo workspace · changes are simulated in memory' : 'Local workspace · automatic refresh'}</span><span className="status-keys"><span className="scale-control"><button className="icon-button sm" aria-label="Zoom out" disabled={scale === SCALES[0]} onClick={() => stepScale(-1)}><ZoomOut size={13} /></button><select className="scale-value" aria-label="Interface zoom" value={scale} onChange={event => changeScale(Number(event.target.value))}>{SCALES.map(s => <option key={s} value={s}>{s}%</option>)}</select><button className="icon-button sm" aria-label="Zoom in" disabled={scale === SCALES[SCALES.length - 1]} onClick={() => stepScale(1)}><ZoomIn size={13} /></button></span><kbd>/</kbd> search <kbd>{navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'} K</kbd> commands</span></footer>
+    {activityLogOpen && <ActivityLogDialog onClose={() => setActivityLogOpen(false)} />}
     {state && menuTarget && <GraphContextMenu target={menuTarget} state={state} busy={mutationBusy || mutationBlocked} onClose={() => setMenuTarget(null)} onOperation={context => { setMenuTarget(null); setActionContext(context); }} onSwitchBranch={ref => { setMenuTarget(null); void switchBranch(ref); }} onShowDetails={oid => { reveal(oid); setInspectorOpen(true); setMenuTarget(null); }} onSetBase={oid => setComparison(oid, 'base')} onSetTarget={oid => setComparison(oid, 'target')} onCompare={compareWithCurrent} onPullRequest={ref => { setMenuTarget(null); setPrSource(ref); }} onRemoteAction={action => void runMenuRemote(action)} onPush={() => void pushFromMenu(menuTarget.context.ref!)} onCopy={(value, label) => void copyMenuValue(value, label)} />}
     {state && publishInfo && <PublishDialog remotes={publishInfo.remotes} branch={publishInfo.branch ?? ''} onPublish={async (remote, branch) => { const action: RemoteActionRequest = { kind: 'push', remote, branch, setUpstream: true }; const output = await remoteWrite('repository_remote_action', { action }); setNotice(output || 'Publish complete.'); }} onClose={() => setPublishInfo(null)} />}
     {state && actionContext && <OperationDialog key={state.session.handle} state={state} operation={operation} context={actionContext} commits={commits} busy={mutationBusy || mutationBlocked} onWrite={operationWrite} onClose={() => setActionContext(null)} onCompare={compareWithCurrent} onPullRequest={source => { setPrSource(source); setActionContext(null); }} />}

@@ -33,7 +33,7 @@ use operation_dto::*;
 use remote_dto::*;
 use repository::Service;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 type Shared = Arc<Service>;
 type Accounts = Arc<provider_accounts::AccountStore>;
@@ -513,6 +513,10 @@ pub fn run() {
                 app.path().app_data_dir()?.join("provider-accounts.json"),
             )));
             app.manage(Arc::new(Service::new(app.path().app_data_dir()?)));
+            let handle = app.handle().clone();
+            process::set_git_log(move |log| {
+                let _ = handle.emit("git_command", log);
+            });
             askpass::init(app.handle().clone())?;
             editor::init(app.handle().clone())?;
             #[cfg(target_os = "linux")]

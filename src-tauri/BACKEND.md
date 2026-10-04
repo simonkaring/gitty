@@ -225,6 +225,15 @@ targeted conflict resolutions have the additional contract documented below.
 - Mutations do not invalidate history generations themselves; committing changes
   refs, so the existing state fingerprint already forces the frontend to start a
   new walk.
+- Every Git write run through `Repository::write` or `write_commit` (stage,
+  unstage, commit, hunks, fetch, pull, push, graph operations) emits a
+  `git_command` event after it finishes: `{command, stdin, success, code, millis}`.
+  `command` is `git` plus the arguments without `-c` configuration overrides, so
+  credential-helper and askpass wiring never reaches the activity log. `stdin` is
+  the UTF-8 text fed to Git (NUL-separated pathspecs become lines, commit and
+  merge messages are verbatim) or `null`; `git apply` patches are file content
+  and are never reported. The environment is not included. Reads and clone are
+  not reported.
 
 ## Repository cloning
 

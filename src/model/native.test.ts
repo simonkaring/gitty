@@ -26,3 +26,35 @@ describe('working status categories', () => {
     expect(groups.staged).toEqual([]); expect(groups.unstaged).toEqual([]);
   });
 });
+
+describe('native dispatcher activity logging', () => {
+  it('logs demo/native calls and records success and error outcomes', async () => {
+    const { native, setDemoMode } = await import('./native');
+    const { getActivityLog, clearActivityLog } = await import('./activity');
+    setDemoMode(true);
+    clearActivityLog();
+
+    await native('repository_open', { location: { kind: 'native', path: '~/Developer/gitty' } });
+    clearActivityLog();
+    const stage = await native('repository_stage', { handle: 'demo:gitty', paths: ['README.md'] });
+    expect(stage).toBeUndefined();
+
+    const logAfterSuccess = getActivityLog();
+    expect(logAfterSuccess).toHaveLength(1);
+    expect(logAfterSuccess[0]).toMatchObject({
+      command: 'repository_stage',
+      status: 'success',
+    });
+    expect(typeof logAfterSuccess[0].durationMs).toBe('number');
+
+    await native('repository_state', { handle: 'demo:gitty' });
+    expect(getActivityLog()).toHaveLength(1);
+
+    await expect(native('unknown_command', { handle: 'demo:repo' })).rejects.toThrow();
+    const logAfterError = getActivityLog();
+    expect(logAfterError).toHaveLength(2);
+    expect(logAfterError[1].status).toBe('error');
+    expect(logAfterError[1].error).toBeDefined();
+  });
+});
+

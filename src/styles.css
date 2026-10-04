@@ -2536,6 +2536,18 @@ button[data-danger='true']:hover:not(:disabled) {
   align-items: center;
   gap: 6px;
 }
+.statusbar .text-button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+}
+.statusbar .text-button:hover {
+  color: var(--text);
+  background: var(--hover);
+}
 .statusbar kbd {
   font-size: var(--fs-2xs);
   height: 17px;
@@ -2843,6 +2855,119 @@ button[data-danger='true']:hover:not(:disabled) {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+}
+.activity-log-dialog {
+  width: min(1000px, calc(100vw - 32px));
+  height: min(760px, calc(100dvh - 64px));
+}
+.activity-log-dialog .dialog-body {
+  padding: 16px 20px;
+  gap: 12px;
+  overflow: hidden;
+}
+.activity-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.activity-toolbar .search-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 320px;
+}
+.activity-toolbar .search-icon {
+  position: absolute;
+  left: 8px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.activity-toolbar input[type='search'] {
+  width: 100%;
+  padding-left: 24px;
+}
+.activity-count {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  font-family: var(--mono);
+}
+.console {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  user-select: text;
+  cursor: text;
+}
+.console-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+}
+.console-entry {
+  padding: 2px 0;
+}
+.console-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.console-time {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.console-prompt {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.console-command {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.console-status {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.console-entry[data-status='success'] .console-status {
+  color: var(--green);
+}
+.console-entry[data-status='error'] .console-status,
+.console-entry[data-status='error'] .console-command {
+  color: var(--red);
+}
+.console-row {
+  display: flex;
+  gap: 8px;
+  padding-left: 24px;
+}
+.console-label {
+  flex-shrink: 0;
+  width: 40px;
+  color: var(--muted);
+  text-align: right;
+}
+.console-row pre {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font: inherit;
+  color: var(--secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.console-row[data-label='error'] pre {
+  color: var(--red);
 }
 .conflict-versions pre {
   min-height: 70px;
