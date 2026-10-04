@@ -50,6 +50,8 @@ export interface RepositoryGitIdentity { local: GitIdentityValues; effective: Gi
  */
 export type RepositoryMutation =
   | { kind: 'stage' | 'unstage'; paths: string[] }
+  | { kind: 'discard'; paths: string[]; expectedStatusFingerprint: string }
+  | { kind: 'ignore'; path: string }
   | { kind: 'stage_hunk'; path: string; hunkIndex: number; fingerprint: string; lineIndices?: number[] }
   | { kind: 'unstage_hunk'; path: string; hunkIndex: number; fingerprint: string; lineIndices?: number[] }
   | { kind: 'commit'; message: string; identity?: CommitIdentity }
@@ -70,6 +72,14 @@ export type RepositoryMutation =
  * repository_search({handle, query: SearchQuery}) -> SearchResult
  * repository_stage({handle, paths: string[]}) -> void
  * repository_unstage({handle, paths: string[]}) -> void
+ * repository_open_path({handle, path}) -> void   (default app; regular non-executable files only)
+ * repository_reveal_path({handle, path}) -> void
+ * repository_ignore_path({handle, path}) -> void   (appends an anchored line to the root .gitignore)
+ * repository_discard({handle, paths: string[], expectedStatusFingerprint}) -> void
+ * Throws away unstaged changes for the named paths only: tracked files are restored from
+ * the index (staged content survives) and untracked files are DELETED permanently.
+ * Staged-only paths, directories and conflicts are refused, and a status fingerprint that
+ * no longer matches returns staleOperation without touching anything.
  * repository_stage_hunk({handle, path, hunkIndex, fingerprint, lineIndices?: number[]}) -> void
  * repository_unstage_hunk({handle, path, hunkIndex, fingerprint, lineIndices?: number[]}) -> void
  * Hunk indices are zero-based complete hunks from FileDiff. Optional lineIndices are

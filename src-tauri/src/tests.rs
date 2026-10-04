@@ -2337,3 +2337,324 @@ fn timing_report() {
         drop(repo.status().unwrap())
     });
 }
+
+fn read(path: &Path, name: &str) -> String {
+    std::fs::read_to_string(path.join(name)).unwrap()
+}
+fn fingerprint_of(service: &Service, handle: &str) -> String {
+    service.repo(handle).unwrap().status().unwrap().fingerprint
+}
+
+#[test]
+fn discard_restores_from_the_index_and_keeps_the_staged_half() {
+    let d = init();
+    for name in ["edited", "partial", "gone", "untouched"] {
+        std::fs::write(d.path().join(name), format!("{name} base\n")).unwrap();
+    }
+    commit(d.path(), "base");
+    std::fs::write(d.path().join("edited"), "edited work\n").unwrap();
+    std::fs::write(d.path().join("partial"), "partial staged\n").unwrap();
+    git(d.path(), &["add", "partial"]);
+    std::fs::write(d.path().join("partial"), "partial staged\nplus worktree\n").unwrap();
+    std::fs::remove_file(d.path().join("gone")).unwrap();
+    std::fs::write(d.path().join("untouched"), "untouched work\n").unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    let fp = fingerprint_of(&service, &handle);
+    service
+        .discard(&handle, &paths(&["edited", "partial", "gone"]), &fp)
+        .unwrap();
+    assert_eq!(read(d.path(), "edited"), "edited base\n");
+    assert_eq!(read(d.path(), "gone"), "gone base\n");
+    // The staged half is the new floor; only the extra working-tree line is lost.
+    assert_eq!(read(d.path(), "partial"), "partial staged\n");
+    assert_eq!(
+        git(d.path(), &["diff", "--cached", "--name-only"]),
+        "partial"
+    );
+    // A path that was not named is never touched.
+    assert_eq!(read(d.path(), "untouched"), "untouched work\n");
+}
+
+#[test]
+fn discard_deletes_only_the_named_untracked_files_and_keeps_names_literal() {
+    let d = init();
+    std::fs::write(d.path().join("tracked"), "base\n").unwrap();
+    commit(d.path(), "base");
+    std::fs::create_dir(d.path().join("sub dir")).unwrap();
+    let doomed = ["-n", "star*[a-b]?.txt", "úñí 工作.txt", "sub dir/deep file"];
+    for name in doomed {
+        std::fs::write(d.path().join(name), "x\n").unwrap();
+    }
+    // Same shape as a doomed pattern, but not named: a glob must not reach it.
+    for name in ["star1.txt", "keep.txt", "sub dir/sibling"] {
+        std::fs::write(d.path().join(name), "keep\n").unwrap();
+    }
+    let (service, _data, handle) = service_for(d.path());
+    let fp = fingerprint_of(&service, &handle);
+    service.discard(&handle, &paths(&doomed), &fp).unwrap();
+    for name in doomed {
+        assert!(!d.path().join(name).exists(), "{name} should be gone");
+    }
+    for name in ["star1.txt", "keep.txt", "sub dir/sibling", "tracked"] {
+        assert!(d.path().join(name).exists(), "{name} must survive");
+    }
+}
+
+#[test]
+fn discard_batches_many_untracked_paths_across_several_git_processes() {
+    let d = init();
+    std::fs::write(d.path().join("tracked"), "base\n").unwrap();
+    commit(d.path(), "base");
+    // Far more argument bytes than one batch allows.
+    let names: Vec<String> = (0..600)
+        .map(|i| format!("generated-file-with-a-long-name-{i:04}.txt"))
+        .collect();
+    for name in &names {
+        std::fs::write(d.path().join(name), "x\n").unwrap();
+    }
+    let (service, _data, handle) = service_for(d.path());
+    let fp = fingerprint_of(&service, &handle);
+    service.discard(&handle, &names, &fp).unwrap();
+    assert!(names.iter().all(|n| !d.path().join(n).exists()));
+    assert!(d.path().join("tracked").exists());
+}
+
+#[test]
+fn discard_refuses_a_stale_fingerprint_and_changes_nothing() {
+    let d = init();
+    std::fs::write(d.path().join("file"), "base\n").unwrap();
+    commit(d.path(), "base");
+    std::fs::write(d.path().join("file"), "reviewed edit\n").unwrap();
+    std::fs::write(d.path().join("fresh"), "reviewed\n").unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    let reviewed = fingerprint_of(&service, &handle);
+    // An edit lands after the user looked, with the same status letters.
+    std::fs::write(d.path().join("file"), "unreviewed longer edit\n").unwrap();
+    let error = service
+        .discard(&handle, &paths(&["file", "fresh"]), &reviewed)
+        .unwrap_err();
+    assert_eq!(error.code, "staleOperation");
+    assert_eq!(read(d.path(), "file"), "unreviewed longer edit\n");
+    assert_eq!(read(d.path(), "fresh"), "reviewed\n");
+}
+
+#[test]
+fn discard_refuses_staged_only_unknown_empty_and_escaping_paths() {
+    let d = init();
+    std::fs::write(d.path().join("staged"), "base\n").unwrap();
+    std::fs::write(d.path().join("clean"), "base\n").unwrap();
+    std::fs::write(d.path().join("intent"), "base\n").unwrap();
+    commit(d.path(), "base");
+    std::fs::write(d.path().join("staged"), "staged work\n").unwrap();
+    git(d.path(), &["add", "staged"]);
+    std::fs::write(d.path().join("added"), "intent to add\n").unwrap();
+    git(d.path(), &["add", "--intent-to-add", "added"]);
+    let (service, _data, handle) = service_for(d.path());
+    let fp = fingerprint_of(&service, &handle);
+    for (path, code) in [
+        ("staged", "invalidRequest"),
+        ("clean", "invalidRequest"),
+        ("added", "invalidRequest"),
+        ("../outside", "invalidPath"),
+    ] {
+        assert_eq!(
+            service
+                .discard(&handle, &paths(&[path]), &fp)
+                .unwrap_err()
+                .code,
+            code,
+            "{path}"
+        );
+    }
+    assert_eq!(
+        service.discard(&handle, &[], &fp).unwrap_err().code,
+        "invalidRequest"
+    );
+    assert_eq!(read(d.path(), "staged"), "staged work\n");
+    assert_eq!(read(d.path(), "added"), "intent to add\n");
+}
+
+#[test]
+fn discard_is_refused_during_an_operation_and_never_removes_a_nested_repository() {
+    let d = init();
+    std::fs::write(d.path().join("file"), "base\n").unwrap();
+    commit(d.path(), "base");
+    let nested = d.path().join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    git(&nested, &["init", "-b", "main"]);
+    std::fs::write(nested.join("inner"), "inner\n").unwrap();
+    std::fs::write(d.path().join("file"), "edited\n").unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    let fp = fingerprint_of(&service, &handle);
+    assert_eq!(
+        service
+            .discard(&handle, &paths(&["nested"]), &fp)
+            .unwrap_err()
+            .code,
+        "invalidRequest"
+    );
+    assert!(nested.join("inner").exists());
+    std::fs::write(
+        d.path().join(".git/MERGE_HEAD"),
+        format!("{}\n", git(d.path(), &["rev-parse", "HEAD"])),
+    )
+    .unwrap();
+    assert_eq!(
+        service
+            .discard(&handle, &paths(&["file"]), &fp)
+            .unwrap_err()
+            .code,
+        "operationInProgress"
+    );
+    assert_eq!(read(d.path(), "file"), "edited\n");
+}
+
+#[test]
+fn discard_works_before_the_first_commit() {
+    let d = init();
+    std::fs::write(d.path().join("fresh"), "x\n").unwrap();
+    std::fs::write(d.path().join("indexed"), "indexed\n").unwrap();
+    git(d.path(), &["add", "indexed"]);
+    std::fs::write(d.path().join("indexed"), "indexed\nmore\n").unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    let fp = fingerprint_of(&service, &handle);
+    service
+        .discard(&handle, &paths(&["fresh", "indexed"]), &fp)
+        .unwrap();
+    assert!(!d.path().join("fresh").exists());
+    assert_eq!(read(d.path(), "indexed"), "indexed\n");
+}
+
+fn untracked(path: &Path) -> Vec<String> {
+    git(path, &["status", "--porcelain=v1", "-uall", "-z"])
+        .split('\0')
+        .filter_map(|record| record.strip_prefix("?? "))
+        .map(String::from)
+        .collect()
+}
+
+#[test]
+fn ignore_path_appends_one_exact_line_and_refuses_to_repeat_itself() {
+    let d = init();
+    std::fs::write(d.path().join("tracked"), "base\n").unwrap();
+    commit(d.path(), "base");
+    std::fs::create_dir(d.path().join("sub")).unwrap();
+    for name in ["secret.env", "sub/secret.env", "sub/other"] {
+        std::fs::write(d.path().join(name), "x\n").unwrap();
+    }
+    let (service, _data, handle) = service_for(d.path());
+    service.ignore_path(&handle, "secret.env").unwrap();
+    assert_eq!(read(d.path(), ".gitignore"), "/secret.env\n");
+    // Anchored: the same name deeper in the tree is a different file.
+    let remaining = untracked(d.path());
+    assert!(remaining.contains(&"sub/secret.env".to_string()));
+    assert!(!remaining.contains(&"secret.env".to_string()));
+    // Already ignored, so no longer untracked: refused, and no second line.
+    assert_eq!(
+        service.ignore_path(&handle, "secret.env").unwrap_err().code,
+        "invalidRequest"
+    );
+    assert_eq!(read(d.path(), ".gitignore"), "/secret.env\n");
+}
+
+#[test]
+fn ignore_path_keeps_existing_content_and_adds_the_missing_newline() {
+    let d = init();
+    std::fs::write(d.path().join("tracked"), "base\n").unwrap();
+    commit(d.path(), "base");
+    std::fs::write(d.path().join(".gitignore"), "target/\r\nnode_modules").unwrap();
+    git(d.path(), &["add", ".gitignore"]);
+    git(d.path(), &["commit", "-m", "ignore"]);
+    std::fs::write(d.path().join("scratch"), "x\n").unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    service.ignore_path(&handle, "scratch").unwrap();
+    assert_eq!(
+        read(d.path(), ".gitignore"),
+        "target/\r\nnode_modules\n/scratch\n"
+    );
+}
+
+#[test]
+fn ignore_path_escapes_names_so_only_that_file_is_ignored() {
+    let d = init();
+    std::fs::write(d.path().join("tracked"), "base\n").unwrap();
+    commit(d.path(), "base");
+    let ignored = [
+        "star*[a-b]?.txt",
+        "#hash",
+        "!bang",
+        "has space.txt",
+        "back\\slash",
+    ];
+    // Look-alikes that an unescaped pattern would also swallow.
+    let kept = ["starX.txt", "hash", "bang", "has_space.txt"];
+    for name in ignored.iter().chain(kept.iter()) {
+        std::fs::write(d.path().join(name), "x\n").unwrap();
+    }
+    let (service, _data, handle) = service_for(d.path());
+    for name in ignored {
+        service.ignore_path(&handle, name).unwrap();
+    }
+    let mut left = untracked(d.path());
+    left.sort();
+    let mut expected: Vec<String> = kept.iter().map(|s| s.to_string()).collect();
+    expected.push(".gitignore".into());
+    expected.sort();
+    assert_eq!(left, expected);
+}
+
+#[test]
+fn ignore_path_refuses_tracked_missing_and_escaping_targets() {
+    let d = init();
+    std::fs::write(d.path().join("tracked"), "base\n").unwrap();
+    commit(d.path(), "base");
+    let (service, _data, handle) = service_for(d.path());
+    for (path, code) in [
+        ("tracked", "invalidRequest"),
+        ("missing", "invalidRequest"),
+        ("../outside", "invalidPath"),
+    ] {
+        assert_eq!(
+            service.ignore_path(&handle, path).unwrap_err().code,
+            code,
+            "{path}"
+        );
+    }
+    assert!(!d.path().join(".gitignore").exists());
+    #[cfg(unix)]
+    {
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("elsewhere");
+        std::fs::write(&target, "outside\n").unwrap();
+        std::os::unix::fs::symlink(&target, d.path().join(".gitignore")).unwrap();
+        std::fs::write(d.path().join("scratch"), "x\n").unwrap();
+        assert!(service.ignore_path(&handle, "scratch").is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "outside\n");
+    }
+}
+
+#[test]
+fn open_path_refuses_what_it_must_not_launch_before_starting_anything() {
+    let d = init();
+    std::fs::write(d.path().join("tracked"), "base\n").unwrap();
+    std::fs::write(d.path().join("run.sh"), "#!/bin/sh\n").unwrap();
+    commit(d.path(), "base");
+    std::fs::create_dir(d.path().join("folder")).unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    for (path, code) in [
+        ("run.sh", "openRefused"),
+        ("folder", "openRefused"),
+        ("gone", "notFound"),
+        ("../outside", "invalidPath"),
+    ] {
+        assert_eq!(
+            service.open_path(&handle, path).unwrap_err().code,
+            code,
+            "{path}"
+        );
+    }
+    assert_eq!(
+        service.reveal_path(&handle, "gone").unwrap_err().code,
+        "notFound"
+    );
+}

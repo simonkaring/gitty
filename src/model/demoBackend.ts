@@ -102,6 +102,13 @@ export async function demoInvoke(command: string, args: Record<string, unknown>)
       for (const file of r().files) if ((args.paths as string[]).includes(file.path)) file.index = command === 'repository_stage' ? file.working : file.head;
       return;
     }
+    case 'repository_discard': {
+      const current = r();
+      if (args.expectedStatusFingerprint !== demoStatus(current.files, current.head).fingerprint) throw { code: 'staleOperation', message: 'The working tree changed since these changes were reviewed. Review them again before discarding.' };
+      const paths = args.paths as string[];
+      current.files = current.files.flatMap(file => !paths.includes(file.path) ? [file] : file.head === null && file.index === null ? [] : [{ ...file, working: file.index }]);
+      return;
+    }
     case 'repository_create_commit': {
       const current = r();
       const files = demoCommittedFiles(current.files);

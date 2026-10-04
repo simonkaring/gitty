@@ -25,6 +25,7 @@ mod remote_dto;
 mod repository;
 mod stash;
 mod stream;
+mod worktree_files;
 mod wsl;
 
 use clone_dto::*;
@@ -391,6 +392,49 @@ async fn repository_stage(
 ) -> Result<()> {
     with_service(state, move |s| s.stage(&handle, &paths)).await
 }
+/// Discards unstaged changes for exactly the named files: tracked files are restored
+/// from the index and untracked files are deleted, which cannot be undone. Staged-only
+/// paths are refused, and `expected_status_fingerprint` must match the current status.
+#[tauri::command]
+async fn repository_discard(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    paths: Vec<String>,
+    expected_status_fingerprint: String,
+) -> Result<()> {
+    with_service(state, move |s| {
+        s.discard(&handle, &paths, &expected_status_fingerprint)
+    })
+    .await
+}
+/// Opens one working-tree file in its default application. Regular, non-executable
+/// documents inside the worktree only.
+#[tauri::command]
+async fn repository_open_path(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    path: String,
+) -> Result<()> {
+    with_service(state, move |s| s.open_path(&handle, &path)).await
+}
+/// Shows one working-tree file in the platform file manager.
+#[tauri::command]
+async fn repository_reveal_path(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    path: String,
+) -> Result<()> {
+    with_service(state, move |s| s.reveal_path(&handle, &path)).await
+}
+/// Adds an anchored line for one untracked file to the root `.gitignore`.
+#[tauri::command]
+async fn repository_ignore_path(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    path: String,
+) -> Result<()> {
+    with_service(state, move |s| s.ignore_path(&handle, &path)).await
+}
 /// Unstages exactly the named files. The working tree is never modified.
 #[tauri::command]
 async fn repository_unstage(
@@ -574,6 +618,10 @@ pub fn run() {
             repository_search,
             repository_stage,
             repository_unstage,
+            repository_discard,
+            repository_open_path,
+            repository_reveal_path,
+            repository_ignore_path,
             repository_stage_hunk,
             repository_unstage_hunk,
             repository_create_commit,

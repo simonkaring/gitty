@@ -28,6 +28,13 @@ export async function writeAndRefresh(handle: string, mutation: RepositoryMutati
         fingerprint: mutation.fingerprint,
         ...(mutation.lineIndices !== undefined ? { lineIndices: mutation.lineIndices } : {}),
       });
+    } else if (mutation.kind === 'ignore') {
+      if (!mutation.path) throw new Error('Select a file to ignore.');
+      await invoke('repository_ignore_path', { handle, path: mutation.path });
+    } else if (mutation.kind === 'discard') {
+      if (!mutation.paths.length) throw new Error('Select at least one path.');
+      if (!mutation.expectedStatusFingerprint) throw new Error('Review the changes again before discarding.');
+      await invoke('repository_discard', { handle, paths: [...new Set(mutation.paths)], expectedStatusFingerprint: mutation.expectedStatusFingerprint });
     } else {
       if (!mutation.paths.length) throw new Error('Select at least one path.');
       await invoke(`repository_${mutation.kind}`, { handle, paths: [...new Set(mutation.paths)] });
@@ -51,6 +58,13 @@ export function operationPaths(entries: StatusEntry[], kind: 'stage' | 'unstage'
       : entry.worktreeStatus === 'R' && !['R', 'C'].includes(entry.indexStatus);
     return includeOrigin && entry.oldPath ? [entry.oldPath, entry.path] : [entry.path];
   }))];
+}
+
+/** Entries `repository_discard` accepts: untracked files and tracked files with a plain
+ * working-tree edit, deletion or type change. Conflicts, directories (nested repositories)
+ * and intent-to-add or rename entries are left out so one of them cannot fail a whole batch. */
+export function discardableEntries(entries: StatusEntry[]): StatusEntry[] {
+  return entries.filter(entry => !entry.conflicted && !entry.path.endsWith('/') && (entry.untracked || ['M', 'D', 'T'].includes(entry.worktreeStatus)));
 }
 
 export interface CommitDraft { subject: string; body: string }

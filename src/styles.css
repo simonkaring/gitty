@@ -2236,13 +2236,24 @@ button[data-danger='true']:hover:not(:disabled) {
 }
 .file-list-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 12px 12px;
   border-bottom: 1px solid var(--border);
 }
 .file-list-actions button {
-  flex: 1;
+  flex: 1 1 auto;
   padding-inline: 8px;
+  white-space: nowrap;
+}
+.discard-list {
+  margin: 0;
+  padding-left: 16px;
+  font: var(--fs-xs) var(--mono);
+  overflow-wrap: anywhere;
+}
+.discard-list small {
+  color: var(--muted);
 }
 .working-category {
   padding-bottom: 4px;
@@ -2276,6 +2287,9 @@ button[data-danger='true']:hover:not(:disabled) {
 .working-file {
   display: flex;
   align-items: center;
+  /* Right-click opens the file menu; it must not also select the path text. */
+  -webkit-user-select: none;
+  user-select: none;
   min-height: 36px;
   animation: file-in var(--dur-slow) var(--ease-out);
 }

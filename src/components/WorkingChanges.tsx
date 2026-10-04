@@ -1,10 +1,12 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { AlertTriangle, Check, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, Minus, Plus, RotateCw, X } from 'lucide-react';
-import type { CommitDetail, DiffSpec, FileDiff, RepositoryMutation, RepositorySession, RepositoryStatus } from '../model/repository';
+import { AlertTriangle, Check, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, Minus, Plus, RotateCw, Undo2, X } from 'lucide-react';
+import type { CommitDetail, DiffSpec, FileDiff, RepositoryMutation, RepositorySession, RepositoryStatus, StatusEntry } from '../model/repository';
 import { errorMessage, isDemoHandle, native, statusGroups, type WorkingGroup } from '../model/native';
-import { clearSubmittedDraft, commitMessage, draftFromCommitMessage, draftKey, operationPaths, readDraft, saveDraft, type CommitDraft, type MutationOutcome } from '../model/workflow';
+import { clearSubmittedDraft, commitMessage, discardableEntries, draftFromCommitMessage, draftKey, operationPaths, readDraft, saveDraft, type CommitDraft, type MutationOutcome } from '../model/workflow';
 import { useSettings } from '../model/settings';
 import { commitProfileRepositoryKey } from '../model/commitProfiles';
+import { DiscardDialog } from './DiscardDialog';
+import { FileContextMenu, type FileMenuTarget } from './FileContextMenu';
 
 const labels: Record<WorkingGroup, string> = { staged: 'Staged', unstaged: 'Unstaged', untracked: 'Untracked', conflict: 'Conflicts' };
 const readDiff = (handle: string, spec: DiffSpec, path: string) => native<FileDiff>('repository_diff', { handle, spec, path });
@@ -86,6 +88,24 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   const stagedCount = groups.staged.length;
   const unstagedCount = groups.unstaged.length + groups.untracked.length;
   const blocked = busy || mutationBlocked || !!operation || !status || session.bare || !!outcome?.refreshError;
+  const [menu, setMenu] = useState<FileMenuTarget | null>(null);
+  const openMenu = (entry: StatusEntry, kind: WorkingGroup, x: number, y: number, trigger: HTMLElement) => setMenu({ entry, kind, x, y, trigger });
+  async function copy(value: string, label: string) {
+    try { await navigator.clipboard.writeText(value); setOutcome(null); setSuccess(`Copied ${label}.`); }
+    catch { setOutcome({ error: 'Clipboard unavailable. Select the path in the file list instead.' }); }
+  }
+  /** Open and reveal only touch the user's desktop, never the repository, so they skip the write lock. */
+  const fileAction = (command: 'repository_open_path' | 'repository_reveal_path', path: string) =>
+    native(command, { handle: session.handle, path }).catch(error => { if (alive.current) setOutcome({ error: errorMessage(error) }); });
+  const discardable = discardableEntries([...groups.unstaged, ...groups.untracked]).sort((a, b) => a.path.localeCompare(b.path));
+  const [discarding, setDiscarding] = useState<{ entries: StatusEntry[]; fingerprint: string } | null>(null);
+  const requestDiscard = (entries: StatusEntry[]) => { if (status && !blocked && entries.length) setDiscarding({ entries, fingerprint: status.fingerprint }); };
+  function confirmDiscard() {
+    if (!discarding) return;
+    const { entries, fingerprint } = discarding;
+    setDiscarding(null);
+    void perform({ kind: 'discard', paths: entries.map(entry => entry.path), expectedStatusFingerprint: fingerprint }, entries.length);
+  }
 
   useEffect(() => {
     if (!onActiveDiffChange) return;
@@ -139,7 +159,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
     if (pending.current || blocked) return;
     pending.current = true;
     const hasLineIndices = 'lineIndices' in mutation && Array.isArray(mutation.lineIndices) && mutation.lineIndices.length > 0;
-    setOperation(mutation.kind === 'commit' ? 'Creating commit and refreshing repository…' : mutation.kind === 'amend' ? 'Rewriting last commit and refreshing repository…' : `${mutation.kind === 'stage' || mutation.kind === 'stage_hunk' ? 'Staging' : 'Unstaging'} ${'hunkIndex' in mutation ? (hasLineIndices ? 'selected lines' : 'selected hunk') : `${fileCount} file${fileCount === 1 ? '' : 's'}`} and refreshing…`);
+    setOperation(mutation.kind === 'commit' ? 'Creating commit and refreshing repository…' : mutation.kind === 'amend' ? 'Rewriting last commit and refreshing repository…' : `${mutation.kind === 'stage' || mutation.kind === 'stage_hunk' ? 'Staging' : mutation.kind === 'discard' ? 'Discarding' : mutation.kind === 'ignore' ? 'Ignoring' : 'Unstaging'} ${'hunkIndex' in mutation ? (hasLineIndices ? 'selected lines' : 'selected hunk') : `${fileCount} file${fileCount === 1 ? '' : 's'}`} and refreshing…`);
     setOutcome(null); setSuccess('');
     try {
       const result = await onMutation(mutation);
@@ -151,6 +171,8 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
       setOutcome(result);
       if (result.oid && mutation.kind === 'commit') { setDraft({ subject: '', body: '' }); setSuccess(`Created commit ${result.oid.slice(0, 12)}.`); }
       else if (result.oid && mutation.kind === 'amend') { amendRequest.current++; setAmending(false); setAmendDraft(null); setAmendHead(''); setSuccess(`Rewrote last commit as ${result.oid.slice(0, 12)}.`); }
+      else if (!result.error && !result.refreshError && mutation.kind === 'discard') setSuccess('Selected changes discarded.');
+      else if (!result.error && !result.refreshError && mutation.kind === 'ignore') setSuccess('Added to .gitignore.');
       else if (!result.error && !result.refreshError) setSuccess(mutation.kind === 'stage' || mutation.kind === 'stage_hunk' ? (hasLineIndices ? 'Selected lines staged.' : 'Selected changes staged.') : (hasLineIndices ? 'Selected lines unstaged.' : 'Selected changes unstaged.'));
     } catch (error) {
       if (alive.current) setOutcome({ error: errorMessage(error), refreshError: 'Repository state could not be confirmed.' });
@@ -190,6 +212,9 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
           <button className="secondary-button" disabled={blocked || !stagedCount} onClick={() => void perform({ kind: 'unstage', paths: stagedPaths }, stagedCount)}>
             <Minus size={13} />Unstage all ({stagedCount})
           </button>
+          <button className="secondary-button" data-danger="true" disabled={blocked || !discardable.length} onClick={() => requestDiscard(discardable)}>
+            <Undo2 size={13} />Discard all ({discardable.length})
+          </button>
         </div>
         <div className="working-files-list">
           {(['conflict', 'unstaged', 'staged'] as const).map(sectionKind => {
@@ -206,8 +231,8 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
               const FileIcon = iconStatus === 'conflict' ? AlertTriangle : iconStatus === 'deleted' ? FileMinus2 : iconStatus === 'added' || iconStatus === 'copied' ? FilePlus2 : iconStatus === 'renamed' ? FileSymlink : iconStatus === 'modified' ? FilePenLine : FileCode2;
               const partial = groups.staged.some(item => item.path === entry.path) && groups.unstaged.some(item => item.path === entry.path);
               const isSelected = active?.group === kind && active.path === entry.path;
-              return <div className={`working-file ${isSelected ? 'selected' : ''}`} key={entry.path}>
-                <button className="working-file-select" aria-pressed={isSelected} aria-label={`${labels[kind]}: ${entry.path}`} onClick={() => setSelection(current => current?.group === kind && current.path === entry.path ? null : { group: kind, path: entry.path })}>
+              return <div className={`working-file ${isSelected ? 'selected' : ''}`} key={entry.path} onContextMenu={event => { event.preventDefault(); openMenu(entry, kind, event.clientX, event.clientY, event.currentTarget.querySelector('button')!); }}>
+                <button className="working-file-select" aria-pressed={isSelected} aria-label={`${labels[kind]}: ${entry.path}`} onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openMenu(entry, kind, rect.left, rect.bottom, event.currentTarget); } }} onClick={() => setSelection(current => current?.group === kind && current.path === entry.path ? null : { group: kind, path: entry.path })}>
                   <FileIcon size={15} data-status={iconStatus} aria-label={iconStatus === 'added' ? 'New file' : `${iconStatus.charAt(0).toUpperCase()}${iconStatus.slice(1)} file`} />
                   <span>
                      <strong>{entry.path}</strong>
@@ -239,6 +264,11 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
           </div>
         </form>
       </div>
+      {menu && <FileContextMenu target={menu} blocked={blocked} native={!demo} onClose={() => setMenu(null)}
+        onToggleStage={() => { const kind = menu.kind === 'staged' ? 'unstage' : 'stage'; void perform({ kind, paths: operationPaths([menu.entry], kind) }); }}
+        onDiscard={() => requestDiscard([menu.entry])} onIgnore={() => void perform({ kind: 'ignore', path: menu.entry.path })}
+        onCopy={(value, label) => void copy(value, label)} onOpen={() => void fileAction('repository_open_path', menu.entry.path)} onReveal={() => void fileAction('repository_reveal_path', menu.entry.path)} />}
+      {discarding && <DiscardDialog entries={discarding.entries} blocked={blocked} onConfirm={confirmDiscard} onClose={() => setDiscarding(null)} />}
   </section>;
 }
 

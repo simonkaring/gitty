@@ -8,6 +8,10 @@ Ordinary index/commit writes use these commands:
 
 - `repository_stage({handle, paths: string[]}) -> void`
 - `repository_unstage({handle, paths: string[]}) -> void`
+- `repository_discard({handle, paths: string[], expectedStatusFingerprint: string}) -> void`
+- `repository_ignore_path({handle, path: string}) -> void`
+- `repository_open_path({handle, path: string}) -> void`
+- `repository_reveal_path({handle, path: string}) -> void`
 - `repository_snapshot({handle}) -> {state, status, operation}` (a read; see Read semantics)
 - `repository_stage_hunk({handle, path: string, hunkIndex: number, fingerprint: string, lineIndices?: number[]}) -> void`
 - `repository_unstage_hunk({handle, path: string, hunkIndex: number, fingerprint: string, lineIndices?: number[]}) -> void`
@@ -97,8 +101,9 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   state and status, the read restarts, and after three attempts fails with `unstable`.
   `repository_state`, `repository_status` and `repository_operation_state` remain for
   callers that need only one. The frontend refreshes through the snapshot and walks
-  history only when the state fingerprint changed; after a stage, unstage or hunk
-  action it re-reads `repository_status` alone, since none of them can move HEAD or refs. Commit and amend keep the full refresh.
+  history only when the state fingerprint changed; after a stage, unstage, hunk,
+  discard or ignore it re-reads `repository_status` alone, since none of them can move
+  HEAD or refs. Commit and amend keep the full refresh.
 - Process waits poll with a 1 ms to 10 ms backoff, so a Git command that finishes in a
   few milliseconds is not charged a fixed 10 ms.
 - Root commits compare against the computed empty-tree ID without writing objects.
@@ -138,7 +143,9 @@ targeted conflict resolutions have the additional contract documented below.
   2.37). Windows caps an entire command line near 32767 UTF-16 units and Unix
   caps both the total and each single argument, so no argument-shaped request
   could honor the limits above on every platform. Git arguments are now a short
-  fixed set. Stdin is a bounded anonymous temp file, so there is no pipe writer
+  fixed set, with one exception: `git clean`, used to discard untracked files, has no
+  pathspec-from-file form, so its paths follow `--` in batches of at most 16 KiB of
+  arguments per process (still literal under `GIT_LITERAL_PATHSPECS=1`). Stdin is a bounded anonymous temp file, so there is no pipe writer
   that could deadlock against full output pipes, and the same handle is what WSL
   forwards into the distribution. Conflict pre-checks query the whole index
   (`ls-files --unmerged -z`) and are filtered in the backend for the same reason;
@@ -202,6 +209,37 @@ targeted conflict resolutions have the additional contract documented below.
   the working tree**. Partially staged files keep their working-tree content.
   Paths that match nothing are a silent no-op in Git, so a stale selection
   resolves on the frontend's next refresh rather than failing.
+- Discard is the only write that destroys working-tree content, so it is guarded
+  twice. Under the mutation lock it re-reads the status and compares its fingerprint
+  with the one the caller reviewed (`staleOperation`, nothing touched, when it moved),
+  then classifies every requested path from that fresh status and refuses the whole
+  request before running anything if any path does not qualify. Untracked files are
+  deleted with `git clean --force --quiet -- <paths>`; tracked files with a worktree
+  status of `M`, `D` or `T` are restored with `git restore --worktree
+  --pathspec-from-file=- --pathspec-file-nul`, whose source is the index, so staged
+  content, including the staged half of a partially staged file, is kept. Refused with
+  `invalidRequest`: staged-only or unchanged paths, unknown paths, directory or nested
+  repository entries (a status path ending in `/`), and intent-to-add, renamed or
+  copied entries. Unmerged paths and operations in progress are refused as for stage.
+  Restore runs before clean. A failure part-way through the clean batches leaves earlier
+  batches applied, so clients re-read status after any outcome. There is no whole-tree
+  form and `paths` must be explicit.
+- `repository_ignore_path` appends `/<path>` to the root `.gitignore`, with `\`, `*`,
+  `?` and `[` escaped and trailing spaces escaped, only for a path that is currently
+  untracked (otherwise ignoring it would do nothing). It is append-only, adding a
+  newline first when the file lacks one, and goes through a `cap-std` directory handle,
+  so a `.gitignore` symlink cannot lead outside the worktree. Names containing a line
+  break are refused. It runs under the mutation lock.
+- `repository_open_path` and `repository_reveal_path` take a repository-relative path,
+  validate it like a write, canonicalize it and require it to stay inside the worktree
+  once symlinks are resolved (`invalidPath` otherwise, `notFound` when it is missing).
+  Open passes a file to the operating system's default application, so it refuses
+  (`openRefused`) anything that is not a regular file, any file with an execute bit on
+  Unix, and extensions that are programs or launchers (`app`, `bat`, `cmd`, `command`,
+  `exe`, `jar`, `lnk`, `msi`, `ps1`, `scr`, `sh`, `vbs` and similar). Reveal selects the
+  file in Finder (`open -R`) or Explorer (`/select,`), and opens the containing folder on
+  other platforms. They take no mutation lock. All three commands in this and the
+  previous bullet return `unsupported` for repositories inside WSL.
 - Commit runs `git commit --quiet --file=-`: the staged index only, never `-a`.
   The message must contain non-whitespace, be under 64 KiB and contain no NUL;
   Git's configured `commit.cleanup` then applies as usual. With nothing staged the
@@ -232,7 +270,8 @@ targeted conflict resolutions have the additional contract documented below.
   reconcile from `repository_state`/`repository_status` after every outcome.
 - Error codes for writes: `invalidHandle`, `invalidRequest`, `invalidPath`,
   `tooManyPaths`, `bareRepository`, `operationInProgress`, `indexLocked`,
-  `unresolvedConflict`, `unresolvedHead`, `nothingStaged`, `git` (Git exited
+  `unresolvedConflict`, `unresolvedHead`, `nothingStaged`, `staleOperation` (discard review
+  out of date), `openRefused`, `notFound`, `unsupported`, `openExternal`, `git` (Git exited
   non-zero: hook rejection, missing identity, signing failure, ignored or
   unmatched paths), `mutationUnverified`, plus the shared `unsupportedEncoding`,
   `inputLimit`, `worker` and process codes.

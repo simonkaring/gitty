@@ -311,6 +311,16 @@ impl Service {
     pub fn unstage(&self, handle: &str, paths: &[String]) -> Result<()> {
         self.mutate(handle, |repo| repo.unstage(paths))
     }
+    pub fn discard(
+        &self,
+        handle: &str,
+        paths: &[String],
+        expected_status_fingerprint: &str,
+    ) -> Result<()> {
+        self.mutate(handle, |repo| {
+            repo.discard(paths, expected_status_fingerprint)
+        })
+    }
     #[cfg(test)]
     pub fn create_commit(&self, handle: &str, message: &str) -> Result<CreatedCommit> {
         self.create_commit_with_identity(handle, message, None)

@@ -1,10 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { GitAction } from '../model/operations';
 import { native } from '../model/native';
 import type { RepositoryState } from '../model/repository';
 import { DEFAULT_PULL_MODE, PULL_MODE_LABELS, type PullMode, type RemoteActionRequest } from '../model/remote';
 import type { ActionContext } from './OperationDialog';
-import { useDismiss } from './ui';
+import { useContextMenu } from './useContextMenu';
 
 export interface MenuTarget { context: ActionContext; x: number; y: number; trigger: HTMLElement }
 
@@ -15,8 +15,7 @@ export function GraphContextMenu({ target, state, busy, onOperation, onSwitchBra
   onPullRequest: (ref: string) => void; onRemoteAction: (action: RemoteActionRequest) => void; onPush: () => void;
   onCopy: (value: string, label: string) => void; onClose: () => void;
 }) {
-  const menu = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState({ left: target.x, top: target.y });
+  const { menu, position } = useContextMenu(target, onClose);
   const [relation, setRelation] = useState<[number, number] | null>(null);
   useEffect(() => {
     setRelation(null);
@@ -24,27 +23,6 @@ export function GraphContextMenu({ target, state, busy, onOperation, onSwitchBra
       void native<[number, number]>('repository_branch_relation', { handle: state.session.handle, first: target.context.ref, second: state.session.headRef }).then(setRelation).catch(() => setRelation(null));
     }
   }, [target, state.session.handle, state.session.headRef]);
-  useLayoutEffect(() => {
-    const rect = menu.current?.getBoundingClientRect();
-    if (rect) setPosition({ left: Math.max(4, Math.min(target.x, window.innerWidth - rect.width - 4)), top: Math.max(4, Math.min(target.y, window.innerHeight - rect.height - 4)) });
-    menu.current?.querySelector('button')?.focus();
-  }, [target]);
-  useEffect(() => {
-    function keydown(event: KeyboardEvent) {
-      if (event.key === 'Tab') onClose();
-      if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) && menu.current?.contains(document.activeElement)) {
-        event.preventDefault();
-        const items = [...menu.current.querySelectorAll<HTMLButtonElement>('button')];
-        const index = items.indexOf(document.activeElement as HTMLButtonElement);
-        items[event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
-      }
-    }
-    document.addEventListener('keydown', keydown, true);
-    return () => document.removeEventListener('keydown', keydown, true);
-  }, [onClose, target]);
-  const trigger = useRef<HTMLElement | null>(target.trigger);
-  trigger.current = target.trigger;
-  useDismiss(true, onClose, [menu], trigger);
   const context = target.context;
   const ref = state.refs.find(value => value.fullName === context.ref);
   const current = context.ref === state.session.headRef;

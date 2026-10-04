@@ -19,6 +19,8 @@ use std::{collections::HashSet, process::Command};
 const MAX_PATHS: usize = 1000;
 const MAX_PATHSPEC_BYTES: usize = 1024 * 1024;
 const MAX_MESSAGE_BYTES: usize = 64 * 1024;
+/// Argument bytes per `git clean` process, far below every platform's limit.
+const CLEAN_BATCH_BYTES: usize = 16 * 1024;
 /// Git output kept in an error message; hook output can be arbitrarily long.
 const MAX_REPORTED: usize = 4000;
 /// Retry advice for any failure that leaves the outcome genuinely unknown.
@@ -470,6 +472,59 @@ impl Repository {
         }
         Ok(())
     }
+    /// Throws away working-tree changes for exactly the named paths: tracked files
+    /// are restored from the index (so staged content survives, including the
+    /// staged half of a partially staged file) and untracked files are deleted.
+    /// Staged-only paths are refused. Deleting is permanent, so the caller must
+    /// pass the status fingerprint it showed the user; any change since is refused.
+    pub(crate) fn discard(&self, paths: &[String], expected_status: &str) -> Result<()> {
+        let paths = self.prepare(paths, "discard")?;
+        let status = self.status()?;
+        if status.fingerprint != expected_status {
+            return Err(Error::new(
+                "staleOperation",
+                "The working tree changed since these changes were reviewed. Review them again before discarding.",
+            ));
+        }
+        let (restore, delete) = classify_discard(&paths, &status.entries)?;
+        if !restore.is_empty() {
+            let a = args(&[
+                "restore",
+                "--worktree",
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+            ]);
+            let output = self.write(
+                &a,
+                &[],
+                &Self::pathspec_input(&restore)?,
+                MAX_PATHSPEC_BYTES,
+            )?;
+            if !output.success {
+                return Err(self.failed(&output));
+            }
+        }
+        // `git clean` has no pathspec-from-file form, so these are the one place
+        // paths travel as arguments: in bounded batches, after `--`, and literal
+        // (GIT_LITERAL_PATHSPECS). With a pathspec `clean` only removes untracked
+        // files, so a path that became tracked in the meantime is untouched.
+        let mut batch: Vec<&String> = Vec::new();
+        let mut bytes = 0;
+        for (index, path) in delete.iter().enumerate() {
+            batch.push(path);
+            bytes += path.len() + 1;
+            if bytes >= CLEAN_BATCH_BYTES || index + 1 == delete.len() {
+                let mut a = args(&["clean", "--force", "--quiet", "--"]);
+                a.extend(batch.drain(..).cloned());
+                bytes = 0;
+                let output = self.write(&a, &[], &[], 1)?;
+                if !output.success {
+                    return Err(self.failed(&output));
+                }
+            }
+        }
+        Ok(())
+    }
     /// Commits exactly what is staged, with the configured identity, hooks and
     /// signing. No `--no-verify`, `--no-gpg-sign`, `--amend` or `--all`.
     pub(crate) fn create_commit(
@@ -611,6 +666,44 @@ impl Repository {
     }
 }
 
+/// Splits requested paths into those to restore from the index and those to
+/// delete, refusing everything else. Pure: it only reads the fresh status.
+fn classify_discard(
+    paths: &[String],
+    entries: &[StatusEntry],
+) -> Result<(Vec<String>, Vec<String>)> {
+    let by_path: std::collections::HashMap<&str, &StatusEntry> = entries
+        .iter()
+        .map(|e| (e.path.strip_suffix('/').unwrap_or(&e.path), e))
+        .collect();
+    let (mut restore, mut delete) = (Vec::new(), Vec::new());
+    for path in paths {
+        let refuse = |why: &str| Err(Error::new("invalidRequest", format!("{path} {why}")));
+        let Some(entry) = by_path.get(path.as_str()) else {
+            return refuse("has no changes to discard.");
+        };
+        if entry.path.ends_with('/') {
+            return refuse("is a directory or nested repository; Gitty never deletes those.");
+        }
+        if entry.untracked {
+            delete.push(path.clone());
+            continue;
+        }
+        match entry.worktree_status.as_str() {
+            "M" | "D" | "T" => restore.push(path.clone()),
+            "." | " " => return refuse(
+                "has only staged changes. Unstage it first; Gitty discards unstaged changes only.",
+            ),
+            _ => {
+                return refuse(
+                    "is marked intent-to-add, renamed or copied in the index; resolve it in Git.",
+                )
+            }
+        }
+    }
+    Ok((restore, delete))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -696,5 +789,41 @@ mod tests {
         assert_eq!(report(&output("out", "err")), "err\nout");
         assert_eq!(report(&output("", "")), "Git exited with status 1");
         assert!(report(&output("", &"x".repeat(MAX_REPORTED * 2))).ends_with("truncated"));
+    }
+    fn entry(path: &str, index: &str, worktree: &str, untracked: bool) -> StatusEntry {
+        StatusEntry {
+            path: path.into(),
+            old_path: None,
+            index_status: index.into(),
+            worktree_status: worktree.into(),
+            conflicted: false,
+            untracked,
+        }
+    }
+    #[test]
+    fn discard_classifies_by_fresh_status_and_refuses_everything_else() {
+        let entries = vec![
+            entry("edited", ".", "M", false),
+            entry("partial", "M", "M", false),
+            entry("gone", ".", "D", false),
+            entry("fresh", "?", "?", true),
+            entry("staged-only", "M", ".", false),
+            entry("intent", ".", "A", false),
+            entry("nested/", "?", "?", true),
+        ];
+        let paths = |p: &[&str]| p.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (restore, delete) =
+            classify_discard(&paths(&["edited", "partial", "gone", "fresh"]), &entries).unwrap();
+        assert_eq!(restore, paths(&["edited", "partial", "gone"]));
+        assert_eq!(delete, paths(&["fresh"]));
+        for refused in ["staged-only", "intent", "nested", "unknown"] {
+            assert_eq!(
+                classify_discard(&paths(&[refused]), &entries)
+                    .unwrap_err()
+                    .code,
+                "invalidRequest",
+                "{refused}"
+            );
+        }
     }
 }
