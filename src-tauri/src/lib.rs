@@ -190,6 +190,13 @@ async fn repository_operation_state(
     with_service(state, move |s| s.repo(&handle)?.operation_state()).await
 }
 #[tauri::command]
+async fn repository_snapshot(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+) -> Result<RepositorySnapshot> {
+    with_service(state, move |s| s.repo(&handle)?.snapshot()).await
+}
+#[tauri::command]
 async fn repository_branch_relation(
     state: tauri::State<'_, Shared>,
     handle: String,
@@ -572,6 +579,7 @@ pub fn run() {
             repository_create_commit,
             repository_amend_commit,
             repository_operation_state,
+            repository_snapshot,
             repository_branch_relation,
             repository_run_operation,
             repository_conflict_file,

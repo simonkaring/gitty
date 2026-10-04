@@ -34,6 +34,7 @@ try {
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
     window.__TAURI_INTERNALS__ = { transformCallback: () => ++callbackId, unregisterCallback: () => {}, invoke: async (command, args) => {
       f.calls.push({ command, args });
+      if (command === 'repository_snapshot') { const [state, status, operation] = await Promise.all(['repository_state', 'repository_status', 'repository_operation_state'].map(name => window.__TAURI_INTERNALS__.invoke(name, args))); return { state, status, operation }; }
       if (command === 'plugin:event|listen') return 1;
       if (command === 'plugin:event|unlisten') return;
       if (command === 'repository_recent') return [{ kind: 'native', path: '/fixture' }];

@@ -8,6 +8,7 @@ Ordinary index/commit writes use these commands:
 
 - `repository_stage({handle, paths: string[]}) -> void`
 - `repository_unstage({handle, paths: string[]}) -> void`
+- `repository_snapshot({handle}) -> {state, status, operation}` (a read; see Read semantics)
 - `repository_stage_hunk({handle, path: string, hunkIndex: number, fingerprint: string, lineIndices?: number[]}) -> void`
 - `repository_unstage_hunk({handle, path: string, hunkIndex: number, fingerprint: string, lineIndices?: number[]}) -> void`
 - `repository_create_commit({handle, message: string, identity?: {name: string, email: string}}) -> {oid: string}`
@@ -87,6 +88,19 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   costs about 100 ms through `wsl.exe`. Repository state also fingerprints remotes and shallow boundaries
   so deepening without moving refs invalidates the walk. Reads are best-effort across
   concurrent external changes; nested repository contents are not recursively hashed.
+- `repository_snapshot` returns repository state, working status and operation state
+  from one read. State and status are computed once and shared with the operation
+  state (whose fingerprint covers both) instead of once per command, and the four
+  operation pseudo-refs (`MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`,
+  `REBASE_HEAD`) resolve in one `cat-file --batch-check` instead of four processes.
+  State is read again at the end: if its fingerprint moved, or HEAD disagrees between
+  state and status, the read restarts, and after three attempts fails with `unstable`.
+  `repository_state`, `repository_status` and `repository_operation_state` remain for
+  callers that need only one. The frontend refreshes through the snapshot and walks
+  history only when the state fingerprint changed; after a stage, unstage or hunk
+  action it re-reads `repository_status` alone, since none of them can move HEAD or refs. Commit and amend keep the full refresh.
+- Process waits poll with a 1 ms to 10 ms backoff, so a Git command that finishes in a
+  few milliseconds is not charged a fixed 10 ms.
 - Root commits compare against the computed empty-tree ID without writing objects.
   Merge comparisons default to first parent; a supplied parent must be an actual
   parent. Explicit comparisons resolve both inputs to commits before diffing.

@@ -48,6 +48,7 @@ function commitFiles(r: DemoRepo, spec: DiffSpec): ChangedFile[] {
   return r.commits.find(commit => commit.id === oid)?.files ?? [];
 }
 
+const demoOperation = { kind: 'none', label: '', current: null, incoming: null, step: null, total: null, conflicts: [], canContinue: false, canSkip: false, fingerprint: 'none' };
 const unsupported = (what: string) => { throw { code: 'unsupported', message: `Not available in the demo: ${what}. The demo simulates staging and committing only.` }; };
 
 export async function demoInvoke(command: string, args: Record<string, unknown>): Promise<unknown> {
@@ -63,7 +64,8 @@ export async function demoInvoke(command: string, args: Record<string, unknown>)
       return state(load(match.name));
     }
     case 'repository_state': return state(r());
-    case 'repository_operation_state': return { kind: 'none', label: '', current: null, incoming: null, step: null, total: null, conflicts: [], canContinue: false, canSkip: false, fingerprint: 'none' };
+    case 'repository_operation_state': return demoOperation;
+    case 'repository_snapshot': return { state: state(r()), status: demoStatus(r().files, r().head), operation: demoOperation };
     case 'repository_branch_relation': return [1, 0];
     case 'repository_status': return demoStatus(r().files, r().head);
     case 'repository_history': {

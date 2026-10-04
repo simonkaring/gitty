@@ -3,7 +3,7 @@ import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus,
 import { CommandPalette, type PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
 import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
-import { appendUnique, errorMessage, graphCommit, isDemoHandle, native, validateHistory, WORKING_ID } from '../model/native';
+import { appendUnique, errorMessage, graphCommit, isDemoHandle, native, readNativeSnapshot, validateHistory, WORKING_ID } from '../model/native';
 import { HistoryGraph, type GraphAnchor, type GraphHandle } from './HistoryGraph';
 import { NativeInspector } from './NativeInspector';
 import { NativeSidebar } from './NativeSidebar';
@@ -21,7 +21,7 @@ import { RepositoryToolbar } from './RepositoryToolbar';
 import { PublishDialog } from './PublishDialog';
 import { RemoteStashDialog } from './RemoteStashDialog';
 import { toggleCommit } from '../model/operationUi';
-import { captureOperation, operationAndRefresh, readOperationSnapshot } from '../model/operationFlow';
+import { captureOperation, operationAndRefresh, operationContent } from '../model/operationFlow';
 import { SwitchBlockedDialog } from './SwitchBlockedDialog';
 import { Segmented, Toast } from './ui';
 import { locationLabel, sessionKey } from '../model/tabs';
@@ -85,7 +85,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
   const [mutationBusy, setMutationBusy] = useState(false);
   const mutationLock = useRef(false);
   const [operation, setOperation] = useState<OperationState | null>(null);
-  const operationFingerprint = useRef('');
+  const operationSig = useRef('');
   const [actionContext, setActionContext] = useState<ActionContext | null>(null);
   const [menuTarget, setMenuTarget] = useState<MenuTarget | null>(null);
   const [publishInfo, setPublishInfo] = useState<SyncInfo | null>(null);
@@ -160,11 +160,11 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
       opened = await native<RepositoryState>('repository_open', { location });
       if (token !== epoch.current) { void close(opened.session.handle); return; }
       const handle = opened.session.handle;
-      const snapshot = await readOperationSnapshot(handle, { current: () => token === epoch.current });
+      const snapshot = await readNativeSnapshot(handle, { current: () => token === epoch.current });
       const activeOperation = snapshot.operation;
       if (token !== epoch.current) { void close(handle); return; }
       session.current = snapshot.state; setState(snapshot.state); setStatus(snapshot.status); fingerprint.current = snapshot.status.fingerprint; generation.current = snapshot.generation;
-      setOperation(activeOperation); operationFingerprint.current = activeOperation.fingerprint;
+      setOperation(activeOperation); operationSig.current = operationContent(activeOperation);
       installHistory(snapshot.commits, snapshot.cursor); setSelected(snapshot.state.session.head ?? snapshot.commits[0]?.id ?? ''); if (!snapshot.state.session.head && snapshot.status.entries.length) { setSelected(WORKING_ID); setInspectorOpen(true); } setRevision(value => value + 1);
       onIdentityRef.current(tabId, sessionKey(location, snapshot.state.session), snapshot.state.session.name);
     } catch (e) { if (opened) void close(opened.session.handle); if (token === epoch.current) { setError(errorMessage(e)); onIdentityRef.current(tabId, null, null); } }
@@ -182,16 +182,18 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
     const token = epoch.current; lock.current = true;
     try {
       const handle = current.session.handle;
-      const snapshot = await readOperationSnapshot(handle, {
+      const snapshot = await readNativeSnapshot(handle, {
         previous: { state: current, commits: history.current, cursor: nextCursor.current, generation: generation.current },
         preserve: [selectedRef.current, graph.current?.anchor()?.id ?? ''],
         current: () => token === epoch.current,
       });
       const activeOperation = snapshot.operation;
       if (token !== epoch.current) return;
-      const operationChanged = operationFingerprint.current !== activeOperation.fingerprint;
-      operationFingerprint.current = activeOperation.fingerprint;
-      setOperation(previous => previous?.fingerprint === activeOperation.fingerprint ? previous : activeOperation);
+      // Content, not fingerprint: the fingerprint also covers status and index, so it moves on every stage.
+      const content = operationContent(activeOperation);
+      const operationChanged = operationSig.current !== content;
+      operationSig.current = content;
+      setOperation(previous => operationChanged || !previous ? activeOperation : previous);
       const { state: updated, status: working } = snapshot;
       const changed = updated.fingerprint !== current.fingerprint;
       const workingChanged = working.fingerprint !== fingerprint.current;
@@ -211,6 +213,30 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
     } catch (e) { if (token === epoch.current) setError(errorMessage(e)); if (force) throw e; }
     finally { if (token === epoch.current) lock.current = false; }
   }, []);
+  /** After a stage/unstage/discard only the working tree can have changed, so read
+   * status alone (about 3 git processes) instead of the whole snapshot. HEAD moving
+   * under us falls back to the full refresh. Same lock and error contract as `refresh(true)`. */
+  const refreshStatus = useCallback(async () => {
+    const current = session.current;
+    if (!current) return;
+    while (lock.current && session.current?.session.handle === current.session.handle) await new Promise(resolve => setTimeout(resolve, 25));
+    if (session.current?.session.handle !== current.session.handle) throw new Error('Repository session changed.');
+    const token = epoch.current; lock.current = true;
+    let moved = false;
+    try {
+      const working = await native<RepositoryStatus>('repository_status', { handle: current.session.handle });
+      if (token !== epoch.current) return;
+      if (working.head !== current.session.head || working.headRef !== current.session.headRef) moved = true;
+      else {
+        if (working.fingerprint !== fingerprint.current && !anchor.current) anchor.current = graph.current?.anchor() ?? null;
+        fingerprint.current = working.fingerprint;
+        setStatus(working); setRevision(value => value + 1);
+        setError(''); blockedRef.current = false; setMutationBlocked(false);
+      }
+    } catch (e) { if (token === epoch.current) setError(errorMessage(e)); throw e; }
+    finally { if (token === epoch.current) lock.current = false; }
+    if (moved) await refresh(true);
+  }, [refresh]);
   // Refresh once when this tab becomes the active one again: the background
   // poll and focus listener are both gated on `active` below, so a tab left
   // open in the background can otherwise show stale ahead/behind, refs, and
@@ -230,7 +256,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
       // Let an already-running read finish, then exclude polling/paging until the
       // write AND its required refresh complete. No dropped post-write reloads.
       while (lock.current && isCurrent()) await new Promise(resolve => setTimeout(resolve, 25));
-      const outcome = await writeAndRefresh(current.session.handle, mutation, () => refresh(true), isCurrent);
+      const outcome = await writeAndRefresh(current.session.handle, mutation, () => mutation.kind === 'commit' || mutation.kind === 'amend' ? refresh(true) : refreshStatus(), isCurrent);
       if (outcome.refreshError && isCurrent()) { blockedRef.current = true; setMutationBlocked(true); }
       return outcome;
     } finally { if (isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }

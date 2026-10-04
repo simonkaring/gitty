@@ -19,6 +19,7 @@ try {
     const operation = () => ({ kind: f.kind, label: f.kind === 'merge' ? 'Merge in progress' : '', current: 'main', incoming: f.kind === 'none' ? null : 'topic', conflicts: f.conflict ? ['file.txt'] : [], canContinue: f.kind !== 'none' && !f.conflict, canSkip: f.kind === 'rebase', step: null, total: null, fingerprint: String(f.version) });
     window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
       f.calls.push({ command, args });
+      if (command === 'repository_snapshot') { const [state, status, operation] = await Promise.all(['repository_state', 'repository_status', 'repository_operation_state'].map(name => window.__TAURI_INTERNALS__.invoke(name, args))); return { state, status, operation }; }
       if (command === 'repository_recent') return [{ kind: 'native', path: '/fixture' }];
       if (command === 'wsl_distributions') return [];
       if (command === 'repository_close') return;

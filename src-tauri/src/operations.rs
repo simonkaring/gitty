@@ -90,13 +90,55 @@ impl Repository {
             }
         }
     }
-    fn optional_ref(&self, name: &str) -> Result<Option<String>> {
-        let output = self.check(&["rev-parse", "--verify", "--quiet", name])?;
-        match output.code {
-            Some(0) => Ok(Some(process::text(output.stdout)?.trim().into())),
-            Some(1) => Ok(None),
-            _ => Err(self.failed(&output)),
+    /// Resolves several names in one `cat-file --batch-check`; a name that does
+    /// not resolve is `None` rather than a failed process.
+    fn optional_refs(&self, names: &[&str]) -> Result<Vec<Option<String>>> {
+        let input = format!("{}\n", names.join("\n"));
+        let command = process::git_command(
+            self.location(),
+            &args(&["cat-file", "--batch-check=%(objectname)"]),
+        )?;
+        let output =
+            process::run_with_input_for(command, input.as_bytes(), process::CHECK_TIMEOUT, 1024)?;
+        if !output.success {
+            return Err(self.failed(&output));
         }
+        let text = process::text(output.stdout)?;
+        let lines: Vec<&str> = text.lines().collect();
+        let parse_error = || {
+            Error::new(
+                "gitParse",
+                "Unexpected reference-state response while reading the operation state",
+            )
+        };
+        if lines.len() != names.len() {
+            return Err(parse_error());
+        }
+        names
+            .iter()
+            .zip(lines)
+            .map(|(name, line)| {
+                if line == format!("{name} missing") {
+                    Ok(None)
+                } else if matches!(line.len(), 40 | 64)
+                    && line.bytes().all(|b| b.is_ascii_hexdigit())
+                {
+                    Ok(Some(line.to_string()))
+                } else {
+                    Err(parse_error())
+                }
+            })
+            .collect()
+    }
+    fn operation_pseudo_refs(&self) -> Result<[Option<String>; 4]> {
+        self.optional_refs(&[
+            "MERGE_HEAD",
+            "CHERRY_PICK_HEAD",
+            "REVERT_HEAD",
+            "REBASE_HEAD",
+        ])?
+        .try_into()
+        .map_err(|_| Error::new("gitParse", "Unexpected reference-state response"))
     }
     fn operation_metadata(&self) -> Result<OperationMetadata> {
         let mut metadata = Vec::new();
@@ -136,16 +178,64 @@ impl Repository {
         Ok(metadata)
     }
     pub(crate) fn conflict_context(&self) -> Result<String> {
+        let [merge, cherry, revert, rebase] = self.operation_pseudo_refs()?;
         Ok(fingerprint((
             self.state()?.fingerprint,
             self.operation_metadata()?,
-            self.optional_ref("MERGE_HEAD")?,
-            self.optional_ref("CHERRY_PICK_HEAD")?,
-            self.optional_ref("REVERT_HEAD")?,
-            self.optional_ref("REBASE_HEAD")?,
+            merge,
+            cherry,
+            revert,
+            rebase,
         )))
     }
     pub fn operation_state(&self) -> Result<OperationState> {
+        let state = self.state()?;
+        let status = if self.session.bare {
+            None
+        } else {
+            Some(self.status()?)
+        };
+        self.operation_state_with(&state, status.as_ref())
+    }
+    /// State, status and operation state from one consistent read: the state and
+    /// status are computed once and shared, instead of once per command. Retries
+    /// when refs or HEAD move underneath the read.
+    pub fn snapshot(&self) -> Result<RepositorySnapshot> {
+        for _ in 0..3 {
+            let state = self.state()?;
+            let status = if self.session.bare {
+                RepositoryStatus {
+                    entries: vec![],
+                    head: state.session.head.clone(),
+                    head_ref: state.session.head_ref.clone(),
+                    fingerprint: "bare".into(),
+                }
+            } else {
+                self.status()?
+            };
+            if status.head != state.session.head || status.head_ref != state.session.head_ref {
+                continue;
+            }
+            let operation =
+                self.operation_state_with(&state, (!self.session.bare).then_some(&status))?;
+            if self.state()?.fingerprint == state.fingerprint {
+                return Ok(RepositorySnapshot {
+                    state,
+                    status,
+                    operation,
+                });
+            }
+        }
+        Err(Error::new(
+            "unstable",
+            "Repository kept changing during the read. Retry when changes settle.",
+        ))
+    }
+    pub(crate) fn operation_state_with(
+        &self,
+        state: &RepositoryState,
+        status: Option<&RepositoryStatus>,
+    ) -> Result<OperationState> {
         let entries = self.git_dir_entries()?;
         let metadata = self.operation_metadata()?;
         let value = |path: &str| {
@@ -155,10 +245,7 @@ impl Repository {
                 .and_then(|(_, v)| v.as_ref())
                 .map(|b| String::from_utf8_lossy(b).trim().to_string())
         };
-        let merge = self.optional_ref("MERGE_HEAD")?;
-        let cherry = self.optional_ref("CHERRY_PICK_HEAD")?;
-        let revert = self.optional_ref("REVERT_HEAD")?;
-        let rebase = self.optional_ref("REBASE_HEAD")?;
+        let [merge, cherry, revert, rebase] = self.operation_pseudo_refs()?;
         let kind = if entries.contains("BISECT_LOG") || entries.contains("rebase-apply") {
             OperationKind::Unsupported
         } else if entries.contains("rebase-merge") {
@@ -188,12 +275,6 @@ impl Repository {
             }
         } else {
             OperationKind::None
-        };
-        let state = self.state()?;
-        let status = if self.session.bare {
-            None
-        } else {
-            Some(self.status()?)
         };
         let conflicts = if self.session.bare {
             vec![]
@@ -263,7 +344,7 @@ impl Repository {
         };
         let fingerprint = fingerprint((
             &state.fingerprint,
-            status.as_ref().map(|s| &s.fingerprint),
+            status.map(|s| &s.fingerprint),
             &index,
             &all_refs,
             &metadata,
@@ -278,8 +359,8 @@ impl Repository {
             kind,
             label,
             current: value("rebase-merge/head-name")
-                .or(state.session.head_ref)
-                .or(state.session.head),
+                .or_else(|| state.session.head_ref.clone())
+                .or_else(|| state.session.head.clone()),
             incoming,
             step,
             total,

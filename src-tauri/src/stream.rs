@@ -136,6 +136,7 @@ impl GitStream {
                 Ok(Err(error)) => return Err(error),
                 Ok(Ok(None)) => {
                     // EOF is not success until Git's exit status and stderr have been collected.
+                    let mut nap = Duration::from_millis(1);
                     loop {
                         if Instant::now() >= deadline {
                             return Err(Error::new("timeout", "Timed out finalizing Git stream"));
@@ -164,7 +165,8 @@ impl GitStream {
                                 return Ok(None);
                             }
                         }
-                        thread::sleep(Duration::from_millis(10));
+                        thread::sleep(nap);
+                        nap = (nap * 2).min(Duration::from_millis(10));
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,

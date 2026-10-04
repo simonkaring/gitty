@@ -1,4 +1,5 @@
 /** Shared contract for the native repository service. IDs and cursors are opaque. */
+import type { OperationState } from './operations';
 export type RepositoryLocation = { kind: 'native'; path: string } | { kind: 'wsl'; distribution: string; path: string };
 export interface RepositorySession {
   handle: string;
@@ -31,6 +32,8 @@ export interface FileDiff { path: string; hunks: DiffHunk[]; binary: boolean; tr
 export interface SearchQuery { text: string; branch?: string; since?: string; until?: string; path?: string }
 export interface SearchResult { commits: CommitSummary[]; truncated: boolean }
 export interface RepositoryState { session: RepositorySession; refs: RepositoryRef[]; remotes: string[]; fingerprint: string }
+/** State, status and operation state read together by one command; the service retries until they agree. */
+export interface RepositorySnapshot { state: RepositoryState; status: RepositoryStatus; operation: OperationState }
 export interface WslDistribution { name: string; running: boolean }
 export interface DirectoryEntry { name: string; path: string }
 export interface RepositoryError { code: string; message: string }
@@ -61,6 +64,7 @@ export type RepositoryMutation =
  * repository_history({handle, cursor: string|null, limit, query: HistoryQuery}) -> HistoryPage
  * repository_commit({handle, oid}) -> CommitDetail
  * repository_status({handle}) -> RepositoryStatus
+ * repository_snapshot({handle}) -> RepositorySnapshot
  * repository_diff_files({handle, spec: DiffSpec}) -> DiffFile[]
  * repository_diff({handle, spec: DiffSpec, path}) -> FileDiff
  * repository_search({handle, query: SearchQuery}) -> SearchResult

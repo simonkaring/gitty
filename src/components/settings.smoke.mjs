@@ -368,7 +368,8 @@ try {
       window.isTauri = true;
       const commit = { id: 'abc1234', parents: [], subject: 'Settings QA fixture', body: '', author: 'QA', email: 'qa@example.test', timestamp: 1700000000 };
       const state = { session: { handle: 'settings-qa', name: 'settings-qa', root: '/fixture/settings', location: { kind: 'native', path: '/fixture/settings' }, gitDir: '/fixture/settings/.git', commonDir: '/fixture/settings/.git', head: commit.id, headRef: 'refs/heads/main', shallow: false, bare: false, linkedWorktree: false }, refs: [{ name: 'main', fullName: 'refs/heads/main', commitId: commit.id, kind: 'local' }], remotes: [], fingerprint: 'qa' };
-      window.__TAURI_INTERNALS__ = { invoke: async command => {
+      window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
+        if (command === 'repository_snapshot') { const [state, status, operation] = await Promise.all(['repository_state', 'repository_status', 'repository_operation_state'].map(name => window.__TAURI_INTERNALS__.invoke(name, args))); return { state, status, operation }; }
         if (command === 'repository_recent') return [state.session.location];
         if (command === 'wsl_distributions') return [];
         if (command === 'repository_open' || command === 'repository_state') return state;

@@ -1821,3 +1821,52 @@ fn operations_switch_carries_changes_and_surfaces_conflicts() {
         "dirtyWorktree"
     );
 }
+
+#[test]
+fn snapshot_matches_the_separate_reads_and_sees_a_conflict() {
+    let f = Fixture::new();
+    f.write("untracked", "new\n");
+    let clean = f.repo.snapshot().unwrap();
+    assert_eq!(clean.operation.kind, OperationKind::None);
+    assert_eq!(
+        clean.operation.fingerprint,
+        f.repo.operation_state().unwrap().fingerprint
+    );
+    assert_eq!(
+        clean.status.fingerprint,
+        f.repo.status().unwrap().fingerprint
+    );
+    assert_eq!(clean.state.fingerprint, f.repo.state().unwrap().fingerprint);
+    assert!(clean.status.entries.iter().any(|e| e.path == "untracked"));
+
+    f.diverge();
+    f.merge("side", false).unwrap();
+    let conflicted = f.repo.snapshot().unwrap();
+    assert_eq!(conflicted.operation.kind, OperationKind::Merge);
+    assert_eq!(conflicted.operation.conflicts, vec!["file".to_string()]);
+    assert_eq!(
+        conflicted.operation.fingerprint,
+        f.repo.operation_state().unwrap().fingerprint
+    );
+    assert!(conflicted.status.entries.iter().any(|e| e.conflicted));
+}
+
+#[test]
+fn snapshot_of_a_bare_repository_has_an_empty_status() {
+    let dir = tempfile::tempdir().unwrap();
+    git(dir.path(), &["init", "--bare", "-b", "main"]);
+    let data = tempfile::tempdir().unwrap();
+    let service = Service::new(data.path().into());
+    let handle = service
+        .open(RepositoryLocation::Native {
+            path: dir.path().to_str().unwrap().into(),
+        })
+        .unwrap()
+        .session
+        .handle;
+    let snapshot = service.repo(&handle).unwrap().snapshot().unwrap();
+    assert!(snapshot.state.session.bare);
+    assert!(snapshot.status.entries.is_empty());
+    assert_eq!(snapshot.status.fingerprint, "bare");
+    assert_eq!(snapshot.operation.kind, OperationKind::None);
+}

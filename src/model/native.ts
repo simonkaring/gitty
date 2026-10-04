@@ -1,7 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { Commit } from './types';
 import { demoInvoke } from './demoBackend';
-import type { CommitSummary, DiffSpec, HistoryPage, RepositoryState, RepositoryStatus, StatusEntry } from './repository';
+import type { CommitSummary, DiffSpec, HistoryPage, RepositorySnapshot, RepositoryState, RepositoryStatus, StatusEntry } from './repository';
+import type { OperationState } from './operations';
+
 import { recordCommandEnd, recordCommandStart } from './activity';
 
 let demoMode = false;
@@ -50,6 +52,7 @@ export function appendUnique(current: CommitSummary[], next: CommitSummary[]) {
 export interface NativeSnapshot {
   state: RepositoryState;
   status: RepositoryStatus;
+  operation: OperationState;
   commits: CommitSummary[];
   cursor: string | null;
   generation: string;
@@ -66,8 +69,10 @@ export function validateHistory(commits: CommitSummary[]) {
   }
 }
 
-/** A generation is opaque, not a state fingerprint. Bracket its creation with live
- * state reads and only publish the entire snapshot after HEAD/refs agree. */
+/** One `repository_snapshot` call reads state, status and operation state together
+ * (the backend retries until they agree). A generation is opaque, not a state
+ * fingerprint: when history has to be walked, bracket the walk with a live state
+ * read and only publish once refs agree. */
 export async function readNativeSnapshot(handle: string, options: {
   previous?: Pick<NativeSnapshot, 'state' | 'commits' | 'cursor' | 'generation'>;
   preserve?: string[];
@@ -80,31 +85,28 @@ export async function readNativeSnapshot(handle: string, options: {
     check(); const result = await invoke<T>(command, { handle, ...args }); check(); return result;
   };
   for (let attempt = 0; attempt < 3; attempt++) {
-    const before = await call<RepositoryState>('repository_state');
-    const status = before.session.bare
-      ? { entries: [], head: before.session.head, headRef: before.session.headRef, fingerprint: 'bare' }
-      : await call<RepositoryStatus>('repository_status');
-    if (status.head !== before.session.head || status.headRef !== before.session.headRef) continue;
-    let commits = options.previous?.commits ?? [];
-    let cursor = options.previous?.cursor ?? null;
-    let generation = options.previous?.generation ?? '';
-    if (!options.previous || before.fingerprint !== options.previous.state.fingerprint) {
-      commits = []; cursor = null; generation = '';
-      const keep = new Set((options.preserve ?? []).filter(id => id && id !== WORKING_ID));
-      const count = Math.max(200, options.previous?.commits.length ?? 0);
-      do {
-        const page: HistoryPage = await call<HistoryPage>('repository_history', { cursor, limit: 200, query: {} });
-        if (generation && page.generation !== generation) throw new Error('History generation changed during refresh. Retry.');
-        if (cursor && cursor === page.cursor) throw new Error('History cursor did not advance. Refresh and retry.');
-        generation = page.generation;
-        commits = appendUnique(commits, page.commits); cursor = page.cursor;
-        page.commits.forEach(commit => keep.delete(commit.id));
-      } while (cursor && (commits.length < count || keep.size > 0));
+    const { state: before, status, operation } = await call<RepositorySnapshot>('repository_snapshot');
+    if (options.previous && before.fingerprint === options.previous.state.fingerprint) {
+      validateHistory(options.previous.commits);
+      return { state: before, status, operation, commits: options.previous.commits, cursor: options.previous.cursor, generation: options.previous.generation };
     }
+    let commits: CommitSummary[] = [];
+    let cursor: string | null = null;
+    let generation = '';
+    const keep = new Set((options.preserve ?? []).filter(id => id && id !== WORKING_ID));
+    const count = Math.max(200, options.previous?.commits.length ?? 0);
+    do {
+      const page: HistoryPage = await call<HistoryPage>('repository_history', { cursor, limit: 200, query: {} });
+      if (generation && page.generation !== generation) throw new Error('History generation changed during refresh. Retry.');
+      if (cursor && cursor === page.cursor) throw new Error('History cursor did not advance. Refresh and retry.');
+      generation = page.generation;
+      commits = appendUnique(commits, page.commits); cursor = page.cursor;
+      page.commits.forEach(commit => keep.delete(commit.id));
+    } while (cursor && (commits.length < count || keep.size > 0));
     const after = await call<RepositoryState>('repository_state');
     if (before.fingerprint !== after.fingerprint || status.head !== after.session.head || status.headRef !== after.session.headRef) continue;
     validateHistory(commits);
-    return { state: after, status, commits, cursor, generation };
+    return { state: after, status, operation, commits, cursor, generation };
   }
   throw new Error('Repository kept changing during refresh. Showing the last consistent snapshot; retry when changes settle.');
 }

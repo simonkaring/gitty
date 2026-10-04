@@ -260,6 +260,7 @@ fn run_with_stdin(command: &mut Command, timeout: Duration, stdin: Stdio) -> Res
     let start = Instant::now();
     let mut failure = None;
     let mut exited = None;
+    let mut nap = Duration::from_millis(1);
     let status = loop {
         if overflow.load(Ordering::Relaxed) || start.elapsed() > timeout {
             failure = Some(if overflow.load(Ordering::Relaxed) {
@@ -286,14 +287,19 @@ fn run_with_stdin(command: &mut Command, timeout: Duration, stdin: Stdio) -> Res
             if out.is_finished() && err.is_finished() {
                 break Ok(status);
             }
-            thread::sleep(Duration::from_millis(10));
+            thread::sleep(nap);
+            nap = (nap * 2).min(Duration::from_millis(10));
             continue;
         }
         match child.try_wait() {
             Ok(Some(s)) => {
                 exited = Some(s);
             }
-            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            // ponytail: polling with backoff (1ms -> 10ms); a waiter thread would remove it
+            Ok(None) => {
+                thread::sleep(nap);
+                nap = (nap * 2).min(Duration::from_millis(10));
+            }
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();

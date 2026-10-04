@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { inspectorSpec, native, readNativeSnapshot, WORKING_ID, type NativeSnapshot } from './native';
+import type { OperationState } from './operations';
 import type { CommitSummary, HistoryPage, RepositoryState, RepositoryStatus } from './repository';
 
 const commit = (id: string, parents: string[] = []): CommitSummary => ({ id, parents, subject: id, author: 'Test', email: '', timestamp: 1 });
@@ -14,25 +15,22 @@ function scripted(steps: [string, unknown][]) {
   });
   return { invoke: invoke as typeof native, calls: invoke, steps };
 }
-const previous: NativeSnapshot = { state: state(), status: status(), commits: [commit('a')], cursor: null, generation: 'old-walk' };
+const operation: OperationState = { kind: 'none', label: '', current: null, incoming: null, step: null, total: null, conflicts: [], canContinue: false, canSkip: false, fingerprint: 'op' };
+const snap = (head = 'a', bare = false) => ({ state: state(head, bare), status: status(head), operation });
+const previous: NativeSnapshot = { state: state(), status: status(), operation, commits: [commit('a')], cursor: null, generation: 'old-walk' };
 
 describe('native snapshot IPC integration', () => {
-  it('retries a HEAD change between state and status before starting a walk', async () => {
-    const mock = scripted([
-      ['repository_state', state('a')], ['repository_status', status('b')],
-      ['repository_state', state('b')], ['repository_status', status('b')],
-      ['repository_history', page([commit('b')])], ['repository_state', state('b')],
-    ]);
+  it('reads state, status and operation in one call before starting a walk', async () => {
+    const mock = scripted([['repository_snapshot', snap('b')], ['repository_history', page([commit('b')])], ['repository_state', state('b')]]);
     const result = await readNativeSnapshot('session', mock);
     expect(result.state.session.head).toBe(result.status.head);
+    expect(result.operation).toBe(operation);
     expect(result.commits[0].id).toBe('b'); expect(mock.steps).toHaveLength(0);
   });
   it('discards a complete candidate when refs move while history is being fetched', async () => {
     const mock = scripted([
-      ['repository_state', state('a')], ['repository_status', status('a')],
-      ['repository_history', page([commit('a')])], ['repository_state', state('b')],
-      ['repository_state', state('b')], ['repository_status', status('b')],
-      ['repository_history', page([commit('b')], null, 'new-walk')], ['repository_state', state('b')],
+      ['repository_snapshot', snap('a')], ['repository_history', page([commit('a')])], ['repository_state', state('b')],
+      ['repository_snapshot', snap('b')], ['repository_history', page([commit('b')], null, 'new-walk')], ['repository_state', state('b')],
     ]);
     const result = await readNativeSnapshot('session', mock);
     expect(result.generation).toBe('new-walk'); expect(result.cursor).toBeNull();
@@ -41,7 +39,7 @@ describe('native snapshot IPC integration', () => {
   it('loads beyond the old prefix to preserve selection and viewport after more than a page of new commits', async () => {
     const newest = Array.from({ length: 200 }, (_, i) => commit(`new-${i}`, [i === 199 ? 'a' : `new-${i + 1}`]));
     const mock = scripted([
-      ['repository_state', state('new-0')], ['repository_status', status('new-0')],
+      ['repository_snapshot', snap('new-0')],
       ['repository_history', page(newest, 'page-2')],
       ['repository_history', page([commit('a', ['anchor']), commit('anchor')])],
       ['repository_state', state('new-0')],
@@ -51,40 +49,38 @@ describe('native snapshot IPC integration', () => {
     expect(mock.calls.mock.calls.filter(([command]) => command === 'repository_history')).toHaveLength(2);
   });
   it('finishes the walk when a retained selection becomes unreachable without adding fake ancestry', async () => {
-    const mock = scripted([
-      ['repository_state', state('b')], ['repository_status', status('b')],
-      ['repository_history', page([commit('b')])], ['repository_state', state('b')],
-    ]);
+    const mock = scripted([['repository_snapshot', snap('b')], ['repository_history', page([commit('b')])], ['repository_state', state('b')]]);
     const result = await readNativeSnapshot('session', { ...mock, previous, preserve: ['a'] });
     expect(result.cursor).toBeNull(); expect(result.commits.map(c => c.id)).toEqual(['b']);
     expect(previous.commits.map(c => c.id)).toEqual(['a']);
   });
-  it('reuses the pinned walk on unchanged polls without allocating generations', async () => {
-    const mock = scripted([['repository_state', state()], ['repository_status', status()], ['repository_state', state()]]);
+  it('reuses the pinned walk on unchanged polls with a single IPC call', async () => {
+    const mock = scripted([['repository_snapshot', snap()]]);
     const result = await readNativeSnapshot('session', { ...mock, previous });
     expect(result.commits).toBe(previous.commits); expect(result.generation).toBe('old-walk');
-    expect(mock.steps).toHaveLength(0);
+    expect(result.operation).toBe(operation);
+    expect(mock.steps).toHaveLength(0); expect(mock.calls).toHaveBeenCalledTimes(1);
   });
-  it('does not call the worktree-only status command for a bare repository', async () => {
-    const mock = scripted([['repository_state', state('a', true)], ['repository_history', page([commit('a')])], ['repository_state', state('a', true)]]);
+  it('walks history for a bare repository without a working-tree status', async () => {
+    const mock = scripted([['repository_snapshot', snap('a', true)], ['repository_history', page([commit('a')])], ['repository_state', state('a', true)]]);
     const result = await readNativeSnapshot('session', mock);
     expect(result.status.entries).toEqual([]); expect(mock.steps).toHaveLength(0);
   });
   it('rejects malformed ordering before it reaches graph layout', async () => {
-    const mock = scripted([['repository_state', state()], ['repository_status', status()], ['repository_history', page([commit('a'), commit('b', ['a'])])], ['repository_state', state()]]);
+    const mock = scripted([['repository_snapshot', snap()], ['repository_history', page([commit('a'), commit('b', ['a'])])], ['repository_state', state()]]);
     await expect(readNativeSnapshot('session', mock)).rejects.toThrow('inconsistent ancestry');
   });
-  it('bounds retries while HEAD keeps moving', async () => {
-    const mock = scripted(Array.from({ length: 3 }, (): [string, unknown][] => [['repository_state', state('a')], ['repository_status', status('b')]]).flat());
+  it('bounds retries while refs keep moving', async () => {
+    const mock = scripted(Array.from({ length: 3 }, (): [string, unknown][] => [['repository_snapshot', snap('a')], ['repository_history', page([commit('a')])], ['repository_state', state('b')]]).flat());
     await expect(readNativeSnapshot('session', mock)).rejects.toThrow('kept changing');
-    expect(mock.calls).toHaveBeenCalledTimes(6);
+    expect(mock.calls).toHaveBeenCalledTimes(9);
   });
   it('stops a superseded asynchronous read before issuing another IPC request', async () => {
-    let resolve!: (value: RepositoryState) => void;
+    let resolve!: (value: unknown) => void;
     let current = true;
-    const invoke = vi.fn(() => new Promise<RepositoryState>(done => { resolve = done; }));
+    const invoke = vi.fn(() => new Promise<unknown>(done => { resolve = done; }));
     const result = readNativeSnapshot('session', { invoke: invoke as typeof native, current: () => current });
-    current = false; resolve(state());
+    current = false; resolve(snap());
     await expect(result).rejects.toThrow('superseded'); expect(invoke).toHaveBeenCalledTimes(1);
   });
 });

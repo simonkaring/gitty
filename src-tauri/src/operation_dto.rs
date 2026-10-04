@@ -26,6 +26,15 @@ pub struct OperationState {
     pub fingerprint: String,
 }
 
+/// Everything a refresh needs, read once and consistent with each other.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositorySnapshot {
+    pub state: crate::dto::RepositoryState,
+    pub status: crate::dto::RepositoryStatus,
+    pub operation: OperationState,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(
     tag = "kind",

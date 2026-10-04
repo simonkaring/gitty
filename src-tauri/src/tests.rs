@@ -2294,3 +2294,46 @@ fn a_broken_head_is_reported_instead_of_being_treated_as_an_unborn_branch() {
     let created = service.create_commit(&handle, "message").unwrap();
     assert_eq!(created.oid, git(d.path(), &["rev-parse", "HEAD"]));
 }
+
+/// Timing report, not an assertion. Point it at a slow repository:
+/// `GITTY_TIMING_REPO=/path/to/repo cargo test timing_report -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn timing_report() {
+    let Ok(path) = std::env::var("GITTY_TIMING_REPO") else {
+        eprintln!("Set GITTY_TIMING_REPO to a repository path.");
+        return;
+    };
+    let data = tempfile::tempdir().unwrap();
+    let service = Service::new(data.path().into());
+    let handle = service
+        .open(RepositoryLocation::Native { path })
+        .unwrap()
+        .session
+        .handle;
+    let repo = service.repo(&handle).unwrap();
+    let time = |label: &str, run: &dyn Fn()| {
+        run(); // warm the file cache
+        let start = std::time::Instant::now();
+        run();
+        eprintln!("{label:<34}{:>8.1?}", start.elapsed());
+    };
+    time("state", &|| drop(repo.state().unwrap()));
+    time("status (refresh fingerprint)", &|| {
+        drop(repo.status().unwrap())
+    });
+    time("operation_state (old, alone)", &|| {
+        drop(repo.operation_state().unwrap())
+    });
+    time("old refresh (2x op + 2x state + status)", &|| {
+        drop(repo.operation_state().unwrap());
+        drop(repo.state().unwrap());
+        drop(repo.status().unwrap());
+        drop(repo.state().unwrap());
+        drop(repo.operation_state().unwrap());
+    });
+    time("snapshot (new refresh)", &|| drop(repo.snapshot().unwrap()));
+    time("status only (after stage/unstage)", &|| {
+        drop(repo.status().unwrap())
+    });
+}
