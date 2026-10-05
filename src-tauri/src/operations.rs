@@ -529,14 +529,18 @@ impl Repository {
         if !control && before.kind != OperationKind::None {
             return Err(Error::new("operationInProgress", before.label));
         }
-        let carry = matches!(
+        // Let Git preserve local changes or refuse overwrites for branch creation
+        // and merges, just as the pull-merge path does. No temporary stash needed.
+        let preserves_changes = matches!(
             request.action,
-            GitAction::SwitchBranch {
-                carry_changes: true,
-                ..
-            }
+            GitAction::CreateBranch { .. }
+                | GitAction::Merge { .. }
+                | GitAction::SwitchBranch {
+                    carry_changes: true,
+                    ..
+                }
         );
-        if !control && !carry && !self.status_entries()?.entries.is_empty() {
+        if !control && !preserves_changes && !self.status_entries()?.entries.is_empty() {
             return Err(Error::new("dirtyWorktree", "Commit or explicitly stash all staged, unstaged and untracked changes first. Gitty never automatically stashes."));
         }
         let mut input = Vec::new();

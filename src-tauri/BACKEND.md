@@ -413,10 +413,14 @@ remote's symbolic `HEAD` alias. These reads do not fetch or contact remotes.
   working bytes. Changed expectations return `staleOperation` before writing.
   This serializes Gitty sessions, not external Git processes: Git's own locks
   remain authoritative and an external change can still race a subprocess.
-- New actions require a clean worktree/index, including no untracked files, and
-  no in-progress operation. Bare repositories are rejected. Gitty never forces,
+- New actions require no in-progress operation. Branch creation and merges allow
+  local changes that Git can safely preserve; other new actions require a clean
+  worktree/index, including no untracked files (except carrying a branch switch,
+  described below). Bare repositories are rejected. Gitty never forces,
   automatically stashes, removes locks or automatically retries writes.
 - Branch creation resolves the start point to a commit; checkout is optional.
+  Creation without checkout leaves local changes untouched; checkout carries
+  staged/unstaged/untracked work when Git can preserve it, refusing overwrites.
   Switching accepts local branches only (`switch --no-guess`). `switchBranch`
   with `carryChanges: true` skips the clean-worktree requirement: Git's plain
   switch carries staged/unstaged work, and `--merge` is used only when the target
@@ -424,6 +428,8 @@ remote's symbolic `HEAD` alias. These reads do not fetch or contact remotes.
   `OperationResult` with `operation.conflicts` for the conflict editor (this can
   restage merged paths). Untracked/ignored obstructions are still refused by Git. Merges target the
   current local branch with explicit `--ff` or `--no-ff`, and `--no-edit`.
+  Git preserves unrelated local changes and refuses changes that would be
+  overwritten or ordinary staged changes that would enter a true merge commit.
   Switch/merge refuse ignored-file overwrites. Rebase/cherry-pick preflight
   destination/replay trees, including queued continuation steps, for obstructing
   ignored or untracked files.
