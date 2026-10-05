@@ -11,6 +11,8 @@ applyScale(loadScale());
 const isMac = typeof navigator !== 'undefined' && (/Mac|iPhone|iPod|iPad/i.test(navigator.userAgent) || (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform === 'macOS');
 if (isMac && typeof document !== 'undefined') {
   document.documentElement.dataset.platform = 'macos';
+} else if (/Windows/i.test(navigator.userAgent)) {
+  document.documentElement.dataset.platform = 'windows';
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

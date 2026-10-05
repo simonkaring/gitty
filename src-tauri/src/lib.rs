@@ -558,6 +558,10 @@ fn app_start_dragging(window: tauri::WebviewWindow) -> Result<()> {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            #[cfg(target_os = "windows")]
+            for (_, window) in app.webview_windows() {
+                window.set_decorations(false)?;
+            }
             credentials::init(app.path().resource_dir()?);
             app.manage(Arc::new(provider_oauth::OAuth::default()));
             app.manage(Arc::new(provider_accounts::AccountStore::new(

@@ -571,6 +571,37 @@ button[data-danger='true']:hover:not(:disabled) {
 .titlebar .native-actions {
   flex-wrap: nowrap;
 }
+.titlebar.titlebar-windows {
+  position: relative;
+  padding-right: 150px;
+}
+.window-controls {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  height: 46px;
+}
+.window-controls button {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+}
+.window-controls button:hover {
+  background: var(--hover);
+}
+.window-controls button:focus-visible {
+  outline-offset: -3px;
+}
+.window-controls .window-close:hover {
+  background: #c42b1c;
+  color: white;
+}
 
 .tab-pane-host {
   display: flex;
