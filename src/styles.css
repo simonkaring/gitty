@@ -1669,7 +1669,7 @@ button[data-danger='true']:hover:not(:disabled) {
    ========================================================================== */
 .inspector,
 .native-inspector {
-  width: var(--inspector-width);
+  width: var(--inspector-fit, var(--inspector-width));
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -2256,23 +2256,87 @@ button[data-danger='true']:hover:not(:disabled) {
   border: 0;
 }
 
+/* Commit inspector: denser metadata so changed files start higher. Still one scroller (.inspector-content). */
+.native-inspector .commit-summary {
+  padding: 12px 16px 0;
+}
+.native-inspector .commit-eyebrow {
+  min-height: var(--h-compact);
+}
+.native-inspector .commit-summary h2 {
+  margin: 8px 0;
+  font-size: var(--fs-lg);
+}
+.native-inspector .author-block strong {
+  font-size: var(--fs-sm);
+}
+.native-inspector .commit-edit-note {
+  margin: 4px 16px 0;
+}
+.native-inspector .commit-description {
+  margin: 8px 16px 0;
+  padding: 8px 12px;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.native-inspector .commit-metadata {
+  margin: 8px 16px;
+  padding: 2px 0;
+  column-gap: 12px;
+}
+.native-inspector .commit-metadata dt,
+.native-inspector .commit-metadata dd {
+  padding: 4px 0;
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+.native-inspector .inspector-block {
+  margin: 0 16px 8px;
+}
+.native-inspector .compare-summary {
+  margin: 0 16px 8px;
+  padding: 8px 12px;
+}
+.native-inspector .changed-files {
+  margin-top: 4px;
+}
+.native-inspector .section-heading {
+  min-height: var(--h-control);
+  padding: 2px 16px;
+}
+.native-inspector .file-row {
+  min-height: var(--h-control);
+  padding: 4px 16px;
+}
+.native-inspector .inspector-tip {
+  margin: 12px 16px;
+  padding: 8px 12px;
+}
+
 /* ==========================================================================
    Working changes (sidebar inspector and full workspace)
    ========================================================================== */
+.native-shell {
+  /* Keep at least 480px for history and diffs beside the sidebar at intermediate window widths, however wide the inspector was dragged. */
+  --inspector-fit: min(var(--inspector-width), max(300px, calc(100vw / var(--zoom, 1) - var(--sidebar-space, 0px) - 480px)));
+}
 .working-inspector-sidebar {
-  width: var(--inspector-width);
+  width: var(--inspector-fit, var(--inspector-width));
   flex-shrink: 0;
   display: flex;
   min-height: 0;
 }
 .working-inspector {
-  width: var(--inspector-width, 380px);
+  width: var(--inspector-fit, var(--inspector-width, 380px));
   flex-shrink: 0;
   height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--raised);
   overflow: hidden;
+  /* Rows and actions adapt to the pane's own width, not the window's. */
+  container: working-changes / inline-size;
 }
 .working-inspector-sidebar .working-inspector {
   width: 100%;
@@ -2282,47 +2346,54 @@ button[data-danger='true']:hover:not(:disabled) {
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
-  padding: 16px 12px 12px 16px;
+  padding: 12px 8px 8px 16px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 .working-sidebar-header .eyebrow {
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   overflow-wrap: anywhere;
 }
 .working-sidebar-header h2 {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: var(--fs-xl);
+  font-size: var(--fs-lg);
   margin: 0;
 }
 .working-sidebar-actions {
   display: flex;
   gap: 2px;
 }
+/* Vertical budget: actions and the composer header never shrink; the file list takes whatever is left (and gives
+   way first, down to a floor); an open composer shrinks next and scrolls inside itself. Only one scrollbar is ever
+   shown per region and the content column itself never scrolls. */
 .working-sidebar-content {
-  flex: 1;
-  overflow-y: auto;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  min-height: 0;
 }
 .working-files-list {
-  flex: 1;
+  flex: 1 1000 auto;
+  min-height: 88px;
   overflow-y: auto;
-  min-height: 120px;
+  overscroll-behavior: contain;
 }
 .file-list-actions {
+  flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  padding: 12px 12px;
+  gap: 6px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
 }
 .file-list-actions button {
   flex: 1 1 auto;
+  min-height: var(--h-compact);
   padding-inline: 8px;
+  font-size: var(--fs-xs);
   white-space: nowrap;
 }
 .discard-list {
@@ -2335,31 +2406,55 @@ button[data-danger='true']:hover:not(:disabled) {
   color: var(--muted);
 }
 .working-category {
-  padding-bottom: 4px;
+  padding-bottom: 2px;
 }
 .working-category h2 {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  background: var(--raised);
+}
+.working-category-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: var(--h-compact);
+  padding: 0 12px 0 8px;
+  text-align: left;
   font: 600 var(--fs-xs) var(--ui);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--secondary);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px 6px;
-  margin: 0;
 }
-.working-category.conflict:has(.working-file) h2 {
+.working-category-toggle:focus-visible {
+  outline-offset: -2px;
+}
+.working-category-toggle .count {
+  margin-left: auto;
+}
+.working-category-chevron {
+  color: var(--muted);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.working-category-toggle[aria-expanded='false'] .working-category-chevron {
+  transform: rotate(-90deg);
+}
+.working-category.conflict.has-entries .working-category-toggle {
   color: var(--red);
 }
-.working-category.staged h2 {
+.working-category.staged .working-category-toggle {
   color: var(--accent-text);
 }
-.working-category.conflict:not(:has(.working-file)) {
-  display: none;
+/* A folded group that still holds the file open in the diff pane says so. */
+.working-category-toggle[data-holds-selection][aria-expanded='false'] .count {
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--accent-text);
 }
 .empty-category {
   margin: 0;
-  padding: 2px 16px 8px;
+  padding: 2px 16px 6px;
   color: var(--muted);
   font-size: var(--fs-xs);
 }
@@ -2369,7 +2464,7 @@ button[data-danger='true']:hover:not(:disabled) {
   /* Right-click opens the file menu; it must not also select the path text. */
   -webkit-user-select: none;
   user-select: none;
-  min-height: 36px;
+  min-height: var(--h-compact);
   animation: file-in var(--dur-slow) var(--ease-out);
 }
 .working-file:hover {
@@ -2383,7 +2478,7 @@ button[data-danger='true']:hover:not(:disabled) {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 8px 8px 8px 16px;
+  padding: 4px 8px 4px 16px;
   flex: 1;
   min-width: 0;
   text-align: left;
@@ -2426,16 +2521,22 @@ button[data-danger='true']:hover:not(:disabled) {
   font-family: var(--mono);
   font-size: var(--fs-sm);
   font-weight: 450;
+  line-height: 1.4;
   overflow-wrap: anywhere;
 }
 .working-file-select small {
   display: block;
   color: var(--accent-text);
   font-size: var(--fs-xs);
-  margin-top: 2px;
+  margin-top: 1px;
+}
+.working-file > .secondary-button {
+  margin-right: 8px;
 }
 .file-stage-button {
-  margin-right: 12px;
+  width: 24px;
+  height: 24px;
+  margin-right: 8px;
   border: 1px solid var(--border-strong);
   background: var(--raised);
 }
@@ -2445,79 +2546,206 @@ button[data-danger='true']:hover:not(:disabled) {
   background: var(--accent-wash);
 }
 .commit-composer {
-  padding: 16px 24px 20px;
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 4px 12px 12px;
   background: var(--sidebar);
   border-top: 1px solid var(--border);
 }
-.working-inspector .commit-composer {
-  flex-shrink: 0;
-  padding: 16px 16px 16px;
+.commit-composer.is-collapsed {
+  padding-bottom: 4px;
 }
 .composer-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.composer-heading h2 {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: var(--fs-xl);
-  margin: 0;
+  min-height: var(--h-compact);
 }
-.working-inspector .composer-heading h2 {
-  font-size: var(--fs-lg);
+.composer-heading h2 {
+  /* The title gives way first: it ellipsizes rather than overlapping the count, draft chip or toggle. */
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--fs-md);
+  margin: 0;
+  white-space: nowrap;
 }
 .composer-heading h2 svg {
+  margin-right: 6px;
   color: var(--accent-text);
 }
 .composer-heading > span {
+  flex: none;
   font-family: var(--mono);
   font-size: var(--fs-xs);
   color: var(--muted);
   white-space: nowrap;
 }
+.composer-draft {
+  flex: none;
+  padding: 0 6px;
+  border-radius: var(--r-pill);
+  background: var(--accent-wash);
+  color: var(--accent-text);
+  font-size: var(--fs-2xs);
+  font-style: normal;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.composer-toggle svg {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.composer-toggle[aria-expanded='false'] svg {
+  transform: rotate(180deg);
+}
+.composer-feedback {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.composer-feedback p {
+  margin: 0;
+  color: var(--secondary);
+  font-size: var(--fs-xs);
+}
+.composer-feedback .workflow-alert {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  line-height: 1.4;
+}
+.composer-feedback small {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+.composer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  /* Room for focus rings, which the scroll container would otherwise clip. */
+  padding: 2px;
+}
+.composer-body > * {
+  flex-shrink: 0;
+}
+.composer-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+}
+.composer-identity {
+  /* Wraps below the amend toggle in a narrow pane rather than squeezing its name to an ellipsis. */
+  flex: 1 1 160px;
+  min-width: 160px;
+}
+.composer-identity[open] {
+  flex-basis: 100%;
+}
+.composer-identity > summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: var(--h-compact);
+  min-width: 0;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  color: var(--secondary);
+  font-size: var(--fs-xs);
+  list-style: none;
+}
+.composer-identity > summary::-webkit-details-marker {
+  display: none;
+}
+.composer-identity > summary:hover {
+  background: var(--hover);
+}
+.composer-identity > summary:focus-visible {
+  outline-offset: -2px;
+}
+.composer-identity-role {
+  flex: none;
+  color: var(--muted);
+}
+.composer-identity-role::after {
+  content: ':';
+}
+.composer-identity-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-weight: 500;
+}
+.composer-identity-chevron {
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.composer-identity[open] .composer-identity-chevron {
+  transform: rotate(180deg);
+}
+.composer-identity-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 4px 0 6px;
+}
+.composer-identity-panel label {
+  margin: 0;
+}
+.composer-amend-note {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
 .commit-composer label {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-xs);
   font-weight: 600;
-  margin: 12px 0 6px;
+  margin: 6px 0 2px;
 }
 .commit-composer label span {
-  font-size: var(--fs-xs);
+  font-size: var(--fs-2xs);
   font-weight: 400;
   color: var(--muted);
 }
-.commit-composer input,
-.commit-composer textarea {
-  width: 100%;
-}
+.commit-composer input:not([type='checkbox']),
 .commit-composer select {
   width: 100%;
-}
-.composer-identity {
-  margin: 12px 0;
-}
-.composer-identity .text-button {
-  margin-top: 4px;
-}
-.composer-identity small {
-  display: block;
-  color: var(--muted);
+  min-height: var(--h-compact);
+  padding: 4px 8px;
+  font-size: var(--fs-sm);
 }
 .commit-composer textarea {
+  width: 100%;
+  min-height: 48px;
+  max-height: 40vh;
+  padding: 4px 8px;
   font-family: var(--mono);
   font-size: var(--editor-font-size);
+  line-height: 1.5;
 }
 .commit-composer .amend-control {
   align-items: center;
   cursor: pointer;
-  margin: 0 0 4px;
-  gap: 8px;
+  margin: 0;
+  gap: 6px;
+  min-height: var(--h-compact);
 }
 .commit-composer .amend-control input {
   width: 16px;
@@ -2528,30 +2756,39 @@ button[data-danger='true']:hover:not(:disabled) {
   font-weight: 500;
 }
 .composer-footer {
+  /* Sticks to the bottom of the composer's own scroll area, so the commit button stays reachable when the pane is short. */
+  position: sticky;
+  bottom: 0;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  margin-top: 16px;
-}
-.composer-footer p {
-  color: var(--muted);
-  font-size: var(--fs-xs);
-  line-height: 1.6;
-  margin: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding-top: 8px;
+  background: var(--sidebar);
 }
 .composer-footer button {
   flex-shrink: 0;
 }
-.working-inspector .composer-footer {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-}
-.working-inspector .composer-footer .primary-button {
-  min-height: 36px;
-}
 
+@container working-changes (max-width: 340px) {
+  .file-list-actions {
+    gap: 4px;
+    padding: 6px 8px;
+  }
+  .file-list-actions button {
+    padding-inline: 6px;
+  }
+  .working-file-select {
+    padding-left: 12px;
+  }
+  .file-stage-button,
+  .working-file > .secondary-button {
+    margin-right: 4px;
+  }
+  .commit-composer {
+    padding-inline: 8px;
+  }
+}
 /* ==========================================================================
    Banners, alerts, status bar, toast
    ========================================================================== */
@@ -4180,6 +4417,11 @@ dialog[open]::backdrop {
 /* ==========================================================================
    Responsive and accessibility overrides (keep last)
    ========================================================================== */
+@media (max-height: 560px) {
+  .working-files-list {
+    min-height: 56px;
+  }
+}
 @media (max-width: 1400px) {
   .history-body {
     --visible-author-width: 0px;
@@ -4203,10 +4445,6 @@ dialog[open]::backdrop {
   .working-inspector,
   .working-inspector-sidebar {
     width: min(var(--inspector-width), 42vw) !important;
-  }
-  .composer-footer {
-    align-items: flex-start;
-    flex-direction: column;
   }
   .native-actions > .secondary-button {
     padding-inline: 12px;
@@ -4270,12 +4508,6 @@ dialog[open]::backdrop {
 .workflow-alert {
     flex-shrink: 0;
   }
-  .commit-composer {
-    padding: 16px 20px;
-  }
-  .composer-footer {
-    flex-direction: row;
-  }
   .welcome-graph {
     display: none;
   }
@@ -4328,11 +4560,6 @@ dialog[open]::backdrop {
   }
   .statusbar {
     padding-inline: 12px;
-  }
-  .composer-footer,
-  .composer-heading {
-    flex-direction: column;
-    align-items: flex-start;
   }
   .composer-footer .primary-button {
     width: 100%;

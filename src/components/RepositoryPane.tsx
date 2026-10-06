@@ -7,8 +7,8 @@ import { appendUnique, errorMessage, graphCommit, isDemoHandle, native, readNati
 import { HistoryGraph, type GraphAnchor, type GraphHandle } from './HistoryGraph';
 import { NativeInspector } from './NativeInspector';
 import { NativeSidebar } from './NativeSidebar';
-import { PaneResizer } from './WorkspaceControls';
-import { DiffPreview, WorkingChanges, type ActiveDiffState } from './WorkingChanges';
+import { INSPECTOR_MAX_WIDTH, INSPECTOR_MIN_WIDTH, PaneResizer } from './WorkspaceControls';
+import { DEFAULT_WORKING_DISCLOSURE, DiffPreview, WorkingChanges, type ActiveDiffState, type WorkingDisclosure, type WorkingDisclosureUpdate } from './WorkingChanges';
 import { writeAndRefresh, type MutationOutcome } from '../model/workflow';
 import { remoteAndRefresh } from '../model/remoteFlow';
 import type { OperationState } from '../model/operations';
@@ -80,6 +80,10 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 6000); return () => clearTimeout(timer); }, [notice]);
   const [revision, setRevision] = useState(0);
   const [activeDiff, setActiveDiff] = useState<ActiveDiffState | null>(null);
+  /** Fold/open state of the working-changes list and commit composer. It lives here, not in WorkingChanges,
+   * so it survives switching the inspector to a commit and back, and it is tagged with the repository
+   * session so a different session starts from the defaults. Never persisted. */
+  const [workingDisclosure, setWorkingDisclosure] = useState<{ handle: string; value: WorkingDisclosure } | null>(null);
   const [split, setSplit] = useState(settings.diffView === 'split');
   useEffect(() => setSplit(settings.diffView === 'split'), [settings.diffView]);
   const [mutationBusy, setMutationBusy] = useState(false);
@@ -437,6 +441,11 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
       void load(id);
     }
   }
+  function updateWorkingDisclosure(update: WorkingDisclosureUpdate) {
+    const handle = state?.session.handle;
+    if (!handle) return;
+    setWorkingDisclosure(current => ({ handle, value: update(current?.handle === handle ? current.value : DEFAULT_WORKING_DISCLOSURE) }));
+  }
   const graphCommits = useMemo(() => {
     const list = commits.map(graphCommit);
     // Never attach live working status to a different pinned HEAD.
@@ -606,7 +615,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
             </section>
           )}
           {inspectorOpen && <>
-            <PaneResizer label="Resize inspector" width={inspectorWidth} onChange={setInspectorWidth} min={300} max={640} />
+            <PaneResizer label="Resize inspector" width={inspectorWidth} onChange={setInspectorWidth} min={INSPECTOR_MIN_WIDTH} max={INSPECTOR_MAX_WIDTH} />
             {selected === WORKING_ID || (!selected && (status?.entries.length ?? 0) > 0) ? (
               <aside className="working-inspector-sidebar">
                 <WorkingChanges
@@ -622,6 +631,8 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
                   activePath={activeDiff?.path ?? null}
                   onActiveDiffChange={setActiveDiff}
                   onClose={() => setInspectorOpen(false)}
+                  disclosure={workingDisclosure?.handle === state.session.handle ? workingDisclosure.value : DEFAULT_WORKING_DISCLOSURE}
+                  onDisclosureChange={updateWorkingDisclosure}
                 />
               </aside>
             ) : (

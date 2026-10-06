@@ -5,7 +5,7 @@ import { CommandPalette, type PaletteCommand } from './CommandPalette';
 import { useSettings } from '../model/settings';
 import type { RepositoryLocation } from '../model/repository';
 import { StartPage } from './Welcome';
-import { Brand, usePaneWidth } from './WorkspaceControls';
+import { Brand, INSPECTOR_MAX_WIDTH, INSPECTOR_MIN_WIDTH, usePaneWidth } from './WorkspaceControls';
 import { SettingsButton } from './Settings';
 import { Toast, ToastProvider, ToastRegion } from './ui';
 import { RepositoryPane } from './RepositoryPane';
@@ -37,7 +37,7 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
   const [{ tabs, activeId, notice: pendingNotice }, dispatch] = useReducer(tabsReducer, demo, initialTabsState);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 1000);
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 900);
-  const [inspectorWidth, setInspectorWidth] = usePaneWidth('inspector', 400, 300, 640);
+  const [inspectorWidth, setInspectorWidth] = usePaneWidth('inspector', 400, INSPECTOR_MIN_WIDTH, INSPECTOR_MAX_WIDTH);
   const [sidebarWidth, setSidebarWidth] = usePaneWidth('sidebar', 240, 210, 340);
   const [notice, setNotice] = useState('');
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -123,7 +123,7 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
   const tabSummaries: RepositoryTabSummary[] = tabs.map(tab => ({ id: tab.id, title: tab.title, busy: tab.busy, branch: tab.branch, dirty: tab.dirty, start: !tab.location }));
   const activeTab = tabs.find(tab => tab.id === activeId);
   const startPage = (fromTabId?: string) => <StartPage onOpen={location => openLocation(location, fromTabId)} onClone={request => startClone(request, fromTabId)} cloneBusy={cloneBusy} onDemo={onToggleDemo && requestDemo} />;
-  return <ToastProvider value={toastRoot}><div className="app-shell native-shell" style={{ '--inspector-width': `${inspectorWidth}px`, '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
+  return <ToastProvider value={toastRoot}><div className="app-shell native-shell" style={{ '--inspector-width': `${inspectorWidth}px`, '--sidebar-width': `${sidebarWidth}px`, '--sidebar-space': `${sidebarOpen ? sidebarWidth : 0}px` } as CSSProperties}>
     <header className={`titlebar${customWindowControls ? ' titlebar-windows' : ''}`} data-tauri-drag-region={customWindowControls ? 'deep' : true} onMouseDown={customWindowControls ? undefined : handleWindowDrag}>
       <Brand demo={demo} />
       <RepositoryTabs tabs={tabSummaries} activeId={activeId} onSelect={selectTab} onClose={closeTab} onNew={() => dispatch({ type: 'start' })} />

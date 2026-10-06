@@ -23,7 +23,7 @@ const button = (page, name) => page.getByRole('button', { name, exact: true });
 const select = (page, name) => page.getByRole('combobox', { name, exact: true });
 const dialog = page => page.getByRole('dialog', { name: 'Settings', exact: true });
 const open = async page => { await button(page, 'Open settings').click(); await dialog(page).waitFor(); await button(page, 'Appearance').click(); };
-const close = async page => { await button(page, 'Close settings').click(); await dialog(page).waitFor({ state: 'hidden' }); };
+const close = async page => { await button(page, 'Close dialog').click(); await dialog(page).waitFor({ state: 'hidden' }); };
 const token = (page, name) => page.evaluate(key => getComputedStyle(document.documentElement).getPropertyValue(key).trim(), name);
 async function painted(page, mode, bg, graph) {
   await page.waitForFunction(({ mode, bg, graph }) => {
@@ -83,7 +83,7 @@ try {
     await page.keyboard.press('Escape');
     assert.equal(await history.evaluate(el => el === document.activeElement), true);
     assert.deepEqual(await history.evaluate(el => ({ selected: el.getAttribute('aria-activedescendant'), scroll: el.scrollTop })), before);
-    const search = page.getByLabel('Search commits, authors, branches, or SHA');
+    const search = page.getByLabel('Search full history');
     await search.fill('theme');
     await page.keyboard.press('Control+,');
     await dialog(page).waitFor();
@@ -276,7 +276,7 @@ try {
     await page.evaluate(() => document.fonts.ready);
     assert.equal(await page.evaluate(() => document.fonts.check('17px "JetBrains Mono"')), true);
     await close(page);
-    await page.getByRole('button', { name: /Working changes/ }).click();
+    await page.getByRole('option', { name: /^Working changes/ }).click();
     const summary = page.getByRole('textbox', { name: /Summary/ });
     await summary.fill('Settings must preserve this draft');
     await summary.press('Meta+,');
@@ -285,7 +285,7 @@ try {
     assert.equal(await summary.inputValue(), 'Settings must preserve this draft');
     assert.equal(await summary.evaluate(el => el === document.activeElement), true);
     await button(page, 'Staged: src/styles/tokens.css').click();
-    const diff = page.getByRole('region', { name: 'Working file diff' }).locator('.native-diff');
+    const diff = page.getByRole('region', { name: 'Diff for src/styles/tokens.css' }).locator('.native-diff');
     await diff.waitFor();
     assert.match(await diff.getAttribute('class'), /split/);
     assert.equal(await diff.evaluate(el => getComputedStyle(el).fontSize), '17px');
@@ -308,7 +308,7 @@ try {
   await check('pane resize persists in shared settings and reset updates mounted panes', async () => {
     await close(page);
     const sidebar = page.getByRole('separator', { name: 'Resize repository sidebar', exact: true });
-    const inspector = page.getByRole('separator', { name: 'Resize commit inspector', exact: true });
+    const inspector = page.getByRole('separator', { name: 'Resize inspector', exact: true });
     await sidebar.press('ArrowRight');
     await inspector.press('ArrowLeft');
     assert.deepEqual((await preferences(page)).paneWidths, { sidebar: 260, inspector: 420 });
@@ -366,16 +366,23 @@ try {
     native.on('pageerror', error => errors.push(error.message));
     await native.addInitScript(() => {
       window.isTauri = true;
+      // Branches are colored by name and the checked-out branch uses the HEAD color, so the lane palette needs a second branch tip.
+      const base = { id: 'def5678', parents: [], subject: 'Settings QA side branch', body: '', author: 'QA', email: 'qa@example.test', timestamp: 1699999999 };
       const commit = { id: 'abc1234', parents: [], subject: 'Settings QA fixture', body: '', author: 'QA', email: 'qa@example.test', timestamp: 1700000000 };
-      const state = { session: { handle: 'settings-qa', name: 'settings-qa', root: '/fixture/settings', location: { kind: 'native', path: '/fixture/settings' }, gitDir: '/fixture/settings/.git', commonDir: '/fixture/settings/.git', head: commit.id, headRef: 'refs/heads/main', shallow: false, bare: false, linkedWorktree: false }, refs: [{ name: 'main', fullName: 'refs/heads/main', commitId: commit.id, kind: 'local' }], remotes: [], fingerprint: 'qa' };
-      window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
+      const state = { session: { handle: 'settings-qa', name: 'settings-qa', root: '/fixture/settings', location: { kind: 'native', path: '/fixture/settings' }, gitDir: '/fixture/settings/.git', commonDir: '/fixture/settings/.git', head: commit.id, headRef: 'refs/heads/main', shallow: false, bare: false, linkedWorktree: false }, refs: [{ name: 'main', fullName: 'refs/heads/main', commitId: commit.id, kind: 'local' }, { name: 'side', fullName: 'refs/heads/side', commitId: base.id, kind: 'local' }], remotes: [], fingerprint: 'qa' };
+      let callbackId = 0;
+      window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+      window.__TAURI_INTERNALS__ = { metadata: { currentWindow: { label: 'main' }, currentWebview: { windowLabel: 'main', label: 'main' } }, transformCallback: () => ++callbackId, unregisterCallback: () => {}, invoke: async (command, args) => {
+        if (command.startsWith('plugin:webview|') || command.startsWith('plugin:window|')) return;
+        if (command === 'plugin:event|listen') return 1;
+        if (command === 'plugin:event|unlisten') return;
         if (command === 'repository_snapshot') { const [state, status, operation] = await Promise.all(['repository_state', 'repository_status', 'repository_operation_state'].map(name => window.__TAURI_INTERNALS__.invoke(name, args))); return { state, status, operation }; }
         if (command === 'repository_recent') return [state.session.location];
         if (command === 'wsl_distributions') return [];
         if (command === 'repository_open' || command === 'repository_state') return state;
         if (command === 'repository_close') return;
-        if (command === 'repository_history') return { commits: [commit], cursor: null, generation: 'qa', shallow: false };
-        if (command === 'repository_commit') return commit;
+        if (command === 'repository_history') return { commits: [commit, base], cursor: null, generation: 'qa', shallow: false };
+        if (command === 'repository_commit') return args.oid === base.id ? base : commit;
         if (command === 'repository_diff_files') return [];
         if (command === 'repository_status') return { head: commit.id, headRef: 'refs/heads/main', fingerprint: 'qa', entries: [] };
         if (command === 'repository_operation_state') return { kind: 'none', label: '', current: 'main', incoming: null, step: null, total: null, conflicts: [], canContinue: false, canSkip: false, fingerprint: 'qa' };
@@ -383,8 +390,7 @@ try {
       } };
     });
     await native.goto(url);
-    await button(native, 'Open repository').click();
-    await button(native, 'Native /fixture/settings').click();
+    await native.getByRole('button', { name: /\/fixture\/settings$/ }).click();
     await native.getByRole('listbox', { name: 'Commit history' }).waitFor();
     await open(native);
     await select(native, 'Theme behavior').selectOption('fixed');

@@ -15,8 +15,8 @@ try {
   demo.on('pageerror', e => errors.push(e.message));
   await demo.goto(url);
   await demo.locator('.statusbar').getByText('Demo workspace', { exact: false }).waitFor();
-  await demo.getByRole('textbox', { name: 'Search commits, authors, branches, or SHA' }).fill('palette');
-  await demo.getByText('Full graph preserved', { exact: false }).waitFor();
+  await demo.getByRole('textbox', { name: 'Search full history' }).fill('palette');
+  await demo.getByText('Ancestry preserved', { exact: false }).waitFor();
   await demo.close();
 
   const page = await browser.newPage({ viewport: { width: 1500, height: 1000 } });
@@ -32,11 +32,12 @@ try {
     const state = () => ({ session: { handle: 's', name: 'Fixture', location: { kind: 'native', path: '/fixture' }, root: '/fixture', gitDir: '/fixture/.git', commonDir: '/fixture/.git', head: list()[0].id, headRef: 'refs/heads/main', shallow: false, bare: false, linkedWorktree: false }, refs: [{ name: 'main', fullName: 'refs/heads/main', commitId: list()[0].id, kind: 'local' }, { name: 'empty', fullName: 'refs/tags/empty', commitId: 'c219', kind: 'tag' }], remotes: [], fingerprint: f.mode });
     let callbackId = 0;
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
-    window.__TAURI_INTERNALS__ = { transformCallback: () => ++callbackId, unregisterCallback: () => {}, invoke: async (command, args) => {
+    window.__TAURI_INTERNALS__ = { metadata: { currentWindow: { label: 'main' }, currentWebview: { windowLabel: 'main', label: 'main' } }, transformCallback: () => ++callbackId, unregisterCallback: () => {}, invoke: async (command, args) => {
       f.calls.push({ command, args });
       if (command === 'repository_snapshot') { const [state, status, operation] = await Promise.all(['repository_state', 'repository_status', 'repository_operation_state'].map(name => window.__TAURI_INTERNALS__.invoke(name, args))); return { state, status, operation }; }
       if (command === 'plugin:event|listen') return 1;
       if (command === 'plugin:event|unlisten') return;
+      if (command.startsWith('plugin:webview|') || command.startsWith('plugin:window|')) return;
       if (command === 'repository_recent') return [{ kind: 'native', path: '/fixture' }];
       if (command === 'wsl_distributions') return [];
       if (command === 'repository_pick') return '/fixture';
@@ -69,8 +70,8 @@ try {
     } };
   });
   await page.goto(url);
-  await page.getByRole('button', { name: 'Open repository', exact: true }).click();
-  await page.getByRole('button', { name: 'Native /fixture' }).click();
+  // The start tab lists recent repositories; the fixture reports /fixture as one.
+  await page.getByRole('button', { name: /\/fixture$/ }).click();
   await page.getByRole('option', { name: /^Commit c0,/ }).waitFor();
   assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
   await page.getByText('main → origin/main', { exact: false }).waitFor();
@@ -102,8 +103,8 @@ try {
   // location focuses it instead of creating a duplicate.
   await page.locator('.repository-tab').getByText('Fixture', { exact: true }).waitFor();
   assert.equal(await page.locator('.repository-tab').count(), 1);
-  await page.getByRole('button', { name: 'Open repository…', exact: true }).click();
-  await page.getByRole('button', { name: 'Native /fixture' }).click();
+  await page.getByRole('button', { name: 'New tab', exact: true }).click();
+  await page.getByRole('button', { name: /\/fixture$/ }).click();
   assert.equal(await page.locator('.repository-tab').count(), 1);
 
   // Stash dialog reads the (empty) stash list without any network action.
@@ -121,16 +122,16 @@ try {
   await page.waitForFunction(() => !window.fixture.statusWaiting);
 
   // Explicit comparison direction and working-category precedence.
-  await page.getByRole('button', { name: 'Set as base', exact: true }).click();
+  await page.getByRole('button', { name: 'Set as compare base', exact: true }).click();
   await page.getByRole('option', { name: /^Commit c1,/ }).click();
-  await page.getByRole('button', { name: 'Set as target', exact: true }).click();
+  await page.getByRole('button', { name: 'Set as compare target', exact: true }).click();
   await page.getByText('Changes that turn the base commit into the target commit.', { exact: false }).waitFor();
   await page.getByRole('option', { name: /^Working changes/ }).click();
   await page.getByRole('button', { name: 'Staged: file.txt', exact: true }).click();
-  await page.locator('.diff-view-pane .diff-view-group-badge.staged').waitFor();
+  await page.locator('.diff-view-pane .badge', { hasText: /^staged$/ }).waitFor();
   await page.waitForFunction(() => window.fixture.calls.filter(c => c.command === 'repository_diff').at(-1)?.args.spec.kind === 'staged');
   await page.getByRole('button', { name: 'Unstaged: file.txt', exact: true }).click();
-  await page.locator('.diff-view-pane .diff-view-group-badge.unstaged').waitFor();
+  await page.locator('.diff-view-pane .badge', { hasText: /^unstaged$/ }).waitFor();
   await page.getByRole('button', { name: 'Close diff and show tree' }).click();
   await page.getByRole('option', { name: /^Commit c0,/ }).click();
   await page.getByRole('button', { name: 'Clear comparison', exact: true }).click();
@@ -140,7 +141,7 @@ try {
   await page.locator('.history-scroll').evaluate(el => { el.scrollTop = 453; });
   await page.evaluate(() => { window.fixture.raceOnce = true; });
   await page.getByRole('button', { name: 'Refresh', exact: true }).click();
-  await page.waitForFunction(() => document.querySelector('.statusbar')?.textContent.includes('400 commits loaded'));
+  await page.waitForFunction(() => document.querySelector('.history-bottom')?.textContent.includes('400 commits loaded'));
   assert.equal(await page.locator('.history-scroll').evaluate(el => el.scrollTop), 250 * 36 + 453);
   assert.equal(await page.locator('.native-sha').textContent(), 'c0');
 
@@ -148,6 +149,8 @@ try {
   await page.getByRole('button', { name: 'HEAD', exact: true }).click();
   await page.evaluate(() => { window.fixture.holdDiff = true; });
   await page.getByRole('option', { name: /^Commit n1,/ }).click();
+  // Diffs load only once a changed file is chosen.
+  await page.locator('.native-inspector .file-row').first().click();
   await page.waitForFunction(() => !!window.fixture.rejectDiff);
   await page.locator('summary').filter({ hasText: 'Tags' }).click();
   await page.getByRole('button', { name: 'empty', exact: true }).click();
@@ -163,7 +166,7 @@ try {
    await page.getByRole('button', { name: 'Open settings', exact: true }).click();
    await page.getByRole('dialog', { name: 'Settings', exact: true }).waitFor();
    await page.getByRole('combobox', { name: 'Theme', exact: true }).selectOption('gitty-light');
-   await page.getByRole('button', { name: 'Close settings', exact: true }).click();
+   await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
    assert.equal(await page.locator('html').getAttribute('data-theme'), 'light');
    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('gitty:settings')).themeId), 'gitty-light');
    assert.equal(await page.evaluate(() => window.fixture.calls.filter(call => call.command === 'repository_operation_state').every(call => call.args.handle === 's')), true);
