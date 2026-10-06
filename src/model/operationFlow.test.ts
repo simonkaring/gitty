@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { captureOperation, operationAndRefresh } from './operationFlow';
+import { captureOperation, operationAndRefresh, operationContent } from './operationFlow';
 import type { native } from './native';
 
 const op = { kind: 'none', fingerprint: 'reviewed', conflicts: [] };
@@ -51,4 +51,8 @@ it('ignores stale sessions without refreshing the replacement repository', async
   expect(refresh).not.toHaveBeenCalled();
   await operationAndRefresh('old', 'repository_run_operation', {}, refresh, () => false, invoke as typeof native);
   expect(invoke).toHaveBeenCalledOnce();
+});
+it('ignores the fingerprint when comparing operation content, since it also covers status and index', () => {
+  expect(operationContent({ ...op, fingerprint: 'a' } as never)).toBe(operationContent({ ...op, fingerprint: 'b' } as never));
+  expect(operationContent({ ...op, step: 1 } as never)).not.toBe(operationContent({ ...op, step: 2 } as never));
 });

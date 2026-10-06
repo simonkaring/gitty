@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus, GitCommitHorizontal, Globe2, Laptop, LocateFixed, RefreshCw, Search, Tag, Upload, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus, GitCommitHorizontal, Globe2, Laptop, LocateFixed, RefreshCw, ScrollText, Search, Tag, Upload, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { CommandPalette, type PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
 import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
-import { appendUnique, errorMessage, graphCommit, isDemoHandle, native, validateHistory, WORKING_ID } from '../model/native';
+import { appendUnique, errorMessage, graphCommit, isDemoHandle, native, readNativeSnapshot, validateHistory, WORKING_ID } from '../model/native';
 import { HistoryGraph, type GraphAnchor, type GraphHandle } from './HistoryGraph';
 import { NativeInspector } from './NativeInspector';
 import { NativeSidebar } from './NativeSidebar';
-import { PaneResizer } from './WorkspaceControls';
-import { DiffPreview, WorkingChanges, type ActiveDiffState } from './WorkingChanges';
+import { INSPECTOR_MAX_WIDTH, INSPECTOR_MIN_WIDTH, PaneResizer } from './WorkspaceControls';
+import { DEFAULT_WORKING_DISCLOSURE, DiffPreview, WorkingChanges, type ActiveDiffState, type WorkingDisclosure, type WorkingDisclosureUpdate } from './WorkingChanges';
 import { writeAndRefresh, type MutationOutcome } from '../model/workflow';
 import { remoteAndRefresh } from '../model/remoteFlow';
 import type { OperationState } from '../model/operations';
 import { OperationDialog, type ActionContext } from './OperationDialog';
+import { ActivityLogDialog } from './ActivityLogDialog';
 import { GraphContextMenu, type MenuTarget } from './GraphContextMenu';
 import { ConflictEditor } from './ConflictEditor';
 import { PullRequestDialog } from './PullRequestDialog';
@@ -20,7 +21,7 @@ import { RepositoryToolbar } from './RepositoryToolbar';
 import { PublishDialog } from './PublishDialog';
 import { RemoteStashDialog } from './RemoteStashDialog';
 import { toggleCommit } from '../model/operationUi';
-import { captureOperation, operationAndRefresh, readOperationSnapshot } from '../model/operationFlow';
+import { captureOperation, operationAndRefresh, operationContent } from '../model/operationFlow';
 import { SwitchBlockedDialog } from './SwitchBlockedDialog';
 import { Segmented, Toast } from './ui';
 import { locationLabel, sessionKey } from '../model/tabs';
@@ -79,12 +80,16 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 6000); return () => clearTimeout(timer); }, [notice]);
   const [revision, setRevision] = useState(0);
   const [activeDiff, setActiveDiff] = useState<ActiveDiffState | null>(null);
+  /** Fold/open state of the working-changes list and commit composer. It lives here, not in WorkingChanges,
+   * so it survives switching the inspector to a commit and back, and it is tagged with the repository
+   * session so a different session starts from the defaults. Never persisted. */
+  const [workingDisclosure, setWorkingDisclosure] = useState<{ handle: string; value: WorkingDisclosure } | null>(null);
   const [split, setSplit] = useState(settings.diffView === 'split');
   useEffect(() => setSplit(settings.diffView === 'split'), [settings.diffView]);
   const [mutationBusy, setMutationBusy] = useState(false);
   const mutationLock = useRef(false);
   const [operation, setOperation] = useState<OperationState | null>(null);
-  const operationFingerprint = useRef('');
+  const operationSig = useRef('');
   const [actionContext, setActionContext] = useState<ActionContext | null>(null);
   const [menuTarget, setMenuTarget] = useState<MenuTarget | null>(null);
   const [publishInfo, setPublishInfo] = useState<SyncInfo | null>(null);
@@ -95,6 +100,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
   const [pickOrder, setPickOrder] = useState<string[]>([]);
   const [pickMode, setPickMode] = useState(false);
   const [stashOpen, setStashOpen] = useState(false);
+  const [activityLogOpen, setActivityLogOpen] = useState(false);
   const [mutationBlocked, setMutationBlocked] = useState(false);
   const blockedRef = useRef(false);
   const [fetchStatus, setFetchStatus] = useState<FetchStatus>({ kind: 'idle' });
@@ -125,6 +131,11 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
   const revealToken = useRef(0);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  /** Counts user selection actions only (not automatic or session-reset selection), so an automatic
+   * follow can tell that the user moved, including away and back to the same commit. */
+  const navigation = useRef(0);
   const activeRef = useRef(active);
   activeRef.current = active;
   const onIdentityRef = useRef(onIdentity);
@@ -158,18 +169,20 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
       opened = await native<RepositoryState>('repository_open', { location });
       if (token !== epoch.current) { void close(opened.session.handle); return; }
       const handle = opened.session.handle;
-      const snapshot = await readOperationSnapshot(handle, { current: () => token === epoch.current });
+      const snapshot = await readNativeSnapshot(handle, { current: () => token === epoch.current });
       const activeOperation = snapshot.operation;
       if (token !== epoch.current) { void close(handle); return; }
       session.current = snapshot.state; setState(snapshot.state); setStatus(snapshot.status); fingerprint.current = snapshot.status.fingerprint; generation.current = snapshot.generation;
-      setOperation(activeOperation); operationFingerprint.current = activeOperation.fingerprint;
+      setOperation(activeOperation); operationSig.current = operationContent(activeOperation);
       installHistory(snapshot.commits, snapshot.cursor); setSelected(snapshot.state.session.head ?? snapshot.commits[0]?.id ?? ''); if (!snapshot.state.session.head && snapshot.status.entries.length) { setSelected(WORKING_ID); setInspectorOpen(true); } setRevision(value => value + 1);
       onIdentityRef.current(tabId, sessionKey(location, snapshot.state.session), snapshot.state.session.name);
     } catch (e) { if (opened) void close(opened.session.handle); if (token === epoch.current) { setError(errorMessage(e)); onIdentityRef.current(tabId, null, null); } }
     finally { if (token === epoch.current) { lock.current = false; setBusy(false); } }
   }, [location, tabId]);
   useEffect(() => { void open(); }, [open]);
-  const refresh = useCallback(async (force = false) => {
+  /** `replace` is a confirmed rewrite of the tip (an amend): the selection and scroll anchor that were on `from`
+   * follow it to `to`, and the history walk looks for `to` rather than the now unreachable `from`. */
+  const refresh = useCallback(async (force = false, replace?: { from: string; to: string }) => {
     const current = session.current;
     if (!current) return;
     if (!force && (lock.current || mutationLock.current)) return;
@@ -180,25 +193,31 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
     const token = epoch.current; lock.current = true;
     try {
       const handle = current.session.handle;
-      const snapshot = await readOperationSnapshot(handle, {
+      const snapshot = await readNativeSnapshot(handle, {
         previous: { state: current, commits: history.current, cursor: nextCursor.current, generation: generation.current },
         preserve: [selectedRef.current, graph.current?.anchor()?.id ?? ''],
+        remap: replace,
         current: () => token === epoch.current,
       });
       const activeOperation = snapshot.operation;
       if (token !== epoch.current) return;
-      const operationChanged = operationFingerprint.current !== activeOperation.fingerprint;
-      operationFingerprint.current = activeOperation.fingerprint;
-      setOperation(previous => previous?.fingerprint === activeOperation.fingerprint ? previous : activeOperation);
+      // Anchors are captured here, after the walk, and must name a row that exists in the new history.
+      const follow = (value: GraphAnchor | null) => replace && snapshot.state.session.head === replace.to && value?.id === replace.from ? { ...value, id: replace.to } : value;
+      anchor.current = follow(anchor.current);
+      // Content, not fingerprint: the fingerprint also covers status and index, so it moves on every stage.
+      const content = operationContent(activeOperation);
+      const operationChanged = operationSig.current !== content;
+      operationSig.current = content;
+      setOperation(previous => operationChanged || !previous ? activeOperation : previous);
       const { state: updated, status: working } = snapshot;
       const changed = updated.fingerprint !== current.fingerprint;
       const workingChanged = working.fingerprint !== fingerprint.current;
       if (changed) {
-        anchor.current = graph.current?.anchor() ?? null;
+        anchor.current = follow(graph.current?.anchor() ?? null);
         generation.current = snapshot.generation;
         installHistory(snapshot.commits, snapshot.cursor);
       }
-      if (workingChanged && !anchor.current) anchor.current = graph.current?.anchor() ?? null;
+      if (workingChanged && !anchor.current) anchor.current = follow(graph.current?.anchor() ?? null);
       session.current = updated;
       if (changed || force) setState(updated);
       if (changed || workingChanged || force) setStatus(working);
@@ -209,6 +228,30 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
     } catch (e) { if (token === epoch.current) setError(errorMessage(e)); if (force) throw e; }
     finally { if (token === epoch.current) lock.current = false; }
   }, []);
+  /** After a stage/unstage/discard only the working tree can have changed, so read
+   * status alone (about 3 git processes) instead of the whole snapshot. HEAD moving
+   * under us falls back to the full refresh. Same lock and error contract as `refresh(true)`. */
+  const refreshStatus = useCallback(async () => {
+    const current = session.current;
+    if (!current) return;
+    while (lock.current && session.current?.session.handle === current.session.handle) await new Promise(resolve => setTimeout(resolve, 25));
+    if (session.current?.session.handle !== current.session.handle) throw new Error('Repository session changed.');
+    const token = epoch.current; lock.current = true;
+    let moved = false;
+    try {
+      const working = await native<RepositoryStatus>('repository_status', { handle: current.session.handle });
+      if (token !== epoch.current) return;
+      if (working.head !== current.session.head || working.headRef !== current.session.headRef) moved = true;
+      else {
+        if (working.fingerprint !== fingerprint.current && !anchor.current) anchor.current = graph.current?.anchor() ?? null;
+        fingerprint.current = working.fingerprint;
+        setStatus(working); setRevision(value => value + 1);
+        setError(''); blockedRef.current = false; setMutationBlocked(false);
+      }
+    } catch (e) { if (token === epoch.current) setError(errorMessage(e)); throw e; }
+    finally { if (token === epoch.current) lock.current = false; }
+    if (moved) await refresh(true);
+  }, [refresh]);
   // Refresh once when this tab becomes the active one again: the background
   // poll and focus listener are both gated on `active` below, so a tab left
   // open in the background can otherwise show stale ahead/behind, refs, and
@@ -228,10 +271,35 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
       // Let an already-running read finish, then exclude polling/paging until the
       // write AND its required refresh complete. No dropped post-write reloads.
       while (lock.current && isCurrent()) await new Promise(resolve => setTimeout(resolve, 25));
-      const outcome = await writeAndRefresh(current.session.handle, mutation, () => refresh(true), isCurrent);
+      const outcome = await writeAndRefresh(current.session.handle, mutation, written => {
+        if (mutation.kind === 'amend') return refresh(true, written.oid && !written.error ? { from: mutation.expectedHead, to: written.oid } : undefined);
+        return mutation.kind === 'commit' ? refresh(true) : refreshStatus();
+      }, isCurrent);
       if (outcome.refreshError && isCurrent()) { blockedRef.current = true; setMutationBlocked(true); }
       return outcome;
     } finally { if (isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
+  }
+  /** Selects and reveals the amended HEAD. Not a user navigation: it must not advance the navigation counter. */
+  function followAmendedHead(id: string) {
+    if (!history.current.some(commit => commit.id === id)) return;
+    setSelected(id); jumpTo.current = id; setCommits(items => [...items]);
+  }
+  /** Rewrites the message of the commit the inspector's editor was opened on, which must still be HEAD on the
+   * same branch. It never retargets: any mismatch is an explicit error and the draft stays with the editor. */
+  async function editHeadMessage({ oid, headRef, message }: { oid: string; headRef: string; message: string }): Promise<MutationOutcome> {
+    const current = session.current;
+    const working = statusRef.current;
+    if (!current) return { error: 'No repository is open.' };
+    if (isDemoHandle(current.session.handle)) return { error: 'Editing commit messages is not available in the demo workspace.' };
+    if (current.session.head !== oid || current.session.headRef !== headRef) return { error: 'HEAD changed since editing started, so the message was not saved. Your draft is kept.' };
+    if (!working || working.head !== oid || working.headRef !== headRef) return { error: 'The working-tree status is not current for this commit. Wait for the refresh to finish and try again.' };
+    const handle = current.session.handle;
+    const generation = navigation.current;
+    // Expectations are read now, after the target, branch and session were validated, not when the editor opened.
+    const outcome = await mutate({ kind: 'amend', message, expectedHead: oid, expectedHeadRef: headRef, expectedStatusFingerprint: fingerprint.current, messageOnly: true, requireUnpushed: true });
+    const settled = !!outcome.oid && !outcome.error && !outcome.refreshError && !outcome.superseded;
+    if (settled && session.current?.session.handle === handle && selectedRef.current === oid && navigation.current === generation) followAmendedHead(outcome.oid!);
+    return outcome;
   }
   async function operationWrite(command: string, args: Record<string, unknown>) {
     const current = session.current;
@@ -256,10 +324,15 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
     switchPending.current = true;
     const token = epoch.current;
     try {
-      const request = await captureOperation(current.session.handle, { kind: 'switchBranch', branch: ref });
+      // Working changes travel with the switch; overlapping ones become conflicts for the editor.
+      const request = await captureOperation(current.session.handle, { kind: 'switchBranch', branch: ref, carryChanges: true });
       if (epoch.current !== token || session.current?.session.handle !== current.session.handle) return;
       await operationWrite('repository_run_operation', { request });
-      if (epoch.current === token) setNotice(`Switched to ${target.name}.`);
+      if (epoch.current !== token) return;
+      const after = await native<OperationState>('repository_operation_state', { handle: current.session.handle });
+      if (epoch.current !== token) return;
+      if (after.conflicts.length) { setNotice(`Switched to ${target.name} with conflicts to resolve.`); setConflictPath(after.conflicts[0]); }
+      else setNotice(`Switched to ${target.name}.`);
     } catch (error) {
       if (epoch.current === token) setBlockedSwitch({ branch: target.name, ref, oid: target.commitId, reason: errorMessage(error) });
     } finally { switchPending.current = false; }
@@ -352,6 +425,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
     finally { if (token === epoch.current) { lock.current = false; setBusy(false); } }
   }
   function reveal(id: string) {
+    navigation.current++;
     setNotice('');
     setActiveDiff(null);
     if (id === WORKING_ID) {
@@ -366,6 +440,11 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
     } else {
       void load(id);
     }
+  }
+  function updateWorkingDisclosure(update: WorkingDisclosureUpdate) {
+    const handle = state?.session.handle;
+    if (!handle) return;
+    setWorkingDisclosure(current => ({ handle, value: update(current?.handle === handle ? current.value : DEFAULT_WORKING_DISCLOSURE) }));
   }
   const graphCommits = useMemo(() => {
     const list = commits.map(graphCommit);
@@ -536,7 +615,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
             </section>
           )}
           {inspectorOpen && <>
-            <PaneResizer label="Resize inspector" width={inspectorWidth} onChange={setInspectorWidth} min={300} max={640} />
+            <PaneResizer label="Resize inspector" width={inspectorWidth} onChange={setInspectorWidth} min={INSPECTOR_MIN_WIDTH} max={INSPECTOR_MAX_WIDTH} />
             {selected === WORKING_ID || (!selected && (status?.entries.length ?? 0) > 0) ? (
               <aside className="working-inspector-sidebar">
                 <WorkingChanges
@@ -552,6 +631,8 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
                   activePath={activeDiff?.path ?? null}
                   onActiveDiffChange={setActiveDiff}
                   onClose={() => setInspectorOpen(false)}
+                  disclosure={workingDisclosure?.handle === state.session.handle ? workingDisclosure.value : DEFAULT_WORKING_DISCLOSURE}
+                  onDisclosureChange={updateWorkingDisclosure}
                 />
               </aside>
             ) : (
@@ -571,17 +652,21 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
                 activePath={activeDiff?.path ?? null}
                 onActiveDiffChange={setActiveDiff}
                 notify={setNotice}
+                onEditMessage={editHeadMessage}
+                writeBlocked={mutationBusy || mutationBlocked}
+                 authorAvatarMode={settings.authorAvatarMode}
               />
             )}
           </>}
         </div>
       </div>
     </main>}
-    <footer className="statusbar"><span><span className="live-dot" />{mutationBusy ? 'Updating repository…' : isDemoHandle(state?.session.handle) ? 'Demo workspace · changes are simulated in memory' : 'Local workspace · automatic refresh'}</span><span className="status-keys"><span className="scale-control"><button className="icon-button sm" aria-label="Zoom out" disabled={scale === SCALES[0]} onClick={() => stepScale(-1)}><ZoomOut size={13} /></button><select className="scale-value" aria-label="Interface zoom" value={scale} onChange={event => changeScale(Number(event.target.value))}>{SCALES.map(s => <option key={s} value={s}>{s}%</option>)}</select><button className="icon-button sm" aria-label="Zoom in" disabled={scale === SCALES[SCALES.length - 1]} onClick={() => stepScale(1)}><ZoomIn size={13} /></button></span><kbd>/</kbd> search <kbd>{navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'} K</kbd> commands</span></footer>
-    {state && menuTarget && <GraphContextMenu target={menuTarget} state={state} busy={mutationBusy || mutationBlocked} onClose={() => setMenuTarget(null)} onOperation={context => { setMenuTarget(null); setActionContext(context); }} onShowDetails={oid => { reveal(oid); setInspectorOpen(true); setMenuTarget(null); }} onSetBase={oid => setComparison(oid, 'base')} onSetTarget={oid => setComparison(oid, 'target')} onCompare={compareWithCurrent} onPullRequest={ref => { setMenuTarget(null); setPrSource(ref); }} onRemoteAction={action => void runMenuRemote(action)} onPush={() => void pushFromMenu(menuTarget.context.ref!)} onCopy={(value, label) => void copyMenuValue(value, label)} />}
+    <footer className="statusbar"><span><button type="button" className="text-button" onClick={() => setActivityLogOpen(true)}><ScrollText size={13} /> Activity</button><span className="live-dot" />{mutationBusy ? 'Updating repository…' : isDemoHandle(state?.session.handle) ? 'Demo workspace · changes are simulated in memory' : 'Local workspace · automatic refresh'}</span><span className="status-keys"><span className="scale-control"><button className="icon-button sm" aria-label="Zoom out" disabled={scale === SCALES[0]} onClick={() => stepScale(-1)}><ZoomOut size={13} /></button><select className="scale-value" aria-label="Interface zoom" value={scale} onChange={event => changeScale(Number(event.target.value))}>{SCALES.map(s => <option key={s} value={s}>{s}%</option>)}</select><button className="icon-button sm" aria-label="Zoom in" disabled={scale === SCALES[SCALES.length - 1]} onClick={() => stepScale(1)}><ZoomIn size={13} /></button></span><kbd>/</kbd> search <kbd>{navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'} K</kbd> commands</span></footer>
+    {activityLogOpen && <ActivityLogDialog onClose={() => setActivityLogOpen(false)} />}
+    {state && menuTarget && <GraphContextMenu target={menuTarget} state={state} busy={mutationBusy || mutationBlocked} onClose={() => setMenuTarget(null)} onOperation={context => { setMenuTarget(null); setActionContext(context); }} onSwitchBranch={ref => { setMenuTarget(null); void switchBranch(ref); }} onShowDetails={oid => { reveal(oid); setInspectorOpen(true); setMenuTarget(null); }} onSetBase={oid => setComparison(oid, 'base')} onSetTarget={oid => setComparison(oid, 'target')} onCompare={compareWithCurrent} onPullRequest={ref => { setMenuTarget(null); setPrSource(ref); }} onRemoteAction={action => void runMenuRemote(action)} onPush={() => void pushFromMenu(menuTarget.context.ref!)} onCopy={(value, label) => void copyMenuValue(value, label)} />}
     {state && publishInfo && <PublishDialog remotes={publishInfo.remotes} branch={publishInfo.branch ?? ''} onPublish={async (remote, branch) => { const action: RemoteActionRequest = { kind: 'push', remote, branch, setUpstream: true }; const output = await remoteWrite('repository_remote_action', { action }); setNotice(output || 'Publish complete.'); }} onClose={() => setPublishInfo(null)} />}
     {state && actionContext && <OperationDialog key={state.session.handle} state={state} operation={operation} context={actionContext} commits={commits} busy={mutationBusy || mutationBlocked} onWrite={operationWrite} onClose={() => setActionContext(null)} onCompare={compareWithCurrent} onPullRequest={source => { setPrSource(source); setActionContext(null); }} />}
-    {state && blockedSwitch && <SwitchBlockedDialog branch={blockedSwitch.branch} reason={blockedSwitch.reason} hasChanges={!!status?.entries.length} onReview={() => { setSelected(WORKING_ID); setInspectorOpen(true); setBlockedSwitch(null); }} onOperations={() => { setActionContext({ oid: blockedSwitch.oid, ref: blockedSwitch.ref, initial: 'switchBranch' }); setBlockedSwitch(null); }} onClose={() => setBlockedSwitch(null)} />}
+    {state && blockedSwitch && <SwitchBlockedDialog branch={blockedSwitch.branch} reason={blockedSwitch.reason} hasChanges={!!status?.entries.length} onReview={() => { navigation.current++; setSelected(WORKING_ID); setInspectorOpen(true); setBlockedSwitch(null); }} onOperations={() => { setActionContext({ oid: blockedSwitch.oid, ref: blockedSwitch.ref, initial: 'switchBranch' }); setBlockedSwitch(null); }} onClose={() => setBlockedSwitch(null)} />}
     {state && conflictPath && <ConflictEditor key={`${state.session.handle}:${conflictPath}`} handle={state.session.handle} path={conflictPath} revision={revision} busy={mutationBusy || mutationBlocked} onWrite={operationWrite} onClose={() => setConflictPath(null)} />}
     {state && prSource && <PullRequestDialog key={state.session.handle} handle={state.session.handle} source={prSource} onClose={() => setPrSource(null)} />}
     {state && stashOpen && <RemoteStashDialog key={`${state.session.handle}:stash`} handle={state.session.handle} onWrite={remoteWrite} onClose={() => setStashOpen(false)} notify={setNotice} />}

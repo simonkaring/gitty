@@ -26,6 +26,15 @@ pub struct OperationState {
     pub fingerprint: String,
 }
 
+/// Everything a refresh needs, read once and consistent with each other.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositorySnapshot {
+    pub state: crate::dto::RepositoryState,
+    pub status: crate::dto::RepositoryStatus,
+    pub operation: OperationState,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(
     tag = "kind",
@@ -41,9 +50,14 @@ pub enum GitAction {
     },
     SwitchBranch {
         branch: String,
+        /// Carry staged/unstaged work to the target branch, merging it where
+        /// the branches differ. Conflicts are left for the conflict editor.
+        #[serde(default)]
+        carry_changes: bool,
     },
     Merge {
         source: String,
+        destination: Option<String>,
         no_fast_forward: bool,
     },
     Rebase {

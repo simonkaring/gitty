@@ -1,0 +1,63 @@
+---
+type: Engineering Invariant
+title: Git mutation safeguards
+description: Explicit write scope, stale-review checks, and reconciliation after uncertain outcomes.
+status: draft
+sources:
+  - id: contract
+    resource: ../../src-tauri/BACKEND.md
+  - id: locking
+    resource: ../../src-tauri/src/repository.rs
+  - id: writes
+    resource: ../../src-tauri/src/mutate.rs
+  - id: workflow
+    resource: ../../src/model/workflow.ts
+  - id: hunk-tests
+    resource: ../../src-tauri/src/hunk_tests.rs
+  - id: workflow-tests
+    resource: ../../src/model/workflow.test.ts
+---
+
+# Git mutation safeguards
+
+File staging/unstaging takes explicit, validated, literal paths; an empty list
+never means all changes. New commits consume the index, not unstaged content.
+Ordinary writes reject unsupported operation/conflict states and respect Git's
+locks, hooks, and signing. The common-directory mutation lock serializes Gitty
+sessions, including linked worktrees; it cannot serialize external Git.[^writes][^locking]
+
+Freshness checks depend on the action: amend checks HEAD/ref/status, discard
+checks reviewed status, hunk/line staging checks the displayed diff, and graph
+actions/conflict resolution check their own expectations. Do not turn UI
+eligibility into write authority or assume every write has the same preflight.
+See the [write contract](../../src-tauri/BACKEND.md#write-semantics) and
+[graph/conflict contract](../../src-tauri/BACKEND.md#operation-safety-and-semantics)
+for exact requirements.[^contract]
+
+Preserve working files and unrelated index entries when staging/unstaging hunks.
+Discard deliberately destroys selected unstaged content; tracked files restore
+from the index. Message-only amend preserves the old tree; ordinary amend folds
+in staged content. Remote-tracking refs are local evidence, not proof of the
+remote's current state.[^contract][^hunk-tests]
+
+Attempt a mutation once. An error can follow a partial or completed write;
+`mutationUnverified` requires refresh and review, not automatic retry.[^contract]
+`writeAndRefresh` distinguishes write and refresh errors and reconciles both
+success and failure while the session is current. A superseded session must not
+publish into its replacement.[^workflow][^workflow-tests]
+
+When changing this area, inspect `Service::mutate`, the action's Rust preflight,
+and `writeAndRefresh`. Existing regression entry points include
+`stage_and_commit_only_selected_hunk_preserves_worktree_and_other_staged_edits`
+and the workflow test “always refreshes after a failed write, without retrying
+an ambiguous commit.” These are source pointers, not a report of a test run.
+
+Related: [refresh coherence](snapshot-and-refresh-coherence.md) and
+[verification scope](demo-and-native-verification.md).
+
+[^contract]: Detailed backend semantics.
+[^locking]: `Service::mutation_lock` and `Service::mutate`.
+[^writes]: Ordinary mutation validation and outcome handling.
+[^workflow]: Frontend single-attempt write lifecycle.
+[^hunk-tests]: Real-repository hunk preservation regressions.
+[^workflow-tests]: Mocked write/refresh lifecycle regressions.

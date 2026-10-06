@@ -252,14 +252,13 @@ summary {
 }
 .count {
   display: inline-block;
-  height: 18px;
+  height: 20px;
   min-width: 20px;
-  padding: 0 6px;
-  border: 1px solid var(--border);
+  padding: 0 8px;
   border-radius: var(--r-pill);
   background: var(--subtle);
   color: var(--secondary);
-  font: 500 var(--fs-2xs) / 16px var(--mono);
+  font: 500 var(--fs-2xs) / 20px var(--mono);
   font-variant-numeric: tabular-nums;
   text-align: center;
   vertical-align: middle;
@@ -275,17 +274,15 @@ summary {
 .badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   height: 20px;
   max-width: 100%;
   padding: 0 8px;
-  border: 1px solid var(--border);
   border-radius: var(--r-pill);
   background: var(--subtle);
   color: var(--secondary);
   font: 500 var(--fs-2xs) / 1 var(--mono);
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.02em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -295,10 +292,14 @@ summary {
   width: 12px;
   height: 12px;
 }
-.badge[data-tone] {
-  color: var(--tone);
-  background: color-mix(in srgb, var(--tone) 12%, var(--bg));
-  border-color: color-mix(in srgb, var(--tone) 35%, transparent);
+/* Tone shows as a small leading dot, not a tinted fill. */
+.badge[data-tone]::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--tone);
 }
 .badge[data-tone='accent'] {
   --tone: var(--accent-text);
@@ -570,6 +571,37 @@ button[data-danger='true']:hover:not(:disabled) {
 .titlebar .native-actions {
   flex-wrap: nowrap;
 }
+.titlebar.titlebar-windows {
+  position: relative;
+  padding-right: 150px;
+}
+.window-controls {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  height: 46px;
+}
+.window-controls button {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+}
+.window-controls button:hover {
+  background: var(--hover);
+}
+.window-controls button:focus-visible {
+  outline-offset: -3px;
+}
+.window-controls .window-close:hover {
+  background: #c42b1c;
+  color: white;
+}
 
 .tab-pane-host {
   display: flex;
@@ -697,15 +729,28 @@ button[data-danger='true']:hover:not(:disabled) {
   color: inherit;
   opacity: 0.6;
 }
+/* Three zones: status left, commands centered on the full width, utilities right. */
 .repository-toolbar {
-  display: flex;
+  display: grid;
   flex: 0 0 auto;
-  flex-wrap: wrap;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  gap: 4px;
+  gap: 8px;
   padding: 6px 12px;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
+}
+.toolbar-zone {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 4px;
+}
+.toolbar-center {
+  justify-content: center;
+}
+.toolbar-end {
+  justify-content: flex-end;
 }
 .repository-toolbar-group {
   display: flex;
@@ -738,8 +783,8 @@ button[data-danger='true']:hover:not(:disabled) {
   padding: 0;
   color: var(--secondary);
 }
-.repository-toolbar > .badge {
-  margin: 0 4px 0 8px;
+.toolbar-start > .badge {
+  flex: 0 1 auto;
 }
 .toolbar-sep {
   width: 1px;
@@ -904,15 +949,17 @@ button[data-danger='true']:hover:not(:disabled) {
   background: var(--selected);
   color: var(--text);
 }
-.current-branch-dot {
-  width: 7px;
-  height: 7px;
-  background: var(--accent);
-  border-radius: 50%;
-  margin-left: auto;
-  flex-shrink: 0;
-  box-shadow: 0 0 0 3px var(--accent-wash);
-  animation: head-glow 2.4s ease-in-out infinite;
+.current-branch-check {
+  position: absolute;
+  left: 5px;
+}
+.current-branch-check polyline {
+  stroke-dasharray: 24;
+  animation: branch-check-in 350ms var(--ease-out) both;
+}
+@keyframes branch-check-in {
+  from { stroke-dashoffset: 24; }
+  to { stroke-dashoffset: 0; }
 }
 
 /* Reference tree: section headers in UI type, entries in mono. */
@@ -973,6 +1020,7 @@ button[data-danger='true']:hover:not(:disabled) {
   color: var(--muted);
 }
 .ref-item {
+  position: relative;
   width: 100%;
   display: flex;
   gap: 8px;
@@ -1066,8 +1114,6 @@ button[data-danger='true']:hover:not(:disabled) {
 .filter-secondary summary .count {
   margin-left: 8px;
   color: var(--accent-text);
-  background: var(--accent-wash);
-  border-color: transparent;
 }
 .filter-secondary > .text-button {
   font-size: var(--fs-xs);
@@ -1366,10 +1412,6 @@ button[data-danger='true']:hover:not(:disabled) {
   background: color-mix(in srgb, var(--branch-color, var(--hover)) 7%, transparent);
   box-shadow: inset 2px 0 color-mix(in srgb, var(--branch-color, var(--accent)) 55%, transparent);
 }
-.commit-row:has(.commit-refs:hover),
-.commit-row:has(.commit-refs:focus-within) {
-  z-index: 3;
-}
 .commit-row.selected {
   box-shadow: inset 3px 0 var(--branch-color, var(--accent));
   background: color-mix(in srgb, var(--branch-color, var(--accent)) 14%, var(--bg));
@@ -1400,11 +1442,10 @@ button[data-danger='true']:hover:not(:disabled) {
   height: 20px;
   min-width: 20px;
   padding: 0 6px;
-  border: 1px solid var(--border-strong);
   border-radius: var(--r-pill);
-  background: var(--raised);
+  background: var(--subtle);
   color: var(--secondary);
-  font: 600 var(--fs-2xs) / 1 var(--mono);
+  font: 500 var(--fs-2xs) / 1 var(--mono);
   cursor: default;
 }
 .commit-refs:hover,
@@ -1504,7 +1545,7 @@ button[data-danger='true']:hover:not(:disabled) {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   min-width: 0;
   max-width: 100%;
   flex-shrink: 1;
@@ -1516,37 +1557,27 @@ button[data-danger='true']:hover:not(:disabled) {
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
-  border: 1px solid color-mix(in srgb, var(--green) 35%, transparent);
-  color: color-mix(in srgb, var(--branch-color, var(--green)) 85%, var(--text));
-  background: color-mix(in srgb, var(--branch-color, var(--green)) 13%, var(--bg));
-  border-color: color-mix(in srgb, var(--branch-color, var(--green)) 38%, transparent);
+  color: var(--text);
+  background: var(--subtle);
   transition:
     transform var(--dur-fast) var(--ease-out),
     background-color var(--dur-fast);
 }
 .ref-pill svg {
   flex-shrink: 0;
+  color: var(--branch-color, var(--muted));
 }
 .ref-pill-name {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.ref-pill.main-ref {
-  color: var(--accent-text);
-  background: var(--accent-wash);
-  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-}
+/* Remote-tracking refs read as plain muted text. */
 .ref-pill.remote-ref {
   color: var(--secondary);
   background: transparent;
-  border-style: dashed;
-  border-color: var(--border-strong);
 }
-.ref-pill.tag-ref {
+.ref-pill.tag-ref svg {
   color: var(--amber);
-  background: color-mix(in srgb, var(--amber) 14%, var(--bg));
-  border-color: color-mix(in srgb, var(--amber) 40%, transparent);
-  border-radius: var(--r-sm);
 }
 .ref-pill[draggable='true'] {
   cursor: grab;
@@ -1554,9 +1585,10 @@ button[data-danger='true']:hover:not(:disabled) {
 .ref-pill[data-current='true'] {
   color: var(--button-foreground);
   background: var(--accent-text);
-  border-color: var(--accent-text);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
   font-weight: 650;
+}
+.ref-pill[data-current='true'] svg {
+  color: inherit;
 }
 .row-author {
   display: flex;
@@ -1611,38 +1643,37 @@ button[data-danger='true']:hover:not(:disabled) {
   animation: pulse-dot 2s ease-in-out infinite;
 }
 
-/* Avatars cycle through graph lane colors so authors are distinguishable. */
+/* Avatars are neutral circles; initials only, no per-author tint. */
 .avatar {
-  --avatar: var(--graph-lane1, var(--accent));
   width: 32px;
   height: 32px;
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: var(--fs-2xs);
-  font-weight: 650;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
   flex-shrink: 0;
-  color: var(--avatar);
-  background: color-mix(in srgb, var(--avatar) 18%, var(--raised));
-  border: 1px solid color-mix(in srgb, var(--avatar) 40%, transparent);
+  color: var(--secondary);
+  background: var(--subtle);
+  position: relative;
+  overflow: hidden;
+}
+.avatar img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+  opacity: 0;
+  transition: opacity 120ms ease;
 }
 .avatar.tiny {
   width: 22px;
   height: 22px;
   font-size: var(--fs-2xs);
-}
-.color-1 {
-  --avatar: var(--graph-lane2, var(--red));
-}
-.color-2 {
-  --avatar: var(--graph-lane3, var(--green));
-}
-.color-3 {
-  --avatar: var(--graph-lane4, var(--accent));
-}
-.color-4 {
-  --avatar: var(--graph-lane5, var(--amber));
 }
 
 /* ==========================================================================
@@ -1650,7 +1681,7 @@ button[data-danger='true']:hover:not(:disabled) {
    ========================================================================== */
 .inspector,
 .native-inspector {
-  width: var(--inspector-width);
+  width: var(--inspector-fit, var(--inspector-width));
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -1721,6 +1752,54 @@ button[data-danger='true']:hover:not(:disabled) {
   margin-top: 1px;
   font-size: var(--fs-xs);
   color: var(--muted);
+}
+.commit-summary h2.editable-commit-heading,
+.commit-description.editable-commit-body {
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  transition: background-color 0.15s ease, outline-color 0.15s ease;
+}
+.commit-summary h2.editable-commit-heading:hover {
+  background: var(--hover);
+  outline: 2px dashed var(--border-strong);
+  outline-offset: 4px;
+}
+.commit-description.editable-commit-body:hover {
+  background: var(--hover);
+  border-color: var(--border-strong);
+}
+.commit-edit-note {
+  margin: 8px 20px 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+.commit-message-editor {
+  margin: 12px 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.commit-message-editor label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+.commit-message-editor input,
+.commit-message-editor textarea {
+  width: 100%;
+}
+.commit-message-editor textarea {
+  font-family: var(--mono);
+  font-size: var(--editor-font-size);
+}
+.commit-message-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
 }
 .commit-description {
   margin: 16px 20px 0;
@@ -1931,19 +2010,17 @@ button[data-danger='true']:hover:not(:disabled) {
   display: grid;
   place-items: center;
   border-radius: var(--r-sm);
+  background: var(--subtle);
   flex-shrink: 0;
 }
 .file-status.modified {
   color: var(--amber);
-  background: color-mix(in srgb, var(--amber) 15%, transparent);
 }
 .file-status.added {
   color: var(--green);
-  background: var(--green-wash);
 }
 .file-status.deleted {
   color: var(--red);
-  background: var(--red-wash);
 }
 .inspector-tip {
   margin: 20px;
@@ -2191,23 +2268,87 @@ button[data-danger='true']:hover:not(:disabled) {
   border: 0;
 }
 
+/* Commit inspector: denser metadata so changed files start higher. Still one scroller (.inspector-content). */
+.native-inspector .commit-summary {
+  padding: 12px 16px 0;
+}
+.native-inspector .commit-eyebrow {
+  min-height: var(--h-compact);
+}
+.native-inspector .commit-summary h2 {
+  margin: 8px 0;
+  font-size: var(--fs-lg);
+}
+.native-inspector .author-block strong {
+  font-size: var(--fs-sm);
+}
+.native-inspector .commit-edit-note {
+  margin: 4px 16px 0;
+}
+.native-inspector .commit-description {
+  margin: 8px 16px 0;
+  padding: 8px 12px;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+.native-inspector .commit-metadata {
+  margin: 8px 16px;
+  padding: 2px 0;
+  column-gap: 12px;
+}
+.native-inspector .commit-metadata dt,
+.native-inspector .commit-metadata dd {
+  padding: 4px 0;
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+.native-inspector .inspector-block {
+  margin: 0 16px 8px;
+}
+.native-inspector .compare-summary {
+  margin: 0 16px 8px;
+  padding: 8px 12px;
+}
+.native-inspector .changed-files {
+  margin-top: 4px;
+}
+.native-inspector .section-heading {
+  min-height: var(--h-control);
+  padding: 2px 16px;
+}
+.native-inspector .file-row {
+  min-height: var(--h-control);
+  padding: 4px 16px;
+}
+.native-inspector .inspector-tip {
+  margin: 12px 16px;
+  padding: 8px 12px;
+}
+
 /* ==========================================================================
    Working changes (sidebar inspector and full workspace)
    ========================================================================== */
+.native-shell {
+  /* Keep at least 480px for history and diffs beside the sidebar at intermediate window widths, however wide the inspector was dragged. */
+  --inspector-fit: min(var(--inspector-width), max(300px, calc(100vw / var(--zoom, 1) - var(--sidebar-space, 0px) - 480px)));
+}
 .working-inspector-sidebar {
-  width: var(--inspector-width);
+  width: var(--inspector-fit, var(--inspector-width));
   flex-shrink: 0;
   display: flex;
   min-height: 0;
 }
 .working-inspector {
-  width: var(--inspector-width, 380px);
+  width: var(--inspector-fit, var(--inspector-width, 380px));
   flex-shrink: 0;
   height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--raised);
   overflow: hidden;
+  /* Rows and actions adapt to the pane's own width, not the window's. */
+  container: working-changes / inline-size;
 }
 .working-inspector-sidebar .working-inspector {
   width: 100%;
@@ -2217,80 +2358,125 @@ button[data-danger='true']:hover:not(:disabled) {
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
-  padding: 16px 12px 12px 16px;
+  padding: 12px 8px 8px 16px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 .working-sidebar-header .eyebrow {
-  margin-bottom: 4px;
+  margin-bottom: 2px;
   overflow-wrap: anywhere;
 }
 .working-sidebar-header h2 {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: var(--fs-xl);
+  font-size: var(--fs-lg);
   margin: 0;
 }
 .working-sidebar-actions {
   display: flex;
   gap: 2px;
 }
+/* Vertical budget: actions and the composer header never shrink; the file list takes whatever is left (and gives
+   way first, down to a floor); an open composer shrinks next and scrolls inside itself. Only one scrollbar is ever
+   shown per region and the content column itself never scrolls. */
 .working-sidebar-content {
-  flex: 1;
-  overflow-y: auto;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  min-height: 0;
 }
 .working-files-list {
-  flex: 1;
+  flex: 1 1000 auto;
+  min-height: 88px;
   overflow-y: auto;
-  min-height: 120px;
+  overscroll-behavior: contain;
 }
 .file-list-actions {
+  flex: 0 0 auto;
   display: flex;
-  gap: 8px;
-  padding: 12px 12px;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--border);
 }
 .file-list-actions button {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: var(--h-compact);
   padding-inline: 8px;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+.discard-list {
+  margin: 0;
+  padding-left: 16px;
+  font: var(--fs-xs) var(--mono);
+  overflow-wrap: anywhere;
+}
+.discard-list small {
+  color: var(--muted);
 }
 .working-category {
-  padding-bottom: 4px;
+  padding-bottom: 2px;
 }
 .working-category h2 {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  background: var(--raised);
+}
+.working-category-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: var(--h-compact);
+  padding: 0 12px 0 8px;
+  text-align: left;
   font: 600 var(--fs-xs) var(--ui);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--secondary);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px 6px;
-  margin: 0;
 }
-.working-category.conflict:has(.working-file) h2 {
+.working-category-toggle:focus-visible {
+  outline-offset: -2px;
+}
+.working-category-toggle .count {
+  margin-left: auto;
+}
+.working-category-chevron {
+  color: var(--muted);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.working-category-toggle[aria-expanded='false'] .working-category-chevron {
+  transform: rotate(-90deg);
+}
+.working-category.conflict.has-entries .working-category-toggle {
   color: var(--red);
 }
-.working-category.staged h2 {
+.working-category.staged .working-category-toggle {
   color: var(--accent-text);
 }
-.working-category.conflict:not(:has(.working-file)) {
-  display: none;
+/* A folded group that still holds the file open in the diff pane says so. */
+.working-category-toggle[data-holds-selection][aria-expanded='false'] .count {
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--accent-text);
 }
 .empty-category {
   margin: 0;
-  padding: 2px 16px 8px;
+  padding: 2px 16px 6px;
   color: var(--muted);
   font-size: var(--fs-xs);
 }
 .working-file {
   display: flex;
   align-items: center;
-  min-height: 36px;
+  /* Right-click opens the file menu; it must not also select the path text. */
+  -webkit-user-select: none;
+  user-select: none;
+  min-height: var(--h-compact);
   animation: file-in var(--dur-slow) var(--ease-out);
 }
 .working-file:hover {
@@ -2304,7 +2490,7 @@ button[data-danger='true']:hover:not(:disabled) {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  padding: 8px 8px 8px 16px;
+  padding: 4px 8px 4px 16px;
   flex: 1;
   min-width: 0;
   text-align: left;
@@ -2320,6 +2506,25 @@ button[data-danger='true']:hover:not(:disabled) {
 .working-file.selected .working-file-select svg {
   color: var(--accent-text);
 }
+.working-file .working-file-select svg[data-status='added'],
+.working-file .working-file-select svg[data-status='copied'] {
+  color: var(--green);
+}
+.working-file .working-file-select svg[data-status='modified'] {
+  color: #e99445;
+}
+.working-file .working-file-select svg[data-status='deleted'],
+.working-file .working-file-select svg[data-status='conflict'] {
+  color: var(--red);
+}
+.working-file .working-file-select svg[data-status='renamed'] {
+  color: #60a5fa;
+}
+.native-inspector .file-row svg[data-status='added'] { color: var(--green); }
+.native-inspector .file-row svg[data-status='modified'] { color: #e99445; }
+.native-inspector .file-row svg[data-status='deleted'],
+.native-inspector .file-row svg[data-status='conflict'] { color: var(--red); }
+.native-inspector .file-row svg[data-status='renamed'] { color: #60a5fa; }
 .working-file-select span {
   min-width: 0;
 }
@@ -2328,16 +2533,22 @@ button[data-danger='true']:hover:not(:disabled) {
   font-family: var(--mono);
   font-size: var(--fs-sm);
   font-weight: 450;
+  line-height: 1.4;
   overflow-wrap: anywhere;
 }
 .working-file-select small {
   display: block;
   color: var(--accent-text);
   font-size: var(--fs-xs);
-  margin-top: 2px;
+  margin-top: 1px;
+}
+.working-file > .secondary-button {
+  margin-right: 8px;
 }
 .file-stage-button {
-  margin-right: 12px;
+  width: 24px;
+  height: 24px;
+  margin-right: 8px;
   border: 1px solid var(--border-strong);
   background: var(--raised);
 }
@@ -2347,79 +2558,206 @@ button[data-danger='true']:hover:not(:disabled) {
   background: var(--accent-wash);
 }
 .commit-composer {
-  padding: 16px 24px 20px;
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 4px 12px 12px;
   background: var(--sidebar);
   border-top: 1px solid var(--border);
 }
-.working-inspector .commit-composer {
-  flex-shrink: 0;
-  padding: 16px 16px 16px;
+.commit-composer.is-collapsed {
+  padding-bottom: 4px;
 }
 .composer-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.composer-heading h2 {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: var(--fs-xl);
-  margin: 0;
+  min-height: var(--h-compact);
 }
-.working-inspector .composer-heading h2 {
-  font-size: var(--fs-lg);
+.composer-heading h2 {
+  /* The title gives way first: it ellipsizes rather than overlapping the count, draft chip or toggle. */
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--fs-md);
+  margin: 0;
+  white-space: nowrap;
 }
 .composer-heading h2 svg {
+  margin-right: 6px;
   color: var(--accent-text);
 }
 .composer-heading > span {
+  flex: none;
   font-family: var(--mono);
   font-size: var(--fs-xs);
   color: var(--muted);
   white-space: nowrap;
 }
+.composer-draft {
+  flex: none;
+  padding: 0 6px;
+  border-radius: var(--r-pill);
+  background: var(--accent-wash);
+  color: var(--accent-text);
+  font-size: var(--fs-2xs);
+  font-style: normal;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.composer-toggle svg {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.composer-toggle[aria-expanded='false'] svg {
+  transform: rotate(180deg);
+}
+.composer-feedback {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.composer-feedback p {
+  margin: 0;
+  color: var(--secondary);
+  font-size: var(--fs-xs);
+}
+.composer-feedback .workflow-alert {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  line-height: 1.4;
+}
+.composer-feedback small {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+.composer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  /* Room for focus rings, which the scroll container would otherwise clip. */
+  padding: 2px;
+}
+.composer-body > * {
+  flex-shrink: 0;
+}
+.composer-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+}
+.composer-identity {
+  /* Wraps below the amend toggle in a narrow pane rather than squeezing its name to an ellipsis. */
+  flex: 1 1 160px;
+  min-width: 160px;
+}
+.composer-identity[open] {
+  flex-basis: 100%;
+}
+.composer-identity > summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: var(--h-compact);
+  min-width: 0;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  color: var(--secondary);
+  font-size: var(--fs-xs);
+  list-style: none;
+}
+.composer-identity > summary::-webkit-details-marker {
+  display: none;
+}
+.composer-identity > summary:hover {
+  background: var(--hover);
+}
+.composer-identity > summary:focus-visible {
+  outline-offset: -2px;
+}
+.composer-identity-role {
+  flex: none;
+  color: var(--muted);
+}
+.composer-identity-role::after {
+  content: ':';
+}
+.composer-identity-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-weight: 500;
+}
+.composer-identity-chevron {
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.composer-identity[open] .composer-identity-chevron {
+  transform: rotate(180deg);
+}
+.composer-identity-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 4px 0 6px;
+}
+.composer-identity-panel label {
+  margin: 0;
+}
+.composer-amend-note {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
 .commit-composer label {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font-size: var(--fs-sm);
+  font-size: var(--fs-xs);
   font-weight: 600;
-  margin: 12px 0 6px;
+  margin: 6px 0 2px;
 }
 .commit-composer label span {
-  font-size: var(--fs-xs);
+  font-size: var(--fs-2xs);
   font-weight: 400;
   color: var(--muted);
 }
-.commit-composer input,
-.commit-composer textarea {
-  width: 100%;
-}
+.commit-composer input:not([type='checkbox']),
 .commit-composer select {
   width: 100%;
-}
-.composer-identity {
-  margin: 12px 0;
-}
-.composer-identity .text-button {
-  margin-top: 4px;
-}
-.composer-identity small {
-  display: block;
-  color: var(--muted);
+  min-height: var(--h-compact);
+  padding: 4px 8px;
+  font-size: var(--fs-sm);
 }
 .commit-composer textarea {
+  width: 100%;
+  min-height: 48px;
+  max-height: 40vh;
+  padding: 4px 8px;
   font-family: var(--mono);
   font-size: var(--editor-font-size);
+  line-height: 1.5;
 }
 .commit-composer .amend-control {
   align-items: center;
   cursor: pointer;
-  margin: 0 0 4px;
-  gap: 8px;
+  margin: 0;
+  gap: 6px;
+  min-height: var(--h-compact);
 }
 .commit-composer .amend-control input {
   width: 16px;
@@ -2430,30 +2768,39 @@ button[data-danger='true']:hover:not(:disabled) {
   font-weight: 500;
 }
 .composer-footer {
+  /* Sticks to the bottom of the composer's own scroll area, so the commit button stays reachable when the pane is short. */
+  position: sticky;
+  bottom: 0;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  margin-top: 16px;
-}
-.composer-footer p {
-  color: var(--muted);
-  font-size: var(--fs-xs);
-  line-height: 1.6;
-  margin: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding-top: 8px;
+  background: var(--sidebar);
 }
 .composer-footer button {
   flex-shrink: 0;
 }
-.working-inspector .composer-footer {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-}
-.working-inspector .composer-footer .primary-button {
-  min-height: 36px;
-}
 
+@container working-changes (max-width: 340px) {
+  .file-list-actions {
+    gap: 4px;
+    padding: 6px 8px;
+  }
+  .file-list-actions button {
+    padding-inline: 6px;
+  }
+  .working-file-select {
+    padding-left: 12px;
+  }
+  .file-stage-button,
+  .working-file > .secondary-button {
+    margin-right: 4px;
+  }
+  .commit-composer {
+    padding-inline: 8px;
+  }
+}
 /* ==========================================================================
    Banners, alerts, status bar, toast
    ========================================================================== */
@@ -2530,6 +2877,18 @@ button[data-danger='true']:hover:not(:disabled) {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+.statusbar .text-button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+}
+.statusbar .text-button:hover {
+  color: var(--text);
+  background: var(--hover);
 }
 .statusbar kbd {
   font-size: var(--fs-2xs);
@@ -2838,6 +3197,119 @@ button[data-danger='true']:hover:not(:disabled) {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+}
+.activity-log-dialog {
+  width: min(1000px, calc(100vw - 32px));
+  height: min(760px, calc(100dvh - 64px));
+}
+.activity-log-dialog .dialog-body {
+  padding: 16px 20px;
+  gap: 12px;
+  overflow: hidden;
+}
+.activity-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.activity-toolbar .search-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 320px;
+}
+.activity-toolbar .search-icon {
+  position: absolute;
+  left: 8px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.activity-toolbar input[type='search'] {
+  width: 100%;
+  padding-left: 24px;
+}
+.activity-count {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  font-family: var(--mono);
+}
+.console {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  user-select: text;
+  cursor: text;
+}
+.console-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+}
+.console-entry {
+  padding: 2px 0;
+}
+.console-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.console-time {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.console-prompt {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.console-command {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.console-status {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.console-entry[data-status='success'] .console-status {
+  color: var(--green);
+}
+.console-entry[data-status='error'] .console-status,
+.console-entry[data-status='error'] .console-command {
+  color: var(--red);
+}
+.console-row {
+  display: flex;
+  gap: 8px;
+  padding-left: 24px;
+}
+.console-label {
+  flex-shrink: 0;
+  width: 40px;
+  color: var(--muted);
+  text-align: right;
+}
+.console-row pre {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font: inherit;
+  color: var(--secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.console-row[data-label='error'] pre {
+  color: var(--red);
 }
 .conflict-versions pre {
   min-height: 70px;
@@ -3152,7 +3624,7 @@ button[data-danger='true']:hover:not(:disabled) {
   }
 }
 
-/* Sidebar: groups animate open, rows slide on hover, current branch glows. */
+/* Sidebar: groups animate open, rows slide on hover, current branch is highlighted. */
 .reference-group::details-content {
   block-size: 0;
   overflow: clip;
@@ -3164,23 +3636,33 @@ button[data-danger='true']:hover:not(:disabled) {
   block-size: auto;
 }
 .reference-group[open] summary .count {
-  color: var(--accent-text);
-  background: var(--accent-wash);
-  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--text);
 }
 .ref-action-row:hover .ref-item > span:first-of-type {
   transform: translateX(2px);
 }
-.ref-item:has(.current-branch-dot) {
+.ref-action-row.current {
+  background: var(--selected);
+}
+.ref-action-row.current .ref-item {
   color: var(--text);
 }
-.ref-item:has(.current-branch-dot) svg {
+.ref-item .current-branch-check {
   color: var(--accent-text);
+  transform-origin: 50% 100%;
 }
-@keyframes head-glow {
-  50% {
-    box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 12%, transparent);
-  }
+/* Hover: the check hops, lands with a squash, and settles with a wiggle. */
+.ref-action-row:hover .current-branch-check,
+.ref-pill[data-current='true']:hover svg.lucide-check {
+  animation: check-hop 520ms ease-out;
+}
+.ref-pill[data-current='true'] svg.lucide-check {
+  transform-origin: 50% 100%;
+}
+@keyframes check-hop {
+  30% { transform: translateY(-3px) rotate(-12deg); }
+  55% { transform: scale(1.2, 0.75); }
+  75% { transform: translateY(-1px) rotate(6deg); }
 }
 /* ==========================================================================
    Graph polish: lane-tinted rows, HEAD pulse, fresh-commit entrance, ref pills
@@ -3205,28 +3687,6 @@ button[data-danger='true']:hover:not(:disabled) {
 @keyframes row-flash {
   to {
     opacity: 0;
-  }
-}
-.graph-head-pulse {
-  position: absolute;
-  top: 50%;
-  width: 10px;
-  height: 10px;
-  margin: -4px 0 0 -4px;
-  border-radius: 50%;
-  background: var(--graph-head, var(--accent));
-  opacity: 0;
-  animation: head-pulse 2.6s var(--ease-out) infinite;
-}
-@keyframes head-pulse {
-  0% {
-    opacity: 0.55;
-    transform: scale(1);
-  }
-  70%,
-  100% {
-    opacity: 0;
-    transform: scale(3.2);
   }
 }
 /* ==========================================================================
@@ -3709,6 +4169,38 @@ dialog[open]::backdrop {
   background: var(--border-strong);
 }
 
+/* While the next commit loads the previous one stays in place. It only dims if the load runs long,
+   so quick row-to-row switches show no flicker at all (snaps back when data lands; reduced motion skips it). */
+.native-inspector .inspector-content[data-stale] {
+  animation: inspector-stale var(--dur-med) ease 150ms both;
+}
+@keyframes inspector-stale {
+  to {
+    opacity: 0.55;
+  }
+}
+
+/* First-load placeholders reuse the real markup with transparent text, so line heights match
+   exactly and nothing shifts when data lands. They stay invisible for --dur-fast so fast loads never flash. */
+.native-inspector .skeleton-text {
+  color: transparent;
+  user-select: none;
+  background: linear-gradient(var(--subtle), var(--subtle)) center / 100% 10px no-repeat;
+}
+.native-inspector h2.skeleton-text {
+  background-size: 100% 14px;
+}
+.native-inspector .avatar.skeleton-text,
+.native-inspector .file-status.skeleton-text {
+  background: var(--subtle);
+}
+.native-inspector .skeleton,
+.native-inspector .skeleton-text {
+  animation:
+    fade-in var(--dur-med) ease var(--dur-fast) both,
+    skeleton-pulse 1.4s ease-in-out var(--dur-fast) infinite;
+}
+
 /* Loading diffs show a pulsing hunk silhouette under the status text. */
 .diff-placeholder[role='status']::after {
   content: '';
@@ -3791,7 +4283,7 @@ dialog[open]::backdrop {
   display: inline-flex;
   border-radius: var(--r-pill);
   padding: 0 8px;
-  height: 18px;
+  height: 20px;
   font-size: var(--fs-2xs);
 }
 .command-palette {
@@ -3937,6 +4429,11 @@ dialog[open]::backdrop {
 /* ==========================================================================
    Responsive and accessibility overrides (keep last)
    ========================================================================== */
+@media (max-height: 560px) {
+  .working-files-list {
+    min-height: 56px;
+  }
+}
 @media (max-width: 1400px) {
   .history-body {
     --visible-author-width: 0px;
@@ -3961,10 +4458,6 @@ dialog[open]::backdrop {
   .working-inspector-sidebar {
     width: min(var(--inspector-width), 42vw) !important;
   }
-  .composer-footer {
-    align-items: flex-start;
-    flex-direction: column;
-  }
   .native-actions > .secondary-button {
     padding-inline: 12px;
   }
@@ -3979,6 +4472,15 @@ dialog[open]::backdrop {
   }
 }
 @media (max-width: 800px) {
+  .repository-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .toolbar-center {
+    flex-wrap: wrap;
+    order: -1;
+  }
   .inspector,
   .native-inspector,
   .working-inspector,
@@ -4017,12 +4519,6 @@ dialog[open]::backdrop {
   .workflow-status,
 .workflow-alert {
     flex-shrink: 0;
-  }
-  .commit-composer {
-    padding: 16px 20px;
-  }
-  .composer-footer {
-    flex-direction: row;
   }
   .welcome-graph {
     display: none;
@@ -4076,11 +4572,6 @@ dialog[open]::backdrop {
   }
   .statusbar {
     padding-inline: 12px;
-  }
-  .composer-footer,
-  .composer-heading {
-    flex-direction: column;
-    align-items: flex-start;
   }
   .composer-footer .primary-button {
     width: 100%;

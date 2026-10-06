@@ -106,6 +106,7 @@ impl Fixture {
     fn merge(&self, source: &str, no_fast_forward: bool) -> Result<OperationResult> {
         self.run(GitAction::Merge {
             source: source.into(),
+            destination: None,
             no_fast_forward,
         })
     }
@@ -285,6 +286,7 @@ fn operations_branch_tag_ff_and_diverged_merge() {
     let side = f.commit("side");
     f.run(GitAction::SwitchBranch {
         branch: "refs/heads/main".into(),
+        carry_changes: false,
     })
     .unwrap();
     assert_eq!(f.merge("side", false).unwrap().head, Some(side.clone()));
@@ -312,6 +314,7 @@ fn operations_branch_tag_ff_and_diverged_merge() {
     f.commit("diverged");
     f.run(GitAction::SwitchBranch {
         branch: "main".into(),
+        carry_changes: false,
     })
     .unwrap();
     assert_eq!(
@@ -407,6 +410,7 @@ fn operations_external_merge_restart_abort_and_stale_expectations() {
     assert_eq!(f.git(&["rev-parse", "HEAD"]), head);
     let request = f.request(GitAction::Merge {
         source: "side".into(),
+        destination: None,
         no_fast_forward: false,
     });
     f.git(&["tag", "changed"]);
@@ -419,6 +423,7 @@ fn operations_external_merge_restart_abort_and_stale_expectations() {
     );
     let mut request = f.request(GitAction::SwitchBranch {
         branch: "side".into(),
+        carry_changes: false,
     });
     request.expected_head_ref = None;
     assert_eq!(
@@ -429,7 +434,196 @@ fn operations_external_merge_restart_abort_and_stale_expectations() {
         "staleOperation"
     );
     f.write("untracked", "dirty");
-    assert_eq!(f.merge("side", false).unwrap_err().code, "dirtyWorktree");
+    assert_eq!(
+        f.merge("side", false).unwrap().operation.kind,
+        OperationKind::Merge
+    );
+    assert_eq!(
+        std::fs::read(f.dir.path().join("untracked")).unwrap(),
+        b"dirty"
+    );
+}
+
+#[test]
+fn operations_create_branch_preserves_dirty_index_and_worktree() {
+    for checkout in [false, true] {
+        let f = Fixture::new();
+        f.write("file", "staged\n");
+        f.git(&["add", "file"]);
+        f.write("file", "unstaged\n");
+        f.write("untracked", "precious\n");
+        let status = f.git(&["status", "--porcelain"]);
+        let staged = f.git(&["diff", "--cached"]);
+        let unstaged = f.git(&["diff"]);
+        f.run(GitAction::CreateBranch {
+            name: "new-branch".into(),
+            start_point: "HEAD".into(),
+            checkout,
+        })
+        .unwrap();
+        assert_eq!(
+            f.git(&["symbolic-ref", "--short", "HEAD"]),
+            if checkout { "new-branch" } else { "main" }
+        );
+        assert_eq!(
+            f.git(&["rev-parse", "new-branch"]),
+            f.git(&["rev-parse", "HEAD"])
+        );
+        assert_eq!(f.git(&["status", "--porcelain"]), status);
+        assert_eq!(f.git(&["diff", "--cached"]), staged);
+        assert_eq!(f.git(&["diff"]), unstaged);
+        assert_eq!(
+            std::fs::read(f.dir.path().join("untracked")).unwrap(),
+            b"precious\n"
+        );
+        assert!(f.repo.stashes().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn operations_create_branch_checkout_refuses_overwriting_local_changes() {
+    let f = Fixture::new();
+    let root = f.git(&["rev-parse", "HEAD"]);
+    f.write("file", "committed\n");
+    let head = f.commit("change file");
+    f.write("file", "precious\n");
+    assert_eq!(
+        f.run(GitAction::CreateBranch {
+            name: "new-branch".into(),
+            start_point: root,
+            checkout: true,
+        })
+        .unwrap_err()
+        .code,
+        "git"
+    );
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), head);
+    assert_eq!(f.git(&["symbolic-ref", "--short", "HEAD"]), "main");
+    assert_eq!(
+        std::fs::read(f.dir.path().join("file")).unwrap(),
+        b"precious\n"
+    );
+}
+
+#[test]
+fn operations_merge_preserves_unrelated_working_changes() {
+    for no_fast_forward in [false, true] {
+        let f = Fixture::new();
+        f.git(&["switch", "-c", "side"]);
+        f.write("incoming", "incoming\n");
+        let incoming = f.commit("incoming");
+        f.git(&["switch", "main"]);
+        if no_fast_forward {
+            f.write("local", "committed\n");
+            f.commit("diverge");
+        }
+        f.write("file", "precious edit\n");
+        f.write("untracked", "precious untracked\n");
+        f.merge("side", no_fast_forward).unwrap();
+        assert_eq!(
+            std::fs::read(f.dir.path().join("file")).unwrap(),
+            b"precious edit\n"
+        );
+        assert_eq!(
+            std::fs::read(f.dir.path().join("untracked")).unwrap(),
+            b"precious untracked\n"
+        );
+        assert_eq!(f.git(&["diff", "--name-only"]), "file");
+        assert!(f.git(&["diff", "--cached"]).is_empty());
+        assert_eq!(f.git(&["show", "HEAD:file"]), "base");
+        if no_fast_forward {
+            assert_eq!(f.git(&["rev-parse", "HEAD^2"]), incoming);
+        } else {
+            assert_eq!(f.git(&["rev-parse", "HEAD"]), incoming);
+        }
+        assert!(f.repo.stashes().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn operations_merge_into_another_branch_carries_unrelated_changes() {
+    let f = Fixture::new();
+    f.git(&["branch", "destination"]);
+    f.git(&["switch", "-c", "side"]);
+    f.write("incoming", "incoming\n");
+    let incoming = f.commit("incoming");
+    f.git(&["switch", "main"]);
+    f.write("file", "precious edit\n");
+    f.write("untracked", "precious untracked\n");
+    f.run(GitAction::Merge {
+        source: "side".into(),
+        destination: Some("refs/heads/destination".into()),
+        no_fast_forward: false,
+    })
+    .unwrap();
+    assert_eq!(f.git(&["symbolic-ref", "--short", "HEAD"]), "destination");
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), incoming);
+    assert_eq!(
+        std::fs::read(f.dir.path().join("file")).unwrap(),
+        b"precious edit\n"
+    );
+    assert_eq!(
+        std::fs::read(f.dir.path().join("untracked")).unwrap(),
+        b"precious untracked\n"
+    );
+}
+
+#[test]
+fn operations_merge_preserves_staged_changes_only_when_fast_forwarding() {
+    for no_fast_forward in [false, true] {
+        let f = Fixture::new();
+        f.git(&["switch", "-c", "side"]);
+        f.write("incoming", "incoming\n");
+        let incoming = f.commit("incoming");
+        f.git(&["switch", "main"]);
+        let head = f.git(&["rev-parse", "HEAD"]);
+        f.write("file", "staged\n");
+        f.git(&["add", "file"]);
+        f.write("file", "unstaged\n");
+        let staged = f.git(&["diff", "--cached"]);
+        let unstaged = f.git(&["diff"]);
+        let result = f.merge("side", no_fast_forward);
+        if no_fast_forward {
+            // Git updates ORIG_HEAD even when refusing the merge, so the
+            // operation contract correctly requires a refresh after failure.
+            assert_eq!(result.unwrap_err().code, "mutationUnverified");
+            assert_eq!(f.git(&["rev-parse", "HEAD"]), head);
+        } else {
+            result.unwrap();
+            assert_eq!(f.git(&["rev-parse", "HEAD"]), incoming);
+        }
+        assert_eq!(f.git(&["diff", "--cached"]), staged);
+        assert_eq!(f.git(&["diff"]), unstaged);
+        assert_eq!(f.git(&["show", "HEAD:file"]), "base");
+    }
+}
+
+#[test]
+fn operations_merge_refuses_overwriting_tracked_untracked_and_ignored_changes() {
+    for path in ["file", "untracked", "ignored"] {
+        let f = Fixture::new();
+        f.git(&["switch", "-c", "side"]);
+        f.write(path, "incoming\n");
+        f.commit("incoming");
+        f.git(&["switch", "main"]);
+        if path == "ignored" {
+            f.write(".gitignore", "ignored\n");
+        }
+        let head = f.git(&["rev-parse", "HEAD"]);
+        f.write(path, "precious\n");
+        let status = f.git(&["status", "--porcelain"]);
+        assert_eq!(
+            f.merge("side", false).unwrap_err().code,
+            "mutationUnverified"
+        );
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), head);
+        assert_eq!(f.git(&["status", "--porcelain"]), status);
+        assert_eq!(
+            std::fs::read(f.dir.path().join(path)).unwrap(),
+            b"precious\n"
+        );
+        assert!(f.repo.stashes().unwrap().is_empty());
+    }
 }
 
 #[test]
@@ -819,7 +1013,8 @@ fn operations_switch_preserves_ignored_work() {
     f.write("local", "precious ignored work\n");
     assert!(f
         .run(GitAction::SwitchBranch {
-            branch: "side".into()
+            branch: "side".into(),
+            carry_changes: false,
         })
         .is_err());
     assert_eq!(
@@ -1251,6 +1446,7 @@ fn operations_merge_and_cherry_pick_abort_preserve_unrelated_edits() {
         } else {
             GitAction::Merge {
                 source: side,
+                destination: None,
                 no_fast_forward: false,
             }
         })
@@ -1771,4 +1967,95 @@ with socket.create_connection(("127.0.0.1", int(os.environ["GITTY_EDITOR_PORT"])
     assert_eq!(f.git(&["log", "-1", "--format=%s"]), "combined message");
     assert_eq!(f.git(&["rev-list", "--count", "side..main"]), "1");
     assert_eq!(f.git(&["show", "HEAD:second-file"]), "second");
+}
+
+#[test]
+fn operations_switch_carries_changes_and_surfaces_conflicts() {
+    let f = Fixture::new();
+    f.git(&["switch", "-c", "side"]);
+    f.write("file", "incoming\n");
+    f.commit("side");
+    f.git(&["switch", "main"]);
+    let switch = |f: &Fixture| {
+        f.run(GitAction::SwitchBranch {
+            branch: "refs/heads/side".into(),
+            carry_changes: true,
+        })
+    };
+    // Unrelated staged work is carried unchanged, still staged.
+    f.write("other", "mine\n");
+    f.git(&["add", "other"]);
+    let result = switch(&f).unwrap();
+    assert!(result.operation.conflicts.is_empty());
+    assert_eq!(f.git(&["symbolic-ref", "--short", "HEAD"]), "side");
+    assert_eq!(f.git(&["diff", "--cached", "--name-only"]), "other");
+    f.git(&["reset", "-q", "--hard"]);
+    f.git(&["switch", "main"]);
+    // Work overlapping the target's changes merges, leaving a conflict to resolve.
+    f.write("file", "mine\n");
+    let result = switch(&f).unwrap();
+    assert_eq!(f.git(&["symbolic-ref", "--short", "HEAD"]), "side");
+    assert_eq!(result.operation.conflicts, vec!["file".to_string()]);
+    // Without carry_changes, dirty work is still refused.
+    f.git(&["reset", "-q", "--hard"]);
+    f.git(&["switch", "main"]);
+    f.write("file", "mine\n");
+    assert_eq!(
+        f.run(GitAction::SwitchBranch {
+            branch: "side".into(),
+            carry_changes: false,
+        })
+        .unwrap_err()
+        .code,
+        "dirtyWorktree"
+    );
+}
+
+#[test]
+fn snapshot_matches_the_separate_reads_and_sees_a_conflict() {
+    let f = Fixture::new();
+    f.write("untracked", "new\n");
+    let clean = f.repo.snapshot().unwrap();
+    assert_eq!(clean.operation.kind, OperationKind::None);
+    assert_eq!(
+        clean.operation.fingerprint,
+        f.repo.operation_state().unwrap().fingerprint
+    );
+    assert_eq!(
+        clean.status.fingerprint,
+        f.repo.status().unwrap().fingerprint
+    );
+    assert_eq!(clean.state.fingerprint, f.repo.state().unwrap().fingerprint);
+    assert!(clean.status.entries.iter().any(|e| e.path == "untracked"));
+
+    f.diverge();
+    f.merge("side", false).unwrap();
+    let conflicted = f.repo.snapshot().unwrap();
+    assert_eq!(conflicted.operation.kind, OperationKind::Merge);
+    assert_eq!(conflicted.operation.conflicts, vec!["file".to_string()]);
+    assert_eq!(
+        conflicted.operation.fingerprint,
+        f.repo.operation_state().unwrap().fingerprint
+    );
+    assert!(conflicted.status.entries.iter().any(|e| e.conflicted));
+}
+
+#[test]
+fn snapshot_of_a_bare_repository_has_an_empty_status() {
+    let dir = tempfile::tempdir().unwrap();
+    git(dir.path(), &["init", "--bare", "-b", "main"]);
+    let data = tempfile::tempdir().unwrap();
+    let service = Service::new(data.path().into());
+    let handle = service
+        .open(RepositoryLocation::Native {
+            path: dir.path().to_str().unwrap().into(),
+        })
+        .unwrap()
+        .session
+        .handle;
+    let snapshot = service.repo(&handle).unwrap().snapshot().unwrap();
+    assert!(snapshot.state.session.bare);
+    assert!(snapshot.status.entries.is_empty());
+    assert_eq!(snapshot.status.fingerprint, "bare");
+    assert_eq!(snapshot.operation.kind, OperationKind::None);
 }

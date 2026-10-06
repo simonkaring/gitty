@@ -7,7 +7,7 @@ import type { CommitSummary, RepositoryState } from '../model/repository';
 import { actionReason, moveCommit } from '../model/operationUi';
 import { captureOperation } from '../model/operationFlow';
 
-export interface ActionContext { oid: string; ref?: string; initial?: GitAction['kind']; commits?: string[] }
+export interface ActionContext { oid: string; ref?: string; destination?: string; initial?: GitAction['kind']; commits?: string[] }
 export type OperationWrite = (command: string, args: Record<string, unknown>) => Promise<void>;
 
 /** Follow the checked-out branch rather than the interleaved graph row order. */
@@ -56,7 +56,7 @@ export function OperationDialog({ state, operation, context, commits, busy, onWr
   switch (kind) {
     case 'createBranch': action = { kind, name, startPoint: source, checkout }; break;
     case 'switchBranch': action = { kind, branch: source }; break;
-    case 'merge': action = { kind, source, noFastForward }; break;
+    case 'merge': action = { kind, source, ...(context.destination ? { destination: context.destination } : {}), noFastForward }; break;
     case 'rebase': action = { kind, onto: source }; break;
     case 'interactiveRebase': action = { kind, onto: source, steps }; break;
     case 'createTag': action = { kind, name, oid: context.oid, ...(message ? { message } : {}) }; break;
@@ -106,7 +106,7 @@ export function OperationDialog({ state, operation, context, commits, busy, onWr
     {review ? <><OperationSummary request={review} commits={commits} /><details><summary>Raw operation details</summary><pre className="operation-review">{JSON.stringify(review.action, null, 2)}</pre></details><p className="muted">Reviewed HEAD <code>{review.expectedHead ?? 'unborn'}</code>. Execution checks this captured HEAD, branch and operation fingerprint; changes require a new review.</p></> : <>
       <fieldset className="choice-group" disabled={pending}>
         <legend className="section-label">Action</legend>
-        {choice('merge', <>Merge source into {current}</>)}{choice('rebase', <>Rebase {current} onto source</>)}{choice('interactiveRebase', 'Edit recent commits (interactive rebase)')}{choice('switchBranch', 'Switch branch')}{choice('createBranch', 'Create branch')}{choice('cherryPick', 'Cherry-pick commits')}{choice('createTag', 'Create tag')}
+        {choice('merge', <>Merge source into {context.destination?.replace(/^refs\/heads\//, '') ?? current}</>)}{choice('rebase', <>Rebase {current} onto source</>)}{choice('interactiveRebase', 'Edit recent commits (interactive rebase)')}{choice('switchBranch', 'Switch branch')}{choice('createBranch', 'Create branch')}{choice('cherryPick', 'Cherry-pick commits')}{choice('createTag', 'Create tag')}
         {operation?.kind !== 'none' && <>{choice('continue', 'Continue operation')}{choice('skip', 'Skip current commit')}{choice('abort', 'Abort operation')}</>}
       </fieldset>
       {['merge', 'rebase', 'interactiveRebase', 'createBranch', 'switchBranch'].includes(kind) && <label className="field">{kind === 'switchBranch' ? 'Local branch' : kind === 'interactiveRebase' ? 'Base commit (ancestor of HEAD)' : 'Source / starting revision'}<input list="operation-refs" value={source} onChange={e => setSource(e.target.value)} /><datalist id="operation-refs">{state.refs.filter(ref => kind !== 'switchBranch' || ref.kind === 'local').map(ref => <option key={ref.fullName} value={ref.fullName}>{ref.name}</option>)}</datalist></label>}
@@ -137,7 +137,7 @@ function OperationSummary({ request, commits }: { request: OperationRequest; com
   const current = request.expectedHeadRef ? revisionLabel(request.expectedHeadRef) : 'Detached HEAD';
   const titles: Record<GitAction['kind'], string> = { merge: 'Merge branches', rebase: 'Rebase branch', interactiveRebase: 'Interactive rebase', cherryPick: 'Cherry-pick commits', createBranch: 'Create branch', switchBranch: 'Switch branch', createTag: 'Create tag', continue: 'Continue operation', skip: 'Skip current commit', abort: 'Abort operation' };
   return <section aria-label="Operation summary"><h3>{titles[action.kind]}</h3>
-    {action.kind === 'merge' && <><p>Source: <strong>{revisionLabel(action.source)}</strong></p><p>Destination: <strong>{current}</strong></p><p>Fast-forward policy: {action.noFastForward ? 'Always create a merge commit (--no-ff).' : 'Allow fast-forward when possible; otherwise create a merge commit.'}</p></>}
+    {action.kind === 'merge' && <><p>Source: <strong>{revisionLabel(action.source)}</strong></p><p>Destination: <strong>{action.destination ? revisionLabel(action.destination) : current}</strong></p>{action.destination && action.destination !== request.expectedHeadRef && <p>Gitty will switch to the destination branch before merging.</p>}<p>Fast-forward policy: {action.noFastForward ? 'Always create a merge commit (--no-ff).' : 'Allow fast-forward when possible; otherwise create a merge commit.'}</p></>}
     {action.kind === 'rebase' && <><p>Source branch to replay: <strong>{current}</strong></p><p>Destination (new base): <strong>{revisionLabel(action.onto)}</strong></p><p>Updates {current} with replayed commits. Their commit IDs change.</p></>}
     {action.kind === 'interactiveRebase' && <><p>Rewriting <strong>{current}</strong> from base <code>{action.onto}</code>. Commit IDs will change; conflicts may require Continue or Abort.</p><ol aria-label="Reviewed rebase order">{action.steps.map(step => <li key={step.oid}><strong>{step.instruction}</strong> <code>{step.oid}</code> — {commits.find(commit => commit.id === step.oid)?.subject}</li>)}</ol></>}
     {action.kind === 'cherryPick' && <><p>Destination: <strong>{current}</strong></p><p>Source commits, applied in this order:</p><ol aria-label="Cherry-pick application order">{action.commits.map(oid => { const commit = commits.find(value => value.id === oid); return <li key={oid}><code>{oid}</code>{commit && ` — ${commit.subject}`}{commit && commit.parents.length > 1 && action.mainline && <span> · Mainline parent {action.mainline}: <code>{commit.parents[action.mainline - 1]}</code></span>}</li>; })}</ol></>}

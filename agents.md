@@ -14,7 +14,16 @@ Gitty is a graph-first desktop Git client built with Tauri 2, Rust, React 19, Ty
 - Keep Git writes explicit and guarded against stale state; preserve working files and unrelated staged changes. Consult the backend contract before changing staging, commits, or graph operations.
 - Treat demo and native flows distinctly; test the appropriate path rather than assuming mocked browser IPC validates native behavior.
 - Use Conventional Commits for commits when asked to create one.
-- Include the `Assisted-by: Antigravity` trailer in every commit message.
+- Don't include co authors/assisted when committing.
+- No need to test before committing.
+
+## Knowledge maintenance
+
+- At task start, open [the knowledge index](docs/knowledge/index.md), inspect concepts relevant to the task, and verify their claims against linked implementation and tests before relying on them.
+- Assess knowledge impact on every code change. Update affected concepts in the same patch when behavior, contracts, invariants, platform boundaries, verification procedures, or architecture change. Cosmetic or unrelated edits need no knowledge churn.
+- Correct stale claims discovered during work. Code and tests are authoritative; reconcile affected summaries with `src-tauri/BACKEND.md` and `README.md`, preserving unrelated edits. If a discrepancy cannot be resolved, record it explicitly with source links rather than presenting a guess as a contract.
+- Keep concepts short and source-linked; detailed IPC contracts belong in `src-tauri/BACKEND.md`, user setup and features in `README.md`. Keep the index in sync when adding, renaming, or retiring concepts.
+- Follow [the maintenance workflow](docs/knowledge/maintenance.md), including OKF reserved-file rules. Do not bump freshness dates without substantive source revalidation. Record verification only for checks actually performed, with scope/platform/outcome; never infer human review or runtime coverage from authorship, mocked IPC, or historical results.
 
 ## Checks
 

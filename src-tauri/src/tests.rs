@@ -1,4 +1,4 @@
-use crate::{dto::*, repository::Service};
+use crate::{dto::*, mutate::AmendOptions, repository::Service};
 use std::{path::Path, process::Command};
 use tempfile::TempDir;
 
@@ -807,7 +807,14 @@ fn batched_history_preserves_topology_unicode_large_bodies_and_detail_parity() {
             "{subject}\n\n{}\nno trailing newline",
             "工作 🦀\n".repeat(10_000)
         );
-        let raw = format!("tree {tree}\n{parents}author Zoë 工作 <zoe@example.org> 1700000000 +1245\ncommitter Test <test@example.org> 1700000001 +0000\n\n{body}");
+        let committer_date = match subject {
+            "Røøt" => 1_700_000_001,
+            "Left 🦀" => 1_700_000_003,
+            "Right 工作" => 1_700_000_004,
+            "Merge é" => 1_700_000_002,
+            _ => unreachable!(),
+        };
+        let raw = format!("tree {tree}\n{parents}author Zoë 工作 <zoe@example.org> 1700000000 +1245\ncommitter Test <test@example.org> {committer_date} +0000\n\n{body}");
         (store_commit(d.path(), raw.as_bytes()), body)
     };
     let root = make(&[], "Røøt");
@@ -815,7 +822,7 @@ fn batched_history_preserves_topology_unicode_large_bodies_and_detail_parity() {
     let right = make(&[&root.0], "Right 工作");
     let merge = make(&[&left.0, &right.0], "Merge é");
     git(d.path(), &["update-ref", "refs/heads/main", &merge.0]);
-    let expected = git(d.path(), &["rev-list", "--topo-order", "HEAD"]);
+    let expected = git(d.path(), &["rev-list", "--date-order", "HEAD"]);
     let data = tempfile::tempdir().unwrap();
     let mut service = Service::new(data.path().into());
     let state = open(&mut service, d.path());
@@ -831,6 +838,11 @@ fn batched_history_preserves_topology_unicode_large_bodies_and_detail_parity() {
     assert_eq!(
         page.commits[0].parents,
         vec![left.0.clone(), right.0.clone()]
+    );
+    assert!(
+        page.commits.iter().position(|c| c.id == right.0).unwrap()
+            < page.commits.iter().position(|c| c.id == left.0).unwrap(),
+        "newer committer date should order the right branch first"
     );
     assert!(page.cursor.is_none());
     for (id, body) in [root, left, right, merge] {
@@ -1508,6 +1520,7 @@ fn selected_commit_profile_only_overrides_commit_identity_and_amend_preserves_au
             &first.oid,
             status.head_ref.as_deref(),
             &status.fingerprint,
+            AmendOptions::default(),
         )
         .unwrap();
     assert_eq!(
@@ -1682,6 +1695,397 @@ fn amend_honors_hooks_and_signing_configuration() {
             .code,
         "git"
     );
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), head);
+}
+
+fn amend_with(
+    service: &Service,
+    handle: &str,
+    message: &str,
+    expected_head: &str,
+    options: AmendOptions,
+) -> Result<CreatedCommit> {
+    let status = service.repo(handle).unwrap().status().unwrap();
+    service.amend_commit_with_identity(
+        handle,
+        message,
+        None,
+        expected_head,
+        status.head_ref.as_deref(),
+        &status.fingerprint,
+        options,
+    )
+}
+const MESSAGE_ONLY: AmendOptions = AmendOptions {
+    message_only: true,
+    require_unpushed: false,
+};
+/// Runs Git where failure is the point of the test (a conflicting stash pop).
+fn git_may_fail(path: &Path, args: &[&str]) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env(
+            "GIT_CONFIG_GLOBAL",
+            if cfg!(windows) { "NUL" } else { "/dev/null" },
+        )
+        .output()
+        .unwrap()
+        .status
+        .success()
+}
+
+#[test]
+fn message_only_amend_ignores_the_index_while_the_default_amend_folds_it_in() {
+    let d = init();
+    std::fs::write(d.path().join("a"), "1\n2\n3\n").unwrap();
+    std::fs::write(d.path().join("b"), "b0\n").unwrap();
+    commit(d.path(), "base");
+    std::fs::write(d.path().join("c"), "c\n").unwrap();
+    let original = commit(d.path(), "original");
+    let original_tree = git(d.path(), &["rev-parse", "HEAD^{tree}"]);
+    let (service, _data, handle) = service_for(d.path());
+
+    // Fully staged (b), partially staged (a), unstaged-only (c) and untracked (new).
+    std::fs::write(d.path().join("b"), "staged\n").unwrap();
+    git(d.path(), &["add", "b"]);
+    std::fs::write(d.path().join("a"), "1\n2x\n3\n").unwrap();
+    git(d.path(), &["add", "a"]);
+    std::fs::write(d.path().join("a"), "1\n2x\n3y\n").unwrap();
+    std::fs::write(d.path().join("c"), "c edited\n").unwrap();
+    std::fs::write(d.path().join("new"), "untracked\n").unwrap();
+    let snapshot = |d: &Path| {
+        (
+            git(d, &["ls-files", "--stage"]),
+            git(d, &["diff", "--cached"]),
+            git(d, &["diff"]),
+            git(d, &["status", "--porcelain=v1"]),
+            ["a", "b", "c", "new"].map(|f| std::fs::read(d.join(f)).unwrap()),
+        )
+    };
+    let before = snapshot(d.path());
+
+    let reworded = amend_with(
+        &service,
+        &handle,
+        "only the message",
+        &original,
+        MESSAGE_ONLY,
+    )
+    .unwrap();
+    assert_ne!(reworded.oid, original);
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), reworded.oid);
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD^{tree}"]), original_tree);
+    assert_eq!(
+        git(d.path(), &["log", "-1", "--format=%s"]),
+        "only the message"
+    );
+    assert_eq!(
+        git(d.path(), &["rev-parse", "HEAD^"]),
+        git(d.path(), &["rev-parse", &format!("{original}^")])
+    );
+    assert_eq!(
+        snapshot(d.path()),
+        before,
+        "index and worktree must be untouched"
+    );
+    assert!(!d.path().join(".git/index.lock").exists());
+
+    // Default semantics are unchanged: the staged index is folded into the commit,
+    // while the unstaged remainder stays in the working tree.
+    let folded = amend_with(
+        &service,
+        &handle,
+        "with the index",
+        &reworded.oid,
+        AmendOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        git(d.path(), &["show", &format!("{}:b", folded.oid)]),
+        "staged"
+    );
+    assert_eq!(
+        git(d.path(), &["show", &format!("{}:a", folded.oid)]),
+        "1\n2x\n3"
+    );
+    assert_eq!(git(d.path(), &["show", &format!("{}:c", folded.oid)]), "c");
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("a")).unwrap(),
+        "1\n2x\n3y\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("new")).unwrap(),
+        "untracked\n"
+    );
+}
+
+#[test]
+fn require_unpushed_is_independent_and_rechecks_remote_refs_added_after_the_read() {
+    let d = init();
+    std::fs::write(d.path().join("file"), "base\n").unwrap();
+    let base = commit(d.path(), "base");
+    std::fs::write(d.path().join("file"), "next\n").unwrap();
+    let head = commit(d.path(), "next");
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    let detail = repo.commit(&head).unwrap();
+    assert!(detail.can_edit_message, "{:?}", detail.edit_disabled_reason);
+
+    // A remote-tracking ref appears after the read that enabled editing.
+    git(d.path(), &["update-ref", "refs/remotes/origin/main", &head]);
+    for options in [
+        AmendOptions {
+            message_only: true,
+            require_unpushed: true,
+        },
+        AmendOptions {
+            message_only: false,
+            require_unpushed: true,
+        },
+    ] {
+        let error = amend_with(&service, &handle, "published", &head, options).unwrap_err();
+        assert_eq!(error.code, "pushedCommit", "{options:?}");
+        assert!(error.message.contains("origin/main"));
+        assert!(error.message.contains("not proof"));
+        assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), head);
+        assert_eq!(git(d.path(), &["log", "-1", "--format=%s"]), "next");
+    }
+    // Each flag is independent: without requireUnpushed the write proceeds.
+    let detail = repo.commit(&head).unwrap();
+    assert!(!detail.can_edit_message);
+    let reason = detail.edit_disabled_reason.unwrap();
+    assert!(
+        reason.contains("origin/main") && reason.contains("not proof"),
+        "{reason}"
+    );
+    let reworded =
+        amend_with(&service, &handle, "explicitly allowed", &head, MESSAGE_ONLY).unwrap();
+
+    // The remote only has the parent, so the rewritten commit is unpushed.
+    git(d.path(), &["update-ref", "refs/remotes/origin/main", &base]);
+    let options = AmendOptions {
+        message_only: true,
+        require_unpushed: true,
+    };
+    let ok = amend_with(&service, &handle, "still local", &reworded.oid, options).unwrap();
+    assert_eq!(git(d.path(), &["log", "-1", "--format=%s"]), "still local");
+    assert!(repo.commit(&ok.oid).unwrap().can_edit_message);
+    // A stale expectation is refused before any remote check or write.
+    let status = repo.status().unwrap();
+    git(
+        d.path(),
+        &["update-ref", "refs/remotes/origin/main", &ok.oid],
+    );
+    assert_eq!(
+        service
+            .amend_commit_with_identity(
+                &handle,
+                "stale",
+                None,
+                &head,
+                status.head_ref.as_deref(),
+                &status.fingerprint,
+                options
+            )
+            .unwrap_err()
+            .code,
+        "staleOperation"
+    );
+}
+
+#[test]
+fn root_and_merge_heads_can_be_reworded_with_their_parents_and_tree_intact() {
+    let d = init();
+    std::fs::write(d.path().join("file"), "root\n").unwrap();
+    let root = commit(d.path(), "root");
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    assert!(repo.commit(&root).unwrap().can_edit_message);
+    let tree = git(d.path(), &["rev-parse", "HEAD^{tree}"]);
+    let reworded = amend_with(&service, &handle, "new root", &root, MESSAGE_ONLY).unwrap();
+    assert_eq!(
+        git(d.path(), &["rev-list", "--parents", "-n1", "HEAD"]),
+        reworded.oid
+    );
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD^{tree}"]), tree);
+
+    git(d.path(), &["checkout", "-qb", "side"]);
+    std::fs::write(d.path().join("side"), "side\n").unwrap();
+    commit(d.path(), "side");
+    git(d.path(), &["checkout", "-q", "main"]);
+    std::fs::write(d.path().join("main"), "main\n").unwrap();
+    commit(d.path(), "main");
+    git(d.path(), &["merge", "--no-ff", "-m", "merge side", "side"]);
+    let merge = git(d.path(), &["rev-parse", "HEAD"]);
+    let parents = git(d.path(), &["rev-list", "--parents", "-n1", "HEAD"]);
+    let tree = git(d.path(), &["rev-parse", "HEAD^{tree}"]);
+    // Staged work must not leak into the merge commit's tree.
+    std::fs::write(d.path().join("extra"), "staged\n").unwrap();
+    git(d.path(), &["add", "extra"]);
+    assert!(repo.commit(&merge).unwrap().can_edit_message);
+    let reworded = amend_with(&service, &handle, "merge, reworded", &merge, MESSAGE_ONLY).unwrap();
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD^{tree}"]), tree);
+    assert_eq!(
+        git(d.path(), &["rev-list", "--parents", "-n1", "HEAD"])
+            .split(' ')
+            .skip(1)
+            .collect::<Vec<_>>(),
+        parents.split(' ').skip(1).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        git(d.path(), &["log", "-1", "--format=%s"]),
+        "merge, reworded"
+    );
+    assert_eq!(git(d.path(), &["diff", "--cached", "--name-only"]), "extra");
+    assert_ne!(reworded.oid, merge);
+}
+
+#[test]
+fn message_edit_eligibility_is_head_first_readable_and_never_fails_open() {
+    let d = init();
+    std::fs::write(d.path().join("file"), "one\n").unwrap();
+    let first = commit(d.path(), "first");
+    std::fs::write(d.path().join("file"), "two\n").unwrap();
+    let head = commit(d.path(), "second");
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    let reason = |id: &str| {
+        let detail = repo.commit(id).unwrap();
+        assert_eq!(
+            detail.can_edit_message,
+            detail.edit_disabled_reason.is_none()
+        );
+        detail.edit_disabled_reason
+    };
+    // The commit is parsed whatever the verdict.
+    assert_eq!(repo.commit(&first).unwrap().summary.subject, "first");
+    assert_eq!(reason(&head), None);
+    assert!(reason(&first).unwrap().contains("HEAD"));
+
+    // A transient index.lock does not decide eligibility; the write itself still refuses.
+    let lock = d.path().join(".git/index.lock");
+    std::fs::write(&lock, "").unwrap();
+    assert_eq!(reason(&head), None);
+    let error = amend_with(&service, &handle, "locked", &head, MESSAGE_ONLY).unwrap_err();
+    assert_eq!(error.code, "indexLocked");
+    std::fs::remove_file(&lock).unwrap();
+
+    // An operation in progress is an error while checking: it becomes the reason.
+    std::fs::create_dir(d.path().join(".git/rebase-merge")).unwrap();
+    let blocked = reason(&head).unwrap();
+    assert!(
+        blocked.contains("could not be checked") && blocked.contains("rebase"),
+        "{blocked}"
+    );
+    assert_eq!(
+        amend_with(&service, &handle, "mid-rebase", &head, MESSAGE_ONLY)
+            .unwrap_err()
+            .code,
+        "operationInProgress"
+    );
+    std::fs::remove_dir(d.path().join(".git/rebase-merge")).unwrap();
+    assert_eq!(reason(&head), None);
+
+    // Unmerged paths without an operation, as left by a conflicting stash pop.
+    std::fs::write(d.path().join("file"), "stashed\n").unwrap();
+    git(d.path(), &["stash", "push", "-q"]);
+    std::fs::write(d.path().join("file"), "three\n").unwrap();
+    let head = commit(d.path(), "third");
+    assert!(!git_may_fail(d.path(), &["stash", "pop", "-q"]));
+    let conflicts = reason(&head).unwrap();
+    assert!(conflicts.contains("unresolved conflicts"), "{conflicts}");
+    assert_eq!(
+        amend_with(&service, &handle, "conflicted", &head, MESSAGE_ONLY)
+            .unwrap_err()
+            .code,
+        "unresolvedConflict"
+    );
+    git(d.path(), &["reset", "-q", "--hard"]);
+
+    // A detached HEAD has no branch to rewrite, even though the commit is HEAD.
+    git(d.path(), &["checkout", "-q", "--detach"]);
+    assert!(reason(&head).unwrap().contains("detached"));
+    git(d.path(), &["checkout", "-q", "main"]);
+    assert_eq!(reason(&head), None);
+
+    // Known remote-tracking refs say so, and say they are not online proof.
+    git(d.path(), &["update-ref", "refs/remotes/origin/main", &head]);
+    let pushed = reason(&head).unwrap();
+    assert!(
+        pushed.contains("origin/main") && pushed.contains("not proof"),
+        "{pushed}"
+    );
+    git(d.path(), &["update-ref", "-d", "refs/remotes/origin/main"]);
+    assert_eq!(reason(&head), None);
+
+    let others = tempfile::tempdir().unwrap();
+    let bare = others.path().join("bare.git");
+    git(
+        d.path(),
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            d.path().to_str().unwrap(),
+            bare.to_str().unwrap(),
+        ],
+    );
+    let (bare_service, _bare_data, bare_handle) = service_for(&bare);
+    let detail = bare_service
+        .repo(&bare_handle)
+        .unwrap()
+        .commit(&head)
+        .unwrap();
+    assert!(!detail.can_edit_message);
+    assert!(detail.edit_disabled_reason.unwrap().contains("bare"));
+    assert_eq!(
+        bare_service
+            .amend_commit_with_identity(
+                &bare_handle,
+                "bare",
+                None,
+                &head,
+                Some("refs/heads/main"),
+                "x",
+                MESSAGE_ONLY
+            )
+            .unwrap_err()
+            .code,
+        "bareRepository"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn message_only_amend_still_runs_hooks_and_signing_and_reports_their_refusals() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = init();
+    std::fs::write(d.path().join("file"), "one\n").unwrap();
+    let head = commit(d.path(), "original");
+    let (service, _data, handle) = service_for(d.path());
+    let hook = d.path().join(".git/hooks/pre-commit");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\necho 'message-only hook refusal' >&2\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let error = amend_with(&service, &handle, "blocked", &head, MESSAGE_ONLY).unwrap_err();
+    assert_eq!(error.code, "git");
+    assert!(error.message.contains("message-only hook refusal"));
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), head);
+
+    std::fs::remove_file(&hook).unwrap();
+    git(d.path(), &["config", "commit.gpgsign", "true"]);
+    git(
+        d.path(),
+        &["config", "gpg.program", "/nonexistent/gitty-signer"],
+    );
+    let error = amend_with(&service, &handle, "unsigned", &head, MESSAGE_ONLY).unwrap_err();
+    assert_eq!(error.code, "git");
     assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), head);
 }
 
@@ -2281,4 +2685,368 @@ fn a_broken_head_is_reported_instead_of_being_treated_as_an_unborn_branch() {
     std::fs::write(d.path().join(".git/HEAD"), &head).unwrap();
     let created = service.create_commit(&handle, "message").unwrap();
     assert_eq!(created.oid, git(d.path(), &["rev-parse", "HEAD"]));
+}
+
+/// Timing report, not an assertion. Point it at a slow repository:
+/// `GITTY_TIMING_REPO=/path/to/repo cargo test timing_report -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn timing_report() {
+    let Ok(path) = std::env::var("GITTY_TIMING_REPO") else {
+        eprintln!("Set GITTY_TIMING_REPO to a repository path.");
+        return;
+    };
+    let data = tempfile::tempdir().unwrap();
+    let service = Service::new(data.path().into());
+    let handle = service
+        .open(RepositoryLocation::Native { path })
+        .unwrap()
+        .session
+        .handle;
+    let repo = service.repo(&handle).unwrap();
+    let time = |label: &str, run: &dyn Fn()| {
+        run(); // warm the file cache
+        let start = std::time::Instant::now();
+        run();
+        eprintln!("{label:<34}{:>8.1?}", start.elapsed());
+    };
+    time("state", &|| drop(repo.state().unwrap()));
+    time("status (refresh fingerprint)", &|| {
+        drop(repo.status().unwrap())
+    });
+    time("operation_state (old, alone)", &|| {
+        drop(repo.operation_state().unwrap())
+    });
+    time("old refresh (2x op + 2x state + status)", &|| {
+        drop(repo.operation_state().unwrap());
+        drop(repo.state().unwrap());
+        drop(repo.status().unwrap());
+        drop(repo.state().unwrap());
+        drop(repo.operation_state().unwrap());
+    });
+    time("snapshot (new refresh)", &|| drop(repo.snapshot().unwrap()));
+    time("status only (after stage/unstage)", &|| {
+        drop(repo.status().unwrap())
+    });
+}
+
+fn read(path: &Path, name: &str) -> String {
+    std::fs::read_to_string(path.join(name)).unwrap()
+}
+fn fingerprint_of(service: &Service, handle: &str) -> String {
+    service.repo(handle).unwrap().status().unwrap().fingerprint
+}
+
+#[test]
+fn discard_restores_from_the_index_and_keeps_the_staged_half() {
+    let d = init();
+    for name in ["edited", "partial", "gone", "untouched"] {
+        std::fs::write(d.path().join(name), format!("{name} base\n")).unwrap();
+    }
+    commit(d.path(), "base");
+    std::fs::write(d.path().join("edited"), "edited work\n").unwrap();
+    std::fs::write(d.path().join("partial"), "partial staged\n").unwrap();
+    git(d.path(), &["add", "partial"]);
+    std::fs::write(d.path().join("partial"), "partial staged\nplus worktree\n").unwrap();
+    std::fs::remove_file(d.path().join("gone")).unwrap();
+    std::fs::write(d.path().join("untouched"), "untouched work\n").unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    let fp = fingerprint_of(&service, &handle);
+    service
+        .discard(&handle, &paths(&["edited", "partial", "gone"]), &fp)
+        .unwrap();
+    assert_eq!(read(d.path(), "edited"), "edited base\n");
+    assert_eq!(read(d.path(), "gone"), "gone base\n");
+    // The staged half is the new floor; only the extra working-tree line is lost.
+    assert_eq!(read(d.path(), "partial"), "partial staged\n");
+    assert_eq!(
+        git(d.path(), &["diff", "--cached", "--name-only"]),
+        "partial"
+    );
+    // A path that was not named is never touched.
+    assert_eq!(read(d.path(), "untouched"), "untouched work\n");
+}
+
+#[test]
+fn discard_deletes_only_the_named_untracked_files_and_keeps_names_literal() {
+    let d = init();
+    std::fs::write(d.path().join("tracked"), "base\n").unwrap();
+    commit(d.path(), "base");
+    std::fs::create_dir(d.path().join("sub dir")).unwrap();
+    let doomed = ["-n", "star*[a-b]?.txt", "úñí 工作.txt", "sub dir/deep file"];
+    for name in doomed {
+        std::fs::write(d.path().join(name), "x\n").unwrap();
+    }
+    // Same shape as a doomed pattern, but not named: a glob must not reach it.
+    for name in ["star1.txt", "keep.txt", "sub dir/sibling"] {
+        std::fs::write(d.path().join(name), "keep\n").unwrap();
+    }
+    let (service, _data, handle) = service_for(d.path());
+    let fp = fingerprint_of(&service, &handle);
+    service.discard(&handle, &paths(&doomed), &fp).unwrap();
+    for name in doomed {
+        assert!(!d.path().join(name).exists(), "{name} should be gone");
+    }
+    for name in ["star1.txt", "keep.txt", "sub dir/sibling", "tracked"] {
+        assert!(d.path().join(name).exists(), "{name} must survive");
+    }
+}
+
+#[test]
+fn discard_batches_many_untracked_paths_across_several_git_processes() {
+    let d = init();
+    std::fs::write(d.path().join("tracked"), "base\n").unwrap();
+    commit(d.path(), "base");
+    // Far more argument bytes than one batch allows.
+    let names: Vec<String> = (0..600)
+        .map(|i| format!("generated-file-with-a-long-name-{i:04}.txt"))
+        .collect();
+    for name in &names {
+        std::fs::write(d.path().join(name), "x\n").unwrap();
+    }
+    let (service, _data, handle) = service_for(d.path());
+    let fp = fingerprint_of(&service, &handle);
+    service.discard(&handle, &names, &fp).unwrap();
+    assert!(names.iter().all(|n| !d.path().join(n).exists()));
+    assert!(d.path().join("tracked").exists());
+}
+
+#[test]
+fn discard_refuses_a_stale_fingerprint_and_changes_nothing() {
+    let d = init();
+    std::fs::write(d.path().join("file"), "base\n").unwrap();
+    commit(d.path(), "base");
+    std::fs::write(d.path().join("file"), "reviewed edit\n").unwrap();
+    std::fs::write(d.path().join("fresh"), "reviewed\n").unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    let reviewed = fingerprint_of(&service, &handle);
+    // An edit lands after the user looked, with the same status letters.
+    std::fs::write(d.path().join("file"), "unreviewed longer edit\n").unwrap();
+    let error = service
+        .discard(&handle, &paths(&["file", "fresh"]), &reviewed)
+        .unwrap_err();
+    assert_eq!(error.code, "staleOperation");
+    assert_eq!(read(d.path(), "file"), "unreviewed longer edit\n");
+    assert_eq!(read(d.path(), "fresh"), "reviewed\n");
+}
+
+#[test]
+fn discard_refuses_staged_only_unknown_empty_and_escaping_paths() {
+    let d = init();
+    std::fs::write(d.path().join("staged"), "base\n").unwrap();
+    std::fs::write(d.path().join("clean"), "base\n").unwrap();
+    std::fs::write(d.path().join("intent"), "base\n").unwrap();
+    commit(d.path(), "base");
+    std::fs::write(d.path().join("staged"), "staged work\n").unwrap();
+    git(d.path(), &["add", "staged"]);
+    std::fs::write(d.path().join("added"), "intent to add\n").unwrap();
+    git(d.path(), &["add", "--intent-to-add", "added"]);
+    let (service, _data, handle) = service_for(d.path());
+    let fp = fingerprint_of(&service, &handle);
+    for (path, code) in [
+        ("staged", "invalidRequest"),
+        ("clean", "invalidRequest"),
+        ("added", "invalidRequest"),
+        ("../outside", "invalidPath"),
+    ] {
+        assert_eq!(
+            service
+                .discard(&handle, &paths(&[path]), &fp)
+                .unwrap_err()
+                .code,
+            code,
+            "{path}"
+        );
+    }
+    assert_eq!(
+        service.discard(&handle, &[], &fp).unwrap_err().code,
+        "invalidRequest"
+    );
+    assert_eq!(read(d.path(), "staged"), "staged work\n");
+    assert_eq!(read(d.path(), "added"), "intent to add\n");
+}
+
+#[test]
+fn discard_is_refused_during_an_operation_and_never_removes_a_nested_repository() {
+    let d = init();
+    std::fs::write(d.path().join("file"), "base\n").unwrap();
+    commit(d.path(), "base");
+    let nested = d.path().join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    git(&nested, &["init", "-b", "main"]);
+    std::fs::write(nested.join("inner"), "inner\n").unwrap();
+    std::fs::write(d.path().join("file"), "edited\n").unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    let fp = fingerprint_of(&service, &handle);
+    assert_eq!(
+        service
+            .discard(&handle, &paths(&["nested"]), &fp)
+            .unwrap_err()
+            .code,
+        "invalidRequest"
+    );
+    assert!(nested.join("inner").exists());
+    std::fs::write(
+        d.path().join(".git/MERGE_HEAD"),
+        format!("{}\n", git(d.path(), &["rev-parse", "HEAD"])),
+    )
+    .unwrap();
+    assert_eq!(
+        service
+            .discard(&handle, &paths(&["file"]), &fp)
+            .unwrap_err()
+            .code,
+        "operationInProgress"
+    );
+    assert_eq!(read(d.path(), "file"), "edited\n");
+}
+
+#[test]
+fn discard_works_before_the_first_commit() {
+    let d = init();
+    std::fs::write(d.path().join("fresh"), "x\n").unwrap();
+    std::fs::write(d.path().join("indexed"), "indexed\n").unwrap();
+    git(d.path(), &["add", "indexed"]);
+    std::fs::write(d.path().join("indexed"), "indexed\nmore\n").unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    let fp = fingerprint_of(&service, &handle);
+    service
+        .discard(&handle, &paths(&["fresh", "indexed"]), &fp)
+        .unwrap();
+    assert!(!d.path().join("fresh").exists());
+    assert_eq!(read(d.path(), "indexed"), "indexed\n");
+}
+
+fn untracked(path: &Path) -> Vec<String> {
+    git(path, &["status", "--porcelain=v1", "-uall", "-z"])
+        .split('\0')
+        .filter_map(|record| record.strip_prefix("?? "))
+        .map(String::from)
+        .collect()
+}
+
+#[test]
+fn ignore_path_appends_one_exact_line_and_refuses_to_repeat_itself() {
+    let d = init();
+    std::fs::write(d.path().join("tracked"), "base\n").unwrap();
+    commit(d.path(), "base");
+    std::fs::create_dir(d.path().join("sub")).unwrap();
+    for name in ["secret.env", "sub/secret.env", "sub/other"] {
+        std::fs::write(d.path().join(name), "x\n").unwrap();
+    }
+    let (service, _data, handle) = service_for(d.path());
+    service.ignore_path(&handle, "secret.env").unwrap();
+    assert_eq!(read(d.path(), ".gitignore"), "/secret.env\n");
+    // Anchored: the same name deeper in the tree is a different file.
+    let remaining = untracked(d.path());
+    assert!(remaining.contains(&"sub/secret.env".to_string()));
+    assert!(!remaining.contains(&"secret.env".to_string()));
+    // Already ignored, so no longer untracked: refused, and no second line.
+    assert_eq!(
+        service.ignore_path(&handle, "secret.env").unwrap_err().code,
+        "invalidRequest"
+    );
+    assert_eq!(read(d.path(), ".gitignore"), "/secret.env\n");
+}
+
+#[test]
+fn ignore_path_keeps_existing_content_and_adds_the_missing_newline() {
+    let d = init();
+    std::fs::write(d.path().join("tracked"), "base\n").unwrap();
+    commit(d.path(), "base");
+    std::fs::write(d.path().join(".gitignore"), "target/\r\nnode_modules").unwrap();
+    git(d.path(), &["add", ".gitignore"]);
+    git(d.path(), &["commit", "-m", "ignore"]);
+    std::fs::write(d.path().join("scratch"), "x\n").unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    service.ignore_path(&handle, "scratch").unwrap();
+    assert_eq!(
+        read(d.path(), ".gitignore"),
+        "target/\r\nnode_modules\n/scratch\n"
+    );
+}
+
+#[test]
+fn ignore_path_escapes_names_so_only_that_file_is_ignored() {
+    let d = init();
+    std::fs::write(d.path().join("tracked"), "base\n").unwrap();
+    commit(d.path(), "base");
+    let ignored = [
+        "star*[a-b]?.txt",
+        "#hash",
+        "!bang",
+        "has space.txt",
+        "back\\slash",
+    ];
+    // Look-alikes that an unescaped pattern would also swallow.
+    let kept = ["starX.txt", "hash", "bang", "has_space.txt"];
+    for name in ignored.iter().chain(kept.iter()) {
+        std::fs::write(d.path().join(name), "x\n").unwrap();
+    }
+    let (service, _data, handle) = service_for(d.path());
+    for name in ignored {
+        service.ignore_path(&handle, name).unwrap();
+    }
+    let mut left = untracked(d.path());
+    left.sort();
+    let mut expected: Vec<String> = kept.iter().map(|s| s.to_string()).collect();
+    expected.push(".gitignore".into());
+    expected.sort();
+    assert_eq!(left, expected);
+}
+
+#[test]
+fn ignore_path_refuses_tracked_missing_and_escaping_targets() {
+    let d = init();
+    std::fs::write(d.path().join("tracked"), "base\n").unwrap();
+    commit(d.path(), "base");
+    let (service, _data, handle) = service_for(d.path());
+    for (path, code) in [
+        ("tracked", "invalidRequest"),
+        ("missing", "invalidRequest"),
+        ("../outside", "invalidPath"),
+    ] {
+        assert_eq!(
+            service.ignore_path(&handle, path).unwrap_err().code,
+            code,
+            "{path}"
+        );
+    }
+    assert!(!d.path().join(".gitignore").exists());
+    #[cfg(unix)]
+    {
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("elsewhere");
+        std::fs::write(&target, "outside\n").unwrap();
+        std::os::unix::fs::symlink(&target, d.path().join(".gitignore")).unwrap();
+        std::fs::write(d.path().join("scratch"), "x\n").unwrap();
+        assert!(service.ignore_path(&handle, "scratch").is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "outside\n");
+    }
+}
+
+#[test]
+fn open_path_refuses_what_it_must_not_launch_before_starting_anything() {
+    let d = init();
+    std::fs::write(d.path().join("tracked"), "base\n").unwrap();
+    std::fs::write(d.path().join("run.sh"), "#!/bin/sh\n").unwrap();
+    commit(d.path(), "base");
+    std::fs::create_dir(d.path().join("folder")).unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    for (path, code) in [
+        ("run.sh", "openRefused"),
+        ("folder", "openRefused"),
+        ("gone", "notFound"),
+        ("../outside", "invalidPath"),
+    ] {
+        assert_eq!(
+            service.open_path(&handle, path).unwrap_err().code,
+            code,
+            "{path}"
+        );
+    }
+    assert_eq!(
+        service.reveal_path(&handle, "gone").unwrap_err().code,
+        "notFound"
+    );
 }

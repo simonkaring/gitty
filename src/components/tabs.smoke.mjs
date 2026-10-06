@@ -33,6 +33,7 @@ try {
     let callbackId = 0;
     window.__TAURI_INTERNALS__ = { transformCallback: () => ++callbackId, unregisterCallback: () => {}, invoke: async (command, args) => {
       f.calls.push({ command, args: args ? { ...args } : args, at: Date.now() });
+      if (command === 'repository_snapshot') { const [state, status, operation] = await Promise.all(['repository_state', 'repository_status', 'repository_operation_state'].map(name => window.__TAURI_INTERNALS__.invoke(name, args))); return { state, status, operation }; }
       if (command === 'repository_recent') return Object.keys(repoDefs).map(path => ({ kind: 'native', path }));
       if (command === 'wsl_distributions') return [];
       if (command === 'repository_open') return stateFor(args.location.path);

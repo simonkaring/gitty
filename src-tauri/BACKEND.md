@@ -8,14 +8,45 @@ Ordinary index/commit writes use these commands:
 
 - `repository_stage({handle, paths: string[]}) -> void`
 - `repository_unstage({handle, paths: string[]}) -> void`
+- `repository_discard({handle, paths: string[], expectedStatusFingerprint: string}) -> void`
+- `repository_ignore_path({handle, path: string}) -> void`
+- `repository_open_path({handle, path: string}) -> void`
+- `repository_reveal_path({handle, path: string}) -> void`
+- `repository_snapshot({handle}) -> {state, status, operation}` (a read; see Read semantics)
 - `repository_stage_hunk({handle, path: string, hunkIndex: number, fingerprint: string, lineIndices?: number[]}) -> void`
 - `repository_unstage_hunk({handle, path: string, hunkIndex: number, fingerprint: string, lineIndices?: number[]}) -> void`
 - `repository_create_commit({handle, message: string, identity?: {name: string, email: string}}) -> {oid: string}`
-- `repository_amend_commit({handle, message: string, identity?: {name: string, email: string}, expectedHead: string, expectedHeadRef: string | null, expectedStatusFingerprint: string}) -> {oid: string}`
+- `repository_amend_commit({handle, message: string, identity?: {name: string, email: string}, expectedHead: string, expectedHeadRef: string | null, expectedStatusFingerprint: string, messageOnly?: boolean, requireUnpushed?: boolean}) -> {oid: string}`
 - `repository_git_identity({handle}) -> {local: {name: string | null, email: string | null}, effective: {name: string | null, email: string | null}}`
 - `repository_set_git_identity({handle, identity: {name: string, email: string}, expectedLocal: {name: string | null, email: string | null}}) -> RepositoryGitIdentity`
 
-`repository_commit({handle, oid})` is unchanged and remains a read.
+`repository_commit({handle, oid})` remains a read. Its `CommitDetail` gains two fields:
+`canEditMessage: boolean` and `editDisabledReason: string | null` (camelCase on the wire).
+They are the eligibility verdict for editing that commit's message in place, and they
+carry no authority: the write re-checks everything it relies on.
+
+Eligibility is read-only and checked cheapest-first, so a commit that is not HEAD costs
+one extra Git process. The commit is parsed first, so a failure while checking can never
+hide the commit itself:
+
+1. A bare repository is not editable.
+2. Only the commit HEAD resolves to is editable; any other commit is disabled with a
+   reason pointing at interactive rebase. (Root and merge commits are editable when
+   they are HEAD. The old ancestry and merge-history probes are gone.)
+3. HEAD must be symbolic (a checked-out branch); a detached HEAD is disabled.
+4. No operation in progress (the same check writes use) and no unmerged paths.
+   A transient `index.lock` is deliberately excluded: it says nothing about
+   eligibility, and the write itself still refuses with `indexLocked`.
+5. No known remote-tracking ref may contain the commit
+   (`git for-each-ref --contains <oid> --format=%(refname) refs/remotes`, which must
+   succeed; a failed query is an error, never "not pushed").
+
+Eligibility never fails open. Any error while checking (an operation in progress, a
+failed Git command, an unresolved HEAD) is returned as a normal detail with
+`canEditMessage: false` and a readable `editDisabledReason` such as "Editing is
+unavailable because eligibility could not be checked: …". Remote-tracking refs are local
+data: they only prove what the last fetch saw, never what the remote has now, and the
+reason text says so. The demo backend returns `canEditMessage: false` for every commit.
 When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage_hunk`, only the specified 0-based lines within the hunk are staged/unstaged using a selectively generated forward patch (and `--reverse` for unstaging), validating bounds and changed line kinds while preserving all working files and other index entries.
 
 ## Read semantics
@@ -42,7 +73,9 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   state, search, status, and diff reads run independently. Closing invalidates the
   handle immediately; acquired requests may finish before resources are released.
 - History resolves current local/remote/tag refs and HEAD to concrete commit IDs,
-  then starts **one** `rev-list --topo-order <captured IDs> --` process per generation.
+  then starts **one** `rev-list --date-order <captured IDs> --` process per generation.
+  History rows use committer timestamps, matching this ordering; original author dates
+  remain in the underlying commit objects.
   It consumes only the requested page plus one lookahead ID. Backpressure pauses
   stdout consumption between pages. Consumed IDs are spooled to an anonymous temp
   file, so replaying a cursor uses exactly the same order without keeping the entire
@@ -85,6 +118,36 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   costs about 100 ms through `wsl.exe`. Repository state also fingerprints remotes and shallow boundaries
   so deepening without moving refs invalidates the walk. Reads are best-effort across
   concurrent external changes; nested repository contents are not recursively hashed.
+- `repository_snapshot` returns repository state, working status and operation state
+  from one read. State and status are computed once and shared with the operation
+  state (whose fingerprint covers both) instead of once per command, and the four
+  operation pseudo-refs (`MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`,
+  `REBASE_HEAD`) resolve in one `cat-file --batch-check` instead of four processes.
+  State is read again at the end: if its fingerprint moved, or HEAD disagrees between
+  state and status, the read restarts, and after three attempts fails with `unstable`.
+  `repository_state`, `repository_status` and `repository_operation_state` remain for
+  callers that need only one. The frontend refreshes through the snapshot and walks
+  history only when the state fingerprint changed; after a stage, unstage, hunk,
+  discard or ignore it re-reads `repository_status` alone, since none of them can move
+  HEAD or refs. Commit and amend keep the full refresh.
+- The frontend's write lifecycle hands the write's outcome to the refresh
+  (`reload(outcome)`) before refreshing. After an amend that confirmed a new `oid`
+  (no write error), the refresh remaps the old `expectedHead` to that `oid` *inside*
+  the snapshot read, before history paging: the automatic keep-visible candidates
+  (selection and scroll anchor) are first filtered to commits that were in the previous
+  history, and only then remapped. The walk therefore finds the new tip on its first
+  page instead of paging the whole history for an ID that no longer exists, and the
+  scroll anchor (ID and offset) is restored on the new row. The remap is honored only
+  while the refreshed HEAD is that `oid`. A failed or uncertain write has no confirmed
+  `oid`, so nothing is remapped, and a failed refresh never forces a reveal. The same
+  filter stops later refreshes from walking all history for an inspector-only orphan
+  (a selected ID that was not in the loaded history). Explicit reveal and paging are
+  unchanged. After a successful refresh the selection moves to the new commit only if
+  it is the same session, the selection is still the old HEAD, and no user selection
+  has happened since the write was submitted (including away and back); compare
+  base/target, refs and cherry-pick picks are never touched.
+- Process waits poll with a 1 ms to 10 ms backoff, so a Git command that finishes in a
+  few milliseconds is not charged a fixed 10 ms.
 - Root commits compare against the computed empty-tree ID without writing objects.
   Merge comparisons default to first parent; a supplied parent must be an actual
   parent. Explicit comparisons resolve both inputs to commits before diffing.
@@ -122,7 +185,9 @@ targeted conflict resolutions have the additional contract documented below.
   2.37). Windows caps an entire command line near 32767 UTF-16 units and Unix
   caps both the total and each single argument, so no argument-shaped request
   could honor the limits above on every platform. Git arguments are now a short
-  fixed set. Stdin is a bounded anonymous temp file, so there is no pipe writer
+  fixed set, with one exception: `git clean`, used to discard untracked files, has no
+  pathspec-from-file form, so its paths follow `--` in batches of at most 16 KiB of
+  arguments per process (still literal under `GIT_LITERAL_PATHSPECS=1`). Stdin is a bounded anonymous temp file, so there is no pipe writer
   that could deadlock against full output pipes, and the same handle is what WSL
   forwards into the distribution. Conflict pre-checks query the whole index
   (`ls-files --unmerged -z`) and are filtered in the backend for the same reason;
@@ -186,6 +251,37 @@ targeted conflict resolutions have the additional contract documented below.
   the working tree**. Partially staged files keep their working-tree content.
   Paths that match nothing are a silent no-op in Git, so a stale selection
   resolves on the frontend's next refresh rather than failing.
+- Discard is the only write that destroys working-tree content, so it is guarded
+  twice. Under the mutation lock it re-reads the status and compares its fingerprint
+  with the one the caller reviewed (`staleOperation`, nothing touched, when it moved),
+  then classifies every requested path from that fresh status and refuses the whole
+  request before running anything if any path does not qualify. Untracked files are
+  deleted with `git clean --force --quiet -- <paths>`; tracked files with a worktree
+  status of `M`, `D` or `T` are restored with `git restore --worktree
+  --pathspec-from-file=- --pathspec-file-nul`, whose source is the index, so staged
+  content, including the staged half of a partially staged file, is kept. Refused with
+  `invalidRequest`: staged-only or unchanged paths, unknown paths, directory or nested
+  repository entries (a status path ending in `/`), and intent-to-add, renamed or
+  copied entries. Unmerged paths and operations in progress are refused as for stage.
+  Restore runs before clean. A failure part-way through the clean batches leaves earlier
+  batches applied, so clients re-read status after any outcome. There is no whole-tree
+  form and `paths` must be explicit.
+- `repository_ignore_path` appends `/<path>` to the root `.gitignore`, with `\`, `*`,
+  `?` and `[` escaped and trailing spaces escaped, only for a path that is currently
+  untracked (otherwise ignoring it would do nothing). It is append-only, adding a
+  newline first when the file lacks one, and goes through a `cap-std` directory handle,
+  so a `.gitignore` symlink cannot lead outside the worktree. Names containing a line
+  break are refused. It runs under the mutation lock.
+- `repository_open_path` and `repository_reveal_path` take a repository-relative path,
+  validate it like a write, canonicalize it and require it to stay inside the worktree
+  once symlinks are resolved (`invalidPath` otherwise, `notFound` when it is missing).
+  Open passes a file to the operating system's default application, so it refuses
+  (`openRefused`) anything that is not a regular file, any file with an execute bit on
+  Unix, and extensions that are programs or launchers (`app`, `bat`, `cmd`, `command`,
+  `exe`, `jar`, `lnk`, `msi`, `ps1`, `scr`, `sh`, `vbs` and similar). Reveal selects the
+  file in Finder (`open -R`) or Explorer (`/select,`), and opens the containing folder on
+  other platforms. They take no mutation lock. All three commands in this and the
+  previous bullet return `unsupported` for repositories inside WSL.
 - Commit runs `git commit --quiet --file=-`: the staged index only, never `-a`.
   The message must contain non-whitespace, be under 64 KiB and contain no NUL;
   Git's configured `commit.cleanup` then applies as usual. With nothing staged the
@@ -198,15 +294,27 @@ targeted conflict resolutions have the additional contract documented below.
    after the command, so it is accurate even if a post-commit hook moved HEAD
    again. If Git fails but HEAD moved anyway, or if HEAD cannot be confirmed, the
    result is `mutationUnverified` rather than a plain failure.
-- Amend runs `git commit --quiet --amend --file=-`. It permits a message-only
-  rewrite or includes the current staged index, but never unstaged content. It
-  requires an existing HEAD and revalidates the expected HEAD OID, symbolic ref,
-  and status fingerprint under the common-directory mutation lock immediately
-  before Git runs. A mismatch already visible then returns `staleOperation`; the
-  check is not an atomic compare-and-swap against external Git before the commit
-  subprocess acquires Git's own locks. Hooks, signing, cleanup,
+- Amend runs `git commit --quiet --amend --file=-` by default: the message is
+  rewritten and the current staged index is folded into the new commit, never
+  unstaged content. It requires an existing HEAD and revalidates the expected HEAD OID,
+  symbolic ref, and status fingerprint under the common-directory mutation lock
+  immediately before Git runs. A mismatch already visible then returns
+  `staleOperation`; the check is not an atomic compare-and-swap against external Git
+  before the commit subprocess acquires Git's own locks. Hooks, signing, cleanup,
   message limits, uncertain outcomes, and the no-retry rule are the same as for a
-  new commit.
+  new commit. Two optional booleans, both defaulting to `false` and fully independent
+  (the existing composer sends neither and keeps exactly these semantics):
+  - `messageOnly` adds `--only` with no paths:
+    `git commit --quiet --amend --only --file=-`. Git ignores the index, so the new
+    commit keeps the old tree and parents (root and merge commits included), and
+    staged, partially staged and working-tree changes are all left exactly as they
+    were. Hooks and signing still run.
+  - `requireUnpushed` refuses with `pushedCommit` when a known remote-tracking ref
+    contains the HEAD being amended. The check (`for-each-ref --contains … refs/remotes`)
+    runs under the same mutation lock after the stale checks and before Git runs; a
+    failed query is an error, not permission. It reads local refs only, which are not
+    proof about the remote, so the message says to fetch.
+  The inline message editor sends both `true`.
 - Writes get a 120-second deadline of their own (hooks and signing are
   interactive-speed work) instead of the 60-second read request budget; checks
   around them get 30 seconds. A write that is abandoned — timeout, output limit,
@@ -216,13 +324,24 @@ targeted conflict resolutions have the additional contract documented below.
   reconcile from `repository_state`/`repository_status` after every outcome.
 - Error codes for writes: `invalidHandle`, `invalidRequest`, `invalidPath`,
   `tooManyPaths`, `bareRepository`, `operationInProgress`, `indexLocked`,
-  `unresolvedConflict`, `unresolvedHead`, `nothingStaged`, `git` (Git exited
+  `unresolvedConflict`, `unresolvedHead`, `nothingStaged`, `pushedCommit` (amend with
+  `requireUnpushed` found a containing remote-tracking ref), `staleOperation` (discard review
+  out of date), `openRefused`, `notFound`, `unsupported`, `openExternal`, `git` (Git exited
   non-zero: hook rejection, missing identity, signing failure, ignored or
   unmatched paths), `mutationUnverified`, plus the shared `unsupportedEncoding`,
   `inputLimit`, `worker` and process codes.
 - Mutations do not invalidate history generations themselves; committing changes
   refs, so the existing state fingerprint already forces the frontend to start a
   new walk.
+- Every Git write run through `Repository::write` or `write_commit` (stage,
+  unstage, commit, hunks, fetch, pull, push, graph operations) emits a
+  `git_command` event after it finishes: `{command, stdin, success, code, millis}`.
+  `command` is `git` plus the arguments without `-c` configuration overrides, so
+  credential-helper and askpass wiring never reaches the activity log. `stdin` is
+  the UTF-8 text fed to Git (NUL-separated pathspecs become lines, commit and
+  merge messages are verbatim) or `null`; `git apply` patches are file content
+  and are never reported. The environment is not included. Reads and clone are
+  not reported.
 
 ## Repository cloning
 
@@ -296,19 +415,33 @@ for a selected connected account. PR creation is explicit and does not push.
   a local per-app askpass bridge when those cannot supply credentials. Gitty
   keeps answers in memory only. A cancelled or expired prompt fails the helper,
   and a prompt has a 90-second response deadline within Git's write deadline.
-  WSL Git cannot use the native askpass bridge: its scripts cannot run inside
-  the distribution. Explicit WSL fetch/pull/push instead set
-  `credential.interactive=true`, so a credential helper with its own sign-in
-  window (typically Windows Git Credential Manager reached through WSL interop)
-  can re-authenticate. Terminal prompts, askpass and SSH passphrase prompts stay
-  disabled; background fetch remains fully noninteractive. Failed explicit
-  actions explain this. No user credential is embedded in a Git argument;
+  On Windows, explicit WSL fetch/pull/push can use a per-operation scoped askpass
+  bridge when `wslpath` translates the Gitty executable for Windows interop.
+  If translation fails (or no askpass registry is available), the helper-UI
+  fallback sets `credential.interactive=true`, so a credential helper with its
+  own sign-in window (typically Windows Git Credential Manager reached through
+  WSL interop) can re-authenticate. Terminal prompts remain disabled. The WSL
+  bridge inherits SSH `BatchMode=yes` even though it sets `SSH_ASKPASS`;
+  interactive SSH passphrase support is not established. Without the bridge,
+  askpass remains disabled. Background fetch remains fully noninteractive. Failed
+  explicit actions explain this. No user credential is embedded in a Git argument;
   ad-hoc prompt answers are not retained, while connected account tokens remain
   in the OS credential store until disconnected.
 - The frontend auto-fetches only the focused tab of a visible window: when a
   repository opens, when its tab or the window regains focus, and on a 30-second
   check, at most once per five minutes. Explicit fetch and pull reset that clock.
   Background fetch failures appear as a toolbar fetch status, not an error banner.
+- Pull (`RemoteAction::Pull`) no longer requires an entirely clean worktree.
+  Fast-forward and merge pulls preserve existing working changes whenever Git can
+  safely carry them, while `--no-overwrite-ignore` and Git's untracked collision
+  checks protect untracked and ignored files from being overwritten. If incoming
+  changes conflict with uncommitted local work, Git refuses the integration with
+  its path-specific explanation. Rebase pulls (`PullMode::Rebase`) refuse tracked
+  staged or unstaged changes (`dirtyWorktree`), while allowing untracked files
+  provided they do not collide with incoming commits (`protect_untracked`).
+  No automatic stashing is performed. Callers refresh repository state on every
+  outcome, and conflicts between local commits and incoming commits leave the
+  operation in progress for existing conflict controls.
 
 ## Graph operations and full conflict editor
 
@@ -338,12 +471,23 @@ remote's symbolic `HEAD` alias. These reads do not fetch or contact remotes.
   working bytes. Changed expectations return `staleOperation` before writing.
   This serializes Gitty sessions, not external Git processes: Git's own locks
   remain authoritative and an external change can still race a subprocess.
-- New actions require a clean worktree/index, including no untracked files, and
-  no in-progress operation. Bare repositories are rejected. Gitty never forces,
+- New actions require no in-progress operation. Branch creation and merges allow
+  local changes that Git can safely preserve; other new actions require a clean
+  worktree/index, including no untracked files (except carrying a branch switch,
+  described below). Bare repositories are rejected. Gitty never forces,
   automatically stashes, removes locks or automatically retries writes.
 - Branch creation resolves the start point to a commit; checkout is optional.
-  Switching accepts local branches only (`switch --no-guess`). Merges target the
+  Creation without checkout leaves local changes untouched; checkout carries
+  staged/unstaged/untracked work when Git can preserve it, refusing overwrites.
+  Switching accepts local branches only (`switch --no-guess`). `switchBranch`
+  with `carryChanges: true` skips the clean-worktree requirement: Git's plain
+  switch carries staged/unstaged work, and `--merge` is used only when the target
+  changes a tracked path that has local changes, so conflicts return as an
+  `OperationResult` with `operation.conflicts` for the conflict editor (this can
+  restage merged paths). Untracked/ignored obstructions are still refused by Git. Merges target the
   current local branch with explicit `--ff` or `--no-ff`, and `--no-edit`.
+  Git preserves unrelated local changes and refuses changes that would be
+  overwritten or ordinary staged changes that would enter a true merge commit.
   Switch/merge refuse ignored-file overwrites. Rebase/cherry-pick preflight
   destination/replay trees, including queued continuation steps, for obstructing
   ignored or untracked files.
@@ -504,4 +648,4 @@ the browser already requires; it is not covered by the macOS suite. Graph
 operations, regular-file conflict resolution, hunk staging, stashes, remote
 operations, amend, and cloning are described above. Line staging and a scoped
 WSL askpass bridge have local tests; Windows/WSL runtime checks remain open.
-The current suite includes 137 passing library tests and two binary tests on macOS.
+The current suite includes 189 passing library tests (one ignored) and two binary tests on macOS. One signing test, `operations_unsupported_state_bare_and_signing_errors`, depends on the machine's global Git configuration: a global `gpg.format =` with an empty value makes Git abort while reading configuration, which no repository-local setting can override, so run it with `GIT_CONFIG_GLOBAL=/dev/null` on such a machine.

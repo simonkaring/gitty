@@ -60,10 +60,13 @@ pub struct CommitSummary {
     pub timestamp: i64,
 }
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommitDetail {
     #[serde(flatten)]
     pub summary: CommitSummary,
     pub body: String,
+    pub can_edit_message: bool,
+    pub edit_disabled_reason: Option<String>,
 }
 /// The commit that HEAD points at after a successful `repository_create_commit`,
 /// which is the commit Git created unless a post-commit hook moved HEAD again.

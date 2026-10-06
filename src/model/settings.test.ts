@@ -20,7 +20,7 @@ describe('local preferences', () => {
     expect(store.getItem('gitty:theme')).toBe('dark');
   });
   it('keeps corrupt and future stored data untouched and reports fallback', () => {
-    for (const value of ['{broken', JSON.stringify({ ...DEFAULT_SETTINGS, version: 2 }), JSON.stringify({ ...DEFAULT_SETTINGS, diffWrap: 'yes' })]) {
+    for (const value of ['{broken', JSON.stringify({ ...DEFAULT_SETTINGS, version: 2 }), JSON.stringify({ ...DEFAULT_SETTINGS, diffWrap: 'yes' }), JSON.stringify({ ...DEFAULT_SETTINGS, authorAvatarMode: 'remote' })]) {
       const store = storage({ [SETTINGS_KEY]: value });
       expect(readSettings(store).error).toBeTruthy();
       expect(readSettings(store).settings).toEqual(DEFAULT_SETTINGS);
@@ -44,6 +44,16 @@ describe('local preferences', () => {
     expect(settings.historyColumns).toEqual(DEFAULT_SETTINGS.historyColumns);
     expect(settings.commitProfiles).toEqual([]);
     expect(settings.repositoryCommitProfiles).toEqual({});
+    expect(settings.authorAvatarMode).toBe('initials');
+  });
+  it('preserves saved preferences while migrating avatar mode and persists its selection', () => {
+    const older = { ...DEFAULT_SETTINGS, themeId: 'dracula', diffWrap: true } as any;
+    delete older.authorAvatarMode;
+    const store = storage({ [SETTINGS_KEY]: JSON.stringify(older) });
+    const migrated = readSettings(store).settings;
+    expect(migrated).toMatchObject({ themeId: 'dracula', diffWrap: true, authorAvatarMode: 'initials' });
+    expect(persistSettings(store, { ...migrated, authorAvatarMode: 'gravatar' })).toBeNull();
+    expect(readSettings(store).settings.authorAvatarMode).toBe('gravatar');
   });
   it('saves profiles and per-worktree selections without changing other settings', () => {
     const store = storage();

@@ -1,15 +1,30 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { Commit } from './types';
 import { demoInvoke } from './demoBackend';
-import type { CommitSummary, DiffSpec, HistoryPage, RepositoryState, RepositoryStatus, StatusEntry } from './repository';
+import type { CommitSummary, DiffSpec, HistoryPage, RepositorySnapshot, RepositoryState, RepositoryStatus, StatusEntry } from './repository';
+import type { OperationState } from './operations';
+
+import { recordCommandEnd, recordCommandStart } from './activity';
 
 let demoMode = false;
 /** While on, handle-less calls (open, recents, pickers) go to the in-memory demo backend. */
 export function setDemoMode(on: boolean) { demoMode = on; }
 export const isDemoHandle = (handle: unknown) => typeof handle === 'string' && handle.startsWith('demo:');
-/** Session calls route by handle, so a pane closing after a mode switch still reaches the backend that owns it. */
-export const native = <T,>(command: string, args: Record<string, unknown> = {}): Promise<T> =>
+const dispatch = <T,>(command: string, args: Record<string, unknown> = {}): Promise<T> =>
   ('handle' in args ? isDemoHandle(args.handle) : demoMode) ? demoInvoke(command, args) as Promise<T> : invoke<T>(command, args);
+/** Session calls route by handle, so a pane closing after a mode switch still reaches the backend that owns it. */
+export const native = async <T,>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
+  const activityId = recordCommandStart(command, args);
+  const start = performance.now();
+  try {
+    const result = await dispatch<T>(command, args);
+    recordCommandEnd(activityId, 'success', performance.now() - start);
+    return result;
+  } catch (error) {
+    recordCommandEnd(activityId, 'error', performance.now() - start, errorMessage(error));
+    throw error;
+  }
+};
 export function errorMessage(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'message' in error) return String(error.message);
   return String(error);
@@ -37,6 +52,7 @@ export function appendUnique(current: CommitSummary[], next: CommitSummary[]) {
 export interface NativeSnapshot {
   state: RepositoryState;
   status: RepositoryStatus;
+  operation: OperationState;
   commits: CommitSummary[];
   cursor: string | null;
   generation: string;
@@ -53,11 +69,20 @@ export function validateHistory(commits: CommitSummary[]) {
   }
 }
 
-/** A generation is opaque, not a state fingerprint. Bracket its creation with live
- * state reads and only publish the entire snapshot after HEAD/refs agree. */
+/** One `repository_snapshot` call reads state, status and operation state together
+ * (the backend retries until they agree). A generation is opaque, not a state
+ * fingerprint: when history has to be walked, bracket the walk with a live state
+ * read and only publish once refs agree. */
 export async function readNativeSnapshot(handle: string, options: {
   previous?: Pick<NativeSnapshot, 'state' | 'commits' | 'cursor' | 'generation'>;
+  /** Automatic keep-visible candidates (selection, scroll anchor). With `previous`, only IDs that were
+   * actually in the previous history are kept: an ID outside it, such as an inspector-only orphan, can never
+   * be found by walking and would otherwise make every refresh read the entire history. */
   preserve?: string[];
+  /** A confirmed rewrite of the tip, `from` -> `to` (an amend). Applied to `preserve` after the filter above
+   * so the old ID, which is in `previous`, is followed to the new commit instead of being searched for. Honored
+   * only while the refreshed HEAD is `to`, so a hook that moved HEAD again cannot cause a full-history walk. */
+  remap?: { from: string; to: string };
   current?: () => boolean;
   invoke?: typeof native;
 } = {}): Promise<NativeSnapshot> {
@@ -67,31 +92,32 @@ export async function readNativeSnapshot(handle: string, options: {
     check(); const result = await invoke<T>(command, { handle, ...args }); check(); return result;
   };
   for (let attempt = 0; attempt < 3; attempt++) {
-    const before = await call<RepositoryState>('repository_state');
-    const status = before.session.bare
-      ? { entries: [], head: before.session.head, headRef: before.session.headRef, fingerprint: 'bare' }
-      : await call<RepositoryStatus>('repository_status');
-    if (status.head !== before.session.head || status.headRef !== before.session.headRef) continue;
-    let commits = options.previous?.commits ?? [];
-    let cursor = options.previous?.cursor ?? null;
-    let generation = options.previous?.generation ?? '';
-    if (!options.previous || before.fingerprint !== options.previous.state.fingerprint) {
-      commits = []; cursor = null; generation = '';
-      const keep = new Set((options.preserve ?? []).filter(id => id && id !== WORKING_ID));
-      const count = Math.max(200, options.previous?.commits.length ?? 0);
-      do {
-        const page: HistoryPage = await call<HistoryPage>('repository_history', { cursor, limit: 200, query: {} });
-        if (generation && page.generation !== generation) throw new Error('History generation changed during refresh. Retry.');
-        if (cursor && cursor === page.cursor) throw new Error('History cursor did not advance. Refresh and retry.');
-        generation = page.generation;
-        commits = appendUnique(commits, page.commits); cursor = page.cursor;
-        page.commits.forEach(commit => keep.delete(commit.id));
-      } while (cursor && (commits.length < count || keep.size > 0));
+    const { state: before, status, operation } = await call<RepositorySnapshot>('repository_snapshot');
+    if (options.previous && before.fingerprint === options.previous.state.fingerprint) {
+      validateHistory(options.previous.commits);
+      return { state: before, status, operation, commits: options.previous.commits, cursor: options.previous.cursor, generation: options.previous.generation };
     }
+    let commits: CommitSummary[] = [];
+    let cursor: string | null = null;
+    let generation = '';
+    const known = options.previous && new Set(options.previous.commits.map(commit => commit.id));
+    const remap = options.remap && before.session.head === options.remap.to ? options.remap : undefined;
+    const keep = new Set((options.preserve ?? [])
+      .filter(id => id && id !== WORKING_ID && (!known || known.has(id)))
+      .map(id => remap && id === remap.from ? remap.to : id));
+    const count = Math.max(200, options.previous?.commits.length ?? 0);
+    do {
+      const page: HistoryPage = await call<HistoryPage>('repository_history', { cursor, limit: 200, query: {} });
+      if (generation && page.generation !== generation) throw new Error('History generation changed during refresh. Retry.');
+      if (cursor && cursor === page.cursor) throw new Error('History cursor did not advance. Refresh and retry.');
+      generation = page.generation;
+      commits = appendUnique(commits, page.commits); cursor = page.cursor;
+      page.commits.forEach(commit => keep.delete(commit.id));
+    } while (cursor && (commits.length < count || keep.size > 0));
     const after = await call<RepositoryState>('repository_state');
     if (before.fingerprint !== after.fingerprint || status.head !== after.session.head || status.headRef !== after.session.headRef) continue;
     validateHistory(commits);
-    return { state: after, status, commits, cursor, generation };
+    return { state: after, status, operation, commits, cursor, generation };
   }
   throw new Error('Repository kept changing during refresh. Showing the last consistent snapshot; retry when changes settle.');
 }

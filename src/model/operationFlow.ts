@@ -1,22 +1,11 @@
-import { native, errorMessage, readNativeSnapshot } from './native';
+import { native, errorMessage } from './native';
 import type { GitAction, OperationRequest, OperationState } from './operations';
 import type { RepositoryState } from './repository';
 import { actionReason } from './operationUi';
 import type { MutationOutcome } from './workflow';
 
-/** Install history, status and operation state together. A read-only retry is
- * safe when another Git process changes the operation during the snapshot. */
-export async function readOperationSnapshot(handle: string, options: Parameters<typeof readNativeSnapshot>[1], invoke = native, read = readNativeSnapshot) {
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (options?.current && !options.current()) throw new Error('Repository session changed.');
-    const before = await invoke<OperationState>('repository_operation_state', { handle });
-    const snapshot = await read(handle, options);
-    const operation = await invoke<OperationState>('repository_operation_state', { handle });
-    if (options?.current && !options.current()) throw new Error('Repository session changed.');
-    if (before.fingerprint === operation.fingerprint) return { ...snapshot, operation };
-  }
-  throw new Error('Repository operation kept changing during refresh. Refresh again.');
-}
+/** Operation state without its fingerprint, which also covers status and index and so moves on every stage. */
+export const operationContent = (operation: OperationState) => JSON.stringify({ ...operation, fingerprint: '' });
 
 /** Capture once at review. Execute must pass this request verbatim. */
 export async function captureOperation(handle: string, action: GitAction, invoke = native): Promise<OperationRequest> {

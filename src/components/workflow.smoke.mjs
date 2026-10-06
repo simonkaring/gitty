@@ -23,21 +23,21 @@ try {
   await sidebarResize.focus(); await sidebarResize.press('ArrowRight');
   assert.equal(await sidebarResize.getAttribute('aria-valuenow'), '260');
   await sidebarResize.press('ArrowLeft');
-  const inspectorResize = demo.getByRole('separator', { name: 'Resize commit inspector' });
+  const inspectorResize = demo.getByRole('separator', { name: 'Resize inspector' });
   await inspectorResize.focus(); await inspectorResize.press('ArrowLeft');
    assert.equal(await inspectorResize.getAttribute('aria-valuenow'), '420');
    await inspectorResize.press('ArrowRight');
    assert.equal(await inspectorResize.getAttribute('aria-valuenow'), '400');
-  await demo.getByRole('button', { name: /Working changes/ }).click();
+  await demo.getByRole('option', { name: /^Working changes/ }).click();
   await demo.getByRole('textbox', { name: /Summary/ }).fill('feat: review working changes');
   await demo.getByRole('textbox', { name: /Description/ }).fill('Compose a clear commit message.');
   await demo.getByRole('button', { name: 'Staged: src/styles/tokens.css', exact: true }).click();
-  await demo.getByRole('region', { name: 'Working file diff' }).getByText('  --row-height: 48px;', { exact: false }).waitFor();
+  await demo.getByRole('region', { name: 'Diff for src/styles/tokens.css' }).getByText('--row-height: 48px;', { exact: false }).first().waitFor();
   await screenshot(demo, 'gitty-working-light');
    await demo.getByRole('button', { name: 'Open settings', exact: true }).click();
    await demo.getByRole('dialog', { name: 'Settings', exact: true }).waitFor();
    await demo.getByRole('combobox', { name: 'Theme', exact: true }).selectOption('gitty-dark');
-   await demo.getByRole('button', { name: 'Close settings', exact: true }).click();
+   await demo.getByRole('button', { name: 'Close dialog', exact: true }).click();
    assert.equal(await demo.locator('html').getAttribute('data-theme'), 'dark');
    assert.equal(await demo.getByRole('textbox', { name: /Summary/ }).inputValue(), 'feat: review working changes');
    assert.equal(await demo.evaluate(() => JSON.parse(localStorage.getItem('gitty:settings')).themeId), 'gitty-dark');
@@ -45,12 +45,12 @@ try {
   await demo.getByRole('button', { name: 'Commit staged changes' }).click();
   await demo.getByText(/Created commit/).waitFor();
   assert.equal(await demo.getByRole('textbox', { name: /Summary/ }).inputValue(), '');
-  await demo.getByRole('button', { name: 'History', exact: true }).click();
+  // History is always on screen beside the inspector.
   await demo.getByRole('option', { name: /^feat: review working changes/ }).waitFor();
   await screenshot(demo, 'gitty-history-dark');
   await demo.setViewportSize({ width: 390, height: 844 });
-  await demo.getByRole('button', { name: 'Toggle repositories sidebar' }).click();
-  await demo.getByRole('button', { name: /Working changes/ }).click();
+  await demo.getByRole('button', { name: 'Toggle references sidebar' }).click();
+  // At this width the working-changes inspector (still open) covers the history, so there is nothing to click first.
   await screenshot(demo, 'gitty-working-mobile');
   assert.equal(await demo.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await demo.getByRole('textbox', { name: /Summary/ }).fill('Mobile draft');
@@ -65,8 +65,14 @@ try {
     const f = window.fixture = { calls: [], head: 'c0', version: 0, bare: false, conflict: false, holdWrite: false, holdRefresh: false, failRefresh: false, commitMode: 'success', entries: [entry('src/partial.ts', 'M', 'M'), entry('src/modified.ts', '.', 'M'), entry('new.md', '?', '?', true)] };
     const commit = (id, parents = []) => ({ id, parents, subject: id === 'c0' ? 'feat: readable repository history' : 'feat: commit staged changes', body: 'Review the changes in context.', author: 'Alex Morgan', email: 'alex@example.test', timestamp: 1700000000 });
     const state = () => ({ session: { handle: 'fixture-session', name: 'gitty', root: '/workspace/gitty', location: { kind: 'native', path: '/workspace/gitty' }, gitDir: '/workspace/gitty/.git', commonDir: '/workspace/gitty/.git', head: f.head, headRef: 'refs/heads/main', shallow: false, bare: f.bare, linkedWorktree: false }, refs: [{ name: 'main', fullName: 'refs/heads/main', commitId: f.head, kind: 'local' }], remotes: ['origin'], fingerprint: `${f.head}:${f.bare}` });
-    window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
+    let callbackId = 0;
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+    window.__TAURI_INTERNALS__ = { metadata: { currentWindow: { label: 'main' }, currentWebview: { windowLabel: 'main', label: 'main' } }, transformCallback: () => ++callbackId, unregisterCallback: () => {}, invoke: async (command, args) => {
       f.calls.push({ command, args });
+      if (command.startsWith('plugin:webview|') || command.startsWith('plugin:window|')) return;
+      if (command === 'plugin:event|listen') return 1;
+      if (command === 'plugin:event|unlisten') return;
+      if (command === 'repository_snapshot') { const [state, status, operation] = await Promise.all(['repository_state', 'repository_status', 'repository_operation_state'].map(name => window.__TAURI_INTERNALS__.invoke(name, args))); return { state, status, operation }; }
       if (command === 'repository_recent') return [{ kind: 'native', path: '/workspace/gitty' }];
       if (command === 'wsl_distributions') return [];
       if (command === 'repository_open' || command === 'repository_state') return state();
@@ -105,23 +111,20 @@ try {
     } };
   });
   // Repository tabs persist across reload: after the first `open()`, a
-  // reload reopens the same tab automatically, so the empty-state "Open
-  // repository" welcome button (only rendered with zero tabs) is gone.
+  // reload reopens the same tab automatically, so the start tab's recent
+  // repository list (only rendered without an open repository) is gone.
   const open = async () => {
-    const welcomeButton = page.getByRole('button', { name: 'Open repository', exact: true });
-    if (await welcomeButton.count()) {
-      await welcomeButton.click();
-      await page.getByRole('button', { name: 'Native /workspace/gitty', exact: true }).click();
-    }
+    const recent = page.getByRole('button', { name: /\/workspace\/gitty$/ });
+    if (await recent.count()) await recent.click();
     await page.getByRole('listbox', { name: 'Commit history' }).waitFor();
   };
   await page.goto(url); await open();
   await screenshot(page, 'gitty-native-history');
-  await page.getByRole('button', { name: /Working changes/ }).click();
+  await page.getByRole('option', { name: /^Working changes/ }).click();
   await page.getByRole('textbox', { name: /Summary/ }).fill('feat: commit staged changes');
   await page.getByRole('textbox', { name: /Description/ }).fill('Keep my draft through failures.');
   await page.reload(); await open();
-  await page.getByRole('button', { name: /Working changes/ }).click();
+  await page.getByRole('option', { name: /^Working changes/ }).click();
   assert.equal(await page.getByRole('textbox', { name: /Summary/ }).inputValue(), 'feat: commit staged changes');
   assert.equal(await page.getByRole('textbox', { name: /Description/ }).inputValue(), 'Keep my draft through failures.');
   await page.getByRole('checkbox', { name: 'Amend last commit' }).check();
@@ -131,42 +134,45 @@ try {
   await page.getByRole('checkbox', { name: 'Amend last commit' }).uncheck();
   assert.equal(await page.getByRole('textbox', { name: /Summary/ }).inputValue(), 'feat: commit staged changes', 'ordinary draft is restored after leaving amend mode');
   await page.getByRole('button', { name: 'Staged: src/partial.ts', exact: true }).click();
-  await page.getByText('HEAD → index · included in your next commit', { exact: true }).waitFor();
+  // Working diffs open in the main pane; the preview request names the side being compared.
+  await page.getByRole('region', { name: 'Diff for src/partial.ts' }).waitFor();
+  await page.waitForFunction(kind => window.fixture.calls.filter(call => call.command === 'repository_diff').at(-1)?.args.spec.kind === kind, 'staged');
   await page.getByRole('button', { name: 'Unstaged: src/partial.ts', exact: true }).click();
-  await page.getByText('Index → working tree · not yet staged', { exact: true }).waitFor();
+  await page.waitForFunction(kind => window.fixture.calls.filter(call => call.command === 'repository_diff').at(-1)?.args.spec.kind === kind, 'unstaged');
   await screenshot(page, 'gitty-native-working');
   // A late preview for a previously selected file must not replace the new one.
   await page.evaluate(() => { window.fixture.holdDiff = 'src/modified.ts'; });
   await page.getByRole('button', { name: 'Unstaged: src/modified.ts', exact: true }).click();
   await page.waitForFunction(() => window.fixture.diffWaiting);
   await page.getByRole('button', { name: 'Untracked: new.md', exact: true }).click();
-  await page.getByRole('region', { name: 'Working file diff' }).getByText('// new.md', { exact: false }).waitFor();
+  await page.getByRole('region', { name: 'Diff for new.md' }).getByText('// new.md', { exact: false }).waitFor();
   await page.evaluate(() => { window.fixture.holdDiff = ''; window.fixture.releaseDiff(); });
   await page.waitForFunction(() => !window.fixture.diffWaiting);
-  assert.equal(await page.getByRole('region', { name: 'Working file diff' }).getByText('// src/modified.ts', { exact: false }).count(), 0);
+  assert.equal(await page.getByRole('region', { name: 'Diff for src/modified.ts' }).count(), 0);
+  assert.equal(await page.getByText('// src/modified.ts', { exact: false }).count(), 0);
 
   // Two DOM clicks in the same turn must produce just one IPC mutation.
   await page.evaluate(() => { window.fixture.holdWrite = true; });
-  await page.getByRole('button', { name: 'Stage all', exact: true }).evaluate(button => { button.click(); button.click(); });
+  await page.getByRole('button', { name: /^Stage all/ }).evaluate(button => { button.click(); button.click(); });
   await page.waitForFunction(() => window.fixture.writeWaiting);
   assert.equal(await page.getByRole('button', { name: 'Commit staged changes' }).isDisabled(), true);
   // "Open repository…" opens an independent tab (its own session/handle) and
   // must stay enabled during another tab's in-flight write: opening a new
   // repository no longer tears down the tab that is mid-mutation.
-  assert.equal(await page.getByRole('button', { name: 'Open repository…', exact: true }).isDisabled(), false);
+  assert.equal(await page.getByRole('button', { name: 'New tab', exact: true }).isDisabled(), false);
   assert.equal(await page.evaluate(() => window.fixture.calls.filter(call => call.command === 'repository_stage').length), 1);
   assert.deepEqual(await page.evaluate(() => window.fixture.calls.find(call => call.command === 'repository_stage').args.paths), ['src/partial.ts', 'src/modified.ts', 'new.md']);
   await page.evaluate(() => { window.fixture.holdRefresh = true; window.fixture.holdWrite = false; window.fixture.releaseWrite(); });
   await page.waitForFunction(() => window.fixture.refreshWaiting);
-  assert.equal(await page.getByRole('button', { name: 'Unstage all', exact: true }).isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: /^Unstage all/ }).isDisabled(), true);
   await page.evaluate(() => { window.fixture.holdRefresh = false; window.fixture.releaseRefresh(); });
   await page.getByText('Selected changes staged.', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: /^Staged: / }).count(), 3);
   await page.getByRole('button', { name: 'Unstage src/partial.ts', exact: true }).click();
   await page.getByText('Selected changes unstaged.', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Unstaged: src/partial.ts', exact: true }).waitFor();
-  await page.getByRole('button', { name: 'Unstage all', exact: true }).click();
-  await page.waitForFunction(() => document.querySelector('.composer-heading > span')?.textContent === '0 staged paths');
+  await page.getByRole('button', { name: /^Unstage all/ }).click();
+  await page.waitForFunction(() => document.querySelector('.composer-heading > span')?.textContent === '0 staged');
   assert.equal(await page.getByRole('button', { name: 'Commit staged changes' }).isDisabled(), true);
   await page.getByRole('button', { name: 'Stage src/partial.ts', exact: true }).click();
   await page.getByText('Selected changes staged.', { exact: true }).waitFor();
@@ -182,9 +188,8 @@ try {
   await page.getByRole('alert').filter({ hasText: 'Commit response was interrupted' }).waitFor();
   assert.equal(await page.getByRole('textbox', { name: /Summary/ }).inputValue(), 'feat: commit staged changes');
   assert.equal(await page.evaluate(() => window.fixture.calls.filter(call => call.command === 'repository_create_commit').length), 2);
-  await page.getByRole('button', { name: 'History', exact: true }).click();
-  await page.getByRole('option', { name: /^feat: commit staged changes/ }).waitFor();
-  await page.getByRole('button', { name: /Working changes/ }).click();
+  await page.getByRole('option', { name: /^feat: commit staged changes/ }).first().waitFor();
+  await page.getByRole('option', { name: /^Working changes/ }).click();
 
   // An unconfirmed refresh blocks further writes until an explicit read succeeds.
   await page.getByRole('button', { name: 'Stage new.md', exact: true }).click();
@@ -196,17 +201,18 @@ try {
   // The failed-refresh guard must survive hiding/showing the same keyed session,
   // and must guard the handler as well as the disabled submit button.
   const writesBeforeBlockedSubmit = await page.evaluate(() => window.fixture.calls.filter(call => ['repository_stage', 'repository_unstage', 'repository_create_commit'].includes(call.command)).length);
-  await page.getByRole('button', { name: 'History', exact: true }).click();
-  await page.getByRole('button', { name: /Working changes/ }).click();
-  assert.equal(await page.locator('.composer-heading > span').textContent(), '1 staged path');
+  // Inspect a commit and come back: the working inspector remounts on the same keyed session.
+  await page.getByRole('option', { name: /^feat: commit staged changes/ }).first().click();
+  await page.getByRole('option', { name: /^Working changes/ }).click();
+  assert.equal(await page.locator('.composer-heading > span').textContent(), '1 staged');
   assert.equal(await page.getByRole('button', { name: 'Commit staged changes' }).isDisabled(), true);
   await page.getByRole('textbox', { name: /Summary/ }).press('Enter');
   await page.getByRole('form', { name: 'Commit composer' }).evaluate(form => form.requestSubmit());
-  await page.getByRole('button', { name: 'Stage all', exact: true }).evaluate(button => button.click());
-  await page.getByRole('button', { name: 'Unstage all', exact: true }).evaluate(button => button.click());
+  await page.getByRole('button', { name: /^Stage all/ }).evaluate(button => button.click());
+  await page.getByRole('button', { name: /^Unstage all/ }).evaluate(button => button.click());
   assert.equal(await page.evaluate(() => window.fixture.calls.filter(call => ['repository_stage', 'repository_unstage', 'repository_create_commit'].includes(call.command)).length), writesBeforeBlockedSubmit);
   await page.evaluate(() => { window.fixture.failRefresh = false; window.fixture.commitMode = 'success'; });
-  await page.getByRole('button', { name: 'Refresh repository state', exact: true }).click();
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
   await page.getByRole('button', { name: 'Staged: src/modified.ts', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Commit staged changes' }).click();
   await page.getByText(/Created commit/).waitFor();
@@ -223,14 +229,14 @@ try {
     }, renameOnly);
     await page.getByRole('button', { name: 'Refresh changes', exact: true }).click();
     await page.getByRole('button', { name: 'Staged: new.ts', exact: true }).waitFor();
-    await page.waitForFunction(count => document.querySelector('.composer-heading > span')?.textContent === `${count} staged ${count === 1 ? 'path' : 'paths'}`, renameOnly ? 1 : 3);
+    await page.waitForFunction(count => document.querySelector('.composer-heading > span')?.textContent === `${count} staged`, renameOnly ? 1 : 3);
   };
   const lastPaths = command => page.evaluate(name => window.fixture.calls.filter(call => call.command === name).at(-1).args.paths, command);
   await resetRenameFixture(true);
   await page.getByRole('button', { name: 'Stage new.ts', exact: true }).click();
   await page.getByText('Selected changes staged.', { exact: true }).waitFor();
   assert.deepEqual(await lastPaths('repository_stage'), ['new.ts']);
-  assert.equal(await page.locator('.composer-heading > span').textContent(), '1 staged path');
+  assert.equal(await page.locator('.composer-heading > span').textContent(), '1 staged');
   await page.getByRole('button', { name: 'Unstage new.ts', exact: true }).click();
   await page.getByText('Selected changes unstaged.', { exact: true }).waitFor();
   assert.deepEqual(await lastPaths('repository_unstage'), ['old.ts', 'new.ts']);
@@ -239,16 +245,16 @@ try {
   await page.getByText('Selected changes unstaged.', { exact: true }).waitFor();
   assert.deepEqual(await lastPaths('repository_unstage'), ['copy.ts']);
   await page.getByRole('button', { name: 'Staged: source.ts', exact: true }).waitFor();
-  assert.equal(await page.locator('.composer-heading > span').textContent(), '2 staged paths');
+  assert.equal(await page.locator('.composer-heading > span').textContent(), '2 staged');
   await resetRenameFixture();
-  await page.getByRole('button', { name: 'Stage all', exact: true }).click();
+  await page.getByRole('button', { name: /^Stage all/ }).click();
   await page.getByText('Selected changes staged.', { exact: true }).waitFor();
   assert.deepEqual(await lastPaths('repository_stage'), ['new.ts', 'copy.ts']);
-  assert.equal(await page.locator('.composer-heading > span').textContent(), '3 staged paths');
-  await page.getByRole('button', { name: 'Unstage all', exact: true }).click();
+  assert.equal(await page.locator('.composer-heading > span').textContent(), '3 staged');
+  await page.getByRole('button', { name: /^Unstage all/ }).click();
   await page.getByText('Selected changes unstaged.', { exact: true }).waitFor();
   assert.deepEqual(await lastPaths('repository_unstage'), ['old.ts', 'new.ts', 'copy.ts', 'source.ts']);
-  assert.equal(await page.locator('.composer-heading > span').textContent(), '0 staged paths');
+  assert.equal(await page.locator('.composer-heading > span').textContent(), '0 staged');
 
   // Conflicted paths are inspectable, never included in stage-all.
   await page.evaluate(() => { window.fixture.conflict = true; window.fixture.version++; });
@@ -257,11 +263,11 @@ try {
   assert.equal(await page.getByRole('button', { name: 'Stage conflict.ts', exact: true }).count(), 0);
   assert.equal(await page.getByRole('button', { name: 'Commit staged changes' }).isDisabled(), true);
   await page.getByRole('button', { name: 'Conflicts: conflict.ts', exact: true }).click();
-   await page.getByText('Unresolved paths · open the conflict editor to resolve', { exact: true }).waitFor();
+   await page.getByText('Unresolved conflicts.', { exact: true }).waitFor();
   await page.evaluate(() => { window.fixture.bare = true; });
   await page.getByRole('button', { name: 'Refresh changes', exact: true }).click();
-  await page.getByText('This is a bare repository.', { exact: false }).waitFor();
-  assert.equal(await page.getByRole('button', { name: 'Stage all', exact: true }).isDisabled(), true);
+  await page.getByText('Bare repository.', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: /^Stage all/ }).isDisabled(), true);
   assert.deepEqual(errors, []);
    console.log(`Workflow browser smoke passed (mocked native IPC + demo): Settings preserves composer; draft reload; partial staging; rename/copy file/all paths and counts; duplicate clicks; write/refresh lock; merge errors; ambiguous commit; refresh recovery; blocked view-switch/keyboard/form submission; confirmed draft clear; conflicts; bare repo; mobile overflow${process.env.SCREENSHOT_DIR ? '; screenshots' : ''}.`);
 } finally { await browser.close(); await server.close(); }

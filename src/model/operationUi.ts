@@ -19,7 +19,8 @@ export function actionReason(action: GitAction, session: RepositorySession, oper
   if (action.kind === 'cherryPick') return action.commits.length ? '' : 'Choose commits in the order they should be applied.';
   if (!session.headRef) return 'Check out a local branch first.';
   const source = action.kind === 'merge' ? action.source : action.kind === 'rebase' || action.kind === 'interactiveRebase' ? action.onto : '';
-  return source && source !== session.headRef && source !== session.headRef.replace(/^refs\/heads\//, '') ? '' : 'Choose a source different from the current branch.';
+  const destination = action.kind === 'merge' ? action.destination ?? session.headRef : session.headRef;
+  return source && source !== destination && source !== destination?.replace(/^refs\/heads\//, '') ? '' : 'Choose a source different from the destination branch.';
 }
 
 /** Selection order is explicit; never infer application order from graph lanes. */

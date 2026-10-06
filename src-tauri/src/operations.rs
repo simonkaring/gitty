@@ -32,6 +32,28 @@ impl Service {
 }
 
 impl Repository {
+    pub fn branch_relation(&self, first: &str, second: &str) -> Result<(usize, usize)> {
+        let first = resolve(self.location(), first)?;
+        let second = resolve(self.location(), second)?;
+        let counts = self.check_text(&[
+            "rev-list",
+            "--left-right",
+            "--count",
+            &format!("{first}...{second}"),
+            "--",
+        ])?;
+        let mut values = counts.split_whitespace().map(str::parse::<usize>);
+        let ahead = values
+            .next()
+            .and_then(|value| value.ok())
+            .ok_or_else(|| Error::new("git", "Could not compare branch history."))?;
+        let behind = values
+            .next()
+            .and_then(|value| value.ok())
+            .ok_or_else(|| Error::new("git", "Could not compare branch history."))?;
+        Ok((ahead, behind))
+    }
+
     pub(crate) fn metadata(&self, name: &str) -> Result<Option<Vec<u8>>> {
         // Only backend constants reach this function, never IPC paths.
         let path = format!("{}/{}", self.session.git_dir, name);
@@ -68,13 +90,55 @@ impl Repository {
             }
         }
     }
-    fn optional_ref(&self, name: &str) -> Result<Option<String>> {
-        let output = self.check(&["rev-parse", "--verify", "--quiet", name])?;
-        match output.code {
-            Some(0) => Ok(Some(process::text(output.stdout)?.trim().into())),
-            Some(1) => Ok(None),
-            _ => Err(self.failed(&output)),
+    /// Resolves several names in one `cat-file --batch-check`; a name that does
+    /// not resolve is `None` rather than a failed process.
+    fn optional_refs(&self, names: &[&str]) -> Result<Vec<Option<String>>> {
+        let input = format!("{}\n", names.join("\n"));
+        let command = process::git_command(
+            self.location(),
+            &args(&["cat-file", "--batch-check=%(objectname)"]),
+        )?;
+        let output =
+            process::run_with_input_for(command, input.as_bytes(), process::CHECK_TIMEOUT, 1024)?;
+        if !output.success {
+            return Err(self.failed(&output));
         }
+        let text = process::text(output.stdout)?;
+        let lines: Vec<&str> = text.lines().collect();
+        let parse_error = || {
+            Error::new(
+                "gitParse",
+                "Unexpected reference-state response while reading the operation state",
+            )
+        };
+        if lines.len() != names.len() {
+            return Err(parse_error());
+        }
+        names
+            .iter()
+            .zip(lines)
+            .map(|(name, line)| {
+                if line == format!("{name} missing") {
+                    Ok(None)
+                } else if matches!(line.len(), 40 | 64)
+                    && line.bytes().all(|b| b.is_ascii_hexdigit())
+                {
+                    Ok(Some(line.to_string()))
+                } else {
+                    Err(parse_error())
+                }
+            })
+            .collect()
+    }
+    fn operation_pseudo_refs(&self) -> Result<[Option<String>; 4]> {
+        self.optional_refs(&[
+            "MERGE_HEAD",
+            "CHERRY_PICK_HEAD",
+            "REVERT_HEAD",
+            "REBASE_HEAD",
+        ])?
+        .try_into()
+        .map_err(|_| Error::new("gitParse", "Unexpected reference-state response"))
     }
     fn operation_metadata(&self) -> Result<OperationMetadata> {
         let mut metadata = Vec::new();
@@ -114,16 +178,64 @@ impl Repository {
         Ok(metadata)
     }
     pub(crate) fn conflict_context(&self) -> Result<String> {
+        let [merge, cherry, revert, rebase] = self.operation_pseudo_refs()?;
         Ok(fingerprint((
             self.state()?.fingerprint,
             self.operation_metadata()?,
-            self.optional_ref("MERGE_HEAD")?,
-            self.optional_ref("CHERRY_PICK_HEAD")?,
-            self.optional_ref("REVERT_HEAD")?,
-            self.optional_ref("REBASE_HEAD")?,
+            merge,
+            cherry,
+            revert,
+            rebase,
         )))
     }
     pub fn operation_state(&self) -> Result<OperationState> {
+        let state = self.state()?;
+        let status = if self.session.bare {
+            None
+        } else {
+            Some(self.status()?)
+        };
+        self.operation_state_with(&state, status.as_ref())
+    }
+    /// State, status and operation state from one consistent read: the state and
+    /// status are computed once and shared, instead of once per command. Retries
+    /// when refs or HEAD move underneath the read.
+    pub fn snapshot(&self) -> Result<RepositorySnapshot> {
+        for _ in 0..3 {
+            let state = self.state()?;
+            let status = if self.session.bare {
+                RepositoryStatus {
+                    entries: vec![],
+                    head: state.session.head.clone(),
+                    head_ref: state.session.head_ref.clone(),
+                    fingerprint: "bare".into(),
+                }
+            } else {
+                self.status()?
+            };
+            if status.head != state.session.head || status.head_ref != state.session.head_ref {
+                continue;
+            }
+            let operation =
+                self.operation_state_with(&state, (!self.session.bare).then_some(&status))?;
+            if self.state()?.fingerprint == state.fingerprint {
+                return Ok(RepositorySnapshot {
+                    state,
+                    status,
+                    operation,
+                });
+            }
+        }
+        Err(Error::new(
+            "unstable",
+            "Repository kept changing during the read. Retry when changes settle.",
+        ))
+    }
+    pub(crate) fn operation_state_with(
+        &self,
+        state: &RepositoryState,
+        status: Option<&RepositoryStatus>,
+    ) -> Result<OperationState> {
         let entries = self.git_dir_entries()?;
         let metadata = self.operation_metadata()?;
         let value = |path: &str| {
@@ -133,10 +245,7 @@ impl Repository {
                 .and_then(|(_, v)| v.as_ref())
                 .map(|b| String::from_utf8_lossy(b).trim().to_string())
         };
-        let merge = self.optional_ref("MERGE_HEAD")?;
-        let cherry = self.optional_ref("CHERRY_PICK_HEAD")?;
-        let revert = self.optional_ref("REVERT_HEAD")?;
-        let rebase = self.optional_ref("REBASE_HEAD")?;
+        let [merge, cherry, revert, rebase] = self.operation_pseudo_refs()?;
         let kind = if entries.contains("BISECT_LOG") || entries.contains("rebase-apply") {
             OperationKind::Unsupported
         } else if entries.contains("rebase-merge") {
@@ -166,12 +275,6 @@ impl Repository {
             }
         } else {
             OperationKind::None
-        };
-        let state = self.state()?;
-        let status = if self.session.bare {
-            None
-        } else {
-            Some(self.status()?)
         };
         let conflicts = if self.session.bare {
             vec![]
@@ -241,7 +344,7 @@ impl Repository {
         };
         let fingerprint = fingerprint((
             &state.fingerprint,
-            status.as_ref().map(|s| &s.fingerprint),
+            status.map(|s| &s.fingerprint),
             &index,
             &all_refs,
             &metadata,
@@ -256,8 +359,8 @@ impl Repository {
             kind,
             label,
             current: value("rebase-merge/head-name")
-                .or(state.session.head_ref)
-                .or(state.session.head),
+                .or_else(|| state.session.head_ref.clone())
+                .or_else(|| state.session.head.clone()),
             incoming,
             step,
             total,
@@ -289,6 +392,28 @@ impl Repository {
             return Err(Error::new("invalidReference", "Invalid branch or tag name"));
         }
         Ok(())
+    }
+    /// True when switching HEAD to `oid` touches a tracked path that has local changes.
+    fn switch_overlaps_changes(&self, oid: &str) -> Result<bool> {
+        let dirty = self.status_entries()?.entries;
+        if !dirty.iter().any(|e| !e.untracked) {
+            return Ok(false);
+        }
+        let changed = self.check_text(&[
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            "HEAD",
+            oid,
+            "--",
+        ])?;
+        let changed: std::collections::HashSet<&str> =
+            changed.split('\0').filter(|p| !p.is_empty()).collect();
+        Ok(dirty.iter().filter(|e| !e.untracked).any(|e| {
+            changed.contains(e.path.as_str())
+                || e.old_path.as_deref().is_some_and(|p| changed.contains(p))
+        }))
     }
     pub(crate) fn protect_untracked(&self, targets: &[String]) -> Result<()> {
         // reset --hard (used internally by rebase) deletes obstructing untracked
@@ -404,7 +529,18 @@ impl Repository {
         if !control && before.kind != OperationKind::None {
             return Err(Error::new("operationInProgress", before.label));
         }
-        if !control && !self.status_entries()?.entries.is_empty() {
+        // Let Git preserve local changes or refuse overwrites for branch creation
+        // and merges, just as the pull-merge path does. No temporary stash needed.
+        let preserves_changes = matches!(
+            request.action,
+            GitAction::CreateBranch { .. }
+                | GitAction::Merge { .. }
+                | GitAction::SwitchBranch {
+                    carry_changes: true,
+                    ..
+                }
+        );
+        if !control && !preserves_changes && !self.status_entries()?.entries.is_empty() {
             return Err(Error::new("dirtyWorktree", "Commit or explicitly stash all staged, unstaged and untracked changes first. Gitty never automatically stashes."));
         }
         let mut input = Vec::new();
@@ -440,24 +576,30 @@ impl Repository {
                     a.extend(args(&["branch", "--", &name, &oid]));
                 }
             }
-            GitAction::SwitchBranch { branch } => {
+            GitAction::SwitchBranch {
+                branch,
+                carry_changes,
+            } => {
                 // The UI sends full ref names (refs/heads/x); accept short names too.
                 let branch = branch
                     .strip_prefix("refs/heads/")
                     .unwrap_or(&branch)
                     .to_string();
                 self.valid_name(&branch, "heads")?;
-                resolve(self.location(), &format!("refs/heads/{branch}"))?;
-                a.extend(args(&[
-                    "switch",
-                    "--no-overwrite-ignore",
-                    "--no-guess",
-                    "--",
-                    &branch,
-                ]));
+                let oid = resolve(self.location(), &format!("refs/heads/{branch}"))?;
+                a.extend(args(&["switch", "--no-overwrite-ignore", "--no-guess"]));
+                // Plain switch carries work Git can keep as-is. Only when the
+                // target changes a path that has local changes is a three-way
+                // merge needed (it leaves conflicts for the editor); using it
+                // otherwise would needlessly unstage unrelated staged changes.
+                if carry_changes && self.switch_overlaps_changes(&oid)? {
+                    a.push("--merge".into());
+                }
+                a.extend(args(&["--", &branch]));
             }
             GitAction::Merge {
                 source,
+                destination,
                 no_fast_forward,
             } => {
                 if state.session.head_ref.is_none() {
@@ -465,6 +607,25 @@ impl Repository {
                         "detachedHead",
                         "Switch to a local branch before merging.",
                     ));
+                }
+                if let Some(destination) = destination {
+                    let branch = destination
+                        .strip_prefix("refs/heads/")
+                        .unwrap_or(&destination);
+                    self.valid_name(branch, "heads")?;
+                    if format!("refs/heads/{branch}")
+                        != state.session.head_ref.as_deref().unwrap_or_default()
+                    {
+                        resolve(self.location(), &format!("refs/heads/{branch}"))?;
+                        let switch = args(&[
+                            "switch",
+                            "--no-overwrite-ignore",
+                            "--no-guess",
+                            "--",
+                            branch,
+                        ]);
+                        self.write(&switch, &[], &[], 0)?;
+                    }
                 }
                 let oid = resolve(self.location(), &source)?;
                 a.extend(args(&[

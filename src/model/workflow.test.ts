@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { clearSubmittedDraft, commitMessage, draftFromCommitMessage, draftKey, operationPaths, readDraft, saveDraft, writeAndRefresh } from './workflow';
+import { clearSubmittedDraft, commitMessage, discardableEntries, draftFromCommitMessage, draftKey, operationPaths, readDraft, saveDraft, writeAndRefresh } from './workflow';
 import type { RepositorySession, StatusEntry } from './repository';
 import type { native } from './native';
 import { demoCommittedFiles, demoFileDiff, demoStatus, demoWorkingFiles } from './demoWorkflow';
@@ -83,6 +83,32 @@ describe('write lifecycle', () => {
     expect(await writeAndRefresh('s', mutation, reload, () => true, invoke)).toEqual({ oid: 'rewritten-head' });
     expect(invoke).toHaveBeenCalledExactlyOnceWith('repository_amend_commit', { handle: 's', message: 'Reworded', expectedHead: 'old-head', expectedHeadRef: 'refs/heads/main', expectedStatusFingerprint: 'status-1' });
     expect(reload).toHaveBeenCalledOnce();
+  });
+  it('sends messageOnly and requireUnpushed independently and leaves them out by default', async () => {
+    const invoke = vi.fn().mockResolvedValue({ oid: 'new' }) as typeof native;
+    const base = { kind: 'amend', message: 'M', expectedHead: 'h', expectedHeadRef: 'refs/heads/main', expectedStatusFingerprint: 'f' } as const;
+    const wire = { handle: 's', message: 'M', expectedHead: 'h', expectedHeadRef: 'refs/heads/main', expectedStatusFingerprint: 'f' };
+    for (const flags of [{}, { messageOnly: true }, { requireUnpushed: true }, { messageOnly: true, requireUnpushed: true }, { messageOnly: false, requireUnpushed: true }]) {
+      await writeAndRefresh('s', { ...base, ...flags }, async () => {}, () => true, invoke);
+      expect(invoke).toHaveBeenLastCalledWith('repository_amend_commit', { ...wire, ...flags });
+    }
+    expect(vi.mocked(invoke).mock.calls[0][1]).not.toHaveProperty('messageOnly');
+    expect(vi.mocked(invoke).mock.calls[0][1]).not.toHaveProperty('requireUnpushed');
+    // Flags belong to amend only.
+    await writeAndRefresh('s', { kind: 'commit', message: 'C' }, async () => {}, () => true, invoke);
+    expect(invoke).toHaveBeenLastCalledWith('repository_create_commit', { handle: 's', message: 'C' });
+  });
+  it('gives reload the confirmed outcome before any refresh error exists, for success and failure alike', async () => {
+    const mutation = { kind: 'amend', message: 'M', expectedHead: 'old', expectedHeadRef: null, expectedStatusFingerprint: 'f' } as const;
+    const seen: unknown[] = [];
+    const reload = vi.fn(async (outcome: unknown) => { seen.push(structuredClone(outcome)); throw new Error('Refresh unavailable'); });
+    const confirmed = await writeAndRefresh('s', mutation, reload, () => true, vi.fn().mockResolvedValue({ oid: 'new' }) as typeof native);
+    expect(seen).toEqual([{ oid: 'new' }]);
+    expect(confirmed).toEqual({ oid: 'new', refreshError: 'Refresh unavailable' });
+    const refused = await writeAndRefresh('s', mutation, reload, () => true, vi.fn().mockRejectedValue({ code: 'pushedCommit', message: 'Already pushed' }) as typeof native);
+    expect(seen[1]).toEqual({ error: 'Already pushed' });
+    expect(refused).toEqual({ error: 'Already pushed', refreshError: 'Refresh unavailable' });
+    expect(refused.oid).toBeUndefined();
   });
   it('passes selected identity only to commit and amend requests', async () => {
     const invoke = vi.fn().mockResolvedValue({ oid: 'new-head' }) as typeof native;
@@ -212,5 +238,44 @@ describe('whole-file staging', () => {
     const committed = files.map(file => ({ ...file, head: file.index }));
     expect(operationPaths(demoStatus(committed, 'new-head').entries, 'unstage')).toEqual([]);
     expect(operationPaths(demoStatus(committed, 'new-head').entries, 'stage')).toHaveLength(3);
+  });
+});
+
+describe('discard', () => {
+  const entry = (path: string, indexStatus: string, worktreeStatus: string, extra: Partial<StatusEntry> = {}): StatusEntry => ({ path, oldPath: null, indexStatus, worktreeStatus, conflicted: false, untracked: false, ...extra });
+  it('sends explicit unique paths with the reviewed fingerprint, then reloads even when the write fails', async () => {
+    const invoke = vi.fn().mockRejectedValue(new Error('stale'));
+    const reload = vi.fn().mockResolvedValue(undefined);
+    const outcome = await writeAndRefresh('s', { kind: 'discard', paths: ['a', 'b', 'a'], expectedStatusFingerprint: 'fp' }, reload, () => true, invoke as typeof native);
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith('repository_discard', { handle: 's', paths: ['a', 'b'], expectedStatusFingerprint: 'fp' });
+    expect(outcome.error).toBe('stale'); expect(reload).toHaveBeenCalledOnce();
+  });
+  it.each([[[], 'fp'], [['a'], '']])('never calls the backend for paths %j and fingerprint %j', async (paths, expectedStatusFingerprint) => {
+    const invoke = vi.fn();
+    const outcome = await writeAndRefresh('s', { kind: 'discard', paths, expectedStatusFingerprint }, async () => {}, () => true, invoke as typeof native);
+    expect(invoke).not.toHaveBeenCalled(); expect(outcome.error).toBeTruthy();
+  });
+  it('offers only entries the backend accepts', () => {
+    const entries = [
+      entry('edited', '.', 'M'), entry('partial', 'M', 'M'), entry('gone', '.', 'D'), entry('typechange', '.', 'T'), entry('fresh', '?', '?', { untracked: true }),
+      entry('staged-only', 'M', '.'), entry('intent', '.', 'A'), entry('renamed', '.', 'R'), entry('both', 'U', 'U', { conflicted: true }), entry('nested/', '?', '?', { untracked: true }),
+    ];
+    expect(discardableEntries(entries).map(e => e.path)).toEqual(['edited', 'partial', 'gone', 'typechange', 'fresh']);
+  });
+  it('demo restores tracked files from the index, deletes untracked ones and refuses a stale review', async () => {
+    const { demoInvoke, demoLocation } = await import('./demoBackend');
+    const { session: { handle } } = await demoInvoke('repository_open', { location: demoLocation('orbit-design') }) as { session: { handle: string } };
+    const status = () => demoInvoke('repository_status', { handle }) as Promise<{ fingerprint: string; entries: StatusEntry[] }>;
+    const before = await status();
+    expect(before.entries).toHaveLength(3);
+    await expect(demoInvoke('repository_discard', { handle, paths: ['docs/workspace.md'], expectedStatusFingerprint: 'old' })).rejects.toMatchObject({ code: 'staleOperation' });
+    expect((await status()).entries).toHaveLength(3);
+    await demoInvoke('repository_discard', { handle, paths: ['src/styles/tokens.css', 'docs/workspace.md'], expectedStatusFingerprint: before.fingerprint });
+    const after = (await status()).entries;
+    expect(after.find(e => e.path === 'docs/workspace.md')).toBeUndefined();
+    // The staged half of the partially staged file stays; only its working-tree edit is gone.
+    expect(after.find(e => e.path === 'src/styles/tokens.css')).toMatchObject({ indexStatus: 'M', worktreeStatus: '.' });
+    expect(after.find(e => e.path === 'src/components/HistoryView.tsx')).toMatchObject({ worktreeStatus: 'M' });
   });
 });

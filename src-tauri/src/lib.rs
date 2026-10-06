@@ -25,6 +25,7 @@ mod remote_dto;
 mod repository;
 mod stash;
 mod stream;
+mod worktree_files;
 mod wsl;
 
 use clone_dto::*;
@@ -33,7 +34,7 @@ use operation_dto::*;
 use remote_dto::*;
 use repository::Service;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 type Shared = Arc<Service>;
 type Accounts = Arc<provider_accounts::AccountStore>;
@@ -188,6 +189,25 @@ async fn repository_operation_state(
     handle: String,
 ) -> Result<OperationState> {
     with_service(state, move |s| s.repo(&handle)?.operation_state()).await
+}
+#[tauri::command]
+async fn repository_snapshot(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+) -> Result<RepositorySnapshot> {
+    with_service(state, move |s| s.repo(&handle)?.snapshot()).await
+}
+#[tauri::command]
+async fn repository_branch_relation(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    first: String,
+    second: String,
+) -> Result<(usize, usize)> {
+    with_service(state, move |s| {
+        s.repo(&handle)?.branch_relation(&first, &second)
+    })
+    .await
 }
 #[tauri::command]
 async fn repository_run_operation(
@@ -372,6 +392,49 @@ async fn repository_stage(
 ) -> Result<()> {
     with_service(state, move |s| s.stage(&handle, &paths)).await
 }
+/// Discards unstaged changes for exactly the named files: tracked files are restored
+/// from the index and untracked files are deleted, which cannot be undone. Staged-only
+/// paths are refused, and `expected_status_fingerprint` must match the current status.
+#[tauri::command]
+async fn repository_discard(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    paths: Vec<String>,
+    expected_status_fingerprint: String,
+) -> Result<()> {
+    with_service(state, move |s| {
+        s.discard(&handle, &paths, &expected_status_fingerprint)
+    })
+    .await
+}
+/// Opens one working-tree file in its default application. Regular, non-executable
+/// documents inside the worktree only.
+#[tauri::command]
+async fn repository_open_path(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    path: String,
+) -> Result<()> {
+    with_service(state, move |s| s.open_path(&handle, &path)).await
+}
+/// Shows one working-tree file in the platform file manager.
+#[tauri::command]
+async fn repository_reveal_path(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    path: String,
+) -> Result<()> {
+    with_service(state, move |s| s.reveal_path(&handle, &path)).await
+}
+/// Adds an anchored line for one untracked file to the root `.gitignore`.
+#[tauri::command]
+async fn repository_ignore_path(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    path: String,
+) -> Result<()> {
+    with_service(state, move |s| s.ignore_path(&handle, &path)).await
+}
 /// Unstages exactly the named files. The working tree is never modified.
 #[tauri::command]
 async fn repository_unstage(
@@ -432,7 +495,13 @@ async fn repository_amend_commit(
     expected_head: String,
     expected_head_ref: Option<String>,
     expected_status_fingerprint: String,
+    message_only: Option<bool>,
+    require_unpushed: Option<bool>,
 ) -> Result<CreatedCommit> {
+    let options = mutate::AmendOptions {
+        message_only: message_only.unwrap_or(false),
+        require_unpushed: require_unpushed.unwrap_or(false),
+    };
     with_service(state, move |s| {
         s.amend_commit_with_identity(
             &handle,
@@ -441,6 +510,7 @@ async fn repository_amend_commit(
             &expected_head,
             expected_head_ref.as_deref(),
             &expected_status_fingerprint,
+            options,
         )
     })
     .await
@@ -495,12 +565,20 @@ fn app_start_dragging(window: tauri::WebviewWindow) -> Result<()> {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
+            #[cfg(target_os = "windows")]
+            for (_, window) in app.webview_windows() {
+                window.set_decorations(false)?;
+            }
             credentials::init(app.path().resource_dir()?);
             app.manage(Arc::new(provider_oauth::OAuth::default()));
             app.manage(Arc::new(provider_accounts::AccountStore::new(
                 app.path().app_data_dir()?.join("provider-accounts.json"),
             )));
             app.manage(Arc::new(Service::new(app.path().app_data_dir()?)));
+            let handle = app.handle().clone();
+            process::set_git_log(move |log| {
+                let _ = handle.emit("git_command", log);
+            });
             askpass::init(app.handle().clone())?;
             editor::init(app.handle().clone())?;
             #[cfg(target_os = "linux")]
@@ -551,11 +629,17 @@ pub fn run() {
             repository_search,
             repository_stage,
             repository_unstage,
+            repository_discard,
+            repository_open_path,
+            repository_reveal_path,
+            repository_ignore_path,
             repository_stage_hunk,
             repository_unstage_hunk,
             repository_create_commit,
             repository_amend_commit,
             repository_operation_state,
+            repository_snapshot,
+            repository_branch_relation,
             repository_run_operation,
             repository_conflict_file,
             repository_resolve_conflict,

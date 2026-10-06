@@ -51,6 +51,9 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          GITTY_GITHUB_CLIENT_ID: ${{ vars.GITTY_GITHUB_CLIENT_ID }}
+          GITTY_GITLAB_CLIENT_ID: ${{ vars.GITTY_GITLAB_CLIENT_ID }}
+          GITTY_AZURE_CLIENT_ID: ${{ vars.GITTY_AZURE_CLIENT_ID }}
         run: npm run tauri -- build --bundles dmg
       - name: Verify signatures and notarization ticket
         shell: bash
@@ -97,6 +100,10 @@ jobs:
           "GITTY_SIGN_CONFIG=$config" | Out-File $env:GITHUB_ENV -Append
       - name: Build signed Windows installers
         shell: pwsh
+        env:
+          GITTY_GITHUB_CLIENT_ID: ${{ vars.GITTY_GITHUB_CLIENT_ID }}
+          GITTY_GITLAB_CLIENT_ID: ${{ vars.GITTY_GITLAB_CLIENT_ID }}
+          GITTY_AZURE_CLIENT_ID: ${{ vars.GITTY_AZURE_CLIENT_ID }}
         run: npm run tauri -- build --config $env:GITTY_SIGN_CONFIG --bundles nsis,msi
       - name: Verify installer signatures
         shell: pwsh

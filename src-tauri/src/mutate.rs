@@ -19,11 +19,25 @@ use std::{collections::HashSet, process::Command};
 const MAX_PATHS: usize = 1000;
 const MAX_PATHSPEC_BYTES: usize = 1024 * 1024;
 const MAX_MESSAGE_BYTES: usize = 64 * 1024;
+/// Argument bytes per `git clean` process, far below every platform's limit.
+const CLEAN_BATCH_BYTES: usize = 16 * 1024;
 /// Git output kept in an error message; hook output can be arbitrarily long.
 const MAX_REPORTED: usize = 4000;
 /// Retry advice for any failure that leaves the outcome genuinely unknown.
 const UNVERIFIED: &str =
     "The repository may already have changed. Refresh and check the status before retrying.";
+
+/// Independent switches for `amend_commit`; both default to off, which is the
+/// composer's behavior: the current index is folded into the rewritten commit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AmendOptions {
+    /// Rewrite the message only: `--only` with no paths ignores the index, so
+    /// staged, partially staged and working-tree changes all stay exactly as they
+    /// are and the new commit keeps the old tree.
+    pub message_only: bool,
+    /// Refuse when a known remote-tracking ref already contains the commit.
+    pub require_unpushed: bool,
+}
 
 fn validate_message(message: &str) -> Result<()> {
     if message.trim().is_empty() {
@@ -229,9 +243,11 @@ impl Repository {
             .find(|((name, _), line)| *line != format!("{name} missing"))
             .map(|((_, what), _)| *what))
     }
-    /// Refuses to write while Git owns the index or an unsupported operation is
-    /// half-finished. Nothing here removes or repairs Git state.
-    pub(crate) fn require_writable(&self) -> Result<()> {
+    /// Refuses while an unsupported operation is half-finished. Read-only: this
+    /// is also the eligibility check for in-place message editing, which must not
+    /// be disabled by a transient `index.lock`. Returns the Git directory listing
+    /// so a writer can answer the lock question without a second read.
+    pub(crate) fn require_no_operation(&self) -> Result<HashSet<String>> {
         self.require_worktree()?;
         let entries = self.git_dir_entries()?;
         let in_progress = IN_PROGRESS_PATHS
@@ -246,6 +262,12 @@ impl Repository {
                 ),
             ));
         }
+        Ok(entries)
+    }
+    /// Refuses to write while Git owns the index or an unsupported operation is
+    /// half-finished. Nothing here removes or repairs Git state.
+    pub(crate) fn require_writable(&self) -> Result<()> {
+        let entries = self.require_no_operation()?;
         if entries.contains(INDEX_LOCK) {
             return Err(Error::new(
                 "indexLocked",
@@ -377,7 +399,10 @@ impl Repository {
                 crate::askpass::wsl_env_mapping(std::env::var("WSLENV").ok().as_deref()),
             );
         }
-        process::run_with_input_for(command, input, MUTATION_TIMEOUT, max_input).map_err(unverified)
+        process::logged(a, input, || {
+            process::run_with_input_for(command, input, MUTATION_TIMEOUT, max_input)
+        })
+        .map_err(unverified)
     }
     fn write_commit(
         &self,
@@ -400,12 +425,14 @@ impl Repository {
             ]);
         }
         let command = process::git_commit_command(self.location(), args, &vars)?;
-        process::run_with_input_for(
-            command,
-            message.as_bytes(),
-            MUTATION_TIMEOUT,
-            MAX_MESSAGE_BYTES,
-        )
+        process::logged(args, message.as_bytes(), || {
+            process::run_with_input_for(
+                command,
+                message.as_bytes(),
+                MUTATION_TIMEOUT,
+                MAX_MESSAGE_BYTES,
+            )
+        })
         .map_err(unverified)
     }
     /// `--pathspec-from-file=-` with **empty** input means every file to Git, which
@@ -462,6 +489,59 @@ impl Repository {
         let output = self.write(&a, &[], &input, MAX_PATHSPEC_BYTES)?;
         if !output.success {
             return Err(self.failed(&output));
+        }
+        Ok(())
+    }
+    /// Throws away working-tree changes for exactly the named paths: tracked files
+    /// are restored from the index (so staged content survives, including the
+    /// staged half of a partially staged file) and untracked files are deleted.
+    /// Staged-only paths are refused. Deleting is permanent, so the caller must
+    /// pass the status fingerprint it showed the user; any change since is refused.
+    pub(crate) fn discard(&self, paths: &[String], expected_status: &str) -> Result<()> {
+        let paths = self.prepare(paths, "discard")?;
+        let status = self.status()?;
+        if status.fingerprint != expected_status {
+            return Err(Error::new(
+                "staleOperation",
+                "The working tree changed since these changes were reviewed. Review them again before discarding.",
+            ));
+        }
+        let (restore, delete) = classify_discard(&paths, &status.entries)?;
+        if !restore.is_empty() {
+            let a = args(&[
+                "restore",
+                "--worktree",
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+            ]);
+            let output = self.write(
+                &a,
+                &[],
+                &Self::pathspec_input(&restore)?,
+                MAX_PATHSPEC_BYTES,
+            )?;
+            if !output.success {
+                return Err(self.failed(&output));
+            }
+        }
+        // `git clean` has no pathspec-from-file form, so these are the one place
+        // paths travel as arguments: in bounded batches, after `--`, and literal
+        // (GIT_LITERAL_PATHSPECS). With a pathspec `clean` only removes untracked
+        // files, so a path that became tracked in the meantime is untouched.
+        let mut batch: Vec<&String> = Vec::new();
+        let mut bytes = 0;
+        for (index, path) in delete.iter().enumerate() {
+            batch.push(path);
+            bytes += path.len() + 1;
+            if bytes >= CLEAN_BATCH_BYTES || index + 1 == delete.len() {
+                let mut a = args(&["clean", "--force", "--quiet", "--"]);
+                a.extend(batch.drain(..).cloned());
+                bytes = 0;
+                let output = self.write(&a, &[], &[], 1)?;
+                if !output.success {
+                    return Err(self.failed(&output));
+                }
+            }
         }
         Ok(())
     }
@@ -537,12 +617,97 @@ impl Repository {
         }
     }
 
-    /// Replaces the current commit with the supplied message and current index.
-    /// The snapshot expectations are checked under Gitty's mutation lock by the
-    /// caller immediately before Git runs. This closes races between app sessions,
-    /// not the final window before Git acquires its own locks from external tools.
-    /// No staged changes are required, so a message-only amend remains possible;
-    /// unstaged changes are never included.
+    /// Remote-tracking refs that contain `id`, as short names such as
+    /// `origin/main`. Checked: a failed query is an error, never "not pushed".
+    /// This reads local refs only; it is not proof about the remote itself.
+    pub(crate) fn remote_branches_containing(&self, id: &str) -> Result<Vec<String>> {
+        let o = self.check(&[
+            "for-each-ref",
+            "--contains",
+            id,
+            "--format=%(refname)",
+            "refs/remotes",
+        ])?;
+        if !o.success {
+            return Err(self.failed(&o));
+        }
+        Ok(process::text(o.stdout)?
+            .lines()
+            .map(|line| {
+                line.strip_prefix("refs/remotes/")
+                    .unwrap_or(line)
+                    .to_string()
+            })
+            .filter(|line| !line.is_empty())
+            .collect())
+    }
+    fn pushed_error(branches: &[String]) -> Error {
+        let shown = branches
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let more = branches.len().saturating_sub(3);
+        Error::new(
+            "pushedCommit",
+            format!(
+                "This commit is already contained in the remote-tracking ref{} {shown}{}. Gitty only reads local remote-tracking refs, which are not proof of what the remote has; fetch to refresh them. Rewriting a published commit would diverge from it.",
+                if branches.len() == 1 { "" } else { "s" },
+                if more > 0 { format!(" and {more} more") } else { String::new() }
+            ),
+        )
+    }
+    /// Why the message of commit `id` cannot be edited in place, or `None` when
+    /// it can. Read-only, and it never fails open: any error while checking is the
+    /// caller's reason to disable editing. Cheap checks come first so that the
+    /// common case, a commit that is not HEAD, costs one Git process.
+    pub(crate) fn message_edit_block(&self, id: &str) -> Result<Option<String>> {
+        if self.session.bare {
+            return Ok(Some(
+                "Editing commit messages requires a working tree; this repository is bare.".into(),
+            ));
+        }
+        if self.head_commit()?.as_deref() != Some(id) {
+            return Ok(Some(
+                "Only the commit HEAD points at can be edited here. Use Interactive rebase from the commit's actions to reword older commits.".into(),
+            ));
+        }
+        let symbolic = self.check(&["symbolic-ref", "--quiet", "HEAD"])?;
+        match symbolic.code {
+            Some(0) => {}
+            Some(1) => {
+                return Ok(Some(
+                    "HEAD is detached. Check out a branch before editing its commit message."
+                        .into(),
+                ))
+            }
+            _ => return Err(self.failed(&symbolic)),
+        }
+        // A transient index.lock is deliberately not checked: it says nothing about
+        // whether this commit may be edited, and the write itself still refuses it.
+        self.require_no_operation()?;
+        let conflicted = self.unmerged()?;
+        if !conflicted.is_empty() {
+            return Ok(Some(format!(
+                "{} has unresolved conflicts. Resolve them in Git before editing the commit message.",
+                conflicted.join(", ")
+            )));
+        }
+        let remotes = self.remote_branches_containing(id)?;
+        if !remotes.is_empty() {
+            return Ok(Some(Self::pushed_error(&remotes).message));
+        }
+        Ok(None)
+    }
+
+    /// Replaces the current commit with the supplied message. By default the
+    /// current index is folded into the new commit; with `message_only` it is not
+    /// read at all. The snapshot expectations are checked under Gitty's mutation
+    /// lock by the caller immediately before Git runs. This closes races between
+    /// app sessions, not the final window before Git acquires its own locks from
+    /// external tools. No staged changes are required, so a message-only amend
+    /// remains possible; unstaged changes are never included.
     pub(crate) fn amend_commit(
         &self,
         message: &str,
@@ -550,6 +715,7 @@ impl Repository {
         expected_head: &str,
         expected_head_ref: Option<&str>,
         expected_status_fingerprint: &str,
+        options: AmendOptions,
     ) -> Result<CreatedCommit> {
         validate_message(message)?;
         validate_identity(identity)?;
@@ -581,7 +747,17 @@ impl Repository {
                 "HEAD or the working changes have changed since this amendment was prepared. Refresh and review the last commit before trying again.",
             ));
         }
-        let a = args(&["commit", "--quiet", "--amend", "--file=-"]);
+        if options.require_unpushed {
+            let remotes = self.remote_branches_containing(&before)?;
+            if !remotes.is_empty() {
+                return Err(Self::pushed_error(&remotes));
+            }
+        }
+        let mut a = args(&["commit", "--quiet", "--amend"]);
+        if options.message_only {
+            a.push("--only".into());
+        }
+        a.push("--file=-".into());
         let output = self.write_commit(&a, message, identity, true)?;
         let after = self.head_commit().map_err(unverified)?;
         if !output.success {
@@ -604,6 +780,44 @@ impl Repository {
             )
         })
     }
+}
+
+/// Splits requested paths into those to restore from the index and those to
+/// delete, refusing everything else. Pure: it only reads the fresh status.
+fn classify_discard(
+    paths: &[String],
+    entries: &[StatusEntry],
+) -> Result<(Vec<String>, Vec<String>)> {
+    let by_path: std::collections::HashMap<&str, &StatusEntry> = entries
+        .iter()
+        .map(|e| (e.path.strip_suffix('/').unwrap_or(&e.path), e))
+        .collect();
+    let (mut restore, mut delete) = (Vec::new(), Vec::new());
+    for path in paths {
+        let refuse = |why: &str| Err(Error::new("invalidRequest", format!("{path} {why}")));
+        let Some(entry) = by_path.get(path.as_str()) else {
+            return refuse("has no changes to discard.");
+        };
+        if entry.path.ends_with('/') {
+            return refuse("is a directory or nested repository; Gitty never deletes those.");
+        }
+        if entry.untracked {
+            delete.push(path.clone());
+            continue;
+        }
+        match entry.worktree_status.as_str() {
+            "M" | "D" | "T" => restore.push(path.clone()),
+            "." | " " => return refuse(
+                "has only staged changes. Unstage it first; Gitty discards unstaged changes only.",
+            ),
+            _ => {
+                return refuse(
+                    "is marked intent-to-add, renamed or copied in the index; resolve it in Git.",
+                )
+            }
+        }
+    }
+    Ok((restore, delete))
 }
 
 #[cfg(test)]
@@ -691,5 +905,41 @@ mod tests {
         assert_eq!(report(&output("out", "err")), "err\nout");
         assert_eq!(report(&output("", "")), "Git exited with status 1");
         assert!(report(&output("", &"x".repeat(MAX_REPORTED * 2))).ends_with("truncated"));
+    }
+    fn entry(path: &str, index: &str, worktree: &str, untracked: bool) -> StatusEntry {
+        StatusEntry {
+            path: path.into(),
+            old_path: None,
+            index_status: index.into(),
+            worktree_status: worktree.into(),
+            conflicted: false,
+            untracked,
+        }
+    }
+    #[test]
+    fn discard_classifies_by_fresh_status_and_refuses_everything_else() {
+        let entries = vec![
+            entry("edited", ".", "M", false),
+            entry("partial", "M", "M", false),
+            entry("gone", ".", "D", false),
+            entry("fresh", "?", "?", true),
+            entry("staged-only", "M", ".", false),
+            entry("intent", ".", "A", false),
+            entry("nested/", "?", "?", true),
+        ];
+        let paths = |p: &[&str]| p.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (restore, delete) =
+            classify_discard(&paths(&["edited", "partial", "gone", "fresh"]), &entries).unwrap();
+        assert_eq!(restore, paths(&["edited", "partial", "gone"]));
+        assert_eq!(delete, paths(&["fresh"]));
+        for refused in ["staged-only", "intent", "nested", "unknown"] {
+            assert_eq!(
+                classify_discard(&paths(&[refused]), &entries)
+                    .unwrap_err()
+                    .code,
+                "invalidRequest",
+                "{refused}"
+            );
+        }
     }
 }

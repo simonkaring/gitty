@@ -48,6 +48,7 @@ function commitFiles(r: DemoRepo, spec: DiffSpec): ChangedFile[] {
   return r.commits.find(commit => commit.id === oid)?.files ?? [];
 }
 
+const demoOperation = { kind: 'none', label: '', current: null, incoming: null, step: null, total: null, conflicts: [], canContinue: false, canSkip: false, fingerprint: 'none' };
 const unsupported = (what: string) => { throw { code: 'unsupported', message: `Not available in the demo: ${what}. The demo simulates staging and committing only.` }; };
 
 export async function demoInvoke(command: string, args: Record<string, unknown>): Promise<unknown> {
@@ -63,7 +64,9 @@ export async function demoInvoke(command: string, args: Record<string, unknown>)
       return state(load(match.name));
     }
     case 'repository_state': return state(r());
-    case 'repository_operation_state': return { kind: 'none', label: '', current: null, incoming: null, step: null, total: null, conflicts: [], canContinue: false, canSkip: false, fingerprint: 'none' };
+    case 'repository_operation_state': return demoOperation;
+    case 'repository_snapshot': return { state: state(r()), status: demoStatus(r().files, r().head), operation: demoOperation };
+    case 'repository_branch_relation': return [1, 0];
     case 'repository_status': return demoStatus(r().files, r().head);
     case 'repository_history': {
       const { commits, head } = r();
@@ -74,7 +77,7 @@ export async function demoInvoke(command: string, args: Record<string, unknown>)
     case 'repository_commit': {
       const commit = r().commits.find(item => item.id === args.oid);
       if (!commit) throw { code: 'not_found', message: 'Commit not found in the demo history.' };
-      return { ...seconds(commit), body: commit.body } satisfies CommitDetail;
+      return { ...seconds(commit), body: commit.body, canEditMessage: false, editDisabledReason: 'Editing commit messages is not available in the demo workspace; it simulates staging and committing only.' } satisfies CommitDetail;
     }
     case 'repository_diff_files': {
       const spec = args.spec as DiffSpec;
@@ -97,6 +100,13 @@ export async function demoInvoke(command: string, args: Record<string, unknown>)
     case 'repository_git_identity': return { local: { name: null, email: null }, effective: { name: 'Demo User', email: 'demo@example.com' } };
     case 'repository_stage': case 'repository_unstage': {
       for (const file of r().files) if ((args.paths as string[]).includes(file.path)) file.index = command === 'repository_stage' ? file.working : file.head;
+      return;
+    }
+    case 'repository_discard': {
+      const current = r();
+      if (args.expectedStatusFingerprint !== demoStatus(current.files, current.head).fingerprint) throw { code: 'staleOperation', message: 'The working tree changed since these changes were reviewed. Review them again before discarding.' };
+      const paths = args.paths as string[];
+      current.files = current.files.flatMap(file => !paths.includes(file.path) ? [file] : file.head === null && file.index === null ? [] : [{ ...file, working: file.index }]);
       return;
     }
     case 'repository_create_commit': {

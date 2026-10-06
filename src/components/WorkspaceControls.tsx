@@ -2,6 +2,11 @@ import { GitBranch } from 'lucide-react';
 import { useRef, type Dispatch, type SetStateAction } from 'react';
 import { useSettings } from '../model/settings';
 
+/** Inspector (right pane) width bounds in px. Shared by the workspace, its resizer and the repository pane
+ * so keyboard End/Home, clamping and aria-valuemin/max all agree. */
+export const INSPECTOR_MIN_WIDTH = 300;
+export const INSPECTOR_MAX_WIDTH = 760;
+
 export function usePaneWidth(name: 'sidebar' | 'inspector', fallback: number, min: number, max: number) {
   const { settings, updateSettings } = useSettings();
   const clamp = (value: number) => Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
@@ -15,12 +20,17 @@ export function usePaneWidth(name: 'sidebar' | 'inspector', fallback: number, mi
 export function Brand({ demo = false }: { demo?: boolean }) {
   return <div className="brand" data-tauri-drag-region><span className="brand-icon" data-tauri-drag-region><GitBranch size={22} /></span><span data-tauri-drag-region>gitty<span className="brand-period">.</span></span><span className="badge">{demo ? 'DEMO' : 'LOCAL GIT'}</span></div>;
 }
-export function PaneResizer({ label, width, onChange, min = 300, max = 640, direction = -1 }: { label: string; width: number; onChange: (width: number) => void; min?: number; max?: number; direction?: 1 | -1 }) {
+export function PaneResizer({ label, width, onChange, min = INSPECTOR_MIN_WIDTH, max = INSPECTOR_MAX_WIDTH, direction = -1 }: { label: string; width: number; onChange: (width: number) => void; min?: number; max?: number; direction?: 1 | -1 }) {
   const drag = useRef({ x: 0, width });
   const change = (value: number) => onChange(Math.max(min, Math.min(max, value)));
   return <div className="pane-resizer" role="separator" aria-label={label} aria-orientation="vertical" aria-valuenow={Math.round(width)} aria-valuemin={min} aria-valuemax={max} tabIndex={0}
     onKeyDown={event => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); change(event.key === 'Home' ? min : event.key === 'End' ? max : width + (event.key === 'ArrowRight' ? 20 : -20) * direction); } }}
-    onPointerDown={event => { drag.current = { x: event.clientX, width }; event.currentTarget.setPointerCapture(event.pointerId); event.currentTarget.dataset.dragging = 'true'; }}
+    onPointerDown={event => {
+      // Start from the width actually on screen: a window too narrow for the saved width clips the pane (CSS), and a drag must not feel dead until it crosses the clipped part.
+      const pane = direction === -1 ? event.currentTarget.nextElementSibling : event.currentTarget.previousElementSibling;
+      const shown = pane?.getBoundingClientRect().width ?? 0;
+      drag.current = { x: event.clientX, width: shown > 0 ? Math.min(width, Math.round(shown)) : width }; event.currentTarget.setPointerCapture(event.pointerId); event.currentTarget.dataset.dragging = 'true';
+    }}
     onPointerMove={event => { if (event.currentTarget.hasPointerCapture(event.pointerId)) change(drag.current.width + (event.clientX - drag.current.x) * direction); }}
     onPointerUp={event => event.currentTarget.releasePointerCapture(event.pointerId)} onLostPointerCapture={event => { delete event.currentTarget.dataset.dragging; }} />;
 }
