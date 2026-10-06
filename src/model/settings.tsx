@@ -8,6 +8,7 @@ export const WORKSPACE_RESET_EVENT = 'gitty:workspace-reset';
 export const MONO_FONTS = ['Geist Mono Variable', 'JetBrains Mono'] as const;
 export const HISTORY_COLUMN_IDS = ['refs', 'graph', 'message', 'author', 'hash', 'date'] as const;
 export type HistoryColumnId = typeof HISTORY_COLUMN_IDS[number];
+export type AuthorAvatarMode = 'initials' | 'gravatar';
 export interface HistoryColumnConfig {
   id: HistoryColumnId;
   visible: boolean;
@@ -27,6 +28,7 @@ export interface Settings {
   historyColumns: HistoryColumnConfig[];
   commitProfiles: CommitProfile[];
   repositoryCommitProfiles: Record<string, string>;
+  authorAvatarMode: AuthorAvatarMode;
 }
 export const DEFAULT_HISTORY_COLUMNS: HistoryColumnConfig[] = [
   { id: 'refs', visible: true },
@@ -36,12 +38,12 @@ export const DEFAULT_HISTORY_COLUMNS: HistoryColumnConfig[] = [
   { id: 'hash', visible: true },
   { id: 'date', visible: false },
 ];
-export const DEFAULT_SETTINGS: Settings = { version: 1, themeMode: 'fixed', themeId: 'gitty-dark', lightThemeId: 'gitty-light', darkThemeId: 'gitty-dark', customThemes: [], diffView: 'unified', diffWrap: false, fontSize: 13, monoFont: MONO_FONTS[0], paneWidths: { sidebar: 240, inspector: 400 }, historyColumns: DEFAULT_HISTORY_COLUMNS, commitProfiles: [], repositoryCommitProfiles: {} };
+export const DEFAULT_SETTINGS: Settings = { version: 1, themeMode: 'fixed', themeId: 'gitty-dark', lightThemeId: 'gitty-light', darkThemeId: 'gitty-dark', customThemes: [], diffView: 'unified', diffWrap: false, fontSize: 13, monoFont: MONO_FONTS[0], paneWidths: { sidebar: 240, inspector: 400 }, historyColumns: DEFAULT_HISTORY_COLUMNS, commitProfiles: [], repositoryCommitProfiles: {}, authorAvatarMode: 'initials' };
 export function validateSettings(value: unknown): Settings {
   if (!value || typeof value !== 'object') throw new Error('Invalid settings.');
   const s = value as Settings;
   if (s.version !== 1) throw new Error('Unsupported settings version.');
-  if (Object.keys(s).some(k => !Object.hasOwn(DEFAULT_SETTINGS, k)) || !['fixed', 'system'].includes(s.themeMode) || !['unified', 'split'].includes(s.diffView) || typeof s.diffWrap !== 'boolean' || !Number.isInteger(s.fontSize) || s.fontSize < 11 || s.fontSize > 22 || !MONO_FONTS.includes(s.monoFont as typeof MONO_FONTS[number]) || !Array.isArray(s.customThemes) || s.customThemes.length > MAX_CUSTOM_THEMES) throw new Error('Invalid preference values.');
+  if (Object.keys(s).some(k => !Object.hasOwn(DEFAULT_SETTINGS, k)) || !['fixed', 'system'].includes(s.themeMode) || !['unified', 'split'].includes(s.diffView) || !['initials', 'gravatar'].includes(s.authorAvatarMode) || typeof s.diffWrap !== 'boolean' || !Number.isInteger(s.fontSize) || s.fontSize < 11 || s.fontSize > 22 || !MONO_FONTS.includes(s.monoFont as typeof MONO_FONTS[number]) || !Array.isArray(s.customThemes) || s.customThemes.length > MAX_CUSTOM_THEMES) throw new Error('Invalid preference values.');
   const customThemes = s.customThemes.map(validateTheme);
   if (!Array.isArray(s.commitProfiles) || s.commitProfiles.length > MAX_COMMIT_PROFILES) throw new Error('Invalid commit profiles.');
   const commitProfiles = s.commitProfiles.map(validateCommitProfile);
@@ -69,6 +71,7 @@ export function readSettings(storage: PreferenceStorage): { settings: Settings; 
         if (!('historyColumns' in parsed)) parsed.historyColumns = DEFAULT_HISTORY_COLUMNS;
         if (!('commitProfiles' in parsed)) parsed.commitProfiles = [];
         if (!('repositoryCommitProfiles' in parsed)) parsed.repositoryCommitProfiles = {};
+        if (!('authorAvatarMode' in parsed)) parsed.authorAvatarMode = 'initials';
       }
       return { settings: validateSettings(parsed), error: null };
     }

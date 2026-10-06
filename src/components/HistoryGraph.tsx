@@ -7,7 +7,7 @@ import type { Commit, GitRef } from '../model/types';
 import type { ActionContext } from './OperationDialog';
 import { DEFAULT_HISTORY_COLUMNS, useSettings, type HistoryColumnId, type ThemeDefinition } from '../model/settings';
 import { HistoryColumnMenu } from './HistoryColumnMenu';
-import { initials } from './ui';
+import { AuthorAvatar } from './AuthorAvatar';
 
 export interface GraphAnchor { id: string; offset: number }
 export interface GraphHandle { scrollTo: (row: number) => void; focus: () => void; anchor: () => GraphAnchor | null; restore: (anchor: GraphAnchor) => void }
@@ -403,7 +403,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                   </div>;
                 }
                 if (col.id === 'author') {
-                  return <span key="author" className="row-author author-column"><span className="avatar tiny">{initials(commit.author)}</span><span>{commit.author.split(' ')[0]}</span></span>;
+                  return <span key="author" className="row-author author-column"><AuthorAvatar name={commit.author} email={commit.email} mode={settings.authorAvatarMode} tiny /><span>{commit.author.split(' ')[0]}</span></span>;
                 }
                 if (col.id === 'hash') {
                   return <span key="hash" className="row-hash hash-column">{commit.id === WORKING_ID ? 'Working' : commit.id.slice(0, 7)}</span>;

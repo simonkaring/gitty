@@ -654,6 +654,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
                 notify={setNotice}
                 onEditMessage={editHeadMessage}
                 writeBlocked={mutationBusy || mutationBlocked}
+                 authorAvatarMode={settings.authorAvatarMode}
               />
             )}
           </>}

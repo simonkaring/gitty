@@ -35,7 +35,7 @@ npm run desktop:build           # Production app and platform bundles
 npm run check:rust              # Cargo check (build the frontend first)
 ```
 
-`src-tauri/tauri.conf.json` sets the app identity, window limits, local asset CSP, and platform icons. `app-icon.svg` is the editable source; regenerate assets with `npm run tauri -- icon app-icon.svg --output src-tauri/icons`. The manual `.github/workflows/release.yml` workflow uses protected CI secrets to build and verify signed Windows installers and a notarized macOS DMG; a successful workflow run and installation are required before treating the bundles as release-ready. macOS secrets: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_CONTENT` (the private `.p8` contents). Windows secrets: `WINDOWS_CERTIFICATE` (base64 PFX) and `WINDOWS_CERTIFICATE_PASSWORD`. No signing secrets belong in this repository.
+`src-tauri/tauri.conf.json` sets the app identity, window limits, a restrictive CSP (including Gravatar images when enabled), and platform icons. `app-icon.svg` is the editable source; regenerate assets with `npm run tauri -- icon app-icon.svg --output src-tauri/icons`. The manual `.github/workflows/release.yml` workflow uses protected CI secrets to build and verify signed Windows installers and a notarized macOS DMG; a successful workflow run and installation are required before treating the bundles as release-ready. macOS secrets: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_CONTENT` (the private `.p8` contents). Windows secrets: `WINDOWS_CERTIFICATE` (base64 PFX) and `WINDOWS_CERTIFICATE_PASSWORD`. No signing secrets belong in this repository.
 
 ## Explore a real repository
 
@@ -114,6 +114,7 @@ Open the gear button or **Cmd/Ctrl+,** from either workspace, including the nati
 - **Editor preferences:** bundled code font, code size, line wrapping, and default unified/side-by-side diffs.
 - **Commit profiles:** add, edit, or delete saved name/email identities for the desktop commit composer.
 - **Workspace reset:** restore pane sizes. Resizing and settings persist across reloads and native/demo switching within the app.
+- **Author avatars:** initials by default, or optional Gravatar images in history and commit details. Gravatar requests use a SHA-256 hash of the author's email; missing images fall back to initials.
 
 ## Explore the demo
 

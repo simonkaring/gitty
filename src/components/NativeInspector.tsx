@@ -3,7 +3,8 @@ import type { CommitDetail, DiffFile, FileDiff, RepositorySession } from '../mod
 import { errorMessage, inspectorSpec, native } from '../model/native';
 import { AlertTriangle, ArrowUpRight, Check, ChevronDown, Copy, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, GitMerge, Pencil, X } from 'lucide-react';
 import type { ActiveDiffState } from './WorkingChanges';
-import { initials } from './ui';
+import { AuthorAvatar } from './AuthorAvatar';
+import type { AuthorAvatarMode } from '../model/settings';
 import { commitMessage, draftFromCommitMessage, type MutationOutcome } from '../model/workflow';
 
 function statusClass(status: string): string {
@@ -39,6 +40,7 @@ export function NativeInspector({
   notify,
   onEditMessage,
   writeBlocked = false,
+  authorAvatarMode = 'initials',
 }: {
   session: RepositorySession;
   selected: string;
@@ -59,6 +61,7 @@ export function NativeInspector({
   onEditMessage?: (request: { oid: string; headRef: string; message: string }) => Promise<MutationOutcome>;
   /** A repository write is running, or the last refresh failed and writes are blocked. */
   writeBlocked?: boolean;
+  authorAvatarMode?: AuthorAvatarMode;
 }) {
   const [detail, setDetail] = useState<CommitDetail | null>(null);
   const [parent, setParent] = useState('');
@@ -411,7 +414,7 @@ export function NativeInspector({
                     )}
                     {detail && (
                       <div className="author-block">
-                        <span className="avatar">{initials(detail.author)}</span>
+                        <AuthorAvatar name={detail.author} email={detail.email} mode={authorAvatarMode} />
                         <div>
                           <strong>{detail.author}</strong>
                           <span>{date} UTC</span>
