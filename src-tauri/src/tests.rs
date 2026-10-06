@@ -1,4 +1,4 @@
-use crate::{dto::*, repository::Service};
+use crate::{dto::*, mutate::AmendOptions, repository::Service};
 use std::{path::Path, process::Command};
 use tempfile::TempDir;
 
@@ -1520,6 +1520,7 @@ fn selected_commit_profile_only_overrides_commit_identity_and_amend_preserves_au
             &first.oid,
             status.head_ref.as_deref(),
             &status.fingerprint,
+            AmendOptions::default(),
         )
         .unwrap();
     assert_eq!(
@@ -1694,6 +1695,397 @@ fn amend_honors_hooks_and_signing_configuration() {
             .code,
         "git"
     );
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), head);
+}
+
+fn amend_with(
+    service: &Service,
+    handle: &str,
+    message: &str,
+    expected_head: &str,
+    options: AmendOptions,
+) -> Result<CreatedCommit> {
+    let status = service.repo(handle).unwrap().status().unwrap();
+    service.amend_commit_with_identity(
+        handle,
+        message,
+        None,
+        expected_head,
+        status.head_ref.as_deref(),
+        &status.fingerprint,
+        options,
+    )
+}
+const MESSAGE_ONLY: AmendOptions = AmendOptions {
+    message_only: true,
+    require_unpushed: false,
+};
+/// Runs Git where failure is the point of the test (a conflicting stash pop).
+fn git_may_fail(path: &Path, args: &[&str]) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env(
+            "GIT_CONFIG_GLOBAL",
+            if cfg!(windows) { "NUL" } else { "/dev/null" },
+        )
+        .output()
+        .unwrap()
+        .status
+        .success()
+}
+
+#[test]
+fn message_only_amend_ignores_the_index_while_the_default_amend_folds_it_in() {
+    let d = init();
+    std::fs::write(d.path().join("a"), "1\n2\n3\n").unwrap();
+    std::fs::write(d.path().join("b"), "b0\n").unwrap();
+    commit(d.path(), "base");
+    std::fs::write(d.path().join("c"), "c\n").unwrap();
+    let original = commit(d.path(), "original");
+    let original_tree = git(d.path(), &["rev-parse", "HEAD^{tree}"]);
+    let (service, _data, handle) = service_for(d.path());
+
+    // Fully staged (b), partially staged (a), unstaged-only (c) and untracked (new).
+    std::fs::write(d.path().join("b"), "staged\n").unwrap();
+    git(d.path(), &["add", "b"]);
+    std::fs::write(d.path().join("a"), "1\n2x\n3\n").unwrap();
+    git(d.path(), &["add", "a"]);
+    std::fs::write(d.path().join("a"), "1\n2x\n3y\n").unwrap();
+    std::fs::write(d.path().join("c"), "c edited\n").unwrap();
+    std::fs::write(d.path().join("new"), "untracked\n").unwrap();
+    let snapshot = |d: &Path| {
+        (
+            git(d, &["ls-files", "--stage"]),
+            git(d, &["diff", "--cached"]),
+            git(d, &["diff"]),
+            git(d, &["status", "--porcelain=v1"]),
+            ["a", "b", "c", "new"].map(|f| std::fs::read(d.join(f)).unwrap()),
+        )
+    };
+    let before = snapshot(d.path());
+
+    let reworded = amend_with(
+        &service,
+        &handle,
+        "only the message",
+        &original,
+        MESSAGE_ONLY,
+    )
+    .unwrap();
+    assert_ne!(reworded.oid, original);
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), reworded.oid);
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD^{tree}"]), original_tree);
+    assert_eq!(
+        git(d.path(), &["log", "-1", "--format=%s"]),
+        "only the message"
+    );
+    assert_eq!(
+        git(d.path(), &["rev-parse", "HEAD^"]),
+        git(d.path(), &["rev-parse", &format!("{original}^")])
+    );
+    assert_eq!(
+        snapshot(d.path()),
+        before,
+        "index and worktree must be untouched"
+    );
+    assert!(!d.path().join(".git/index.lock").exists());
+
+    // Default semantics are unchanged: the staged index is folded into the commit,
+    // while the unstaged remainder stays in the working tree.
+    let folded = amend_with(
+        &service,
+        &handle,
+        "with the index",
+        &reworded.oid,
+        AmendOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        git(d.path(), &["show", &format!("{}:b", folded.oid)]),
+        "staged"
+    );
+    assert_eq!(
+        git(d.path(), &["show", &format!("{}:a", folded.oid)]),
+        "1\n2x\n3"
+    );
+    assert_eq!(git(d.path(), &["show", &format!("{}:c", folded.oid)]), "c");
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("a")).unwrap(),
+        "1\n2x\n3y\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(d.path().join("new")).unwrap(),
+        "untracked\n"
+    );
+}
+
+#[test]
+fn require_unpushed_is_independent_and_rechecks_remote_refs_added_after_the_read() {
+    let d = init();
+    std::fs::write(d.path().join("file"), "base\n").unwrap();
+    let base = commit(d.path(), "base");
+    std::fs::write(d.path().join("file"), "next\n").unwrap();
+    let head = commit(d.path(), "next");
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    let detail = repo.commit(&head).unwrap();
+    assert!(detail.can_edit_message, "{:?}", detail.edit_disabled_reason);
+
+    // A remote-tracking ref appears after the read that enabled editing.
+    git(d.path(), &["update-ref", "refs/remotes/origin/main", &head]);
+    for options in [
+        AmendOptions {
+            message_only: true,
+            require_unpushed: true,
+        },
+        AmendOptions {
+            message_only: false,
+            require_unpushed: true,
+        },
+    ] {
+        let error = amend_with(&service, &handle, "published", &head, options).unwrap_err();
+        assert_eq!(error.code, "pushedCommit", "{options:?}");
+        assert!(error.message.contains("origin/main"));
+        assert!(error.message.contains("not proof"));
+        assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), head);
+        assert_eq!(git(d.path(), &["log", "-1", "--format=%s"]), "next");
+    }
+    // Each flag is independent: without requireUnpushed the write proceeds.
+    let detail = repo.commit(&head).unwrap();
+    assert!(!detail.can_edit_message);
+    let reason = detail.edit_disabled_reason.unwrap();
+    assert!(
+        reason.contains("origin/main") && reason.contains("not proof"),
+        "{reason}"
+    );
+    let reworded =
+        amend_with(&service, &handle, "explicitly allowed", &head, MESSAGE_ONLY).unwrap();
+
+    // The remote only has the parent, so the rewritten commit is unpushed.
+    git(d.path(), &["update-ref", "refs/remotes/origin/main", &base]);
+    let options = AmendOptions {
+        message_only: true,
+        require_unpushed: true,
+    };
+    let ok = amend_with(&service, &handle, "still local", &reworded.oid, options).unwrap();
+    assert_eq!(git(d.path(), &["log", "-1", "--format=%s"]), "still local");
+    assert!(repo.commit(&ok.oid).unwrap().can_edit_message);
+    // A stale expectation is refused before any remote check or write.
+    let status = repo.status().unwrap();
+    git(
+        d.path(),
+        &["update-ref", "refs/remotes/origin/main", &ok.oid],
+    );
+    assert_eq!(
+        service
+            .amend_commit_with_identity(
+                &handle,
+                "stale",
+                None,
+                &head,
+                status.head_ref.as_deref(),
+                &status.fingerprint,
+                options
+            )
+            .unwrap_err()
+            .code,
+        "staleOperation"
+    );
+}
+
+#[test]
+fn root_and_merge_heads_can_be_reworded_with_their_parents_and_tree_intact() {
+    let d = init();
+    std::fs::write(d.path().join("file"), "root\n").unwrap();
+    let root = commit(d.path(), "root");
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    assert!(repo.commit(&root).unwrap().can_edit_message);
+    let tree = git(d.path(), &["rev-parse", "HEAD^{tree}"]);
+    let reworded = amend_with(&service, &handle, "new root", &root, MESSAGE_ONLY).unwrap();
+    assert_eq!(
+        git(d.path(), &["rev-list", "--parents", "-n1", "HEAD"]),
+        reworded.oid
+    );
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD^{tree}"]), tree);
+
+    git(d.path(), &["checkout", "-qb", "side"]);
+    std::fs::write(d.path().join("side"), "side\n").unwrap();
+    commit(d.path(), "side");
+    git(d.path(), &["checkout", "-q", "main"]);
+    std::fs::write(d.path().join("main"), "main\n").unwrap();
+    commit(d.path(), "main");
+    git(d.path(), &["merge", "--no-ff", "-m", "merge side", "side"]);
+    let merge = git(d.path(), &["rev-parse", "HEAD"]);
+    let parents = git(d.path(), &["rev-list", "--parents", "-n1", "HEAD"]);
+    let tree = git(d.path(), &["rev-parse", "HEAD^{tree}"]);
+    // Staged work must not leak into the merge commit's tree.
+    std::fs::write(d.path().join("extra"), "staged\n").unwrap();
+    git(d.path(), &["add", "extra"]);
+    assert!(repo.commit(&merge).unwrap().can_edit_message);
+    let reworded = amend_with(&service, &handle, "merge, reworded", &merge, MESSAGE_ONLY).unwrap();
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD^{tree}"]), tree);
+    assert_eq!(
+        git(d.path(), &["rev-list", "--parents", "-n1", "HEAD"])
+            .split(' ')
+            .skip(1)
+            .collect::<Vec<_>>(),
+        parents.split(' ').skip(1).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        git(d.path(), &["log", "-1", "--format=%s"]),
+        "merge, reworded"
+    );
+    assert_eq!(git(d.path(), &["diff", "--cached", "--name-only"]), "extra");
+    assert_ne!(reworded.oid, merge);
+}
+
+#[test]
+fn message_edit_eligibility_is_head_first_readable_and_never_fails_open() {
+    let d = init();
+    std::fs::write(d.path().join("file"), "one\n").unwrap();
+    let first = commit(d.path(), "first");
+    std::fs::write(d.path().join("file"), "two\n").unwrap();
+    let head = commit(d.path(), "second");
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    let reason = |id: &str| {
+        let detail = repo.commit(id).unwrap();
+        assert_eq!(
+            detail.can_edit_message,
+            detail.edit_disabled_reason.is_none()
+        );
+        detail.edit_disabled_reason
+    };
+    // The commit is parsed whatever the verdict.
+    assert_eq!(repo.commit(&first).unwrap().summary.subject, "first");
+    assert_eq!(reason(&head), None);
+    assert!(reason(&first).unwrap().contains("HEAD"));
+
+    // A transient index.lock does not decide eligibility; the write itself still refuses.
+    let lock = d.path().join(".git/index.lock");
+    std::fs::write(&lock, "").unwrap();
+    assert_eq!(reason(&head), None);
+    let error = amend_with(&service, &handle, "locked", &head, MESSAGE_ONLY).unwrap_err();
+    assert_eq!(error.code, "indexLocked");
+    std::fs::remove_file(&lock).unwrap();
+
+    // An operation in progress is an error while checking: it becomes the reason.
+    std::fs::create_dir(d.path().join(".git/rebase-merge")).unwrap();
+    let blocked = reason(&head).unwrap();
+    assert!(
+        blocked.contains("could not be checked") && blocked.contains("rebase"),
+        "{blocked}"
+    );
+    assert_eq!(
+        amend_with(&service, &handle, "mid-rebase", &head, MESSAGE_ONLY)
+            .unwrap_err()
+            .code,
+        "operationInProgress"
+    );
+    std::fs::remove_dir(d.path().join(".git/rebase-merge")).unwrap();
+    assert_eq!(reason(&head), None);
+
+    // Unmerged paths without an operation, as left by a conflicting stash pop.
+    std::fs::write(d.path().join("file"), "stashed\n").unwrap();
+    git(d.path(), &["stash", "push", "-q"]);
+    std::fs::write(d.path().join("file"), "three\n").unwrap();
+    let head = commit(d.path(), "third");
+    assert!(!git_may_fail(d.path(), &["stash", "pop", "-q"]));
+    let conflicts = reason(&head).unwrap();
+    assert!(conflicts.contains("unresolved conflicts"), "{conflicts}");
+    assert_eq!(
+        amend_with(&service, &handle, "conflicted", &head, MESSAGE_ONLY)
+            .unwrap_err()
+            .code,
+        "unresolvedConflict"
+    );
+    git(d.path(), &["reset", "-q", "--hard"]);
+
+    // A detached HEAD has no branch to rewrite, even though the commit is HEAD.
+    git(d.path(), &["checkout", "-q", "--detach"]);
+    assert!(reason(&head).unwrap().contains("detached"));
+    git(d.path(), &["checkout", "-q", "main"]);
+    assert_eq!(reason(&head), None);
+
+    // Known remote-tracking refs say so, and say they are not online proof.
+    git(d.path(), &["update-ref", "refs/remotes/origin/main", &head]);
+    let pushed = reason(&head).unwrap();
+    assert!(
+        pushed.contains("origin/main") && pushed.contains("not proof"),
+        "{pushed}"
+    );
+    git(d.path(), &["update-ref", "-d", "refs/remotes/origin/main"]);
+    assert_eq!(reason(&head), None);
+
+    let others = tempfile::tempdir().unwrap();
+    let bare = others.path().join("bare.git");
+    git(
+        d.path(),
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            d.path().to_str().unwrap(),
+            bare.to_str().unwrap(),
+        ],
+    );
+    let (bare_service, _bare_data, bare_handle) = service_for(&bare);
+    let detail = bare_service
+        .repo(&bare_handle)
+        .unwrap()
+        .commit(&head)
+        .unwrap();
+    assert!(!detail.can_edit_message);
+    assert!(detail.edit_disabled_reason.unwrap().contains("bare"));
+    assert_eq!(
+        bare_service
+            .amend_commit_with_identity(
+                &bare_handle,
+                "bare",
+                None,
+                &head,
+                Some("refs/heads/main"),
+                "x",
+                MESSAGE_ONLY
+            )
+            .unwrap_err()
+            .code,
+        "bareRepository"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn message_only_amend_still_runs_hooks_and_signing_and_reports_their_refusals() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = init();
+    std::fs::write(d.path().join("file"), "one\n").unwrap();
+    let head = commit(d.path(), "original");
+    let (service, _data, handle) = service_for(d.path());
+    let hook = d.path().join(".git/hooks/pre-commit");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\necho 'message-only hook refusal' >&2\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let error = amend_with(&service, &handle, "blocked", &head, MESSAGE_ONLY).unwrap_err();
+    assert_eq!(error.code, "git");
+    assert!(error.message.contains("message-only hook refusal"));
+    assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), head);
+
+    std::fs::remove_file(&hook).unwrap();
+    git(d.path(), &["config", "commit.gpgsign", "true"]);
+    git(
+        d.path(),
+        &["config", "gpg.program", "/nonexistent/gitty-signer"],
+    );
+    let error = amend_with(&service, &handle, "unsigned", &head, MESSAGE_ONLY).unwrap_err();
+    assert_eq!(error.code, "git");
     assert_eq!(git(d.path(), &["rev-parse", "HEAD"]), head);
 }
 

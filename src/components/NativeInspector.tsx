@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CommitDetail, DiffFile, FileDiff, RepositorySession } from '../model/repository';
 import { errorMessage, inspectorSpec, native } from '../model/native';
-import { AlertTriangle, ArrowUpRight, Check, ChevronDown, Copy, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, GitMerge, X } from 'lucide-react';
+import { AlertTriangle, ArrowUpRight, Check, ChevronDown, Copy, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, GitMerge, Pencil, X } from 'lucide-react';
 import type { ActiveDiffState } from './WorkingChanges';
 import { initials } from './ui';
+import { commitMessage, draftFromCommitMessage, type MutationOutcome } from '../model/workflow';
 
 function statusClass(status: string): string {
   const s = status.toUpperCase();
@@ -36,6 +37,8 @@ export function NativeInspector({
   activePath,
   onActiveDiffChange,
   notify,
+  onEditMessage,
+  writeBlocked = false,
 }: {
   session: RepositorySession;
   selected: string;
@@ -51,6 +54,11 @@ export function NativeInspector({
   activePath: string | null;
   onActiveDiffChange: (diff: ActiveDiffState | null) => void;
   notify?: (message: string) => void;
+  /** Rewrites the message of the current HEAD only. The capture names the commit and branch the user
+   * started editing; the owner revalidates them and never retargets. Never called for other commits. */
+  onEditMessage?: (request: { oid: string; headRef: string; message: string }) => Promise<MutationOutcome>;
+  /** A repository write is running, or the last refresh failed and writes are blocked. */
+  writeBlocked?: boolean;
 }) {
   const [detail, setDetail] = useState<CommitDetail | null>(null);
   const [parent, setParent] = useState('');
@@ -65,6 +73,17 @@ export function NativeInspector({
   const [busy, setBusy] = useState(false);
   const [diffBusy, setDiffBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  /** What the open editor is bound to. `original` is the normalized message the draft started from. */
+  const [editor, setEditor] = useState<{ oid: string; headRef: string; original: string; token: number } | null>(null);
+  const editorToken = useRef(0);
+  const saving = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; editorToken.current++; }; }, []);
+  const isEditing = !!editor;
+  const [subjectDraft, setSubjectDraft] = useState('');
+  const [bodyDraft, setBodyDraft] = useState('');
+  const [savingMessage, setSavingMessage] = useState(false);
+  const [editError, setEditError] = useState('');
 
   useEffect(() => {
     setParent('');
@@ -72,6 +91,11 @@ export function NativeInspector({
     setDiffError('');
     setDiffBusy(false);
     setCopied(false);
+    // Changing the selection ends the editor. A write already in flight still completes and is
+    // reported by its own token check; it is never retargeted at the new selection.
+    editorToken.current++;
+    setEditor(null);
+    setEditError('');
   }, [selected]);
 
   const validParent = detail?.id === selected && detail.parents.includes(parent) ? parent : undefined;
@@ -172,6 +196,82 @@ export function NativeInspector({
     ? new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }).format(detail.timestamp * 1000)
     : '';
 
+  const isHead = !!session.head && viewId === session.head && selected === session.head;
+  // Editing is offered only for the current, loaded HEAD: a commit that is not HEAD, a detail still
+  // being refetched, or one the backend refused is never editable, and eligibility is re-read on every revision.
+  const loaded = !!detail && !stale && !error && detail.id === selected;
+  const editable = loaded && isHead && !!session.headRef && detail.canEditMessage === true;
+  const canStartEditing = editable && !writeBlocked && !savingMessage && !!onEditMessage;
+  const editNote = loaded && isHead && !editable ? detail.editDisabledReason ?? null : null;
+  const draftMessage = commitMessage({ subject: subjectDraft, body: bodyDraft });
+  const draftChanged = !!editor && draftMessage !== editor.original;
+  /** Why the open editor cannot be saved right now; its draft is kept either way. */
+  const editBlock = (() => {
+    if (!editor) return '';
+    if (session.head !== editor.oid || session.headRef !== editor.headRef || selected !== editor.oid) return 'HEAD changed after editing started, so this draft can no longer be saved to that commit. Copy it, cancel, and edit the current commit.';
+    if (!loaded) return 'Reloading commit details…';
+    if (!editable) return detail?.editDisabledReason ?? 'This commit message can no longer be edited.';
+    if (writeBlocked) return 'Another repository write is running, or a failed refresh is blocking writes.';
+    return '';
+  })();
+  const canSave = !!editor && !editBlock && !savingMessage && !!subjectDraft.trim() && draftChanged;
+
+  function startEditing() {
+    if (!canStartEditing || !detail || !session.headRef) return;
+    const message = detail.body || detail.subject;
+    const draft = draftFromCommitMessage(message);
+    setSubjectDraft(draft.subject);
+    setBodyDraft(draft.body);
+    setEditError('');
+    setEditor({ oid: detail.id, headRef: session.headRef, original: commitMessage(draftFromCommitMessage(message)), token: ++editorToken.current });
+  }
+
+  function cancelEditing() {
+    if (saving.current) return;
+    editorToken.current++;
+    setEditor(null);
+    setEditError('');
+  }
+
+  async function handleSaveMessage() {
+    // Every guard reads current props, not what was true when the editor opened.
+    if (!editor || saving.current || !onEditMessage) return;
+    if (editBlock) return; // already shown as the editor's alert
+    if (!subjectDraft.trim()) { setEditError('Commit subject cannot be empty.'); return; }
+    if (!draftChanged) { setEditError('The message has not changed.'); return; }
+    const { token, oid, headRef } = editor;
+    saving.current = true;
+    setSavingMessage(true);
+    setEditError('');
+    let outcome: MutationOutcome;
+    try {
+      outcome = await onEditMessage({ oid, headRef, message: draftMessage });
+    } catch (e) {
+      outcome = { error: errorMessage(e) };
+    } finally {
+      saving.current = false;
+      if (mounted.current) setSavingMessage(false);
+    }
+    if (!mounted.current) return;
+    const live = editorToken.current === token;
+    const written = !!outcome.oid && !outcome.error;
+    const refreshFailed = outcome.refreshError ? ` Refreshing the repository failed: ${outcome.refreshError}. Writes stay blocked until a refresh succeeds.` : '';
+    let message = '';
+    if (written) message = outcome.refreshError ? `Commit message updated.${refreshFailed}` : 'Commit message updated.';
+    else if (outcome.superseded) message = 'The repository session changed while the message was being saved. Refresh and check the last commit before trying again.';
+    else if (outcome.error) message = `${outcome.error}${refreshFailed} Your draft is kept; nothing is retried automatically.`;
+    else message = 'Git did not report a new commit. Refresh and check the last commit before trying again.';
+    if (written) {
+      if (live) { editorToken.current++; setEditor(null); }
+      notify?.(message);
+    } else if (live) {
+      setEditError(message);
+    } else {
+      // The editor was closed or moved on, but the write was attempted: say what happened.
+      notify?.(`Commit message was not updated. ${message}`);
+    }
+  }
+
   return (
     <aside className="inspector native-inspector" aria-label={comparing ? 'Commit comparison' : 'Commit inspector'} aria-busy={loading || filesLoading || stale}>
       <div className="inspector-content" data-stale={stale || undefined}>
@@ -189,8 +289,18 @@ export function NativeInspector({
                     {detail && detail.parents.length > 1 ? <GitMerge size={14} /> : <GitCommitHorizontal size={15} />}
                     {viewId.slice(0, 7)}
                   </span>
-                  {session.head && viewId === session.head && <span className="badge" data-tone="accent">HEAD</span>}
+                  {!!session.head && viewId === session.head && <span className="badge" data-tone="accent">HEAD</span>}
                   <div className="commit-actions">
+                    {canStartEditing && !isEditing && (
+                      <button
+                        className="icon-button"
+                        aria-label="Edit commit message"
+                        title="Edit commit message"
+                        onClick={startEditing}
+                      >
+                        <Pencil size={14} />
+                      </button>
+                    )}
                     <button className="icon-button" aria-label="Copy full commit SHA" title="Copy full commit SHA" onClick={copy}>
                       {copied ? <Check size={14} /> : <Copy size={14} />}
                     </button>
@@ -199,28 +309,138 @@ export function NativeInspector({
                     </button>
                   </div>
                 </div>
-                {loading ? <h2 className="skeleton-text" style={{ width: '65%' }}>Loading commit…</h2> : <h2>{detail?.subject || viewId}</h2>}
-                {loading && (
-                  <div className="author-block" aria-hidden="true">
-                    <span className="avatar skeleton-text" />
-                    <div>
-                      <strong className="skeleton-text" style={{ width: '60%' }}>Author name</strong>
-                      <span className="skeleton-text">Jan 1, 2025, 12:00 PM UTC</span>
+
+                {isEditing ? (
+                  <form
+                    className="commit-message-editor"
+                    onSubmit={e => {
+                      e.preventDefault();
+                      void handleSaveMessage();
+                    }}
+                  >
+                    {(editError || editBlock) && (
+                      <div className="workflow-alert error" role="alert">
+                        {editError || editBlock}
+                      </div>
+                    )}
+                    <label>
+                      Subject
+                      <input
+                        type="text"
+                        autoFocus
+                        value={subjectDraft}
+                        disabled={savingMessage}
+                        onChange={e => setSubjectDraft(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Escape') {
+                            e.preventDefault();
+                            cancelEditing();
+                          } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                            e.preventDefault();
+                            void handleSaveMessage();
+                          }
+                        }}
+                      />
+                    </label>
+                    <label>
+                      Description
+                      <textarea
+                        rows={4}
+                        value={bodyDraft}
+                        disabled={savingMessage}
+                        placeholder="Optional extended description…"
+                        onChange={e => setBodyDraft(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Escape') {
+                            e.preventDefault();
+                            cancelEditing();
+                          } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                            e.preventDefault();
+                            void handleSaveMessage();
+                          }
+                        }}
+                      />
+                    </label>
+                    <div className="commit-message-editor-actions">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        disabled={savingMessage}
+                        onClick={cancelEditing}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        className="primary-button"
+                        disabled={!canSave}
+                      >
+                        {savingMessage ? 'Saving…' : 'Save'}
+                      </button>
                     </div>
-                  </div>
-                )}
-                {detail && (
-                  <div className="author-block">
-                    <span className="avatar">{initials(detail.author)}</span>
-                    <div>
-                      <strong>{detail.author}</strong>
-                      <span>{date} UTC</span>
-                    </div>
-                  </div>
+                  </form>
+                ) : (
+                  <>
+                    {loading ? (
+                      <h2 className="skeleton-text" style={{ width: '65%' }}>Loading commit…</h2>
+                    ) : (
+                      <h2
+                        className={canStartEditing ? 'editable-commit-heading' : undefined}
+                        onClick={canStartEditing ? startEditing : undefined}
+                        title={canStartEditing ? 'Click to edit commit message' : undefined}
+                        tabIndex={canStartEditing ? 0 : undefined}
+                        role={canStartEditing ? 'button' : undefined}
+                        onKeyDown={canStartEditing ? e => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            startEditing();
+                          }
+                        } : undefined}
+                      >
+                        {detail?.subject || viewId}
+                      </h2>
+                    )}
+                    {loading && (
+                      <div className="author-block" aria-hidden="true">
+                        <span className="avatar skeleton-text" />
+                        <div>
+                          <strong className="skeleton-text" style={{ width: '60%' }}>Author name</strong>
+                          <span className="skeleton-text">Jan 1, 2025, 12:00 PM UTC</span>
+                        </div>
+                      </div>
+                    )}
+                    {detail && (
+                      <div className="author-block">
+                        <span className="avatar">{initials(detail.author)}</span>
+                        <div>
+                          <strong>{detail.author}</strong>
+                          <span>{date} UTC</span>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
 
-              {detail?.body && <p className="commit-description">{detail.body}</p>}
+              {!isEditing && editNote && <p className="commit-edit-note" role="note">{editNote}</p>}
+
+              {!isEditing && detail?.body && (
+                <p
+                  className={`commit-description${canStartEditing ? ' editable-commit-body' : ''}`}
+                  onClick={canStartEditing ? startEditing : undefined}
+                  title={canStartEditing ? 'Click to edit commit message' : undefined}
+                  tabIndex={canStartEditing ? 0 : undefined}
+                  role={canStartEditing ? 'button' : undefined}
+                  onKeyDown={canStartEditing ? e => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      startEditing();
+                    }
+                  } : undefined}
+                >
+                  {detail.body}
+                </p>
+              )}
 
               <dl className="commit-metadata">
                 <div>

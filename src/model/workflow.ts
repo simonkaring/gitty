@@ -3,7 +3,9 @@ import type { CreateCommitResult, RepositoryMutation, RepositorySession, StatusE
 
 export interface MutationOutcome { oid?: string; error?: string; refreshError?: string; superseded?: boolean }
 /** One attempt only. Even a failed write can have changed the index or HEAD. */
-export async function writeAndRefresh(handle: string, mutation: RepositoryMutation, reload: () => Promise<void>, current: () => boolean, invoke = native): Promise<MutationOutcome> {
+/** `reload` receives what the write reported (a copy, before any refresh error exists) so a refresh can use a
+ * confirmed new commit ID, e.g. to follow an amended HEAD. It is called even when the write failed. */
+export async function writeAndRefresh(handle: string, mutation: RepositoryMutation, reload: (outcome: MutationOutcome) => Promise<void>, current: () => boolean, invoke = native): Promise<MutationOutcome> {
   const outcome: MutationOutcome = {};
   try {
     if (!current()) return { superseded: true };
@@ -12,7 +14,7 @@ export async function writeAndRefresh(handle: string, mutation: RepositoryMutati
       outcome.oid = result.oid;
     } else if (mutation.kind === 'amend') {
       if (!mutation.expectedHead || !mutation.expectedStatusFingerprint) throw new Error('Refresh and review the last commit before amending.');
-       const result = await invoke<CreateCommitResult>('repository_amend_commit', { handle, message: mutation.message, ...(mutation.identity ? { identity: mutation.identity } : {}), expectedHead: mutation.expectedHead, expectedHeadRef: mutation.expectedHeadRef, expectedStatusFingerprint: mutation.expectedStatusFingerprint });
+       const result = await invoke<CreateCommitResult>('repository_amend_commit', { handle, message: mutation.message, ...(mutation.identity ? { identity: mutation.identity } : {}), expectedHead: mutation.expectedHead, expectedHeadRef: mutation.expectedHeadRef, expectedStatusFingerprint: mutation.expectedStatusFingerprint, ...(mutation.messageOnly !== undefined ? { messageOnly: mutation.messageOnly } : {}), ...(mutation.requireUnpushed !== undefined ? { requireUnpushed: mutation.requireUnpushed } : {}) });
       outcome.oid = result.oid;
     } else if (mutation.kind === 'stage_hunk' || mutation.kind === 'unstage_hunk') {
       if (!mutation.path || !mutation.fingerprint || !Number.isSafeInteger(mutation.hunkIndex) || mutation.hunkIndex < 0) throw new Error('Select a complete hunk from a current diff.');
@@ -41,7 +43,7 @@ export async function writeAndRefresh(handle: string, mutation: RepositoryMutati
     }
   } catch (error) { outcome.error = errorMessage(error); }
   if (!current()) return { ...outcome, superseded: true };
-  try { await reload(); } catch (error) { outcome.refreshError = errorMessage(error); }
+  try { await reload({ ...outcome }); } catch (error) { outcome.refreshError = errorMessage(error); }
   return current() ? outcome : { ...outcome, superseded: true };
 }
 

@@ -16,7 +16,11 @@ export interface RepositorySession {
 }
 export interface RepositoryRef { name: string; fullName: string; commitId: string; kind: 'local' | 'remote' | 'tag' }
 export interface CommitSummary { id: string; parents: string[]; subject: string; author: string; email: string; timestamp: number }
-export interface CommitDetail extends CommitSummary { body: string }
+/** `canEditMessage` is a read-only eligibility verdict for in-place message editing: true only for the commit
+ * HEAD points at, on a checked-out branch, with no operation or conflicts in progress and no known
+ * remote-tracking ref containing it. When false, `editDisabledReason` is a readable explanation (including
+ * when eligibility itself could not be checked). Remote-tracking refs are local data, not proof about the remote. */
+export interface CommitDetail extends CommitSummary { body: string; canEditMessage?: boolean; editDisabledReason?: string | null }
 export interface HistoryPage { commits: CommitSummary[]; cursor: string | null; generation: string; shallow: boolean }
 export interface HistoryQuery { branch?: string }
 export interface StatusEntry { path: string; oldPath: string | null; indexStatus: string; worktreeStatus: string; conflicted: boolean; untracked: boolean }
@@ -55,7 +59,11 @@ export type RepositoryMutation =
   | { kind: 'stage_hunk'; path: string; hunkIndex: number; fingerprint: string; lineIndices?: number[] }
   | { kind: 'unstage_hunk'; path: string; hunkIndex: number; fingerprint: string; lineIndices?: number[] }
   | { kind: 'commit'; message: string; identity?: CommitIdentity }
-  | { kind: 'amend'; message: string; identity?: CommitIdentity; expectedHead: string; expectedHeadRef: string | null; expectedStatusFingerprint: string };
+  | { kind: 'amend'; message: string; identity?: CommitIdentity; expectedHead: string; expectedHeadRef: string | null; expectedStatusFingerprint: string;
+      /** Rewrite the message only (`git commit --amend --only`, no paths): the index and working tree are untouched and the tree is kept. Default false: the staged index is folded in. */
+      messageOnly?: boolean;
+      /** Refuse (`pushedCommit`) when a known remote-tracking ref already contains HEAD. Independent of messageOnly; default false. */
+      requireUnpushed?: boolean };
 
 /* Tauri commands (all argument names camelCase):
  * repository_pick() -> string | null
@@ -88,7 +96,8 @@ export type RepositoryMutation =
  * Unsupported/truncated previews have no actionable fingerprint. No patch text
  * is accepted from the client. Both commands leave the working tree untouched.
   * repository_create_commit({handle, message: string, identity?: CommitIdentity}) -> CreateCommitResult
-  * repository_amend_commit({handle, message, identity?: CommitIdentity, expectedHead, expectedHeadRef, expectedStatusFingerprint}) -> CreateCommitResult
+  * repository_amend_commit({handle, message, identity?: CommitIdentity, expectedHead, expectedHeadRef, expectedStatusFingerprint, messageOnly?: boolean, requireUnpushed?: boolean}) -> CreateCommitResult
+  * Both optional flags default to false and are independent; see BACKEND.md.
   * repository_git_identity({handle}) -> RepositoryGitIdentity
   * repository_set_git_identity({handle, identity: CommitIdentity, expectedLocal: GitIdentityValues}) -> RepositoryGitIdentity
  * wsl_distributions() -> WslDistribution[]

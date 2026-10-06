@@ -84,6 +84,32 @@ describe('write lifecycle', () => {
     expect(invoke).toHaveBeenCalledExactlyOnceWith('repository_amend_commit', { handle: 's', message: 'Reworded', expectedHead: 'old-head', expectedHeadRef: 'refs/heads/main', expectedStatusFingerprint: 'status-1' });
     expect(reload).toHaveBeenCalledOnce();
   });
+  it('sends messageOnly and requireUnpushed independently and leaves them out by default', async () => {
+    const invoke = vi.fn().mockResolvedValue({ oid: 'new' }) as typeof native;
+    const base = { kind: 'amend', message: 'M', expectedHead: 'h', expectedHeadRef: 'refs/heads/main', expectedStatusFingerprint: 'f' } as const;
+    const wire = { handle: 's', message: 'M', expectedHead: 'h', expectedHeadRef: 'refs/heads/main', expectedStatusFingerprint: 'f' };
+    for (const flags of [{}, { messageOnly: true }, { requireUnpushed: true }, { messageOnly: true, requireUnpushed: true }, { messageOnly: false, requireUnpushed: true }]) {
+      await writeAndRefresh('s', { ...base, ...flags }, async () => {}, () => true, invoke);
+      expect(invoke).toHaveBeenLastCalledWith('repository_amend_commit', { ...wire, ...flags });
+    }
+    expect(vi.mocked(invoke).mock.calls[0][1]).not.toHaveProperty('messageOnly');
+    expect(vi.mocked(invoke).mock.calls[0][1]).not.toHaveProperty('requireUnpushed');
+    // Flags belong to amend only.
+    await writeAndRefresh('s', { kind: 'commit', message: 'C' }, async () => {}, () => true, invoke);
+    expect(invoke).toHaveBeenLastCalledWith('repository_create_commit', { handle: 's', message: 'C' });
+  });
+  it('gives reload the confirmed outcome before any refresh error exists, for success and failure alike', async () => {
+    const mutation = { kind: 'amend', message: 'M', expectedHead: 'old', expectedHeadRef: null, expectedStatusFingerprint: 'f' } as const;
+    const seen: unknown[] = [];
+    const reload = vi.fn(async (outcome: unknown) => { seen.push(structuredClone(outcome)); throw new Error('Refresh unavailable'); });
+    const confirmed = await writeAndRefresh('s', mutation, reload, () => true, vi.fn().mockResolvedValue({ oid: 'new' }) as typeof native);
+    expect(seen).toEqual([{ oid: 'new' }]);
+    expect(confirmed).toEqual({ oid: 'new', refreshError: 'Refresh unavailable' });
+    const refused = await writeAndRefresh('s', mutation, reload, () => true, vi.fn().mockRejectedValue({ code: 'pushedCommit', message: 'Already pushed' }) as typeof native);
+    expect(seen[1]).toEqual({ error: 'Already pushed' });
+    expect(refused).toEqual({ error: 'Already pushed', refreshError: 'Refresh unavailable' });
+    expect(refused.oid).toBeUndefined();
+  });
   it('passes selected identity only to commit and amend requests', async () => {
     const invoke = vi.fn().mockResolvedValue({ oid: 'new-head' }) as typeof native;
     const reload = vi.fn().mockResolvedValue(undefined);

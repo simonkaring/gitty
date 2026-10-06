@@ -27,6 +27,18 @@ const MAX_REPORTED: usize = 4000;
 const UNVERIFIED: &str =
     "The repository may already have changed. Refresh and check the status before retrying.";
 
+/// Independent switches for `amend_commit`; both default to off, which is the
+/// composer's behavior: the current index is folded into the rewritten commit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AmendOptions {
+    /// Rewrite the message only: `--only` with no paths ignores the index, so
+    /// staged, partially staged and working-tree changes all stay exactly as they
+    /// are and the new commit keeps the old tree.
+    pub message_only: bool,
+    /// Refuse when a known remote-tracking ref already contains the commit.
+    pub require_unpushed: bool,
+}
+
 fn validate_message(message: &str) -> Result<()> {
     if message.trim().is_empty() {
         return Err(Error::new(
@@ -231,9 +243,11 @@ impl Repository {
             .find(|((name, _), line)| *line != format!("{name} missing"))
             .map(|((_, what), _)| *what))
     }
-    /// Refuses to write while Git owns the index or an unsupported operation is
-    /// half-finished. Nothing here removes or repairs Git state.
-    pub(crate) fn require_writable(&self) -> Result<()> {
+    /// Refuses while an unsupported operation is half-finished. Read-only: this
+    /// is also the eligibility check for in-place message editing, which must not
+    /// be disabled by a transient `index.lock`. Returns the Git directory listing
+    /// so a writer can answer the lock question without a second read.
+    pub(crate) fn require_no_operation(&self) -> Result<HashSet<String>> {
         self.require_worktree()?;
         let entries = self.git_dir_entries()?;
         let in_progress = IN_PROGRESS_PATHS
@@ -248,6 +262,12 @@ impl Repository {
                 ),
             ));
         }
+        Ok(entries)
+    }
+    /// Refuses to write while Git owns the index or an unsupported operation is
+    /// half-finished. Nothing here removes or repairs Git state.
+    pub(crate) fn require_writable(&self) -> Result<()> {
+        let entries = self.require_no_operation()?;
         if entries.contains(INDEX_LOCK) {
             return Err(Error::new(
                 "indexLocked",
@@ -597,12 +617,97 @@ impl Repository {
         }
     }
 
-    /// Replaces the current commit with the supplied message and current index.
-    /// The snapshot expectations are checked under Gitty's mutation lock by the
-    /// caller immediately before Git runs. This closes races between app sessions,
-    /// not the final window before Git acquires its own locks from external tools.
-    /// No staged changes are required, so a message-only amend remains possible;
-    /// unstaged changes are never included.
+    /// Remote-tracking refs that contain `id`, as short names such as
+    /// `origin/main`. Checked: a failed query is an error, never "not pushed".
+    /// This reads local refs only; it is not proof about the remote itself.
+    pub(crate) fn remote_branches_containing(&self, id: &str) -> Result<Vec<String>> {
+        let o = self.check(&[
+            "for-each-ref",
+            "--contains",
+            id,
+            "--format=%(refname)",
+            "refs/remotes",
+        ])?;
+        if !o.success {
+            return Err(self.failed(&o));
+        }
+        Ok(process::text(o.stdout)?
+            .lines()
+            .map(|line| {
+                line.strip_prefix("refs/remotes/")
+                    .unwrap_or(line)
+                    .to_string()
+            })
+            .filter(|line| !line.is_empty())
+            .collect())
+    }
+    fn pushed_error(branches: &[String]) -> Error {
+        let shown = branches
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let more = branches.len().saturating_sub(3);
+        Error::new(
+            "pushedCommit",
+            format!(
+                "This commit is already contained in the remote-tracking ref{} {shown}{}. Gitty only reads local remote-tracking refs, which are not proof of what the remote has; fetch to refresh them. Rewriting a published commit would diverge from it.",
+                if branches.len() == 1 { "" } else { "s" },
+                if more > 0 { format!(" and {more} more") } else { String::new() }
+            ),
+        )
+    }
+    /// Why the message of commit `id` cannot be edited in place, or `None` when
+    /// it can. Read-only, and it never fails open: any error while checking is the
+    /// caller's reason to disable editing. Cheap checks come first so that the
+    /// common case, a commit that is not HEAD, costs one Git process.
+    pub(crate) fn message_edit_block(&self, id: &str) -> Result<Option<String>> {
+        if self.session.bare {
+            return Ok(Some(
+                "Editing commit messages requires a working tree; this repository is bare.".into(),
+            ));
+        }
+        if self.head_commit()?.as_deref() != Some(id) {
+            return Ok(Some(
+                "Only the commit HEAD points at can be edited here. Use Interactive rebase from the commit's actions to reword older commits.".into(),
+            ));
+        }
+        let symbolic = self.check(&["symbolic-ref", "--quiet", "HEAD"])?;
+        match symbolic.code {
+            Some(0) => {}
+            Some(1) => {
+                return Ok(Some(
+                    "HEAD is detached. Check out a branch before editing its commit message."
+                        .into(),
+                ))
+            }
+            _ => return Err(self.failed(&symbolic)),
+        }
+        // A transient index.lock is deliberately not checked: it says nothing about
+        // whether this commit may be edited, and the write itself still refuses it.
+        self.require_no_operation()?;
+        let conflicted = self.unmerged()?;
+        if !conflicted.is_empty() {
+            return Ok(Some(format!(
+                "{} has unresolved conflicts. Resolve them in Git before editing the commit message.",
+                conflicted.join(", ")
+            )));
+        }
+        let remotes = self.remote_branches_containing(id)?;
+        if !remotes.is_empty() {
+            return Ok(Some(Self::pushed_error(&remotes).message));
+        }
+        Ok(None)
+    }
+
+    /// Replaces the current commit with the supplied message. By default the
+    /// current index is folded into the new commit; with `message_only` it is not
+    /// read at all. The snapshot expectations are checked under Gitty's mutation
+    /// lock by the caller immediately before Git runs. This closes races between
+    /// app sessions, not the final window before Git acquires its own locks from
+    /// external tools. No staged changes are required, so a message-only amend
+    /// remains possible; unstaged changes are never included.
     pub(crate) fn amend_commit(
         &self,
         message: &str,
@@ -610,6 +715,7 @@ impl Repository {
         expected_head: &str,
         expected_head_ref: Option<&str>,
         expected_status_fingerprint: &str,
+        options: AmendOptions,
     ) -> Result<CreatedCommit> {
         validate_message(message)?;
         validate_identity(identity)?;
@@ -641,7 +747,17 @@ impl Repository {
                 "HEAD or the working changes have changed since this amendment was prepared. Refresh and review the last commit before trying again.",
             ));
         }
-        let a = args(&["commit", "--quiet", "--amend", "--file=-"]);
+        if options.require_unpushed {
+            let remotes = self.remote_branches_containing(&before)?;
+            if !remotes.is_empty() {
+                return Err(Self::pushed_error(&remotes));
+            }
+        }
+        let mut a = args(&["commit", "--quiet", "--amend"]);
+        if options.message_only {
+            a.push("--only".into());
+        }
+        a.push("--file=-".into());
         let output = self.write_commit(&a, message, identity, true)?;
         let after = self.head_commit().map_err(unverified)?;
         if !output.success {

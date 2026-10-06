@@ -495,7 +495,13 @@ async fn repository_amend_commit(
     expected_head: String,
     expected_head_ref: Option<String>,
     expected_status_fingerprint: String,
+    message_only: Option<bool>,
+    require_unpushed: Option<bool>,
 ) -> Result<CreatedCommit> {
+    let options = mutate::AmendOptions {
+        message_only: message_only.unwrap_or(false),
+        require_unpushed: require_unpushed.unwrap_or(false),
+    };
     with_service(state, move |s| {
         s.amend_commit_with_identity(
             &handle,
@@ -504,6 +510,7 @@ async fn repository_amend_commit(
             &expected_head,
             expected_head_ref.as_deref(),
             &expected_status_fingerprint,
+            options,
         )
     })
     .await

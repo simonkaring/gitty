@@ -90,6 +90,8 @@ Commit drafts and profile selections persist per repository/worktree and survive
 
 Amend supports message-only rewrites and staged changes. It never includes unstaged content. HEAD, its symbolic ref, and the working-state fingerprint are revalidated under Gitty's mutation lock immediately before Git runs, so changes already visible at preflight reject a stale review. This serializes Gitty sessions, not external Git: an external process can still race before `git commit` acquires Git's own index/ref locks.
 
+The commit inspector can also edit the **HEAD** commit's message in place (click the title or description). Only HEAD on a checked-out branch is offered, with no operation or conflicts in progress and no known remote-tracking ref containing it; other commits stay on interactive rebase. This runs a message-only amend (`--only`, no paths), so staged, partially staged and working-tree changes are untouched, and it refuses a commit that a remote-tracking ref already contains. Those refs are local data from your last fetch, not proof of what the remote has. A reason is shown when editing is unavailable, and the draft is kept if HEAD, the branch or eligibility changes while you edit. The demo workspace does not support it.
+
 The browser demo does not modify repository files. Its commit history and diffs are synthetic; stage and commit controls are available in the desktop app.
 
 ## Branches, drag/drop, and conflicts

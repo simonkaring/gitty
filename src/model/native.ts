@@ -75,7 +75,14 @@ export function validateHistory(commits: CommitSummary[]) {
  * read and only publish once refs agree. */
 export async function readNativeSnapshot(handle: string, options: {
   previous?: Pick<NativeSnapshot, 'state' | 'commits' | 'cursor' | 'generation'>;
+  /** Automatic keep-visible candidates (selection, scroll anchor). With `previous`, only IDs that were
+   * actually in the previous history are kept: an ID outside it, such as an inspector-only orphan, can never
+   * be found by walking and would otherwise make every refresh read the entire history. */
   preserve?: string[];
+  /** A confirmed rewrite of the tip, `from` -> `to` (an amend). Applied to `preserve` after the filter above
+   * so the old ID, which is in `previous`, is followed to the new commit instead of being searched for. Honored
+   * only while the refreshed HEAD is `to`, so a hook that moved HEAD again cannot cause a full-history walk. */
+  remap?: { from: string; to: string };
   current?: () => boolean;
   invoke?: typeof native;
 } = {}): Promise<NativeSnapshot> {
@@ -93,7 +100,11 @@ export async function readNativeSnapshot(handle: string, options: {
     let commits: CommitSummary[] = [];
     let cursor: string | null = null;
     let generation = '';
-    const keep = new Set((options.preserve ?? []).filter(id => id && id !== WORKING_ID));
+    const known = options.previous && new Set(options.previous.commits.map(commit => commit.id));
+    const remap = options.remap && before.session.head === options.remap.to ? options.remap : undefined;
+    const keep = new Set((options.preserve ?? [])
+      .filter(id => id && id !== WORKING_ID && (!known || known.has(id)))
+      .map(id => remap && id === remap.from ? remap.to : id));
     const count = Math.max(200, options.previous?.commits.length ?? 0);
     do {
       const page: HistoryPage = await call<HistoryPage>('repository_history', { cursor, limit: 200, query: {} });

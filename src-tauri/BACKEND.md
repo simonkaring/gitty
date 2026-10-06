@@ -16,11 +16,37 @@ Ordinary index/commit writes use these commands:
 - `repository_stage_hunk({handle, path: string, hunkIndex: number, fingerprint: string, lineIndices?: number[]}) -> void`
 - `repository_unstage_hunk({handle, path: string, hunkIndex: number, fingerprint: string, lineIndices?: number[]}) -> void`
 - `repository_create_commit({handle, message: string, identity?: {name: string, email: string}}) -> {oid: string}`
-- `repository_amend_commit({handle, message: string, identity?: {name: string, email: string}, expectedHead: string, expectedHeadRef: string | null, expectedStatusFingerprint: string}) -> {oid: string}`
+- `repository_amend_commit({handle, message: string, identity?: {name: string, email: string}, expectedHead: string, expectedHeadRef: string | null, expectedStatusFingerprint: string, messageOnly?: boolean, requireUnpushed?: boolean}) -> {oid: string}`
 - `repository_git_identity({handle}) -> {local: {name: string | null, email: string | null}, effective: {name: string | null, email: string | null}}`
 - `repository_set_git_identity({handle, identity: {name: string, email: string}, expectedLocal: {name: string | null, email: string | null}}) -> RepositoryGitIdentity`
 
-`repository_commit({handle, oid})` is unchanged and remains a read.
+`repository_commit({handle, oid})` remains a read. Its `CommitDetail` gains two fields:
+`canEditMessage: boolean` and `editDisabledReason: string | null` (camelCase on the wire).
+They are the eligibility verdict for editing that commit's message in place, and they
+carry no authority: the write re-checks everything it relies on.
+
+Eligibility is read-only and checked cheapest-first, so a commit that is not HEAD costs
+one extra Git process. The commit is parsed first, so a failure while checking can never
+hide the commit itself:
+
+1. A bare repository is not editable.
+2. Only the commit HEAD resolves to is editable; any other commit is disabled with a
+   reason pointing at interactive rebase. (Root and merge commits are editable when
+   they are HEAD. The old ancestry and merge-history probes are gone.)
+3. HEAD must be symbolic (a checked-out branch); a detached HEAD is disabled.
+4. No operation in progress (the same check writes use) and no unmerged paths.
+   A transient `index.lock` is deliberately excluded: it says nothing about
+   eligibility, and the write itself still refuses with `indexLocked`.
+5. No known remote-tracking ref may contain the commit
+   (`git for-each-ref --contains <oid> --format=%(refname) refs/remotes`, which must
+   succeed; a failed query is an error, never "not pushed").
+
+Eligibility never fails open. Any error while checking (an operation in progress, a
+failed Git command, an unresolved HEAD) is returned as a normal detail with
+`canEditMessage: false` and a readable `editDisabledReason` such as "Editing is
+unavailable because eligibility could not be checked: …". Remote-tracking refs are local
+data: they only prove what the last fetch saw, never what the remote has now, and the
+reason text says so. The demo backend returns `canEditMessage: false` for every commit.
 When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage_hunk`, only the specified 0-based lines within the hunk are staged/unstaged using a selectively generated forward patch (and `--reverse` for unstaging), validating bounds and changed line kinds while preserving all working files and other index entries.
 
 ## Read semantics
@@ -104,6 +130,22 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   history only when the state fingerprint changed; after a stage, unstage, hunk,
   discard or ignore it re-reads `repository_status` alone, since none of them can move
   HEAD or refs. Commit and amend keep the full refresh.
+- The frontend's write lifecycle hands the write's outcome to the refresh
+  (`reload(outcome)`) before refreshing. After an amend that confirmed a new `oid`
+  (no write error), the refresh remaps the old `expectedHead` to that `oid` *inside*
+  the snapshot read, before history paging: the automatic keep-visible candidates
+  (selection and scroll anchor) are first filtered to commits that were in the previous
+  history, and only then remapped. The walk therefore finds the new tip on its first
+  page instead of paging the whole history for an ID that no longer exists, and the
+  scroll anchor (ID and offset) is restored on the new row. The remap is honored only
+  while the refreshed HEAD is that `oid`. A failed or uncertain write has no confirmed
+  `oid`, so nothing is remapped, and a failed refresh never forces a reveal. The same
+  filter stops later refreshes from walking all history for an inspector-only orphan
+  (a selected ID that was not in the loaded history). Explicit reveal and paging are
+  unchanged. After a successful refresh the selection moves to the new commit only if
+  it is the same session, the selection is still the old HEAD, and no user selection
+  has happened since the write was submitted (including away and back); compare
+  base/target, refs and cherry-pick picks are never touched.
 - Process waits poll with a 1 ms to 10 ms backoff, so a Git command that finishes in a
   few milliseconds is not charged a fixed 10 ms.
 - Root commits compare against the computed empty-tree ID without writing objects.
@@ -252,15 +294,27 @@ targeted conflict resolutions have the additional contract documented below.
    after the command, so it is accurate even if a post-commit hook moved HEAD
    again. If Git fails but HEAD moved anyway, or if HEAD cannot be confirmed, the
    result is `mutationUnverified` rather than a plain failure.
-- Amend runs `git commit --quiet --amend --file=-`. It permits a message-only
-  rewrite or includes the current staged index, but never unstaged content. It
-  requires an existing HEAD and revalidates the expected HEAD OID, symbolic ref,
-  and status fingerprint under the common-directory mutation lock immediately
-  before Git runs. A mismatch already visible then returns `staleOperation`; the
-  check is not an atomic compare-and-swap against external Git before the commit
-  subprocess acquires Git's own locks. Hooks, signing, cleanup,
+- Amend runs `git commit --quiet --amend --file=-` by default: the message is
+  rewritten and the current staged index is folded into the new commit, never
+  unstaged content. It requires an existing HEAD and revalidates the expected HEAD OID,
+  symbolic ref, and status fingerprint under the common-directory mutation lock
+  immediately before Git runs. A mismatch already visible then returns
+  `staleOperation`; the check is not an atomic compare-and-swap against external Git
+  before the commit subprocess acquires Git's own locks. Hooks, signing, cleanup,
   message limits, uncertain outcomes, and the no-retry rule are the same as for a
-  new commit.
+  new commit. Two optional booleans, both defaulting to `false` and fully independent
+  (the existing composer sends neither and keeps exactly these semantics):
+  - `messageOnly` adds `--only` with no paths:
+    `git commit --quiet --amend --only --file=-`. Git ignores the index, so the new
+    commit keeps the old tree and parents (root and merge commits included), and
+    staged, partially staged and working-tree changes are all left exactly as they
+    were. Hooks and signing still run.
+  - `requireUnpushed` refuses with `pushedCommit` when a known remote-tracking ref
+    contains the HEAD being amended. The check (`for-each-ref --contains … refs/remotes`)
+    runs under the same mutation lock after the stale checks and before Git runs; a
+    failed query is an error, not permission. It reads local refs only, which are not
+    proof about the remote, so the message says to fetch.
+  The inline message editor sends both `true`.
 - Writes get a 120-second deadline of their own (hooks and signing are
   interactive-speed work) instead of the 60-second read request budget; checks
   around them get 30 seconds. A write that is abandoned — timeout, output limit,
@@ -270,7 +324,8 @@ targeted conflict resolutions have the additional contract documented below.
   reconcile from `repository_state`/`repository_status` after every outcome.
 - Error codes for writes: `invalidHandle`, `invalidRequest`, `invalidPath`,
   `tooManyPaths`, `bareRepository`, `operationInProgress`, `indexLocked`,
-  `unresolvedConflict`, `unresolvedHead`, `nothingStaged`, `staleOperation` (discard review
+  `unresolvedConflict`, `unresolvedHead`, `nothingStaged`, `pushedCommit` (amend with
+  `requireUnpushed` found a containing remote-tracking ref), `staleOperation` (discard review
   out of date), `openRefused`, `notFound`, `unsupported`, `openExternal`, `git` (Git exited
   non-zero: hook rejection, missing identity, signing failure, ignored or
   unmatched paths), `mutationUnverified`, plus the shared `unsupportedEncoding`,
@@ -590,4 +645,4 @@ the browser already requires; it is not covered by the macOS suite. Graph
 operations, regular-file conflict resolution, hunk staging, stashes, remote
 operations, amend, and cloning are described above. Line staging and a scoped
 WSL askpass bridge have local tests; Windows/WSL runtime checks remain open.
-The current suite includes 137 passing library tests and two binary tests on macOS.
+The current suite includes 189 passing library tests (one ignored) and two binary tests on macOS. One signing test, `operations_unsupported_state_bare_and_signing_errors`, depends on the machine's global Git configuration: a global `gpg.format =` with an empty value makes Git abort while reading configuration, which no repository-local setting can override, so run it with `GIT_CONFIG_GLOBAL=/dev/null` on such a machine.

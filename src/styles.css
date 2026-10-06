@@ -1741,6 +1741,54 @@ button[data-danger='true']:hover:not(:disabled) {
   font-size: var(--fs-xs);
   color: var(--muted);
 }
+.commit-summary h2.editable-commit-heading,
+.commit-description.editable-commit-body {
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  transition: background-color 0.15s ease, outline-color 0.15s ease;
+}
+.commit-summary h2.editable-commit-heading:hover {
+  background: var(--hover);
+  outline: 2px dashed var(--border-strong);
+  outline-offset: 4px;
+}
+.commit-description.editable-commit-body:hover {
+  background: var(--hover);
+  border-color: var(--border-strong);
+}
+.commit-edit-note {
+  margin: 8px 20px 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+.commit-message-editor {
+  margin: 12px 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.commit-message-editor label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+.commit-message-editor input,
+.commit-message-editor textarea {
+  width: 100%;
+}
+.commit-message-editor textarea {
+  font-family: var(--mono);
+  font-size: var(--editor-font-size);
+}
+.commit-message-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
 .commit-description {
   margin: 16px 20px 0;
   padding: 12px 16px;

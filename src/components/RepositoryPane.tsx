@@ -127,6 +127,11 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
   const revealToken = useRef(0);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  /** Counts user selection actions only (not automatic or session-reset selection), so an automatic
+   * follow can tell that the user moved, including away and back to the same commit. */
+  const navigation = useRef(0);
   const activeRef = useRef(active);
   activeRef.current = active;
   const onIdentityRef = useRef(onIdentity);
@@ -171,7 +176,9 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
     finally { if (token === epoch.current) { lock.current = false; setBusy(false); } }
   }, [location, tabId]);
   useEffect(() => { void open(); }, [open]);
-  const refresh = useCallback(async (force = false) => {
+  /** `replace` is a confirmed rewrite of the tip (an amend): the selection and scroll anchor that were on `from`
+   * follow it to `to`, and the history walk looks for `to` rather than the now unreachable `from`. */
+  const refresh = useCallback(async (force = false, replace?: { from: string; to: string }) => {
     const current = session.current;
     if (!current) return;
     if (!force && (lock.current || mutationLock.current)) return;
@@ -185,10 +192,14 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
       const snapshot = await readNativeSnapshot(handle, {
         previous: { state: current, commits: history.current, cursor: nextCursor.current, generation: generation.current },
         preserve: [selectedRef.current, graph.current?.anchor()?.id ?? ''],
+        remap: replace,
         current: () => token === epoch.current,
       });
       const activeOperation = snapshot.operation;
       if (token !== epoch.current) return;
+      // Anchors are captured here, after the walk, and must name a row that exists in the new history.
+      const follow = (value: GraphAnchor | null) => replace && snapshot.state.session.head === replace.to && value?.id === replace.from ? { ...value, id: replace.to } : value;
+      anchor.current = follow(anchor.current);
       // Content, not fingerprint: the fingerprint also covers status and index, so it moves on every stage.
       const content = operationContent(activeOperation);
       const operationChanged = operationSig.current !== content;
@@ -198,11 +209,11 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
       const changed = updated.fingerprint !== current.fingerprint;
       const workingChanged = working.fingerprint !== fingerprint.current;
       if (changed) {
-        anchor.current = graph.current?.anchor() ?? null;
+        anchor.current = follow(graph.current?.anchor() ?? null);
         generation.current = snapshot.generation;
         installHistory(snapshot.commits, snapshot.cursor);
       }
-      if (workingChanged && !anchor.current) anchor.current = graph.current?.anchor() ?? null;
+      if (workingChanged && !anchor.current) anchor.current = follow(graph.current?.anchor() ?? null);
       session.current = updated;
       if (changed || force) setState(updated);
       if (changed || workingChanged || force) setStatus(working);
@@ -256,10 +267,35 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
       // Let an already-running read finish, then exclude polling/paging until the
       // write AND its required refresh complete. No dropped post-write reloads.
       while (lock.current && isCurrent()) await new Promise(resolve => setTimeout(resolve, 25));
-      const outcome = await writeAndRefresh(current.session.handle, mutation, () => mutation.kind === 'commit' || mutation.kind === 'amend' ? refresh(true) : refreshStatus(), isCurrent);
+      const outcome = await writeAndRefresh(current.session.handle, mutation, written => {
+        if (mutation.kind === 'amend') return refresh(true, written.oid && !written.error ? { from: mutation.expectedHead, to: written.oid } : undefined);
+        return mutation.kind === 'commit' ? refresh(true) : refreshStatus();
+      }, isCurrent);
       if (outcome.refreshError && isCurrent()) { blockedRef.current = true; setMutationBlocked(true); }
       return outcome;
     } finally { if (isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
+  }
+  /** Selects and reveals the amended HEAD. Not a user navigation: it must not advance the navigation counter. */
+  function followAmendedHead(id: string) {
+    if (!history.current.some(commit => commit.id === id)) return;
+    setSelected(id); jumpTo.current = id; setCommits(items => [...items]);
+  }
+  /** Rewrites the message of the commit the inspector's editor was opened on, which must still be HEAD on the
+   * same branch. It never retargets: any mismatch is an explicit error and the draft stays with the editor. */
+  async function editHeadMessage({ oid, headRef, message }: { oid: string; headRef: string; message: string }): Promise<MutationOutcome> {
+    const current = session.current;
+    const working = statusRef.current;
+    if (!current) return { error: 'No repository is open.' };
+    if (isDemoHandle(current.session.handle)) return { error: 'Editing commit messages is not available in the demo workspace.' };
+    if (current.session.head !== oid || current.session.headRef !== headRef) return { error: 'HEAD changed since editing started, so the message was not saved. Your draft is kept.' };
+    if (!working || working.head !== oid || working.headRef !== headRef) return { error: 'The working-tree status is not current for this commit. Wait for the refresh to finish and try again.' };
+    const handle = current.session.handle;
+    const generation = navigation.current;
+    // Expectations are read now, after the target, branch and session were validated, not when the editor opened.
+    const outcome = await mutate({ kind: 'amend', message, expectedHead: oid, expectedHeadRef: headRef, expectedStatusFingerprint: fingerprint.current, messageOnly: true, requireUnpushed: true });
+    const settled = !!outcome.oid && !outcome.error && !outcome.refreshError && !outcome.superseded;
+    if (settled && session.current?.session.handle === handle && selectedRef.current === oid && navigation.current === generation) followAmendedHead(outcome.oid!);
+    return outcome;
   }
   async function operationWrite(command: string, args: Record<string, unknown>) {
     const current = session.current;
@@ -385,6 +421,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
     finally { if (token === epoch.current) { lock.current = false; setBusy(false); } }
   }
   function reveal(id: string) {
+    navigation.current++;
     setNotice('');
     setActiveDiff(null);
     if (id === WORKING_ID) {
@@ -604,6 +641,8 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
                 activePath={activeDiff?.path ?? null}
                 onActiveDiffChange={setActiveDiff}
                 notify={setNotice}
+                onEditMessage={editHeadMessage}
+                writeBlocked={mutationBusy || mutationBlocked}
               />
             )}
           </>}
@@ -615,7 +654,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
     {state && menuTarget && <GraphContextMenu target={menuTarget} state={state} busy={mutationBusy || mutationBlocked} onClose={() => setMenuTarget(null)} onOperation={context => { setMenuTarget(null); setActionContext(context); }} onSwitchBranch={ref => { setMenuTarget(null); void switchBranch(ref); }} onShowDetails={oid => { reveal(oid); setInspectorOpen(true); setMenuTarget(null); }} onSetBase={oid => setComparison(oid, 'base')} onSetTarget={oid => setComparison(oid, 'target')} onCompare={compareWithCurrent} onPullRequest={ref => { setMenuTarget(null); setPrSource(ref); }} onRemoteAction={action => void runMenuRemote(action)} onPush={() => void pushFromMenu(menuTarget.context.ref!)} onCopy={(value, label) => void copyMenuValue(value, label)} />}
     {state && publishInfo && <PublishDialog remotes={publishInfo.remotes} branch={publishInfo.branch ?? ''} onPublish={async (remote, branch) => { const action: RemoteActionRequest = { kind: 'push', remote, branch, setUpstream: true }; const output = await remoteWrite('repository_remote_action', { action }); setNotice(output || 'Publish complete.'); }} onClose={() => setPublishInfo(null)} />}
     {state && actionContext && <OperationDialog key={state.session.handle} state={state} operation={operation} context={actionContext} commits={commits} busy={mutationBusy || mutationBlocked} onWrite={operationWrite} onClose={() => setActionContext(null)} onCompare={compareWithCurrent} onPullRequest={source => { setPrSource(source); setActionContext(null); }} />}
-    {state && blockedSwitch && <SwitchBlockedDialog branch={blockedSwitch.branch} reason={blockedSwitch.reason} hasChanges={!!status?.entries.length} onReview={() => { setSelected(WORKING_ID); setInspectorOpen(true); setBlockedSwitch(null); }} onOperations={() => { setActionContext({ oid: blockedSwitch.oid, ref: blockedSwitch.ref, initial: 'switchBranch' }); setBlockedSwitch(null); }} onClose={() => setBlockedSwitch(null)} />}
+    {state && blockedSwitch && <SwitchBlockedDialog branch={blockedSwitch.branch} reason={blockedSwitch.reason} hasChanges={!!status?.entries.length} onReview={() => { navigation.current++; setSelected(WORKING_ID); setInspectorOpen(true); setBlockedSwitch(null); }} onOperations={() => { setActionContext({ oid: blockedSwitch.oid, ref: blockedSwitch.ref, initial: 'switchBranch' }); setBlockedSwitch(null); }} onClose={() => setBlockedSwitch(null)} />}
     {state && conflictPath && <ConflictEditor key={`${state.session.handle}:${conflictPath}`} handle={state.session.handle} path={conflictPath} revision={revision} busy={mutationBusy || mutationBlocked} onWrite={operationWrite} onClose={() => setConflictPath(null)} />}
     {state && prSource && <PullRequestDialog key={state.session.handle} handle={state.session.handle} source={prSource} onClose={() => setPrSource(null)} />}
     {state && stashOpen && <RemoteStashDialog key={`${state.session.handle}:stash`} handle={state.session.handle} onWrite={remoteWrite} onClose={() => setStashOpen(false)} notify={setNotice} />}

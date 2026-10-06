@@ -1,5 +1,6 @@
 use crate::{
     dto::*,
+    mutate::AmendOptions,
     process::{self, args},
 };
 use std::{
@@ -349,6 +350,7 @@ impl Service {
             expected_head,
             expected_head_ref,
             expected_status_fingerprint,
+            AmendOptions::default(),
         )
     }
     pub fn amend_commit_with_identity(
@@ -359,6 +361,7 @@ impl Service {
         expected_head: &str,
         expected_head_ref: Option<&str>,
         expected_status_fingerprint: &str,
+        options: AmendOptions,
     ) -> Result<CreatedCommit> {
         self.mutate(handle, |repo| {
             repo.amend_commit(
@@ -367,6 +370,7 @@ impl Service {
                 expected_head,
                 expected_head_ref,
                 expected_status_fingerprint,
+                options,
             )
         })
     }
@@ -581,7 +585,21 @@ impl Repository {
     pub fn commit(&self, revision: &str) -> Result<CommitDetail> {
         let id = resolve(self.location(), revision)?;
         let raw = process::checked(self.location(), &args(&["cat-file", "commit", &id]))?;
-        crate::commit::parse(&id, &raw)
+        let mut detail = crate::commit::parse(&id, &raw)?;
+        // The commit itself is parsed first so a failure while checking eligibility
+        // can never hide it. Eligibility never fails open: an error becomes the
+        // readable reason editing is unavailable.
+        match self.message_edit_block(&id) {
+            Ok(None) => detail.can_edit_message = true,
+            Ok(Some(reason)) => detail.edit_disabled_reason = Some(reason),
+            Err(error) => {
+                detail.edit_disabled_reason = Some(format!(
+                    "Editing is unavailable because eligibility could not be checked: {}",
+                    error.message
+                ))
+            }
+        }
+        Ok(detail)
     }
     pub fn require_worktree(&self) -> Result<()> {
         if self.session.bare {

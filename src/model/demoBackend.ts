@@ -77,7 +77,7 @@ export async function demoInvoke(command: string, args: Record<string, unknown>)
     case 'repository_commit': {
       const commit = r().commits.find(item => item.id === args.oid);
       if (!commit) throw { code: 'not_found', message: 'Commit not found in the demo history.' };
-      return { ...seconds(commit), body: commit.body } satisfies CommitDetail;
+      return { ...seconds(commit), body: commit.body, canEditMessage: false, editDisabledReason: 'Editing commit messages is not available in the demo workspace; it simulates staging and committing only.' } satisfies CommitDetail;
     }
     case 'repository_diff_files': {
       const spec = args.spec as DiffSpec;

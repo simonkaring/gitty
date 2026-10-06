@@ -108,6 +108,8 @@ pub fn parse(id: &str, bytes: &[u8]) -> Result<CommitDetail> {
             timestamp,
         },
         body: body.to_string(),
+        can_edit_message: false,
+        edit_disabled_reason: None,
     })
 }
 
