@@ -415,13 +415,16 @@ for a selected connected account. PR creation is explicit and does not push.
   a local per-app askpass bridge when those cannot supply credentials. Gitty
   keeps answers in memory only. A cancelled or expired prompt fails the helper,
   and a prompt has a 90-second response deadline within Git's write deadline.
-  WSL Git cannot use the native askpass bridge: its scripts cannot run inside
-  the distribution. Explicit WSL fetch/pull/push instead set
-  `credential.interactive=true`, so a credential helper with its own sign-in
-  window (typically Windows Git Credential Manager reached through WSL interop)
-  can re-authenticate. Terminal prompts, askpass and SSH passphrase prompts stay
-  disabled; background fetch remains fully noninteractive. Failed explicit
-  actions explain this. No user credential is embedded in a Git argument;
+  On Windows, explicit WSL fetch/pull/push can use a per-operation scoped askpass
+  bridge when `wslpath` translates the Gitty executable for Windows interop.
+  If translation fails (or no askpass registry is available), the helper-UI
+  fallback sets `credential.interactive=true`, so a credential helper with its
+  own sign-in window (typically Windows Git Credential Manager reached through
+  WSL interop) can re-authenticate. Terminal prompts remain disabled. The WSL
+  bridge inherits SSH `BatchMode=yes` even though it sets `SSH_ASKPASS`;
+  interactive SSH passphrase support is not established. Without the bridge,
+  askpass remains disabled. Background fetch remains fully noninteractive. Failed
+  explicit actions explain this. No user credential is embedded in a Git argument;
   ad-hoc prompt answers are not retained, while connected account tokens remain
   in the OS credential store until disconnected.
 - The frontend auto-fetches only the focused tab of a visible window: when a
