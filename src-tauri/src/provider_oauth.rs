@@ -57,7 +57,7 @@ fn now() -> u64 {
 fn config(provider: Provider) -> Result<(&'static str, &'static str, &'static str, &'static str)> {
     let (id, device, token, scope) = match provider {
         Provider::Github => (
-            option_env!("GITTY_GITHUB_CLIENT_ID"),
+            Some("Ov23licwx24t0lMRQL4N"),
             "https://github.com/login/device/code",
             "https://github.com/login/oauth/access_token",
             "repo read:user",
@@ -69,7 +69,7 @@ fn config(provider: Provider) -> Result<(&'static str, &'static str, &'static st
             "api read_user write_repository",
         ),
         Provider::AzureDevops => (
-            option_env!("GITTY_AZURE_CLIENT_ID"),
+            Some("e73da836-df04-46ba-8f74-46542a39267c"),
             "https://login.microsoftonline.com/organizations/oauth2/v2.0/devicecode",
             "https://login.microsoftonline.com/organizations/oauth2/v2.0/token",
             "499b84ac-1321-427f-aa17-267ca6975798/.default offline_access",

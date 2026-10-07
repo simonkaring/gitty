@@ -389,8 +389,9 @@ in app data contains provider, username, an opaque ID and an OAuth flag; access/
 are stored in the OS credential store under that ID. GitHub, GitLab and
 Bitbucket tokens are checked against the provider's user endpoint on connect.
 Azure DevOps PATs are checked when used against an organization. GitHub/GitLab.com
-and Microsoft Entra work/school accounts support public-client device authorization,
-configured using build-time client IDs. Only request IDs, user codes, approved
+and Microsoft Entra work/school accounts support public-client device authorization.
+GitHub and Microsoft Entra use built-in publisher app-registration client IDs;
+GitLab.com uses the build-time `GITTY_GITLAB_CLIENT_ID`. Only request IDs, user codes, approved
 verification URLs and timing information cross IPC. Device codes stay in Rust;
 tokens are saved only after account verification and refresh before API use.
 
