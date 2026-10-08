@@ -125,7 +125,7 @@ impl Repository {
         Ok(info)
     }
 
-    fn remote_branch_name(&self, branch: &str) -> Result<()> {
+    pub(crate) fn remote_branch_name(&self, branch: &str) -> Result<()> {
         if branch.is_empty()
             || branch.starts_with(['-', '+'])
             || branch.len() > 1024
@@ -473,7 +473,7 @@ pub(crate) fn action_result(output: Output) -> Result<ActionOutput> {
     })
 }
 
-fn network_result(output: Output, wsl: bool) -> Result<ActionOutput> {
+pub(crate) fn network_result(output: Output, wsl: bool) -> Result<ActionOutput> {
     action_result(output).map_err(|mut error| {
         if wsl {
             error.message.push_str("\nGitty cannot prompt for passwords or passphrases in WSL. A credential helper with its own sign-in window (such as Git Credential Manager) can still ask; otherwise configure a credential helper or SSH agent inside the distribution, then retry.");
@@ -482,12 +482,16 @@ fn network_result(output: Output, wsl: bool) -> Result<ActionOutput> {
     })
 }
 
+pub(crate) fn network_error(output: Output, wsl: bool) -> Result<ActionOutput> {
+    network_result(output, wsl)
+}
+
 /// Explicit WSL actions cannot use the native askpass bridge, but a credential
 /// helper that opens its own window — typically Windows Git Credential Manager
 /// reached through WSL interop — may sign the user in again. Terminal prompts,
 /// askpass programs and SSH passphrase prompts stay disabled, so nothing can
 /// wait on input Gitty cannot supply. Background fetch never calls this.
-fn allow_credential_helper_ui(a: &mut [String]) {
+pub(crate) fn allow_credential_helper_ui(a: &mut [String]) {
     for value in a.iter_mut() {
         if value == "credential.interactive=false" {
             *value = "credential.interactive=true".into();

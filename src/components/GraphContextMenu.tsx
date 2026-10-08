@@ -1,19 +1,21 @@
 import { useEffect, useState } from 'react';
 import type { GitAction } from '../model/operations';
-import { native } from '../model/native';
+import { isDemoHandle, native } from '../model/native';
 import type { RepositoryState } from '../model/repository';
 import { DEFAULT_PULL_MODE, PULL_MODE_LABELS, type PullMode, type RemoteActionRequest } from '../model/remote';
 import type { ActionContext } from './OperationDialog';
 import { useContextMenu } from './useContextMenu';
+import type { BranchDeleteScope } from '../model/branchDelete';
 
 export interface MenuTarget { context: ActionContext; x: number; y: number; trigger: HTMLElement }
 
-export function GraphContextMenu({ target, state, busy, onOperation, onSwitchBranch, onShowDetails, onSetBase, onSetTarget, onCompare, onPullRequest, onRemoteAction, onPush, onCopy, onClose }: {
+export function GraphContextMenu({ target, state, busy, onOperation, onSwitchBranch, onShowDetails, onSetBase, onSetTarget, onCompare, onPullRequest, onRemoteAction, onPush, onCopy, onDeleteBranch, onClose }: {
   target: MenuTarget; state: RepositoryState; busy: boolean;
   onOperation: (context: ActionContext) => void; onSwitchBranch: (ref: string) => void; onShowDetails: (oid: string) => void;
   onSetBase: (oid: string) => void; onSetTarget: (oid: string) => void; onCompare: (oid: string) => void;
   onPullRequest: (ref: string) => void; onRemoteAction: (action: RemoteActionRequest) => void; onPush: () => void;
   onCopy: (value: string, label: string) => void; onClose: () => void;
+  onDeleteBranch: (fullName: string, scope: BranchDeleteScope) => void;
 }) {
   const { menu, position } = useContextMenu(target, onClose);
   const [relation, setRelation] = useState<[number, number] | null>(null);
@@ -26,6 +28,11 @@ export function GraphContextMenu({ target, state, busy, onOperation, onSwitchBra
   const context = target.context;
   const ref = state.refs.find(value => value.fullName === context.ref);
   const current = context.ref === state.session.headRef;
+  const hasOriginCounterpart = ref?.kind === 'local' && state.refs.some(value => value.fullName === `refs/remotes/origin/${ref.name}`);
+  const hasLocalCounterpart = ref?.kind === 'remote' && state.refs.some(value => value.fullName === `refs/heads/${ref.fullName.slice('refs/remotes/origin/'.length)}`);
+  const originRef = ref?.kind === 'local' ? `refs/remotes/origin/${ref.name}` : ref?.fullName;
+  const localRef = ref?.kind === 'remote' ? `refs/heads/${ref.fullName.slice('refs/remotes/origin/'.length)}` : ref?.fullName;
+  const demo = isDemoHandle(state.session.handle);
   const tracking = ref?.kind === 'remote' ? [...state.remotes].sort((a, b) => b.length - a.length).find(remote => ref.fullName.startsWith(`refs/remotes/${remote}/`)) : undefined;
   function operation(kind: GitAction['kind'], destination?: string, sourceRef?: string) { onOperation({ ...context, ...(destination ? { destination } : {}), ...(sourceRef ? { ref: sourceRef } : {}), initial: kind }); }
   return <div ref={menu} className="menu graph-context-menu" role="menu" aria-label={ref ? `Actions for ${ref.name}` : 'Commit actions'} style={position}>
@@ -43,6 +50,16 @@ export function GraphContextMenu({ target, state, busy, onOperation, onSwitchBra
     <button role="menuitem" onClick={() => operation('createBranch')}>Create branch here…</button>
     <button role="menuitem" onClick={() => operation('createTag')}>Create tag here…</button>
     {ref?.kind === 'local' && <button role="menuitem" onClick={() => onPullRequest(ref.fullName)}>Create pull request…</button>}
+    {ref?.kind === 'local' && <>
+      <button role="menuitem" disabled={busy || demo || current} title={current ? 'Switch to another branch first.' : demo ? 'Branch deletion is unavailable in the demo.' : undefined} onClick={() => onDeleteBranch(localRef!, 'local')}>Delete local branch…{current ? ' (current branch)' : demo ? ' (unavailable in demo)' : ''}</button>
+      {hasOriginCounterpart && <button role="menuitem" disabled={busy || demo} title={demo ? 'Branch deletion is unavailable in the demo.' : undefined} onClick={() => onDeleteBranch(originRef!, 'origin')}>Delete branch on origin…{demo ? ' (unavailable in demo)' : ''}</button>}
+      {hasOriginCounterpart && <button role="menuitem" disabled={busy || demo || current} title={current ? 'Switch to another branch first.' : demo ? 'Branch deletion is unavailable in the demo.' : undefined} onClick={() => onDeleteBranch(localRef!, 'both')}>Delete local and origin branches…{current ? ' (current branch)' : demo ? ' (unavailable in demo)' : ''}</button>}
+    </>}
+    {ref?.kind === 'remote' && ref.fullName.startsWith('refs/remotes/origin/') && ref.fullName !== 'refs/remotes/origin/HEAD' && <>
+      {hasLocalCounterpart && <button role="menuitem" disabled={busy || demo || state.session.headRef === localRef} title={state.session.headRef === localRef ? 'Switch to another branch first.' : demo ? 'Branch deletion is unavailable in the demo.' : undefined} onClick={() => onDeleteBranch(localRef!, 'local')}>Delete local branch…{state.session.headRef === localRef ? ' (current branch)' : ''}</button>}
+      <button role="menuitem" disabled={busy || demo} title={demo ? 'Branch deletion is unavailable in the demo.' : undefined} onClick={() => onDeleteBranch(ref.fullName, 'origin')}>Delete branch on origin…</button>
+      {hasLocalCounterpart && <button role="menuitem" disabled={busy || demo || state.session.headRef === localRef} title={state.session.headRef === localRef ? 'Switch to another branch first.' : demo ? 'Branch deletion is unavailable in the demo.' : undefined} onClick={() => onDeleteBranch(localRef!, 'both')}>Delete local and origin branches…{state.session.headRef === localRef ? ' (current branch)' : ''}</button>}
+    </>}
     <div className="menu-divider" role="separator" />
     {state.session.head && context.oid !== state.session.head && <button role="menuitem" onClick={() => onCompare(context.oid)}>Compare with current</button>}
     <button role="menuitem" onClick={() => onSetBase(context.oid)}>Set as comparison base</button>

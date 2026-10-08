@@ -16,6 +16,8 @@ sources:
     resource: ../../src/model/native.integration.test.ts
   - id: contract
     resource: ../../src-tauri/BACKEND.md
+  - id: pane-refresh
+    resource: ../../src/components/RepositoryPane.tsx
 ---
 
 # Snapshot and refresh coherence
@@ -37,6 +39,10 @@ confirmed amend, the old HEAD can be remapped to the returned OID before paging,
 only while that OID is the refreshed HEAD. Otherwise an unreachable old tip or
 inspector-only orphan could cause a full-history scan. Session checks prevent
 superseded asynchronous reads from publishing.[^loader][^tests]
+
+After a branch-deletion result, the pane removes deleted or unverified target OIDs from its
+automatic selection/anchor keep-visible candidates before refreshing. Returned
+history remains intact, and explicit reveal/paging behavior is unchanged.[^pane-refresh]
 
 `RepositoryPane` coordinates reads with write completion. File/index-only
 mutations refresh status, falling back to full refresh if HEAD/ref moved;
@@ -61,3 +67,4 @@ Related: [mutation safeguards](git-mutation-safeguards.md),
 [^pane]: Per-tab read/write coordination and navigation guards.
 [^tests]: Scripted snapshot race and keep-visible regressions.
 [^contract]: Read limitations and fingerprint coverage.
+[^pane-refresh]: Deletion-specific exclusion passed to `readNativeSnapshot`.

@@ -966,6 +966,12 @@ button[data-danger='true']:hover:not(:disabled) {
 .reference-group {
   margin: 0 8px 6px;
 }
+.reference-folder { margin-left: 8px; }
+.reference-folder > summary { min-height: 27px; padding: 4px 8px; color: var(--text-muted); cursor: pointer; font-size: var(--fs-xs); list-style: none; }
+.reference-folder > summary::-webkit-details-marker { display: none; }
+.reference-folder > summary::before { content: '›'; display: inline-block; width: 13px; color: var(--text-faint); }
+.reference-folder[open] > summary::before { content: '⌄'; }
+.reference-folder-children { padding-left: 8px; }
 .reference-group summary {
   width: 100%;
   display: flex;
@@ -3182,6 +3188,11 @@ button[data-danger='true']:hover:not(:disabled) {
 .graph-context-menu {
   position: fixed;
 }
+.branch-delete-review { display: grid; grid-template-columns: minmax(90px, auto) minmax(0, 1fr); gap: 6px 12px; margin: 12px 0; font-size: var(--fs-xs); }
+.branch-delete-review dt { color: var(--text-muted); }
+.branch-delete-review dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.branch-delete-outcomes { display: grid; gap: 6px; margin-top: 12px; }
+.branch-delete-outcomes ul { display: grid; gap: 6px; margin: 0; padding-left: 16px; overflow-wrap: anywhere; }
 .operation-dialog pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

@@ -44,7 +44,7 @@ npm run check:rust              # Cargo check (build the frontend first)
 Run `npm run desktop`, choose **Open repository**, then use the native folder picker, a recent location, or the clone form. A clone targets a selected native folder or the currently browsed WSL folder, reports progress, can be cancelled, and opens the completed repository in a new tab. Clones are full, use the remote's default branch, do not initialize submodules, and copy local-source objects instead of hardlinking them. On Windows, the picker also offers WSL distribution discovery and Linux-directory browsing, and a folder chosen under `\\wsl.localhost\<distribution>\` (or `\\wsl$\`) opens through that distribution's Git. WSL Git runs inside the selected distribution; its conflict editor filesystem helper also requires Python 3. Windows/WSL runtime validation is still pending.
 
 - **Repository identity:** native/WSL location, current branch or detached HEAD, linked worktree, shallow, and bare states.
-- **Live graph:** local branches, remote-tracking branches, commit-pointing tags, and HEAD; 200-commit cursor pages with original parent relationships. Remote information reflects locally stored refs, including those updated by background fetch.
+- **Live graph:** local branches, remote-tracking branches, commit-pointing tags, and HEAD; 200-commit cursor pages with original parent relationships. A branch pill selects its tip with one click/Enter/Space; right-click or **Shift+F10** opens its action menu. Remote information reflects locally stored refs, including those updated by background fetch.
 - **Working changes:** when there are changes, a distinct graph entry attached to HEAD opens the right-side file list and commit composer. It groups staged, unstaged, untracked, and conflicted paths. A partially staged file can appear in both staged and unstaged lists. Right-click a file (or press **Shift+F10**) for stage/unstage, discard, copy path or name, open, reveal in the file manager, and add to `.gitignore`; **Discard all** reviews the Unstaged list before reverting supported changes.
 - **Real changes:** lazy file lists and Git-produced unified/side-by-side diffs, including rename/binary/mode metadata and explicit preview limits. Root commits compare against the empty tree; merge commits offer a parent selector.
 - **Compare commits:** select a commit as base and another as target, then swap direction if needed. The heading explains how the base tree becomes the target tree.
@@ -98,7 +98,8 @@ The browser demo does not modify repository files. Its history and diffs are syn
 
 ## Branches, drag/drop, and conflicts
 
-- Use **New branch…** or **Switch branch…**, or open a reference/commit's action menu with its button, right-click, or **Shift+F10**.
+- Use **New branch…** or **Switch branch…**, or open a reference/commit's action menu with its button, right-click, or **Shift+F10**. Local and matching origin branches can be deleted from the shared menu; nested branch names appear in collapsible folders, while tags stay flat. Sidebar reference buttons navigate on click and switch a local branch on double-click.
+- Deletion requires a fresh confirmation naming the exact branch and origin push destination. Local deletion uses Git's safe `-d` behavior first; an unmerged failure offers a separate explicit confirmation for local `-D`. Origin deletion is pinned to the locally reviewed branch OID and push URL, and uses a force-with-lease so a branch moved on the server is preserved. Partial and uncertain outcomes remain visible per target; working files and staged changes are not part of branch deletion.
 - Drag a branch onto the **outlined current branch** in the graph or sidebar to review a merge. Drag a commit subject onto that target to review a cherry-pick. Dropping opens the action dialog; execution follows an explicit review.
 - Other actions include rebasing the current branch onto a selected source, editing up to 100 recent linear commits with a reviewed interactive rebase (reorder/drop/reword/squash/fixup), ordered multi-commit cherry-picks, comparison, and lightweight/annotated tags. Merge commits require an explicit cherry-pick mainline parent.
 - The operation banner provides **Continue**, **Skip** where applicable, **Abort**, and conflict links. The built-in conflict editor shows full base/current/incoming versions, editable results, block acceptance, and whole-file/deletion choices. On Unix and WSL, symlink conflicts allow exact side selection or deletion; external edits are detected before saving.
@@ -146,7 +147,7 @@ Open the gear button or **Cmd/Ctrl+,** from either workspace, including the nati
 | `←` / `→` on inspector divider      | Resize by 20 px                       |
 | `Home` / `End` on inspector divider | Minimum / maximum width               |
 
-The `/` shortcut is disabled while editing an input. Use the **HEAD** button to reveal the current tip. Sidebar reference names navigate; their action buttons and graph badges open explicit operations, and double-clicking a local branch badge starts switching to it. `All branches` intentionally keeps the complete graph visible.
+The `/` shortcut is disabled while editing an input. Use the **HEAD** button to reveal the current tip. Sidebar reference names navigate and double-clicking a local branch starts switching to it. Graph branch pills select their tip; use right-click or **Shift+F10** for actions. `All branches` intentionally keeps the complete graph visible.
 
 ## Project map
 
@@ -167,6 +168,7 @@ src/
     CommandPalette.tsx           Searchable workspace and repository commands
     HistoryColumnMenu.tsx        History column visibility and ordering
     OperationDialog.tsx          Reviewed graph operations and interactive rebase plans
+    BranchDeleteDialog.tsx       Confirmed local/origin branch deletion
     ConflictEditor.tsx           Full conflict versions and guarded resolution
     PullRequestDialog.tsx        Provider API requests and browser forms
     ActivityLogDialog.tsx        Session operation log, errors and Git command details

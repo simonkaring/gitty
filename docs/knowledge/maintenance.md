@@ -7,7 +7,7 @@ sources:
   - id: spec
     resource: https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/ad30107c31c06aec8a7d5636e0d1058118604e6f/SPEC.md
   - id: guide
-    resource: ../../agents.md
+    resource: ../../AGENTS.md
 ---
 
 # Knowledge maintenance

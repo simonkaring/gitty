@@ -13,6 +13,8 @@ interface NativeSidebarProps {
   switchBranch: (ref: string) => void;
   openMenu: (context: ActionContext, x: number, y: number, trigger: HTMLElement) => void;
   onAction: (context: ActionContext) => void;
+  folderOpen: Record<string, boolean>;
+  onFolderOpen: (key: string, open: boolean) => void;
 }
 
 const GROUPS = [
@@ -21,7 +23,33 @@ const GROUPS = [
   { kind: 'tag', label: 'Tags', Icon: Tag },
 ] as const;
 
-export function NativeSidebar({ state, commits, filters, busy, reveal, switchBranch, openMenu, onAction }: NativeSidebarProps) {
+interface RefTree { folders: Map<string, RefTree>; refs: RepositoryState['refs'] }
+export function buildRefTree(refs: RepositoryState['refs'], prefix: string, remotes: string[] = []): RefTree {
+  const root: RefTree = { folders: new Map(), refs: [] };
+  for (const ref of refs) {
+    if (prefix === 'refs/tags/') { root.refs.push(ref); continue; }
+    if (prefix === 'refs/remotes/' && ref.fullName === 'refs/remotes/origin/HEAD') continue;
+    let parts: string[];
+    if (prefix === 'refs/remotes/') {
+      const relative = ref.fullName.slice(prefix.length);
+      const remote = [...remotes].sort((a, b) => b.length - a.length).find(name => relative.startsWith(`${name}/`));
+      if (!remote) continue;
+      const branch = relative.slice(remote.length + 1);
+      parts = [remote, ...branch.split('/')];
+    } else {
+      parts = ref.fullName.slice(prefix.length).split('/');
+    }
+    let node = root;
+    for (const part of parts.slice(0, -1)) {
+      if (!node.folders.has(part)) node.folders.set(part, { folders: new Map(), refs: [] });
+      node = node.folders.get(part)!;
+    }
+    node.refs.push(ref);
+  }
+  return root;
+}
+
+export function NativeSidebar({ state, commits, filters, busy, reveal, switchBranch, openMenu, onAction, folderOpen, onFolderOpen }: NativeSidebarProps) {
   const { session } = state;
   return <aside className="sidebar native-sidebar" aria-label="Repository references">
     <div className="workspace-label"><FolderGit2 size={22} /><span>{session.name}<small title={session.root}>{session.root}</small></span></div>
@@ -35,21 +63,30 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
     <div className="sidebar-divider" />
     {filters}
     {GROUPS.map(({ kind, label, Icon }) => {
-      const refs = state.refs.filter(ref => ref.kind === kind);
-      return <details className="reference-group" key={kind} open={kind === 'local'}>
-        <summary>{kind !== 'tag' && <Icon size={15} aria-hidden="true" />}{label}<span className="count">{refs.length}</span></summary>
-        {refs.map(ref => <div className={`ref-action-row${ref.fullName === session.headRef ? ' current' : ''}`} key={ref.fullName} onContextMenu={event => { event.preventDefault(); openMenu({ oid: ref.commitId, ref: ref.fullName }, event.clientX, event.clientY, event.currentTarget.querySelector('button')!); }}>
-          <button className="ref-item" title={ref.fullName} aria-current={ref.fullName === session.headRef ? 'true' : undefined} disabled={busy} draggable={ref.kind !== 'tag'}
+      const refs = state.refs.filter(ref => ref.kind === kind && !(kind === 'remote' && ref.fullName === 'refs/remotes/origin/HEAD'));
+      const prefix = kind === 'local' ? 'refs/heads/' : kind === 'remote' ? 'refs/remotes/' : 'refs/tags/';
+      const tree = buildRefTree(refs, prefix, state.remotes);
+      const renderTree = (node: RefTree, parts: string[] = []): ReactNode => <>
+        {[...node.refs].sort((a, b) => a.fullName < b.fullName ? -1 : a.fullName > b.fullName ? 1 : 0).map(ref => <div className={`ref-action-row${ref.fullName === session.headRef ? ' current' : ''}`} key={ref.fullName} onContextMenu={event => { event.preventDefault(); openMenu({ oid: ref.commitId, ref: ref.fullName }, event.clientX, event.clientY, event.currentTarget.querySelector('button')!); }}>
+          <button className="ref-item" title={ref.fullName} aria-label={`${kind} ${ref.fullName}`} aria-current={ref.fullName === session.headRef ? 'true' : undefined} disabled={busy} draggable={ref.kind !== 'tag'}
             onDragStart={event => { event.stopPropagation(); if (ref.kind === 'tag') { event.preventDefault(); return; } event.dataTransfer.clearData(COMMIT_DRAG_TYPE); event.dataTransfer.setData(REF_DRAG_TYPE, ref.fullName); event.dataTransfer.effectAllowed = 'copy'; }}
             onDragOver={event => { if (ref.fullName === session.headRef && [REF_DRAG_TYPE, COMMIT_DRAG_TYPE].some(type => event.dataTransfer.types.includes(type))) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
             onDrop={event => { event.preventDefault(); event.stopPropagation(); const action = graphDropAction(event.dataTransfer, ref.fullName, session.headRef, commits, state.refs); if (action) onAction(action); }}
-            onClick={() => reveal(ref.commitId)}
-            onDoubleClick={() => { if (ref.kind === 'local') switchBranch(ref.fullName); }}
+            onClick={() => reveal(ref.commitId)} onDoubleClick={() => { if (ref.kind === 'local') switchBranch(ref.fullName); }}
             onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openMenu({ oid: ref.commitId, ref: ref.fullName }, rect.left, rect.bottom, event.currentTarget); } }}>
-            {kind === 'tag' && <Icon size={15} />}{ref.fullName === session.headRef && <Check className="current-branch-check" size={15} aria-hidden="true" />}<span>{ref.name}</span>
-          </button>
-          <button className="icon-button sm" aria-label={`Actions for ${ref.name}`} onClick={() => onAction({ oid: ref.commitId, ref: ref.fullName })}>…</button>
+            {kind === 'tag' && <Icon size={15} />}{ref.fullName === session.headRef && <Check className="current-branch-check" size={15} aria-hidden="true" />}<span>{kind === 'tag' ? ref.name : ref.name.split('/').at(-1)}</span>
+          </button><button className="icon-button sm" aria-label={`Actions for ${ref.fullName}`} aria-haspopup="menu" onClick={event => { const rect = event.currentTarget.getBoundingClientRect(); openMenu({ oid: ref.commitId, ref: ref.fullName }, rect.left, rect.bottom, event.currentTarget); }}>…</button>
         </div>)}
+        {[...node.folders].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, child]) => {
+          const key = `${session.handle}:${kind}:${[...parts, name].join('/')}`;
+          const currentPrefix = kind === 'local' ? session.headRef?.replace(prefix, '') : undefined;
+          const initiallyOpen = !!currentPrefix?.startsWith(`${[...parts, name].join('/')}/`);
+          return <details className="reference-folder" key={key} open={folderOpen[key] ?? initiallyOpen} onToggle={event => onFolderOpen(key, event.currentTarget.open)}><summary title={name}>{name}</summary><div className="reference-folder-children">{renderTree(child, [...parts, name])}</div></details>;
+        })}
+      </>;
+      return <details className="reference-group" key={kind} open={kind === 'local'}>
+        <summary>{kind !== 'tag' && <Icon size={15} aria-hidden="true" />}{label}<span className="count">{refs.length}</span></summary>
+        {renderTree(tree)}
         {!refs.length && <p className="empty-category">No references</p>}
       </details>;
     })}

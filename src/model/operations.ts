@@ -54,6 +54,26 @@ export interface RemoteInfo {
   currentUpstream: string | null;
 }
 
+export interface BranchDeleteRequest {
+  branch: string;
+  expectedHead: string | null;
+  expectedHeadRef: string | null;
+  expectedLocalOid?: string;
+  expectedOriginOid?: string;
+  expectedPushUrl?: string;
+  deleteLocal: boolean;
+  deleteOrigin: boolean;
+  forceLocal: boolean;
+}
+export interface BranchDeleteTargetResult {
+  target: 'local' | 'origin';
+  status: 'deleted' | 'failed' | 'unverified' | 'notAttempted';
+  error: { code: string; message: string } | null;
+  note: string | null;
+}
+export interface BranchDeleteResult { local: BranchDeleteTargetResult | null; origin: BranchDeleteTargetResult | null }
+export interface BranchDeleteExecution { result: BranchDeleteResult; refreshError?: string }
+
 export interface EditorPromptPayload {
   requestId: number;
   fileName: string;
@@ -63,6 +83,7 @@ export interface EditorPromptPayload {
 /* Commands (camelCase arguments):
  * repository_operation_state({handle}) -> OperationState
  * repository_branch_relation({handle, first, second}) -> [firstOnly, secondOnly]
+ * repository_delete_branch({handle, request: BranchDeleteRequest}) -> BranchDeleteResult
  * repository_run_operation({handle, request: OperationRequest}) -> OperationResult
  * repository_conflict_file({handle, path}) -> ConflictFile
  * repository_resolve_conflict({handle, path, fingerprint, resolution: ConflictResolution}) -> void

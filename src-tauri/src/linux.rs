@@ -207,7 +207,11 @@ mod tests {
         );
 
         // Migrate the old icon reference even when Exec has not changed.
-        std::fs::write(&desktop_file, content.replace("Icon=gitty-dark", "Icon=gitty")).unwrap();
+        std::fs::write(
+            &desktop_file,
+            content.replace("Icon=gitty-dark", "Icon=gitty"),
+        )
+        .unwrap();
         ensure_desktop_entry_in(&data_home, false, &fake_exe).unwrap();
         assert_eq!(std::fs::read_to_string(&desktop_file).unwrap(), content);
 

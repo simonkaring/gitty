@@ -2,7 +2,7 @@ use crate::{dto::*, mutate::AmendOptions, repository::Service};
 use std::{path::Path, process::Command};
 use tempfile::TempDir;
 
-fn git(path: &Path, args: &[&str]) -> String {
+pub(super) fn git(path: &Path, args: &[&str]) -> String {
     let o = Command::new("git")
         .arg("-C")
         .arg(path)
@@ -21,19 +21,19 @@ fn git(path: &Path, args: &[&str]) -> String {
     );
     String::from_utf8(o.stdout).unwrap().trim_end().into()
 }
-fn init() -> TempDir {
+pub(super) fn init() -> TempDir {
     let d = tempfile::tempdir().unwrap();
     git(d.path(), &["init", "-b", "main"]);
     git(d.path(), &["config", "user.name", "Test Author"]);
     git(d.path(), &["config", "user.email", "test@example.com"]);
     d
 }
-fn commit(path: &Path, message: &str) -> String {
+pub(super) fn commit(path: &Path, message: &str) -> String {
     git(path, &["add", "--all"]);
     git(path, &["commit", "-m", message]);
     git(path, &["rev-parse", "HEAD"])
 }
-fn open(service: &mut Service, path: &Path) -> RepositoryState {
+pub(super) fn open(service: &mut Service, path: &Path) -> RepositoryState {
     service
         .open(RepositoryLocation::Native {
             path: path.to_str().unwrap().into(),

@@ -16,6 +16,10 @@ sources:
     resource: ../../src-tauri/src/hunk_tests.rs
   - id: workflow-tests
     resource: ../../src/model/workflow.test.ts
+  - id: branch-delete
+    resource: ../../src-tauri/src/branch_delete.rs
+  - id: branch-delete-ui
+    resource: ../../src/model/branchDelete.ts
 ---
 
 # Git mutation safeguards
@@ -46,6 +50,15 @@ Attempt a mutation once. An error can follow a partial or completed write;
 success and failure while the session is current. A superseded session must not
 publish into its replacement.[^workflow][^workflow-tests]
 
+Branch deletion is a dedicated locked mutation with exact reviewed target OIDs
+and, for origin, the effective push URL. It uses safe local `-d` first; a
+separate `-D` request is enabled only after a failed safe delete, unchanged target,
+unmerged upstream/HEAD ancestry, and clear lock/worktree checks.
+Origin deletion uses one same-name refspec and an expected-OID lease. Local
+failure/uncertainty prevents the remote attempt; partial target outcomes remain
+structured for the UI. Deletion refresh excludes removed target tips from
+automatic keep-visible paging while leaving explicit navigation unchanged.[^branch-delete][^branch-delete-ui]
+
 When changing this area, inspect `Service::mutate`, the action's Rust preflight,
 and `writeAndRefresh`. Existing regression entry points include
 `stage_and_commit_only_selected_hunk_preserves_worktree_and_other_staged_edits`
@@ -61,3 +74,5 @@ Related: [refresh coherence](snapshot-and-refresh-coherence.md) and
 [^workflow]: Frontend single-attempt write lifecycle.
 [^hunk-tests]: Real-repository hunk preservation regressions.
 [^workflow-tests]: Mocked write/refresh lifecycle regressions.
+[^branch-delete]: Dedicated branch deletion preflight and remote/local outcomes.
+[^branch-delete-ui]: Branch target resolution and confirmation request construction.

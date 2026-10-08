@@ -416,7 +416,7 @@ for a selected connected account. PR creation is explicit and does not push.
   a local per-app askpass bridge when those cannot supply credentials. Gitty
   keeps answers in memory only. A cancelled or expired prompt fails the helper,
   and a prompt has a 90-second response deadline within Git's write deadline.
-  On Windows, explicit WSL fetch/pull/push can use a per-operation scoped askpass
+  On Windows, explicit WSL fetch/pull/push/branch deletion can use a per-operation scoped askpass
   bridge when `wslpath` translates the Gitty executable for Windows interop.
   If translation fails (or no askpass registry is available), the helper-UI
   fallback sets `credential.interactive=true`, so a credential helper with its
@@ -428,6 +428,8 @@ for a selected connected account. PR creation is explicit and does not push.
   explicit actions explain this. No user credential is embedded in a Git argument;
   ad-hoc prompt answers are not retained, while connected account tokens remain
   in the OS credential store until disconnected.
+- Origin branch deletion uses the same explicit network, credential-helper,
+  native/WSL askpass, activity-log, and write-deadline infrastructure as push.
 - The frontend auto-fetches only the focused tab of a visible window: when a
   repository opens, when its tab or the window regains focus, and on a 30-second
   check, at most once per five minutes. Explicit fetch and pull reset that clock.
@@ -446,15 +448,17 @@ for a selected connected account. PR creation is explicit and does not push.
 
 ## Graph operations and full conflict editor
 
-The exact additional IPC contract is `src/model/operations.ts`. All six commands
+The exact additional IPC contract is `src/model/operations.ts`. All nine commands
 are registered as application commands (no broad filesystem or opener plugin
 capability is exposed):
 
 - `repository_operation_state({handle}) -> OperationState`
+- `repository_branch_relation({handle, first, second}) -> [firstOnly, secondOnly]`
 - `repository_run_operation({handle, request}) -> OperationResult`
 - `repository_conflict_file({handle, path}) -> ConflictFile`
 - `repository_resolve_conflict({handle, path, fingerprint, resolution}) -> void`
 - `repository_remotes({handle}) -> RemoteInfo[]`
+- `repository_delete_branch({handle, request}) -> BranchDeleteResult`
 - `open_external_url({url}) -> void`
 - `editor_reply({requestId, content}) -> void`
 
@@ -463,9 +467,41 @@ name, such as `origin/main`. The singular fetch/push URL fields report Git's
 effective first URL; all locally known remote branches are included, except the
 remote's symbolic `HEAD` alias. These reads do not fetch or contact remotes.
 
+### Branch deletion
+
+`repository_delete_branch` takes a strict camelCase request: `branch` is the
+short local branch name; `expectedHead` and `expectedHeadRef` pin the checked-out
+state; optional `expectedLocalOid`, `expectedOriginOid` and `expectedPushUrl`
+pin each selected target; `deleteLocal`, `deleteOrigin` and `forceLocal` select
+the requested work. Only an exact same-name `origin` branch is offered for
+remote deletion; other remote refs and `origin/HEAD` are not deletion targets.
+The operation runs under the common-directory mutation lock, revalidates HEAD,
+refs, push URL, writable/operation/conflict state and worktree protection, while
+allowing unrelated staged or dirty files. The checked-out local branch cannot be
+deleted; a branch checked out in another worktree is protected.
+
+Before the first write, every selected target OID, the effective single origin
+push URL, and mirror/remote configuration are revalidated under the mutation
+lock. Local deletion is then attempted first with `git branch -d -- <name>`.
+A second request may use `-D` only after that command fails, the target still
+matches, Git's upstream-if-resolves-otherwise-HEAD ancestry rule says it is not
+merged, and ref-lock/worktree checks find no competing cause. No localized
+stderr text is used to classify the failure; ambiguous checks fail closed. If
+local deletion fails or is unverified, origin deletion is not attempted. Origin
+preflight is repeated immediately before transport. Origin deletion requires
+exactly one push URL and uses one
+literal `:<refs/heads/name>` refspec with
+`--force-with-lease=refs/heads/name:<expectedOid>`; mirror remotes are refused.
+On confirmed remote success the matching local `refs/remotes/origin/<name>` is
+removed only if it still has the expected OID; cleanup failure is reported as a
+note without undoing remote success. Outcomes preserve per-target `deleted`,
+`failed`, `unverified` and `notAttempted` states plus structured errors/notes.
+No deletion is rolled back or automatically retried. Timeouts/capture failures
+remain unverified and require refresh/review.
+
 ### Operation safety and semantics
 
-- The common-directory mutation lock also covers graph actions and conflict
+- The common-directory mutation lock also covers graph actions, branch deletion and conflict
   resolution. `expectedHead`, `expectedHeadRef` and `expectedOperation` are
   revalidated under that lock. The operation fingerprint includes all refs,
   status/content fingerprints, index stages, operation metadata and conflict
@@ -476,7 +512,10 @@ remote's symbolic `HEAD` alias. These reads do not fetch or contact remotes.
   local changes that Git can safely preserve; other new actions require a clean
   worktree/index, including no untracked files (except carrying a branch switch,
   described below). Bare repositories are rejected. Gitty never forces,
-  automatically stashes, removes locks or automatically retries writes.
+  automatically stashes, removes locks or automatically retries writes. Branch
+  deletion is the narrow exception to the no-force rule: local `-D` follows a
+  separately confirmed, positively classified `-d` failure; origin deletion
+  uses an expected-OID force-with-lease on one explicit refspec.
 - Branch creation resolves the start point to a commit; checkout is optional.
   Creation without checkout leaves local changes untouched; checkout carries
   staged/unstaged/untracked work when Git can preserve it, refusing overwrites.

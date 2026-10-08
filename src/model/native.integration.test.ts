@@ -54,6 +54,15 @@ describe('native snapshot IPC integration', () => {
     expect(result.cursor).toBeNull(); expect(result.commits.map(c => c.id)).toEqual(['b']);
     expect(previous.commits.map(c => c.id)).toEqual(['a']);
   });
+  it('excludes a deleted target from automatic keep-visible paging without filtering returned history', async () => {
+    const firstPage = Array.from({ length: 200 }, (_, index) => commit(`tip-${index}`, [`parent-${index}`]));
+    const mock = scripted([['repository_snapshot', snap('tip-0')], ['repository_history', page(firstPage, 'next')], ['repository_state', state('tip-0')]]);
+    const result = await readNativeSnapshot('session', { ...mock, previous, preserve: ['a'], excludeKeepVisible: ['a'] });
+    expect(result.commits).toHaveLength(200);
+    expect(result.commits.some(item => item.id === 'a')).toBe(false);
+    expect(result.cursor).toBe('next');
+    expect(mock.calls.mock.calls.filter(([command]) => command === 'repository_history')).toHaveLength(1);
+  });
   describe('following an amended tip', () => {
     const chain = (prefix: string, length: number) => Array.from({ length }, (_, i) => commit(`${prefix}${i}`, [`${prefix}${i + 1}`]));
     const before: NativeSnapshot = { ...previous, state: state('old'), status: status('old'), commits: [commit('old', ['base']), commit('base')], cursor: null };

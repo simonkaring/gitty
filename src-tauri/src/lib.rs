@@ -1,4 +1,5 @@
 mod askpass;
+mod branch_delete;
 pub mod editor;
 
 mod clone;
@@ -219,6 +220,19 @@ async fn repository_run_operation(
     let editor = editor.inner().clone();
     with_service(state, move |s| {
         s.run_operation(&handle, request, Some(&editor))
+    })
+    .await
+}
+#[tauri::command]
+async fn repository_delete_branch(
+    state: tauri::State<'_, Shared>,
+    registry: tauri::State<'_, Arc<crate::askpass::AskpassRegistry>>,
+    handle: String,
+    request: branch_delete::BranchDeleteRequest,
+) -> Result<branch_delete::BranchDeleteResult> {
+    let registry = registry.inner().clone();
+    with_service(state, move |s| {
+        s.delete_branch(&handle, request, Some(&registry))
     })
     .await
 }
@@ -641,6 +655,7 @@ pub fn run() {
             repository_snapshot,
             repository_branch_relation,
             repository_run_operation,
+            repository_delete_branch,
             repository_conflict_file,
             repository_resolve_conflict,
             repository_remotes,
@@ -658,6 +673,8 @@ pub fn run() {
         .expect("Unable to start Gitty");
 }
 
+#[cfg(test)]
+mod branch_delete_tests;
 #[cfg(test)]
 mod hunk_tests;
 #[cfg(test)]

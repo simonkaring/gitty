@@ -45,6 +45,32 @@ it('groupRefs merges a local branch with its same-named remote ref', () => {
   const groups = groupRefs([r('origin/x', 'remote'), r('x', 'local'), r('origin/y', 'remote'), r('v1', 'tag')]);
   expect(groups.map(g => [g.ref.name, g.remote?.name])).toEqual([['x', 'origin/x'], ['origin/y', undefined], ['v1', undefined]]);
 });
+it('branch pills select their tip on click and Enter/Space while context gestures still open actions', async () => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const originalObserver = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} unobserve() {} } as typeof ResizeObserver;
+  const canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(new Proxy({}, { get: () => () => {} }) as CanvasRenderingContext2D);
+  const host = document.createElement('div'); const root = createRoot(host);
+  const commits = [{ id: 'tip', parents: [], subject: 'Tip', body: '', author: 'A', email: '', timestamp: 1, branch: 'topic', files: [] }];
+  const onSelect = vi.fn(); const onActions = vi.fn(); const onContextActions = vi.fn(); const onSwitchBranch = vi.fn();
+  try {
+    await act(async () => { root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={[{ name: 'topic', fullName: 'refs/heads/topic', kind: 'local', commitId: 'tip' }]} selectedId="tip" head="tip" headRef="refs/heads/main" loaded={1} matches={null} onSelect={onSelect} onActions={onActions} onContextActions={onContextActions} onSwitchBranch={onSwitchBranch} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />); });
+    const pill = host.querySelector('.ref-pill') as HTMLElement;
+    await act(async () => { pill.click(); });
+    await act(async () => { pill.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
+    await act(async () => { pill.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true })); });
+    expect(onSelect.mock.calls).toEqual([['tip'], ['tip'], ['tip']]);
+    expect(onActions).not.toHaveBeenCalled();
+    await act(async () => { pill.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 1, clientY: 2 })); });
+    await act(async () => { pill.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true })); });
+    expect(onContextActions).toHaveBeenCalledTimes(2);
+    await act(async () => { pill.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); });
+    expect(onSwitchBranch).toHaveBeenCalledWith('refs/heads/topic');
+  } finally {
+    await act(async () => { root.unmount(); });
+    canvas.mockRestore(); globalThis.ResizeObserver = originalObserver;
+  }
+});
 it('renders graph nodes without selection halo, HEAD glow, or HEAD center dot', async () => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const originalObserver = globalThis.ResizeObserver;

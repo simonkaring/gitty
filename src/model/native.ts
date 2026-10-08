@@ -79,6 +79,8 @@ export async function readNativeSnapshot(handle: string, options: {
    * actually in the previous history are kept: an ID outside it, such as an inspector-only orphan, can never
    * be found by walking and would otherwise make every refresh read the entire history. */
   preserve?: string[];
+  /** Target OIDs deleted or left unverified by the immediately preceding branch deletion. */
+  excludeKeepVisible?: string[];
   /** A confirmed rewrite of the tip, `from` -> `to` (an amend). Applied to `preserve` after the filter above
    * so the old ID, which is in `previous`, is followed to the new commit instead of being searched for. Honored
    * only while the refreshed HEAD is `to`, so a hook that moved HEAD again cannot cause a full-history walk. */
@@ -102,8 +104,10 @@ export async function readNativeSnapshot(handle: string, options: {
     let generation = '';
     const known = options.previous && new Set(options.previous.commits.map(commit => commit.id));
     const remap = options.remap && before.session.head === options.remap.to ? options.remap : undefined;
+    const excluded = new Set(options.excludeKeepVisible ?? []);
     const keep = new Set((options.preserve ?? [])
       .filter(id => id && id !== WORKING_ID && (!known || known.has(id)))
+      .filter(id => !excluded.has(id))
       .map(id => remap && id === remap.from ? remap.to : id));
     const count = Math.max(200, options.previous?.commits.length ?? 0);
     do {

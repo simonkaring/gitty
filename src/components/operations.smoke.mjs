@@ -63,11 +63,8 @@ try {
   const writes = () => page.evaluate(() => window.fixture.calls.filter(call => ['repository_run_operation', 'repository_resolve_conflict'].includes(call.command)));
 
   // Actual reference drag only opens review. Cancel is read-only and preserves scroll.
-  // Local `topic` and remote `origin/topic` both render a ref-pill whose
-  // aria-label contains the substring "topic" (e.g. "Graph actions for
-  // origin/topic"), so an exact accessible-name match is required to isolate
-  // the local branch's pill specifically.
-  const topic = page.getByRole('button', { name: 'Graph actions for topic', exact: true });
+  // Local and remote branch pills select their tip; drag/drop still opens review.
+  const topic = page.getByRole('button', { name: 'Select tip of refs/heads/topic; right-click or press Shift+F10 for actions', exact: true });
   const main = page.locator('.ref-pill[data-current=true]');
   const beforeScroll = await page.locator('.history-scroll').evaluate(el => el.scrollTop);
   const drop = async (target, source, type = 'application/x-gitty-ref') => { const dataTransfer = await page.evaluateHandle(({ value, type }) => { const data = new DataTransfer(); data.setData(type, value); return data; }, { value: source, type }); await target.dispatchEvent('drop', { dataTransfer }); await dataTransfer.dispose(); };
@@ -77,7 +74,7 @@ try {
   }
   await drop(topic, 'refs/heads/main');
   assert.equal(await page.getByRole('dialog', { name: 'Git actions' }).count(), 0);
-  assert.equal(await page.getByRole('button', { name: 'Graph actions for v1', exact: true }).getAttribute('draggable'), 'false');
+  assert.equal(await page.getByRole('button', { name: 'Select tip of refs/tags/v1; right-click or press Shift+F10 for actions', exact: true }).getAttribute('draggable'), 'false');
   await topic.dragTo(main);
   await page.getByRole('dialog', { name: 'Git actions' }).waitFor();
   assert.equal(await page.locator('input[name="operation-action"]:checked').inputValue(), 'merge');
@@ -129,7 +126,7 @@ try {
   await summary.getByText('Fast-forward policy: Always create a merge commit (--no-ff).', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   assert.equal((await writes()).length, 0);
-  for (const target of [main, page.getByRole('button', { name: 'Actions for main', exact: true })]) {
+  for (const target of [main, page.getByRole('button', { name: 'Actions for refs/heads/main', exact: true })]) {
     await target.click();
     assert.equal(await page.locator('input[name="operation-action"]:checked').inputValue(), 'createBranch');
     assert.equal(await page.getByRole('combobox', { name: 'Source / starting revision', exact: true }).inputValue(), 'refs/heads/main');
@@ -150,23 +147,24 @@ try {
     await scroller.evaluate(el => { el.scrollTop = 0; });
   }
 
-  // Right click and the context-menu key show a compact menu; Enter keeps the direct dialog.
-  for (const gesture of ['rightclick', 'Enter', 'Shift+F10']) {
+  // Branch pills select on click/Enter; right-click and Shift+F10 open their menu.
+  for (const gesture of ['rightclick', 'Shift+F10']) {
     if (gesture === 'rightclick') await topic.click({ button: 'right' });
     else { await topic.focus(); await topic.press(gesture); }
-    if (gesture !== 'Enter') {
-      const menu = page.getByRole('menu', { name: 'Actions for topic' });
-      await menu.waitFor();
-      assert.equal(await page.getByRole('dialog', { name: 'Git actions' }).count(), 0);
-      assert.equal(await menu.getByRole('menuitem', { name: 'Merge into current…' }).count(), 1);
-      assert.equal(await menu.getByRole('menuitem', { name: 'Rebase current onto this…' }).count(), 1);
-      assert.equal(await menu.getByRole('menuitem', { name: 'Copy reference name' }).count(), 1);
-      await menu.getByRole('menuitem', { name: 'Create branch here…' }).click();
-    }
+    const menu = page.getByRole('menu', { name: 'Actions for topic' });
+    await menu.waitFor();
+    assert.equal(await page.getByRole('dialog', { name: 'Git actions' }).count(), 0);
+    assert.equal(await menu.getByRole('menuitem', { name: /^Merge topic into main/ }).count(), 1);
+    assert.equal(await menu.getByRole('menuitem', { name: 'Rebase current onto this…' }).count(), 1);
+    assert.equal(await menu.getByRole('menuitem', { name: 'Copy reference name' }).count(), 1);
+    await menu.getByRole('menuitem', { name: 'Create branch here…' }).click();
     await page.getByRole('dialog', { name: 'Git actions' }).waitFor();
     assert.equal(await page.getByRole('combobox', { name: 'Source / starting revision', exact: true }).inputValue(), 'refs/heads/topic');
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   }
+  await topic.focus(); await topic.press('Enter');
+  assert.equal(await page.getByRole('dialog', { name: 'Git actions' }).count(), 0);
+  assert.equal(await topic.getAttribute('aria-pressed'), null);
   await main.click({ button: 'right' });
   const currentMenu = page.getByRole('menu', { name: 'Actions for main' });
   await currentMenu.getByRole('menuitem', { name: 'Pull (rebase)' }).click();
@@ -201,11 +199,11 @@ try {
   await page.waitForFunction(() => window.fixture.calls.some(call => call.command === 'repository_remote_action' && call.args.action.kind === 'fetch' && call.args.action.remote === 'origin' && call.args.action.branch === 'topic'));
 
   // Tags and remote-tracking refs have explicit PR restrictions; no prefix guessing.
-  await page.getByRole('button', { name: 'Graph actions for v1', exact: true }).click();
+  await page.getByRole('button', { name: 'Select tip of refs/tags/v1; right-click or press Shift+F10 for actions', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: 'Create pull request…' }).isDisabled(), true);
   await page.getByText('Tags cannot be pull-request source branches.', { exact: false }).waitFor();
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
-  await page.getByRole('button', { name: 'Actions for origin/topic', exact: true }).click();
+  await page.getByRole('button', { name: 'Actions for refs/remotes/origin/topic', exact: true }).click();
   assert.equal(await page.getByRole('button', { name: 'Create pull request…' }).isDisabled(), true);
   await page.getByText('Create or check out a local branch from this remote-tracking ref first.', { exact: false }).waitFor();
   assert.equal(await page.getByRole('combobox', { name: 'Source / starting revision', exact: true }).inputValue(), 'refs/remotes/origin/topic');
@@ -242,7 +240,7 @@ try {
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
 
   // An uncertain write must refresh and then block further writes on refresh failure.
-  await page.getByRole('button', { name: 'Actions for topic', exact: true }).click();
+  await page.getByRole('button', { name: 'Actions for refs/heads/topic', exact: true }).click();
   await page.getByRole('button', { name: 'Review operation', exact: true }).click();
   await page.getByRole('button', { name: 'Execute operation', exact: true }).waitFor();
   await page.evaluate(() => { window.fixture.failAfterWrite = true; window.fixture.holdWrite = true; });
@@ -334,7 +332,7 @@ try {
   assert.equal(await page.getByRole('button', { name: 'Review operation', exact: true }).isDisabled(), true);
   await page.getByRole('combobox', { name: 'Local branch', exact: true }).fill('refs/heads/topic');
   await execute({ kind: 'switchBranch', branch: 'refs/heads/topic' }, ['From: Local branch main', 'Destination: Local branch topic']);
-  await page.getByRole('button', { name: 'Actions for topic', exact: true }).click();
+  await page.getByRole('button', { name: 'Actions for refs/heads/topic', exact: true }).click();
   await page.getByRole('radio', { name: /Rebase/ }).check();
   await execute({ kind: 'rebase', onto: 'refs/heads/topic' }, ['Source branch to replay: Local branch main', 'Destination (new base): Local branch topic']);
   await page.getByRole('button', { name: 'Actions for c1', exact: true }).click();
@@ -349,7 +347,7 @@ try {
   }
 
   await page.evaluate(() => { window.fixture.failRemotes = true; });
-  await page.getByRole('button', { name: 'Actions for topic', exact: true }).click();
+  await page.getByRole('button', { name: 'Actions for refs/heads/topic', exact: true }).click();
   await page.getByRole('button', { name: 'Create pull request…' }).click();
   await page.getByRole('alert').filter({ hasText: 'Remote read fixture failed' }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Open provider form' }).isDisabled(), true);
