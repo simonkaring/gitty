@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Check, FolderGit2, Globe2, Laptop, Tag } from 'lucide-react';
+import { Check, ChevronRight, Folder, FolderOpen, FolderGit2, GitBranch, Globe2, Laptop, Tag } from 'lucide-react';
 import type { CommitSummary, RepositoryState } from '../model/repository';
 import { graphDropAction, REF_DRAG_TYPE, COMMIT_DRAG_TYPE } from './HistoryGraph';
 import type { ActionContext } from './OperationDialog';
@@ -74,19 +74,26 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
             onDrop={event => { event.preventDefault(); event.stopPropagation(); const action = graphDropAction(event.dataTransfer, ref.fullName, session.headRef, commits, state.refs); if (action) onAction(action); }}
             onClick={() => reveal(ref.commitId)} onDoubleClick={() => { if (ref.kind === 'local') switchBranch(ref.fullName); }}
             onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openMenu({ oid: ref.commitId, ref: ref.fullName }, rect.left, rect.bottom, event.currentTarget); } }}>
-            {kind === 'tag' && <Icon size={15} />}{ref.fullName === session.headRef && <Check className="current-branch-check" size={15} aria-hidden="true" />}<span>{kind === 'tag' ? ref.name : ref.name.split('/').at(-1)}</span>
+            {kind === 'tag' ? <Icon size={14} aria-hidden="true" /> : ref.fullName === session.headRef ? <Check className="current-branch-check" size={14} aria-hidden="true" /> : <GitBranch size={14} aria-hidden="true" />}<span>{kind === 'tag' ? ref.name : ref.name.split('/').at(-1)}</span>
           </button><button className="icon-button sm" aria-label={`Actions for ${ref.fullName}`} aria-haspopup="menu" onClick={event => { const rect = event.currentTarget.getBoundingClientRect(); openMenu({ oid: ref.commitId, ref: ref.fullName }, rect.left, rect.bottom, event.currentTarget); }}>…</button>
         </div>)}
         {[...node.folders].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, child]) => {
           const key = `${session.handle}:${kind}:${[...parts, name].join('/')}`;
           const currentPrefix = kind === 'local' ? session.headRef?.replace(prefix, '') : undefined;
           const initiallyOpen = !!currentPrefix?.startsWith(`${[...parts, name].join('/')}/`);
-          return <details className="reference-folder" key={key} open={folderOpen[key] ?? initiallyOpen} onToggle={event => onFolderOpen(key, event.currentTarget.open)}><summary title={name}>{name}</summary><div className="reference-folder-children">{renderTree(child, [...parts, name])}</div></details>;
+          return <details className="reference-folder" key={key} open={folderOpen[key] ?? initiallyOpen} onToggle={event => onFolderOpen(key, event.currentTarget.open)}>
+            <summary title={[...parts, name].join('/')}>
+              <ChevronRight className="reference-folder-chevron" size={12} aria-hidden="true" />
+              {kind === 'remote' && parts.length === 0 ? <Globe2 className="reference-folder-icon" size={14} aria-hidden="true" /> : <><Folder className="reference-folder-icon folder-closed" size={14} aria-hidden="true" /><FolderOpen className="reference-folder-icon folder-open" size={14} aria-hidden="true" /></>}
+              <span className="reference-folder-name">{name}</span>
+            </summary>
+            <div className="reference-folder-children">{renderTree(child, [...parts, name])}</div>
+          </details>;
         })}
       </>;
       return <details className="reference-group" key={kind} open={kind === 'local'}>
         <summary>{kind !== 'tag' && <Icon size={15} aria-hidden="true" />}{label}<span className="count">{refs.length}</span></summary>
-        {renderTree(tree)}
+        <div className="reference-tree">{renderTree(tree)}</div>
         {!refs.length && <p className="empty-category">No references</p>}
       </details>;
     })}

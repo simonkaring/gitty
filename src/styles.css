@@ -966,13 +966,7 @@ button[data-danger='true']:hover:not(:disabled) {
 .reference-group {
   margin: 0 8px 6px;
 }
-.reference-folder { margin-left: 8px; }
-.reference-folder > summary { min-height: 27px; padding: 4px 8px; color: var(--text-muted); cursor: pointer; font-size: var(--fs-xs); list-style: none; }
-.reference-folder > summary::-webkit-details-marker { display: none; }
-.reference-folder > summary::before { content: '›'; display: inline-block; width: 13px; color: var(--text-faint); }
-.reference-folder[open] > summary::before { content: '⌄'; }
-.reference-folder-children { padding-left: 8px; }
-.reference-group summary {
+.reference-group > summary {
   width: 100%;
   display: flex;
   align-items: center;
@@ -986,14 +980,14 @@ button[data-danger='true']:hover:not(:disabled) {
   border-radius: var(--r-sm);
   list-style: none;
 }
-.reference-group summary:hover {
+.reference-group > summary:hover {
   background: var(--hover);
   color: var(--text);
 }
-.reference-group summary::-webkit-details-marker {
+.reference-group > summary::-webkit-details-marker {
   display: none;
 }
-.reference-group summary::before {
+.reference-group > summary::before {
   content: '';
   width: 6px;
   height: 6px;
@@ -1004,10 +998,10 @@ button[data-danger='true']:hover:not(:disabled) {
   flex-shrink: 0;
   transition: transform var(--dur-med) var(--ease-spring);
 }
-.reference-group[open] summary::before {
+.reference-group[open] > summary::before {
   transform: rotate(45deg) translate(-2px, -1px);
 }
-.reference-group summary .count {
+.reference-group > summary .count {
   margin-left: auto;
   transition:
     background-color var(--dur-fast),
@@ -1025,6 +1019,55 @@ button[data-danger='true']:hover:not(:disabled) {
   font-family: var(--ui);
   color: var(--muted);
 }
+.reference-tree {
+  padding: 4px 0 4px 12px;
+  min-width: 0;
+}
+.reference-folder {
+  min-width: 0;
+}
+.reference-folder > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 8px 0 2px;
+  border-radius: var(--r-sm);
+  color: var(--secondary);
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  cursor: pointer;
+  list-style: none;
+}
+.reference-folder > summary::-webkit-details-marker { display: none; }
+.reference-folder > summary:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.reference-folder > summary:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: -2px;
+}
+.reference-folder-chevron,
+.reference-folder-icon { flex-shrink: 0; color: var(--muted); }
+.reference-folder[open] > summary > .reference-folder-chevron { transform: rotate(90deg); }
+.reference-folder > summary > .folder-open,
+.reference-folder[open] > summary > .folder-closed { display: none; }
+.reference-folder[open] > summary > .folder-open { display: block; }
+.reference-folder-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reference-folder-children {
+  margin-left: 8px;
+  padding-left: 12px;
+  border-left: 1px solid var(--border);
+}
+.reference-tree .ref-item { gap: 6px; padding-left: 20px; }
+.reference-tree .ref-item > svg { flex-shrink: 0; }
 .ref-item {
   position: relative;
   width: 100%;
@@ -3646,7 +3689,7 @@ button[data-danger='true']:hover:not(:disabled) {
 .reference-group[open]::details-content {
   block-size: auto;
 }
-.reference-group[open] summary .count {
+.reference-group[open] > summary .count {
   color: var(--text);
 }
 .ref-action-row:hover .ref-item > span:first-of-type {
