@@ -324,8 +324,10 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
   }
   async function switchBranch(ref: string) {
     const current = session.current;
-    const target = current?.refs.find(item => item.kind === 'local' && item.fullName === ref);
-    if (!current || !target || ref === current.session.headRef || switchPending.current) return;
+    const target = current?.refs.find(item => item.fullName === ref && (item.kind === 'local' || (item.kind === 'remote' && ref.startsWith('refs/remotes/origin/') && ref !== 'refs/remotes/origin/HEAD')));
+    const localRef = ref.replace(/^refs\/remotes\/origin\//, 'refs/heads/');
+    if (!current || !target || localRef === current.session.headRef || switchPending.current) return;
+    const branchName = localRef.replace(/^refs\/heads\//, '');
     if (mutationLock.current || blockedRef.current) { setBlockedSwitch({ branch: target.name, ref, oid: target.commitId, reason: blockedRef.current ? 'Refresh the repository before another write.' : 'Another repository operation is running. Wait for it to finish.' }); return; }
     switchPending.current = true;
     const token = epoch.current;
@@ -337,8 +339,8 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
       if (epoch.current !== token) return;
       const after = await native<OperationState>('repository_operation_state', { handle: current.session.handle });
       if (epoch.current !== token) return;
-      if (after.conflicts.length) { setNotice(`Switched to ${target.name} with conflicts to resolve.`); setConflictPath(after.conflicts[0]); }
-      else setNotice(`Switched to ${target.name}.`);
+      if (after.conflicts.length) { setNotice(`Switched to ${branchName} with conflicts to resolve.`); setConflictPath(after.conflicts[0]); }
+      else setNotice(`Switched to ${branchName}.`);
     } catch (error) {
       if (epoch.current === token) setBlockedSwitch({ branch: target.name, ref, oid: target.commitId, reason: errorMessage(error) });
     } finally { switchPending.current = false; }

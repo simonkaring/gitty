@@ -1970,6 +1970,75 @@ with socket.create_connection(("127.0.0.1", int(os.environ["GITTY_EDITOR_PORT"])
 }
 
 #[test]
+fn operations_switch_origin_creates_tracking_branch_and_preserves_existing_local() {
+    let f = Fixture::new();
+    f.git(&["remote", "add", "origin", "."]);
+    f.git(&["switch", "-c", "remote-source"]);
+    f.write("file", "incoming\n");
+    let origin_oid = f.commit("origin tip");
+    f.git(&[
+        "update-ref",
+        "refs/remotes/origin/feature/topic",
+        &origin_oid,
+    ]);
+    f.git(&["switch", "main"]);
+    f.write("other", "staged work\n");
+    f.git(&["add", "other"]);
+    let switch = || {
+        f.run(GitAction::SwitchBranch {
+            branch: "refs/remotes/origin/feature/topic".into(),
+            carry_changes: true,
+        })
+    };
+    switch().unwrap();
+    assert_eq!(f.git(&["symbolic-ref", "HEAD"]), "refs/heads/feature/topic");
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), origin_oid);
+    assert_eq!(
+        f.git(&["rev-parse", "--symbolic-full-name", "@{upstream}"]),
+        "refs/remotes/origin/feature/topic"
+    );
+    assert_eq!(f.git(&["diff", "--cached", "--name-only"]), "other");
+    let local_oid = f.commit("local work");
+    f.git(&["switch", "main"]);
+    switch().unwrap();
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), local_oid);
+    assert_eq!(
+        f.git(&["rev-parse", "refs/remotes/origin/feature/topic"]),
+        origin_oid
+    );
+    assert_eq!(
+        f.run(GitAction::SwitchBranch {
+            branch: "refs/remotes/origin/HEAD".into(),
+            carry_changes: true,
+        })
+        .unwrap_err()
+        .code,
+        "invalidReference"
+    );
+}
+
+#[test]
+fn operations_switch_origin_carries_overlapping_changes_as_conflicts() {
+    let f = Fixture::new();
+    f.git(&["remote", "add", "origin", "."]);
+    f.git(&["switch", "-c", "remote-source"]);
+    f.write("file", "incoming\n");
+    let oid = f.commit("origin tip");
+    f.git(&["update-ref", "refs/remotes/origin/topic", &oid]);
+    f.git(&["switch", "main"]);
+    f.write("file", "mine\n");
+    let result = f
+        .run(GitAction::SwitchBranch {
+            branch: "refs/remotes/origin/topic".into(),
+            carry_changes: true,
+        })
+        .unwrap();
+    assert_eq!(f.git(&["symbolic-ref", "--short", "HEAD"]), "topic");
+    assert_eq!(result.operation.conflicts, vec!["file".to_string()]);
+    assert_eq!(f.git(&["config", "branch.topic.remote"]), "origin");
+}
+
+#[test]
 fn operations_switch_carries_changes_and_surfaces_conflicts() {
     let f = Fixture::new();
     f.git(&["switch", "-c", "side"]);

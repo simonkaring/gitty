@@ -580,13 +580,22 @@ impl Repository {
                 branch,
                 carry_changes,
             } => {
-                // The UI sends full ref names (refs/heads/x); accept short names too.
-                let branch = branch
-                    .strip_prefix("refs/heads/")
-                    .unwrap_or(&branch)
+                // Origin refs create a tracking branch only if no local counterpart exists.
+                let origin = branch.strip_prefix("refs/remotes/origin/");
+                if origin == Some("HEAD") {
+                    return Err(Error::new(
+                        "invalidReference",
+                        "origin/HEAD is not a branch target",
+                    ));
+                }
+                let name = origin
+                    .unwrap_or_else(|| branch.strip_prefix("refs/heads/").unwrap_or(&branch))
                     .to_string();
-                self.valid_name(&branch, "heads")?;
-                let oid = resolve(self.location(), &format!("refs/heads/{branch}"))?;
+                self.valid_name(&name, "heads")?;
+                let local_ref = format!("refs/heads/{name}");
+                let create =
+                    origin.is_some() && !state.refs.iter().any(|r| r.full_name == local_ref);
+                let oid = resolve(self.location(), if create { &branch } else { &local_ref })?;
                 a.extend(args(&["switch", "--no-overwrite-ignore", "--no-guess"]));
                 // Plain switch carries work Git can keep as-is. Only when the
                 // target changes a path that has local changes is a three-way
@@ -595,7 +604,11 @@ impl Repository {
                 if carry_changes && self.switch_overlaps_changes(&oid)? {
                     a.push("--merge".into());
                 }
-                a.extend(args(&["--", &branch]));
+                if create {
+                    a.extend(args(&["-c", &name, "--track", "--", &branch]));
+                } else {
+                    a.extend(args(&["--", &name]));
+                }
             }
             GitAction::Merge {
                 source,

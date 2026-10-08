@@ -519,7 +519,10 @@ remain unverified and require refresh/review.
 - Branch creation resolves the start point to a commit; checkout is optional.
   Creation without checkout leaves local changes untouched; checkout carries
   staged/unstaged/untracked work when Git can preserve it, refusing overwrites.
-  Switching accepts local branches only (`switch --no-guess`). `switchBranch`
+  Switching accepts local branches and explicit `refs/remotes/origin/<branch>`
+  refs (`switch --no-guess`). An origin ref switches to an existing same-named
+  local branch without resetting it, or creates and checks out a local branch
+  with `--track` when none exists. `origin/HEAD` is not a branch target. `switchBranch`
   with `carryChanges: true` skips the clean-worktree requirement: Git's plain
   switch carries staged/unstaged work, and `--merge` is used only when the target
   changes a tracked path that has local changes, so conflicts return as an

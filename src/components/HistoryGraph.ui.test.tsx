@@ -45,7 +45,7 @@ it('groupRefs merges a local branch with its same-named remote ref', () => {
   const groups = groupRefs([r('origin/x', 'remote'), r('x', 'local'), r('origin/y', 'remote'), r('v1', 'tag')]);
   expect(groups.map(g => [g.ref.name, g.remote?.name])).toEqual([['x', 'origin/x'], ['origin/y', undefined], ['v1', undefined]]);
 });
-it('branch pills select their tip on click and Enter/Space while context gestures still open actions', async () => {
+it.each(['refs/heads/topic', 'refs/remotes/origin/feature/topic'])('branch pill %s selects its tip and switches on double-click', async fullName => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const originalObserver = globalThis.ResizeObserver;
   globalThis.ResizeObserver = class { observe() {} disconnect() {} unobserve() {} } as typeof ResizeObserver;
@@ -54,7 +54,7 @@ it('branch pills select their tip on click and Enter/Space while context gesture
   const commits = [{ id: 'tip', parents: [], subject: 'Tip', body: '', author: 'A', email: '', timestamp: 1, branch: 'topic', files: [] }];
   const onSelect = vi.fn(); const onActions = vi.fn(); const onContextActions = vi.fn(); const onSwitchBranch = vi.fn();
   try {
-    await act(async () => { root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={[{ name: 'topic', fullName: 'refs/heads/topic', kind: 'local', commitId: 'tip' }]} selectedId="tip" head="tip" headRef="refs/heads/main" loaded={1} matches={null} onSelect={onSelect} onActions={onActions} onContextActions={onContextActions} onSwitchBranch={onSwitchBranch} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />); });
+    await act(async () => { root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={[{ name: 'topic', fullName, kind: fullName.startsWith('refs/heads/') ? 'local' : 'remote', commitId: 'tip' }]} selectedId="tip" head="tip" headRef="refs/heads/main" loaded={1} matches={null} onSelect={onSelect} onActions={onActions} onContextActions={onContextActions} onSwitchBranch={onSwitchBranch} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />); });
     const pill = host.querySelector('.ref-pill') as HTMLElement;
     await act(async () => { pill.click(); });
     await act(async () => { pill.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
@@ -65,7 +65,7 @@ it('branch pills select their tip on click and Enter/Space while context gesture
     await act(async () => { pill.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true })); });
     expect(onContextActions).toHaveBeenCalledTimes(2);
     await act(async () => { pill.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); });
-    expect(onSwitchBranch).toHaveBeenCalledWith('refs/heads/topic');
+    expect(onSwitchBranch).toHaveBeenCalledWith(fullName);
   } finally {
     await act(async () => { root.unmount(); });
     canvas.mockRestore(); globalThis.ResizeObserver = originalObserver;
