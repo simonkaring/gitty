@@ -47,20 +47,16 @@ pub fn ensure_desktop_entry_in(
     }
 
     let icons_dir = data_home.join("icons/hicolor/512x512/apps");
-    let icon_path = icons_dir.join("gitty.png");
-    if !icon_path.exists() {
+    // A new icon name also invalidates the compositor's cached light artwork.
+    let icon_path = icons_dir.join("gitty-dark.png");
+    let icon = include_bytes!("../icons/icon.png");
+    if std::fs::read(&icon_path).ok().as_deref() != Some(icon.as_slice()) {
         std::fs::create_dir_all(&icons_dir)?;
-        std::fs::write(&icon_path, include_bytes!("../icons/icon.png"))?;
+        std::fs::write(&icon_path, icon)?;
     }
 
     let apps_dir = data_home.join("applications");
     let desktop_path = apps_dir.join("gitty.desktop");
-
-    if let Ok(content) = std::fs::read_to_string(&desktop_path) {
-        if content.contains(&format!("Exec={}", exe_path.display())) {
-            return Ok(());
-        }
-    }
 
     std::fs::create_dir_all(&apps_dir)?;
     let desktop_content = format!(
@@ -70,13 +66,15 @@ pub fn ensure_desktop_entry_in(
          GenericName=Git Client\n\
          Comment=A little clarity for your Git history\n\
          Exec={}\n\
-         Icon=gitty\n\
+         Icon=gitty-dark\n\
          StartupWMClass=gitty\n\
          Terminal=false\n\
          Categories=Development;RevisionControl;\n",
         exe_path.display()
     );
-    std::fs::write(desktop_path, desktop_content)?;
+    if std::fs::read_to_string(&desktop_path).ok().as_deref() != Some(&desktop_content) {
+        std::fs::write(desktop_path, desktop_content)?;
+    }
     Ok(())
 }
 
@@ -104,8 +102,8 @@ pub fn configure_linux_window(window: &tauri::WebviewWindow) {
     ensure_desktop_entry();
 
     if let Ok(gtk_window) = window.gtk_window() {
-        gtk_window.set_icon_name(Some("gitty"));
-        gtk::Window::set_default_icon_name("gitty");
+        gtk_window.set_icon_name(Some("gitty-dark"));
+        gtk::Window::set_default_icon_name("gitty-dark");
 
         if let Ok(pixbuf) = gtk::gdk_pixbuf::Pixbuf::from_read(std::io::Cursor::new(
             include_bytes!("../icons/icon.png"),
@@ -179,26 +177,39 @@ mod tests {
         ensure_desktop_entry_in(&data_home, true, &fake_exe).unwrap();
         assert!(!data_home.join("applications/gitty.desktop").exists());
         assert!(!data_home
-            .join("icons/hicolor/512x512/apps/gitty.png")
+            .join("icons/hicolor/512x512/apps/gitty-dark.png")
             .exists());
 
         // 2. If system_installed is false, write icon and desktop entry
         ensure_desktop_entry_in(&data_home, false, &fake_exe).unwrap();
         let desktop_file = data_home.join("applications/gitty.desktop");
-        let icon_file = data_home.join("icons/hicolor/512x512/apps/gitty.png");
+        let icon_file = data_home.join("icons/hicolor/512x512/apps/gitty-dark.png");
 
         assert!(desktop_file.exists());
         assert!(icon_file.exists());
 
         let content = std::fs::read_to_string(&desktop_file).unwrap();
         assert!(content.contains("Exec=/opt/gitty/bin/gitty"));
-        assert!(content.contains("Icon=gitty"));
+        assert!(content.contains("Icon=gitty-dark\n"));
         assert!(content.contains("StartupWMClass=gitty"));
 
         // 3. Repeated call with same exe does not fail and keeps content
         ensure_desktop_entry_in(&data_home, false, &fake_exe).unwrap();
         let content2 = std::fs::read_to_string(&desktop_file).unwrap();
         assert_eq!(content, content2);
+
+        // Refresh stale icons even when the desktop entry is already current.
+        std::fs::write(&icon_file, b"old light icon").unwrap();
+        ensure_desktop_entry_in(&data_home, false, &fake_exe).unwrap();
+        assert_eq!(
+            std::fs::read(&icon_file).unwrap(),
+            include_bytes!("../icons/icon.png")
+        );
+
+        // Migrate the old icon reference even when Exec has not changed.
+        std::fs::write(&desktop_file, content.replace("Icon=gitty-dark", "Icon=gitty")).unwrap();
+        ensure_desktop_entry_in(&data_home, false, &fake_exe).unwrap();
+        assert_eq!(std::fs::read_to_string(&desktop_file).unwrap(), content);
 
         // 4. Call with new exe updates Exec path
         let new_exe = std::path::PathBuf::from("/usr/local/bin/gitty");

@@ -22,7 +22,12 @@ const preferences = async page => JSON.parse(await stored(page));
 const button = (page, name) => page.getByRole('button', { name, exact: true });
 const select = (page, name) => page.getByRole('combobox', { name, exact: true });
 const dialog = page => page.getByRole('dialog', { name: 'Settings', exact: true });
-const open = async page => { await button(page, 'Open settings').click(); await dialog(page).waitFor(); await button(page, 'Appearance').click(); };
+const open = async page => {
+  await button(page, 'Open settings').click();
+  await dialog(page).waitFor();
+  assert.equal(await dialog(page).locator('.dialog-body').evaluate(el => el.clientHeight > 100), true, 'settings body must not collapse in an auto-height flex dialog');
+  await button(page, 'Appearance').click();
+};
 const close = async page => { await button(page, 'Close dialog').click(); await dialog(page).waitFor({ state: 'hidden' }); };
 const token = (page, name) => page.evaluate(key => getComputedStyle(document.documentElement).getPropertyValue(key).trim(), name);
 async function painted(page, mode, bg, graph) {

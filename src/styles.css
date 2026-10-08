@@ -2987,7 +2987,7 @@ button[data-danger='true']:hover:not(:disabled) {
   overflow-wrap: anywhere;
 }
 .dialog-body {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
   display: flex;
