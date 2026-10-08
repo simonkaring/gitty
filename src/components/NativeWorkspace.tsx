@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type CSSProperties } from 'react';
-import { Channel, isTauri } from '@tauri-apps/api/core';
+import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { Command, FolderOpen, Palette, PanelLeft, PanelRight, Search, Settings as SettingsIcon, Sparkles } from 'lucide-react';
 import { CommandPalette, type PaletteCommand } from './CommandPalette';
 import { useSettings } from '../model/settings';
@@ -14,7 +15,7 @@ import { loadPersistedTabs, locationLabel, savePersistedTabs, tabsReducer, type 
 import { errorMessage, handleWindowDrag, native } from '../model/native';
 import { DEMO_REPOS, demoLocation } from '../model/demoBackend';
 import { cloneReducer, type CloneProgress, type CloneRequest } from '../model/clone';
-import { WindowControls } from './WindowControls';
+import { DEFAULT_BUTTON_LAYOUT, parseWindowButtonLayout, WindowControls, WindowResizeHandles } from './WindowControls';
 
 function initialTabsState(demo: boolean): TabsState {
   const persisted = demo ? { tabs: [{ id: 'demo', location: demoLocation(DEMO_REPOS[0].name) }], activeId: 'demo' } : loadPersistedTabs(window.localStorage);
@@ -59,6 +60,16 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
     noticeTimer.current = setTimeout(() => setNotice(''), 4500);
   }, []);
+  const isLinux = document.documentElement.dataset.platform === 'linux' && isTauri();
+  const [buttonLayout, setButtonLayout] = useState(DEFAULT_BUTTON_LAYOUT);
+  useEffect(() => {
+    if (!isLinux) return;
+    let disposed = false;
+    const update = (layout: string) => { if (!disposed) setButtonLayout(layout); };
+    const unlisten = listen<string>('window-button-layout-changed', event => update(event.payload));
+    void unlisten.then(() => invoke<string>('app_window_button_layout')).then(update).catch(error => { if (!disposed) notify(`Could not read window button layout: ${errorMessage(error)}`); });
+    return () => { disposed = true; void unlisten.then(stop => stop()).catch(() => {}); };
+  }, [isLinux, notify]);
   useEffect(() => () => { if (noticeTimer.current) clearTimeout(noticeTimer.current); }, []);
   useEffect(() => { if (!demo) savePersistedTabs(window.localStorage, { tabs: tabs.flatMap(tab => tab.location ? [{ id: tab.id, location: tab.location }] : []), activeId: tabs.find(tab => tab.id === activeId)?.location ? activeId : null }); }, [tabs, activeId, demo]);
   // The only place a tab-strip notice is ever shown: the reducer just records
@@ -119,12 +130,15 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
     ...themes.filter(t => t.id !== theme.id).map(t => ({ id: `theme:${t.id}`, group: 'Theme', label: `Theme: ${t.name}`, hint: t.mode, icon: <Palette size={15} />, run: () => updateSettings({ themeMode: 'fixed', themeId: t.id }) })),
   ];
   const isMac = document.documentElement.dataset.platform === 'macos' || /Mac/.test(navigator.platform);
-  const customWindowControls = document.documentElement.dataset.platform === 'windows' && isTauri();
+  const customWindowControls = (document.documentElement.dataset.platform === 'windows' && isTauri()) || isLinux;
+  const [leftButtons, rightButtons] = parseWindowButtonLayout(buttonLayout);
   const tabSummaries: RepositoryTabSummary[] = tabs.map(tab => ({ id: tab.id, title: tab.title, busy: tab.busy, branch: tab.branch, dirty: tab.dirty, start: !tab.location }));
   const activeTab = tabs.find(tab => tab.id === activeId);
   const startPage = (fromTabId?: string) => <StartPage onOpen={location => openLocation(location, fromTabId)} onClone={request => startClone(request, fromTabId)} cloneBusy={cloneBusy} onDemo={onToggleDemo && requestDemo} />;
   return <ToastProvider value={toastRoot}><div className="app-shell native-shell" style={{ '--inspector-width': `${inspectorWidth}px`, '--sidebar-width': `${sidebarWidth}px`, '--sidebar-space': `${sidebarOpen ? sidebarWidth : 0}px` } as CSSProperties}>
-    <header className={`titlebar${customWindowControls ? ' titlebar-windows' : ''}`} data-tauri-drag-region={customWindowControls ? 'deep' : true} onMouseDown={customWindowControls ? undefined : handleWindowDrag}>
+    {isLinux && <WindowResizeHandles onError={notify} />}
+    <header className={`titlebar${customWindowControls ? isLinux ? ' titlebar-linux' : ' titlebar-windows' : ''}`} data-tauri-drag-region={customWindowControls ? 'deep' : true} onMouseDown={customWindowControls ? undefined : handleWindowDrag}>
+      {isLinux && leftButtons.length > 0 && <WindowControls buttons={leftButtons} onError={notify} />}
       <Brand demo={demo} />
       <RepositoryTabs tabs={tabSummaries} activeId={activeId} onSelect={selectTab} onClose={closeTab} onNew={() => dispatch({ type: 'start' })} />
       <div className="native-actions">
@@ -134,7 +148,7 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
         <button className="icon-button" aria-label="Toggle references sidebar" aria-pressed={sidebarOpen} onClick={() => setSidebarOpen(!sidebarOpen)}><PanelLeft size={18} /></button>
         <button className="icon-button" aria-label="Toggle working changes and inspector" aria-pressed={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><PanelRight size={18} /></button>
       </div>
-      {customWindowControls && <WindowControls onError={notify} />}
+      {customWindowControls && (!isLinux || rightButtons.length > 0) && <WindowControls buttons={isLinux ? rightButtons : undefined} onError={notify} />}
     </header>
     {notice && <Toast onDismiss={() => setNotice('')}>{notice}</Toast>}
     {cloneBusy && <Toast tone="progress" action={<button className="secondary-button" disabled={clone.status === 'cancelling'} onClick={cancelClone}>Cancel clone</button>}>

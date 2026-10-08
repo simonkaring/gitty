@@ -16,9 +16,29 @@ sources:
     resource: ../../src-tauri/BACKEND.md
   - id: readme
     resource: ../../README.md
+  - id: windows
+    resource: ../../src-tauri/src/lib.rs
+  - id: linux-window
+    resource: ../../src-tauri/src/linux.rs
+  - id: workspace
+    resource: ../../src/components/NativeWorkspace.tsx
+  - id: controls
+    resource: ../../src/components/WindowControls.tsx
 ---
 
 # Native and WSL boundaries
+
+Linux and Windows disable native window decorations and use app-header controls;
+macOS retains its native overlay controls. Linux reads `gtk-decoration-layout`
+on the GTK UI thread, exposes the current value through `app_window_button_layout`,
+and emits `window-button-layout-changed` when GTK preferences change. The frontend
+honors supported buttons on both sides, filtering duplicates and GTK-only menu
+entries; malformed layouts fall back to minimize/maximize/close on the right.
+Controls use Gitty styling, not the desktop GTK theme. Window APIs bypass demo
+repository dispatch, so desktop demo mode keeps working controls. Linux edge/corner
+handles invoke native resize dragging; Tauri's deep drag region handles moving and
+double-click maximization without capturing interactive header elements.
+Wayland/X11 GUI behavior requires separate runtime verification.[^windows][^linux-window][^workspace][^controls]
 
 Rust owns repository Git and filesystem work. Native Git uses explicit arguments
 with `git -C`; WSL locations use `wsl.exe --distribution … --exec env … git -C …`
@@ -66,3 +86,7 @@ The [backend contract](../../src-tauri/BACKEND.md#read-semantics) and
 [^bridge-test]: Construction-level WSL bridge regression.
 [^contract]: Filesystem, editor, and process-lifecycle platform limits.
 [^readme]: User-facing platform prerequisites and pending runtime checks.
+[^windows]: Window decoration setup and layout IPC.
+[^linux-window]: GTK button layout observation and Linux icons.
+[^workspace]: Platform-gated header controls and layout subscription.
+[^controls]: Button layout parsing, window actions, and native resize handles.

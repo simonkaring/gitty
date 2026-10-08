@@ -575,11 +575,27 @@ fn app_start_dragging(window: tauri::WebviewWindow) -> Result<()> {
         .map_err(|e| Error::new("window", e.to_string()))
 }
 
+#[tauri::command]
+fn app_window_button_layout(app: tauri::AppHandle) -> String {
+    #[cfg(target_os = "linux")]
+    return app
+        .state::<linux::WindowButtonLayout>()
+        .0
+        .lock()
+        .unwrap()
+        .clone();
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        ":minimize,maximize,close".into()
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
             for (_, window) in app.webview_windows() {
                 window.set_decorations(false)?;
             }
@@ -597,6 +613,7 @@ pub fn run() {
             editor::init(app.handle().clone())?;
             #[cfg(target_os = "linux")]
             {
+                linux::configure_button_layout(app.handle());
                 for (_, window) in app.webview_windows() {
                     linux::configure_linux_window(&window);
                 }
@@ -615,6 +632,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            app_window_button_layout,
             app_start_dragging,
             backend_info,
             list_provider_accounts,

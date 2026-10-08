@@ -27,9 +27,9 @@ Open **http://127.0.0.1:1420**. The browser preview demonstrates the workspace w
 
 Install **Git 2.37+** and the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform, including stable Rust/Cargo:
 
-- **macOS:** macOS 14+ and Xcode Command Line Tools. The bundled credential manager includes the .NET 10 runtime, which requires macOS 14+. The app uses a standard native titlebar and a platform-neutral workspace beneath it.
+- **macOS:** macOS 14+ and Xcode Command Line Tools. The bundled credential manager includes the .NET 10 runtime, which requires macOS 14+. Native window controls overlay the app header.
 - **Windows:** Microsoft C++ Build Tools and WebView2. No POSIX shell assumptions or hard-coded filesystem paths in the backend.
-- **Linux:** the distribution’s WebKitGTK 4.1 and other Tauri development libraries. See the prerequisites link for your distribution's setup.
+- **Linux:** the distribution’s WebKitGTK 4.1 and other Tauri development libraries. See the prerequisites link for your distribution's setup. Window controls are integrated into the app header using Gitty's styling; their placement, order, and visibility follow GTK's system button layout, including changes while running. Drag the header to move the window, double-click it to maximize/restore, or drag an edge/corner to resize. There is no separate native titlebar.
 
 ```sh
 npm run desktop                 # Native development window + Vite

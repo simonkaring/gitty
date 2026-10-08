@@ -592,6 +592,25 @@ button[data-danger='true']:hover:not(:disabled) {
   background: transparent;
   color: var(--text);
 }
+.titlebar-linux .window-controls {
+  position: static;
+  flex-shrink: 0;
+  height: 40px;
+}
+.titlebar-linux .window-controls button {
+  width: 36px;
+  border-radius: var(--r-md);
+}
+.window-resize { position: fixed; z-index: 100; }
+.window-resize-North, .window-resize-South { left: 8px; right: 8px; height: 4px; cursor: ns-resize; }
+.window-resize-East, .window-resize-West { top: 8px; bottom: 8px; width: 4px; cursor: ew-resize; }
+.window-resize-North, .window-resize-NorthEast, .window-resize-NorthWest { top: 0; }
+.window-resize-South, .window-resize-SouthEast, .window-resize-SouthWest { bottom: 0; }
+.window-resize-East, .window-resize-NorthEast, .window-resize-SouthEast { right: 0; }
+.window-resize-West, .window-resize-NorthWest, .window-resize-SouthWest { left: 0; }
+.window-resize-NorthEast, .window-resize-NorthWest, .window-resize-SouthEast, .window-resize-SouthWest { width: 8px; height: 8px; }
+.window-resize-NorthEast, .window-resize-SouthWest { cursor: nesw-resize; }
+.window-resize-NorthWest, .window-resize-SouthEast { cursor: nwse-resize; }
 .window-controls button:hover {
   background: var(--hover);
 }

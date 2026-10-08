@@ -13,6 +13,8 @@ if (isMac && typeof document !== 'undefined') {
   document.documentElement.dataset.platform = 'macos';
 } else if (/Windows/i.test(navigator.userAgent)) {
   document.documentElement.dataset.platform = 'windows';
+} else if (/Linux/i.test(navigator.userAgent)) {
+  document.documentElement.dataset.platform = 'linux';
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
