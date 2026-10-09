@@ -186,7 +186,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       if (token !== epoch.current) { void close(handle); return; }
       session.current = snapshot.state; setState(snapshot.state); setStatus(snapshot.status); fingerprint.current = snapshot.status.fingerprint; generation.current = snapshot.generation;
       setOperation(activeOperation); operationSig.current = operationContent(activeOperation);
-      installHistory(snapshot.commits, snapshot.cursor); setSelected(snapshot.state.session.head ?? snapshot.commits[0]?.id ?? ''); if (!snapshot.state.session.head && snapshot.status.entries.length) { setSelected(WORKING_ID); setInspectorOpen(true); } setRevision(value => value + 1);
+      installHistory(snapshot.commits, snapshot.cursor); setSelected(snapshot.state.session.head ?? snapshot.commits[0]?.id ?? ''); if (!snapshot.state.session.head && snapshot.status.entries.length) { setSelected(WORKING_ID); setInspectorOpen(true); } setRevision(value => value + 1); setStateRevision(value => value + 1);
       onIdentityRef.current(tabId, sessionKey(location, snapshot.state.session), snapshot.state.session.name);
     } catch (e) { if (opened) void close(opened.session.handle); if (token === epoch.current) { setError(errorMessage(e)); onIdentityRef.current(tabId, null, null); } }
     finally { if (token === epoch.current) { lock.current = false; setBusy(false); } }
@@ -235,6 +235,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       if (changed || force) setState(updated);
       if (changed || workingChanged || force) setStatus(working);
       fingerprint.current = working.fingerprint;
+      if (changed) setStateRevision(value => value + 1);
       if (changed || workingChanged || operationChanged || force) setRevision(value => value + 1);
       setError('');
       blockedRef.current = false; setMutationBlocked(false);
