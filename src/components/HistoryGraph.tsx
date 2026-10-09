@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Check, GitMerge, Globe2, Laptop, Settings as SettingsIcon, Tag } from 'lucide-react';
 import { indexEdges, laneX, LANE_WIDTH, ROW_HEIGHT, type GraphLayout } from '../graph/layout';
 import { assignBranchColors, branchName } from '../graph/branchColor';
@@ -83,6 +83,7 @@ interface Props {
 
 const MIN_GRAPH_WIDTH = laneX(2) + 14; // three lanes plus padding; also fits the "GRAPH" label
 export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, loaded, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onContextActions, onSwitchBranch, pickOrder, onTogglePick }, ref) {
+  const uid = useId();
   const { settings, updateSettings } = useSettings();
   const graphLaneWidth = settings.graphAuthorAvatars ? 30 : LANE_WIDTH;
   const graphLaneX = useMemo(() => (lane: number) => laneX(0) + lane * graphLaneWidth, [graphLaneWidth]);
@@ -365,8 +366,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       />
     )}
     <div className="graph-viewport">
-      <div className="history-scroll" ref={scroller} role="listbox" aria-label="Commit history" aria-describedby="history-keyboard-help" tabIndex={0}
-        aria-activedescendant={selectedIndex >= start && selectedIndex < end ? `commit-${selectedId}` : undefined}
+      <div className="history-scroll" ref={scroller} role="listbox" aria-label="Commit history" aria-describedby={`${uid}-help`} tabIndex={0}
+        aria-activedescendant={selectedIndex >= start && selectedIndex < end ? `${uid}-commit-${selectedId}` : undefined}
         onScroll={event => { setScrollTop(event.currentTarget.scrollTop); setScrollLeft(event.currentTarget.scrollLeft); }}
         onDragOver={event => { if (![REF_DRAG_TYPE, COMMIT_DRAG_TYPE].some(type => event.dataTransfer.types.includes(type))) return; const bounds = event.currentTarget.getBoundingClientRect(); dragVelocity.current = event.clientY < bounds.top + 45 ? -10 : event.clientY > bounds.bottom - 45 ? 10 : 0; if (!dragFrame.current) autoScroll(); }}
         onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) stopDrag(); }}
@@ -383,9 +384,9 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
             const node = layout.nodes[row];
             const lane = node?.lane ?? 0;
             const branchColor = palette[branchColors.rows[row] ?? lane % colors.length];
-            const badges = refs.filter(ref => ref.commitId === commit.id && !(ref.kind === 'remote' && ref.name.endsWith('/HEAD')));
+            const badges = refsByCommit.get(commit.id) ?? NO_REFS;
             const groups = groupRefs(badges, headRef);
-            return <div key={commit.id} id={`commit-${commit.id}`} role="option" aria-selected={commit.id === selectedId}
+            return <div key={commit.id} id={`${uid}-commit-${commit.id}`} role="option" aria-selected={commit.id === selectedId}
               aria-posinset={row + 1} aria-setsize={commits.length}
               aria-label={`${commit.subject}, ${commit.author}, ${commit.id.slice(0, 7)}${commit.parents.length > 1 ? ', merge commit' : ''}${commit.id === head ? ', HEAD' : ''}${badges.length ? `, ${badges.map(b => b.name).join(', ')}` : ''}`}
               className={`commit-row ${commit.id === selectedId ? 'selected' : ''} ${matches && !matches.has(commit.id) ? 'dimmed' : ''} ${freshIds.has(commit.id) ? 'fresh' : ''}`}
@@ -441,6 +442,6 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     <div className="history-bottom"><span><span className="live-dot" />{(loaded - (commits[0]?.id === WORKING_ID ? 1 : 0)).toLocaleString()} commits loaded{shallow ? ' · Shallow repository boundary' : ''}</span>
       {(hasMore ?? loaded < commits.length) ? <button className="text-button" disabled={paging} onClick={onLoadMore}>{paging ? 'Loading…' : 'Load older history ↓'}</button> : <span className="muted">{shallow ? 'Available history loaded' : 'All history loaded'}</span>}
     </div>
-    <span id="history-keyboard-help" className="sr-only">Use Up and Down to select commits, Page Up and Page Down to move a page, Home and End to move to the loaded boundaries. Press Enter to open details.{onActions && ' Press Shift+F10 for commit actions. Tab to a branch badge and press Enter or Shift+F10 for branch actions.'}{onSwitchBranch && ' Double-click a local or origin branch badge to switch branches, creating a local tracking branch if needed.'}</span>
+    <span id={`${uid}-help`} className="sr-only">Use Up and Down to select commits, Page Up and Page Down to move a page, Home and End to move to the loaded boundaries. Press Enter to open details.{onActions && ' Press Shift+F10 for commit actions. Tab to a branch badge and press Enter or Shift+F10 for branch actions.'}{onSwitchBranch && ' Double-click a local or origin branch badge to switch branches, creating a local tracking branch if needed.'}</span>
   </div>;
 });
