@@ -1572,6 +1572,23 @@ button[data-danger='true']:hover:not(:disabled) {
   position: relative;
   align-self: stretch;
 }
+.graph-avatar-node {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 3;
+  display: flex;
+  border: 1px solid var(--branch-color);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px var(--bg);
+  pointer-events: none;
+}
+.graph-avatar-node.merge {
+  border: 3px double var(--branch-color);
+}
+.commit-row.dimmed .graph-avatar-node {
+  opacity: 0.3;
+}
 .commit-message {
   display: flex;
   align-items: center;
@@ -1711,7 +1728,7 @@ button[data-danger='true']:hover:not(:disabled) {
   animation: pulse-dot 2s ease-in-out infinite;
 }
 
-/* Avatars are neutral circles; initials only, no per-author tint. */
+/* Avatars are neutral circles with initials beneath optional Gravatar images. */
 .avatar {
   width: 32px;
   height: 32px;

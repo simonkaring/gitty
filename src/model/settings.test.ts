@@ -66,6 +66,19 @@ describe('local preferences', () => {
     expect(persistSettings(store, { ...DEFAULT_SETTINGS, commitProfiles: [profile], repositoryCommitProfiles: { [key]: profile.id } })).toBeNull();
     expect(readSettings(store).settings).toMatchObject({ commitProfiles: [profile], repositoryCommitProfiles: { [key]: profile.id } });
   });
+  it('migrates graph avatar nodes to off and persists the toggle independently of avatar mode', () => {
+    const older = { ...DEFAULT_SETTINGS, themeId: 'dracula', authorAvatarMode: 'initials' } as any;
+    delete older.graphAuthorAvatars;
+    const store = storage({ [SETTINGS_KEY]: JSON.stringify(older) });
+    const { settings, error } = readSettings(store);
+    expect(error).toBeNull();
+    expect(settings).toMatchObject({ themeId: 'dracula', authorAvatarMode: 'initials', graphAuthorAvatars: false });
+    expect(persistSettings(store, { ...settings, graphAuthorAvatars: true })).toBeNull();
+    expect(readSettings(store).settings).toMatchObject({ authorAvatarMode: 'initials', graphAuthorAvatars: true });
+    expect(persistSettings(store, settings)).toBeNull();
+    expect(readSettings(store).settings.graphAuthorAvatars).toBe(false);
+    for (const graphAuthorAvatars of ['true', null, 1]) expect(() => validateSettings({ ...DEFAULT_SETTINGS, graphAuthorAvatars })).toThrow();
+  });
   it('rejects malformed identity fields and broken selections', () => {
     const valid = { id: 'profile-1', name: 'Valid', email: 'valid@example.org' };
     for (const profile of [{ ...valid, name: 'bad\nname' }, { ...valid, email: 'bad>\n@example.org' }, { ...valid, email: 'missing-at' }, { ...valid, id: '--bad' }]) expect(() => validateCommitProfile(profile)).toThrow();

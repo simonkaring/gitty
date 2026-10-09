@@ -11,6 +11,19 @@ try {
   const page = await browser.newPage({ viewport: { width: 1500, height: 900 } });
   await page.goto(server.resolvedUrls.local[0]);
   await page.getByRole('listbox', { name: 'Commit history' }).waitFor();
+  const messageHandle = page.getByRole('button', { name: 'Resize Commit message column', exact: true });
+  const messageWidth = () => messageHandle.evaluate(el => el.parentElement.getBoundingClientRect().width);
+  const initialWidth = await messageWidth();
+  const grip = await messageHandle.boundingBox();
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(grip.x + grip.width / 2 - 50, grip.y + grip.height / 2);
+  await page.mouse.up();
+  assert.ok(Math.abs(await messageWidth() - (initialWidth - 50)) < 2, 'drag shrinks the actual filled message width');
+  await messageHandle.focus();
+  await messageHandle.press('ArrowRight');
+  assert.ok(Math.abs(await messageWidth() - (initialWidth - 40)) < 2, 'keyboard grows the actual message width');
+  assert.ok(Math.abs(await page.locator('.commit-message').first().evaluate(el => el.getBoundingClientRect().width) - await messageWidth()) < 2, 'header and row widths match');
   await page.getByRole('button', { name: 'Customize columns' }).click();
   const menu = page.getByRole('dialog', { name: 'History columns settings' });
   await menu.getByRole('checkbox', { name: 'Date' }).check();
@@ -40,7 +53,7 @@ try {
   await page.reload();
   await page.getByRole('listbox', { name: 'Commit history' }).waitFor();
   assert.equal(await page.locator('.history-columns .date-column').count(), 0);
-  console.log('PASS history column visibility, order, graph alignment, narrow layout, reset and persistence');
+  console.log('PASS message column pointer/keyboard resizing, row alignment, column visibility, order, graph alignment, narrow layout, reset and persistence');
 } finally {
   await browser?.close();
   await server.close();

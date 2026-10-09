@@ -1,16 +1,74 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { expect, it, vi } from 'vitest';
-import { layoutHistory } from '../graph/layout';
+import { afterEach, expect, it, vi } from 'vitest';
+import { laneX, layoutHistory } from '../graph/layout';
 import { BUILTIN_THEMES } from '../model/themes';
 import { DEFAULT_HISTORY_COLUMNS } from '../model/settings';
 import { groupRefs, HistoryGraph, sortRefs } from './HistoryGraph';
 import { WORKING_ID } from '../model/native';
 
+const preferences = vi.hoisted(() => ({ graphAuthorAvatars: false, authorAvatarMode: 'initials' as 'initials' | 'gravatar', graphOnly: false }));
+const avatarUrl = vi.hoisted(() => vi.fn(async () => 'https://gravatar.com/avatar/test?s=64&d=404'));
+vi.mock('../model/gravatar', () => ({ gravatarUrl: avatarUrl, gravatarImageFailed: () => false, markGravatarImageFailed: vi.fn() }));
+afterEach(() => { preferences.graphAuthorAvatars = false; preferences.authorAvatarMode = 'initials'; preferences.graphOnly = false; avatarUrl.mockClear(); });
 vi.mock('../model/settings', async importOriginal => {
   const original = await importOriginal<typeof import('../model/settings')>();
-  return { ...original, useSettings: () => ({ settings: { historyColumns: DEFAULT_HISTORY_COLUMNS }, updateSettings: vi.fn() }) };
+  return { ...original, useSettings: () => ({ settings: { ...preferences, historyColumns: preferences.graphOnly ? DEFAULT_HISTORY_COLUMNS.map(column => ({ ...column, visible: column.id === 'graph' })) : DEFAULT_HISTORY_COLUMNS }, updateSettings: vi.fn() }) };
+});
+
+it('switches graph nodes between dots, initials and Gravatar while preserving working-tree and merge markers', async () => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const originalObserver = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} unobserve() {} } as typeof ResizeObserver;
+  const arc = vi.fn(), roundRect = vi.fn();
+  const canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(new Proxy({}, { get: (_, key) => key === 'arc' ? arc : key === 'roundRect' ? roundRect : () => {} }) as CanvasRenderingContext2D);
+  const host = document.createElement('div'), root = createRoot(host);
+  const commits = [
+    { id: WORKING_ID, parents: ['merge'], subject: 'Working tree', body: '', author: 'Me', email: '', timestamp: 4, branch: 'main', files: [] },
+    { id: 'merge', parents: ['a', 'b'], subject: 'Merge', body: '', author: 'Ada Lovelace', email: 'ada@example.com', timestamp: 3, branch: 'main', files: [] },
+    { id: 'a', parents: [], subject: 'A', body: '', author: 'Ada Lovelace', email: 'ada@example.com', timestamp: 2, branch: 'main', files: [] },
+    { id: 'b', parents: [], subject: 'B', body: '', author: 'Grace Hopper', email: 'grace@example.com', timestamp: 1, branch: 'topic', files: [] },
+  ];
+  const layout = { ...layoutHistory(commits), laneCount: 40 };
+  const render = (pending = false) => act(async () => root.render(<HistoryGraph commits={commits} layout={pending ? layoutHistory([]) : layout} refs={[]} selectedId="merge" head="merge" loaded={commits.length} matches={new Set(['merge'])} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />));
+  preferences.graphOnly = true;
+  try {
+    await render();
+    expect(host.querySelector('.graph-avatar-node')).toBeNull();
+    expect(arc).toHaveBeenCalled();
+    preferences.graphAuthorAvatars = true;
+    arc.mockClear(); roundRect.mockClear();
+    await render();
+    expect(host.querySelectorAll('.graph-avatar-node')).toHaveLength(3);
+    expect(host.querySelector(`[id="commit-${WORKING_ID}"]`)).not.toBeNull();
+    expect(host.querySelector(`[id="commit-${WORKING_ID}"] .graph-avatar-node`)).toBeNull();
+    expect(host.querySelector('#commit-merge .graph-avatar-node.merge')?.textContent).toBe('AL');
+    expect(host.querySelector('#commit-b.dimmed .graph-avatar-node')?.textContent).toBe('GH');
+    expect(arc).not.toHaveBeenCalled();
+    expect(roundRect).toHaveBeenCalled();
+    expect(avatarUrl).not.toHaveBeenCalled();
+    const pan = host.querySelector('.graph-hscroll') as HTMLDivElement;
+    await act(async () => { pan.scrollLeft = 18; pan.dispatchEvent(new Event('scroll', { bubbles: true })); });
+    expect((host.querySelector('#commit-b .graph-avatar-node') as HTMLElement).style.left).toBe(`${laneX(0) + layout.nodes[3].lane * 30 - 18}px`);
+    preferences.authorAvatarMode = 'gravatar';
+    await render();
+    expect(host.querySelectorAll('.graph-avatar-node img')).toHaveLength(3);
+    await act(async () => { host.querySelector('#commit-b img')!.dispatchEvent(new Event('error')); });
+    expect(host.querySelector('#commit-b img')).toBeNull();
+    expect(host.querySelector('#commit-b .graph-avatar-node')?.textContent).toBe('GH');
+    await render(true);
+    expect(host.querySelectorAll('[role="option"]')).toHaveLength(4);
+    expect(host.querySelector('.graph-avatar-node')).toBeNull();
+    preferences.graphAuthorAvatars = false;
+    arc.mockClear();
+    await render();
+    expect(host.querySelector('.graph-avatar-node')).toBeNull();
+    expect(arc).toHaveBeenCalled();
+  } finally {
+    await act(async () => root.unmount());
+    canvas.mockRestore(); globalThis.ResizeObserver = originalObserver;
+  }
 });
 
 it('renders pending history without drawing nodes the layout worker has not returned', async () => {

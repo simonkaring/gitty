@@ -115,7 +115,7 @@ Open the gear button or **Cmd/Ctrl+,** from either workspace, including the nati
 - **System appearance:** choose separate light and dark themes, or use one fixed theme.
 - **Custom themes:** duplicate a preset, edit UI/diff/graph colors with a live preview and contrast feedback, then save a named theme. Import/export versioned local JSON; edits can be reset or canceled.
 - **Editor preferences:** bundled code font, code size, line wrapping, and default unified/side-by-side diffs.
-- **Author avatars:** initials by default, or optional Gravatar images in history and commit details. Gravatar requests use a SHA-256 hash of the author's email; missing images fall back to initials.
+- **Author avatars:** Gravatar images in the history author column and commit details by default, or initials without network requests via Settings → Appearance. Enable **Show author avatars as graph nodes** to replace commit dots with author-column-sized avatars and branch-colored borders; graph avatar nodes are off by default. Graph lanes widen to fit the avatars. Merge nodes use a double border, and the working-tree marker remains square. Gravatar requests use a SHA-256 hash of the author's email; missing images fall back to initials.
 - **Commit profiles:** add, edit, or delete saved name/email identities for the desktop commit composer.
 - **Workspace reset:** restore pane sizes. Resizing and settings persist across reloads and native/demo switching within the app.
 
@@ -268,6 +268,7 @@ These historical browser suites require an existing Playwright/Chromium installa
 ```sh
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/tabs.smoke.mjs
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/hunks.smoke.mjs
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/graph-avatars.smoke.mjs
 ```
 
 ### Historical: Milestone 3 verification

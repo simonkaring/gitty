@@ -29,6 +29,7 @@ export interface Settings {
   commitProfiles: CommitProfile[];
   repositoryCommitProfiles: Record<string, string>;
   authorAvatarMode: AuthorAvatarMode;
+  graphAuthorAvatars: boolean;
 }
 export const DEFAULT_HISTORY_COLUMNS: HistoryColumnConfig[] = [
   { id: 'refs', visible: true },
@@ -38,11 +39,12 @@ export const DEFAULT_HISTORY_COLUMNS: HistoryColumnConfig[] = [
   { id: 'hash', visible: true },
   { id: 'date', visible: false },
 ];
-export const DEFAULT_SETTINGS: Settings = { version: 1, themeMode: 'fixed', themeId: 'gitty-dark', lightThemeId: 'gitty-light', darkThemeId: 'gitty-dark', customThemes: [], diffView: 'unified', diffWrap: false, fontSize: 13, monoFont: MONO_FONTS[0], paneWidths: { sidebar: 240, inspector: 400 }, historyColumns: DEFAULT_HISTORY_COLUMNS, commitProfiles: [], repositoryCommitProfiles: {}, authorAvatarMode: 'gravatar' };
+export const DEFAULT_SETTINGS: Settings = { version: 1, themeMode: 'fixed', themeId: 'gitty-dark', lightThemeId: 'gitty-light', darkThemeId: 'gitty-dark', customThemes: [], diffView: 'unified', diffWrap: false, fontSize: 13, monoFont: MONO_FONTS[0], paneWidths: { sidebar: 240, inspector: 400 }, historyColumns: DEFAULT_HISTORY_COLUMNS, commitProfiles: [], repositoryCommitProfiles: {}, authorAvatarMode: 'gravatar', graphAuthorAvatars: false };
 export function validateSettings(value: unknown): Settings {
   if (!value || typeof value !== 'object') throw new Error('Invalid settings.');
   const s = value as Settings;
   if (s.version !== 1) throw new Error('Unsupported settings version.');
+  if (typeof s.graphAuthorAvatars !== 'boolean') throw new Error('Invalid graph avatar preference.');
   if (Object.keys(s).some(k => !Object.hasOwn(DEFAULT_SETTINGS, k)) || !['fixed', 'system'].includes(s.themeMode) || !['unified', 'split'].includes(s.diffView) || !['initials', 'gravatar'].includes(s.authorAvatarMode) || typeof s.diffWrap !== 'boolean' || !Number.isInteger(s.fontSize) || s.fontSize < 11 || s.fontSize > 22 || !MONO_FONTS.includes(s.monoFont as typeof MONO_FONTS[number]) || !Array.isArray(s.customThemes) || s.customThemes.length > MAX_CUSTOM_THEMES) throw new Error('Invalid preference values.');
   const customThemes = s.customThemes.map(validateTheme);
   if (!Array.isArray(s.commitProfiles) || s.commitProfiles.length > MAX_COMMIT_PROFILES) throw new Error('Invalid commit profiles.');
@@ -72,6 +74,7 @@ export function readSettings(storage: PreferenceStorage): { settings: Settings; 
         if (!('commitProfiles' in parsed)) parsed.commitProfiles = [];
         if (!('repositoryCommitProfiles' in parsed)) parsed.repositoryCommitProfiles = {};
         if (!('authorAvatarMode' in parsed)) parsed.authorAvatarMode = DEFAULT_SETTINGS.authorAvatarMode;
+        if (!('graphAuthorAvatars' in parsed)) parsed.graphAuthorAvatars = DEFAULT_SETTINGS.graphAuthorAvatars;
       }
       return { settings: validateSettings(parsed), error: null };
     }

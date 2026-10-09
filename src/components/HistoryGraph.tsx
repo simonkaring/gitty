@@ -67,6 +67,9 @@ interface Props {
 const MIN_GRAPH_WIDTH = laneX(2) + 14; // three lanes plus padding; also fits the "GRAPH" label
 export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, loaded, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onContextActions, onSwitchBranch, pickOrder, onTogglePick }, ref) {
   const { settings, updateSettings } = useSettings();
+  const graphLaneWidth = settings.graphAuthorAvatars ? 30 : LANE_WIDTH;
+  const graphLaneX = useMemo(() => (lane: number) => laneX(0) + lane * graphLaneWidth, [graphLaneWidth]);
+  const minGraphWidth = graphLaneX(2) + 14;
   const scroller = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const columnSettingsButton = useRef<HTMLButtonElement>(null);
@@ -78,21 +81,23 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const [height, setHeight] = useState(600);
   const [viewportWidth, setViewportWidth] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [messageResized, setMessageResized] = useState(false);
   const [widths, setWidths] = useState<Record<HistoryColumnId, number>>({ refs: 170, graph: MIN_GRAPH_WIDTH, message: 130, author: 110, hash: 90, date: 120 });
   type Column = HistoryColumnId;
-  const limits: Record<Column, [number, number]> = { refs: [90, 420], graph: [MIN_GRAPH_WIDTH, 600], message: [100, 600], author: [70, 260], hash: [70, 180], date: [80, 220] };
-  function resize(column: Column, delta: number) {
-    setWidths(current => ({ ...current, [column]: Math.max(limits[column][0], Math.min(limits[column][1], current[column] + delta)) }));
+  const limits: Record<Column, [number, number]> = { refs: [90, 420], graph: [minGraphWidth, 600], message: [100, Math.max(600, viewportWidth)], author: [70, 260], hash: [70, 180], date: [80, 220] };
+  function resize(column: Column, delta: number, initial: number) {
+    if (column === 'message') setMessageResized(true);
+    setWidths(current => ({ ...current, [column]: Math.max(limits[column][0], Math.min(limits[column][1], initial + delta)) }));
   }
   function resizeHandle(column: Column) {
     const colLabels: Record<Column, string> = { refs: 'Branch / tag', graph: 'Graph', message: 'Commit message', author: 'Author', hash: 'Commit', date: 'Date' };
     return <button className="history-column-resize" aria-label={`Resize ${colLabels[column]} column`} title="Drag or use arrow keys to resize" onClick={event => event.stopPropagation()}
-      onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); resize(column, event.key === 'ArrowRight' ? 10 : -10); } }}
+      onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); resize(column, event.key === 'ArrowRight' ? 10 : -10, column === 'message' ? event.currentTarget.parentElement!.getBoundingClientRect().width : widths[column]); } }}
       onPointerDown={event => {
         event.preventDefault();
-        const target = event.currentTarget, start = event.clientX, initial = widths[column];
+        const target = event.currentTarget, start = event.clientX, initial = column === 'message' ? target.parentElement!.getBoundingClientRect().width : widths[column];
         target.setPointerCapture(event.pointerId);
-        const move = (moveEvent: PointerEvent) => setWidths(current => ({ ...current, [column]: Math.max(limits[column][0], Math.min(limits[column][1], initial + moveEvent.clientX - start)) }));
+        const move = (moveEvent: PointerEvent) => resize(column, moveEvent.clientX - start, initial);
         const end = () => { target.removeEventListener('pointermove', move); target.removeEventListener('pointerup', end); target.removeEventListener('pointercancel', end); };
         target.addEventListener('pointermove', move); target.addEventListener('pointerup', end); target.addEventListener('pointercancel', end);
       }} />;
@@ -107,8 +112,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   }
   useEffect(() => { window.addEventListener('dragend', stopDrag); window.addEventListener('drop', stopDrag, true); return () => { stopDrag(); if (badgeAction.current) clearTimeout(badgeAction.current); window.removeEventListener('dragend', stopDrag); window.removeEventListener('drop', stopDrag, true); }; }, []);
   // The column keeps its own width however wide the lane tree gets; the canvas shows a window scrolled by graphScroll.
-  const graphContent = Math.max(112, layout.laneCount * LANE_WIDTH + 32);
-  const graphWidth = widths.graph;
+  const graphContent = Math.max(112, layout.laneCount * graphLaneWidth + 32);
+  const graphWidth = Math.max(widths.graph, minGraphWidth);
   const graphScrollMax = Math.max(0, graphContent - graphWidth);
   const graphX = Math.min(graphScroll, graphScrollMax);
   const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - 8);
@@ -182,7 +187,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     ctx.lineWidth = 1.8;
     ctx.lineCap = 'round';
     for (const edge of visibleEdges(Math.floor(scrollTop / ROW_HEIGHT) - 1, Math.min(loaded, Math.ceil((scrollTop + height) / ROW_HEIGHT) + 1))) {
-      const x1 = laneX(edge.fromLane), xt = laneX(edge.track), x2 = laneX(edge.toLane);
+      const x1 = graphLaneX(edge.fromLane), xt = graphLaneX(edge.track), x2 = graphLaneX(edge.toLane);
       const y1 = y(edge.fromRow), y2 = y(edge.toRow);
       const colorRow = commits[edge.fromRow]?.parents[0] === edge.to ? edge.fromRow : edge.toRow;
       ctx.strokeStyle = palette[branchColors.rows[colorRow] ?? branchColors.rows[edge.fromRow] ?? edge.track % colors.length];
@@ -200,7 +205,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     for (let row = start; row < Math.min(end, layout.nodes.length, commits.length); row++) {
       const node = layout.nodes[row];
       const commit = commits[row];
-      const x = laneX(node.lane), cy = y(row);
+      if (settings.graphAuthorAvatars && commit.id !== WORKING_ID) continue;
+      const x = graphLaneX(node.lane), cy = y(row);
       const lane = palette[branchColors.rows[row] ?? node.lane % colors.length];
       ctx.globalAlpha = matches && !matches.has(node.id) ? 0.3 : 1;
       ctx.beginPath();
@@ -213,16 +219,16 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       if (!hollow) { ctx.beginPath(); ctx.arc(x, cy, 5, 0, Math.PI * 2); ctx.lineWidth = 1; ctx.strokeStyle = lane; ctx.stroke(); }
     }
     ctx.globalAlpha = 1;
-  }, [commits, layout, visibleEdges, start, end, scrollTop, height, graphWidth, graphX, theme, matches, loaded, colors, palette, branchColors]);
+  }, [commits, layout, visibleEdges, start, end, scrollTop, height, graphWidth, graphX, theme, matches, loaded, colors, palette, branchColors, settings.graphAuthorAvatars, graphLaneX]);
 
   useEffect(() => {
     const node = layout.nodes[selectedIndex];
     const el = graphScroller.current;
     if (!node || !el) return;
-    const x = laneX(node.lane);
+    const x = graphLaneX(node.lane);
     if (x < graphX + 12) el.scrollLeft = Math.max(0, x - 24);
     else if (x > graphX + graphWidth - 12) el.scrollLeft = x - graphWidth + 24;
-  }, [selectedIndex, layout.nodes]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedIndex, layout.nodes, graphLaneX]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Commits prepended by a refresh (new commit, fetch) slide in once.
   const seenIds = useRef<Set<string> | null>(null);
@@ -256,13 +262,13 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
         .map(c => {
           if (c.id === 'refs') return 'var(--ref-width)';
           if (c.id === 'graph') return 'var(--graph-width)';
-          if (c.id === 'message') return 'minmax(var(--message-width), 1fr)';
+          if (c.id === 'message') return messageResized ? 'var(--message-width)' : 'minmax(var(--message-width), 1fr)';
           if (c.id === 'author') return 'var(--author-width)';
           if (c.id === 'hash') return 'var(--hash-width)';
           return 'var(--date-width)';
         })
         .join(' '),
-    [visibleColumns]
+    [visibleColumns, messageResized]
   );
 
   const totalWidth = useMemo(
@@ -275,10 +281,10 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     for (const col of visibleColumns) {
       if (col.id === 'graph') break;
       offset += columnWidth(col.id);
-      if (col.id === 'message') offset += Math.max(0, viewportWidth - totalWidth);
+      if (col.id === 'message' && !messageResized) offset += Math.max(0, viewportWidth - totalWidth);
     }
     return offset;
-  }, [visibleColumns, widths, graphWidth, viewportWidth, totalWidth]);
+  }, [visibleColumns, widths, graphWidth, viewportWidth, totalWidth, messageResized]);
 
   // Shift+wheel or a horizontal trackpad swipe over the graph column pans the graph, not the whole list.
   useEffect(() => {
@@ -390,7 +396,11 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                   </div>;
                 }
                 if (col.id === 'graph') {
-                  return <div key="graph" className="commit-graph-cell" aria-hidden="true" />;
+                  return <div key="graph" className="commit-graph-cell" aria-hidden="true">
+                    {settings.graphAuthorAvatars && node && commit.id !== WORKING_ID && <span className={`graph-avatar-node${commit.parents.length > 1 ? ' merge' : ''}`} style={{ left: graphLaneX(node.lane) - graphX }}>
+                      <AuthorAvatar name={commit.author} email={commit.email} mode={settings.authorAvatarMode} tiny />
+                    </span>}
+                  </div>;
                 }
                 if (col.id === 'message') {
                   return <div key="message" className="commit-message">
