@@ -18,6 +18,11 @@ export function actionReason(action: GitAction, session: RepositorySession, oper
   if (action.kind === 'createTag') return action.name.trim() && action.oid ? '' : 'Enter a tag name and commit.';
   if (action.kind === 'cherryPick') return action.commits.length ? '' : 'Choose commits in the order they should be applied.';
   if (!session.headRef) return 'Check out a local branch first.';
+  if (action.kind === 'merge' && action.message !== undefined) {
+    if (!action.message.trim()) return 'Enter a merge commit message.';
+    if (action.message.includes('\0')) return 'Commit messages cannot contain NUL bytes.';
+    if (new TextEncoder().encode(action.message).length > 65536) return 'Commit messages are limited to 64 KiB.';
+  }
   const source = action.kind === 'merge' ? action.source : action.kind === 'rebase' || action.kind === 'interactiveRebase' ? action.onto : '';
   const destination = action.kind === 'merge' ? action.destination ?? session.headRef : session.headRef;
   return source && source !== destination && source !== destination?.replace(/^refs\/heads\//, '') ? '' : 'Choose a source different from the destination branch.';

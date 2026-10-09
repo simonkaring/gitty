@@ -108,6 +108,7 @@ impl Fixture {
             source: source.into(),
             destination: None,
             no_fast_forward,
+            message: None,
         })
     }
 }
@@ -385,6 +386,118 @@ fn operations_merge_conflict_exact_text_stale_and_continue() {
 }
 
 #[test]
+fn operations_custom_merge_message_for_ff_no_ff_and_diverged_merge() {
+    for (no_fast_forward, diverged) in [(false, false), (true, false), (false, true)] {
+        let f = Fixture::new();
+        f.git(&["switch", "-c", "side"]);
+        f.write("other", "side\n");
+        let side = f.commit("side");
+        f.git(&["switch", "main"]);
+        if diverged {
+            f.write("main-only", "main\n");
+            f.commit("main");
+        }
+        let message = "Merge the login feature\n\nReviewed custom body with café.";
+        f.run(GitAction::Merge {
+            source: "side".into(),
+            destination: None,
+            no_fast_forward,
+            message: Some(message.into()),
+        })
+        .unwrap();
+        if !no_fast_forward && !diverged {
+            assert_eq!(f.git(&["rev-parse", "HEAD"]), side);
+            assert_eq!(f.git(&["log", "-1", "--format=%B"]), "side");
+        } else {
+            assert_eq!(f.git(&["log", "-1", "--format=%B"]), message);
+            assert_eq!(
+                f.git(&["rev-list", "--parents", "-n", "1", "HEAD"])
+                    .split_whitespace()
+                    .count(),
+                3
+            );
+        }
+    }
+}
+
+#[test]
+fn operations_custom_merge_message_survives_conflict_and_session_restart() {
+    let f = Fixture::new();
+    f.diverge();
+    let message = "Integrate side\n\nKeep this message after resolving conflicts.";
+    let result = f
+        .run(GitAction::Merge {
+            source: "side".into(),
+            destination: None,
+            no_fast_forward: false,
+            message: Some(message.into()),
+        })
+        .unwrap();
+    assert_eq!(result.operation.kind, OperationKind::Merge);
+    assert!(std::fs::read_to_string(f.dir.path().join(".git/MERGE_MSG"))
+        .unwrap()
+        .starts_with(message));
+    f.resolve(ConflictResolution::Ours).unwrap();
+    let service = Service::new(f._data.path().into());
+    let session = service
+        .open(RepositoryLocation::Native {
+            path: f.dir.path().to_string_lossy().into(),
+        })
+        .unwrap();
+    service
+        .run_operation(
+            &session.session.handle,
+            f.request(GitAction::Continue),
+            None,
+        )
+        .unwrap();
+    assert_eq!(f.git(&["log", "-1", "--format=%B"]), message);
+}
+
+#[test]
+fn operations_invalid_merge_message_is_rejected_before_destination_switch() {
+    let f = Fixture::new();
+    f.git(&["branch", "side"]);
+    let head = f.git(&["rev-parse", "HEAD"]);
+    for message in [
+        " \n".to_string(),
+        "bad\0message".to_string(),
+        "é".repeat(32769),
+    ] {
+        let error = f
+            .run(GitAction::Merge {
+                source: "main".into(),
+                destination: Some("side".into()),
+                no_fast_forward: true,
+                message: Some(message),
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "invalidRequest");
+        assert_eq!(f.git(&["symbolic-ref", "--short", "HEAD"]), "main");
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), head);
+    }
+}
+
+#[test]
+fn operations_maximum_merge_message_reaches_destination_without_argv_limits() {
+    let f = Fixture::new();
+    f.git(&["branch", "destination"]);
+    f.write("other", "source\n");
+    f.commit("source");
+    let message = format!("Integrate main\n\n{}", "é".repeat(32760));
+    assert_eq!(message.len(), 65536);
+    f.run(GitAction::Merge {
+        source: "main".into(),
+        destination: Some("refs/heads/destination".into()),
+        no_fast_forward: true,
+        message: Some(message.clone()),
+    })
+    .unwrap();
+    assert_eq!(f.git(&["symbolic-ref", "--short", "HEAD"]), "destination");
+    assert_eq!(f.git(&["log", "-1", "--format=%B"]), message);
+}
+
+#[test]
 fn operations_external_merge_restart_abort_and_stale_expectations() {
     let f = Fixture::new();
     f.diverge();
@@ -412,6 +525,7 @@ fn operations_external_merge_restart_abort_and_stale_expectations() {
         source: "side".into(),
         destination: None,
         no_fast_forward: false,
+        message: None,
     });
     f.git(&["tag", "changed"]);
     assert_eq!(
@@ -554,6 +668,7 @@ fn operations_merge_into_another_branch_carries_unrelated_changes() {
         source: "side".into(),
         destination: Some("refs/heads/destination".into()),
         no_fast_forward: false,
+        message: None,
     })
     .unwrap();
     assert_eq!(f.git(&["symbolic-ref", "--short", "HEAD"]), "destination");
@@ -1448,6 +1563,7 @@ fn operations_merge_and_cherry_pick_abort_preserve_unrelated_edits() {
                 source: side,
                 destination: None,
                 no_fast_forward: false,
+                message: None,
             }
         })
         .unwrap();
