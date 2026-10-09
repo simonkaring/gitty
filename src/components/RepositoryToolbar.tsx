@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useDismiss } from './ui';
+import { useDismiss, useMenuKeyboard } from './ui';
 import { Archive, Check, ChevronDown, Download, GitBranch, RefreshCw, Upload, UserRound } from 'lucide-react';
 import { native, errorMessage } from '../model/native';
 import { DEFAULT_PULL_MODE, PULL_MODE_LABELS, remoteSuccessMessage, needsPublish, syncSummary, type PullMode, type RemoteActionRequest, type SyncInfo } from '../model/remote';
@@ -63,6 +63,8 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
   }, [handle, revision, active]);
   useDismiss(pullMenuOpen, () => setPullMenuOpen(false), [pullMenuRef], pullToggleRef);
   useDismiss(branchMenuOpen, () => setBranchMenuOpen(false), [branchMenuRef], branchToggleRef);
+  useMenuKeyboard(pullMenuRef, pullMenuOpen, () => setPullMenuOpen(false));
+  useMenuKeyboard(branchMenuRef, branchMenuOpen, () => setBranchMenuOpen(false));
   // Deactivating the tab makes the browser force-close any top-layer publish
   // dialog in it; keep menus/dialog state in sync rather than leaving a
   // dropdown open behind a hidden pane.
