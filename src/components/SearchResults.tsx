@@ -1,6 +1,9 @@
 import { useRef, type ReactNode } from 'react';
 import { GitBranch, GitCommitHorizontal, LocateFixed, Search } from 'lucide-react';
 import type { RepositoryRef, SearchResult } from '../model/repository';
+import { commitIsoString, formatCommitDate } from '../model/dates';
+
+const SEARCH_DATE: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', year: 'numeric' };
 
 export function highlightMatch(value: string, query: string): ReactNode {
   if (!query) return value;
@@ -36,12 +39,11 @@ export function SearchResults({ result, loading, error, query, refs, selected, o
         event.preventDefault(); buttons[next]?.focus();
       }}>
         {result?.commits.map(commit => {
-          const date = new Date(commit.timestamp * 1000);
           return <div className={`search-result-row${selected === commit.id ? ' selected' : ''}`} key={commit.id}>
             <button className="search-result-select" aria-pressed={selected === commit.id} onClick={() => onSelect(commit.id)}>
               <GitCommitHorizontal size={17} className="search-result-icon" aria-hidden="true" />
               <span className="search-result-content"><strong>{highlightMatch(commit.subject, query)}</strong>
-                <span className="search-result-meta"><span title={commit.email}>{highlightMatch(commit.author, query)}</span><code>{highlightMatch(commit.id.slice(0, 7), query)}</code><time dateTime={date.toISOString()}>{date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</time></span>
+                <span className="search-result-meta"><span title={commit.email}>{highlightMatch(commit.author, query)}</span><code>{highlightMatch(commit.id.slice(0, 7), query)}</code><time dateTime={commitIsoString(commit.timestamp) || undefined}>{formatCommitDate(commit.timestamp, SEARCH_DATE)}</time></span>
                 {refs.some(ref => ref.commitId === commit.id) && <span className="search-result-refs">{refs.filter(ref => ref.commitId === commit.id).map(ref => <span className="badge" key={ref.fullName} title={ref.fullName}><GitBranch size={11} /><span>{highlightMatch(ref.name, query)}</span></span>)}</span>}
               </span>
             </button>
