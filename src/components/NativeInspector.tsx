@@ -108,6 +108,8 @@ export function NativeInspector({
   const validParent = detail?.id === selected && detail.parents.includes(parent) ? parent : undefined;
   const spec = useMemo(() => inspectorSpec(selected, 'unstaged', base, target, validParent), [base, target, selected, validParent]);
   const comparing = spec.kind === 'compare';
+  /** The selection last handed to the backend, to tell a changed selection (debounced) from a refetch of the same one. */
+  const dispatched = useRef<{ handle: string; selected: string } | null>(null);
   const scope = JSON.stringify([selected, spec, revision, retry]);
 
   useEffect(() => {
@@ -119,27 +121,37 @@ export function NativeInspector({
     setDiff(null);
     // The previous commit/files stay on screen (dimmed) until this fetch lands; every guard below
     // still compares against `selected`/`scope`, so stale data is never treated as current.
-    Promise.all([
-      selected ? native<CommitDetail>('repository_commit', { handle: session.handle, oid: selected }) : Promise.resolve(null),
-      selected ? native<DiffFile[]>('repository_diff_files', { handle: session.handle, spec }) : Promise.resolve([]),
-    ]).then(([commit, list]) => {
-      if (live) {
-        setDetail(commit);
-        setFiles(list);
-        setFilesScope(scope);
-        setPath(old => (old && list.some(file => file.path === old) ? old : ''));
-      }
-    }).catch(e => {
-      if (live) {
-        setError(errorMessage(e));
-        setDetail(null);
-        setFiles([]);
-        setFilesScope('');
-      }
-    }).finally(() => {
-      if (live) setBusy(false);
-    });
-    return () => { live = false; };
+    const load = () => {
+      dispatched.current = { handle: session.handle, selected };
+      Promise.all([
+        selected ? native<CommitDetail>('repository_commit', { handle: session.handle, oid: selected }) : Promise.resolve(null),
+        selected ? native<DiffFile[]>('repository_diff_files', { handle: session.handle, spec }) : Promise.resolve([]),
+      ]).then(([commit, list]) => {
+        if (live) {
+          setDetail(commit);
+          setFiles(list);
+          setFilesScope(scope);
+          setPath(old => (old && list.some(file => file.path === old) ? old : ''));
+        }
+      }).catch(e => {
+        if (live) {
+          setError(errorMessage(e));
+          setDetail(null);
+          setFiles([]);
+          setFilesScope('');
+        }
+      }).finally(() => {
+        if (live) setBusy(false);
+      });
+    };
+    // Holding an arrow key in the graph changes the selection per keystroke: wait for it to settle instead of
+    // fetching every row passed. A new selection inside the same session is debounced; the first load, a revision
+    // or retry refetch of the same commit, and a session change start immediately.
+    const last = dispatched.current;
+    const settling = !!selected && !!last && last.handle === session.handle && !!last.selected && last.selected !== selected;
+    const timer = settling ? setTimeout(load, SELECTION_DEBOUNCE_MS) : undefined;
+    if (!settling) load();
+    return () => { live = false; if (timer) clearTimeout(timer); };
   }, [session.handle, selected, spec, revision, retry, scope, onActiveDiffChange]);
 
   useEffect(() => {
