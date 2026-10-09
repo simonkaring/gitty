@@ -27,7 +27,7 @@ import { SwitchBlockedDialog } from './SwitchBlockedDialog';
 import { Segmented, Toast } from './ui';
 import { locationLabel, sessionKey } from '../model/tabs';
 import { useSettings } from '../model/settings';
-import { SCALES, applyScale, loadScale } from '../model/scale';
+import { SCALES, useScale } from '../model/scale';
 import { AUTO_FETCH_CHECK, autoFetchDue, isFetchingAction, type FetchStatus } from '../model/autoFetch';
 import { DEFAULT_PULL_MODE, remoteSuccessMessage, needsPublish, type RemoteActionRequest, type SyncInfo } from '../model/remote';
 import { branchDeleteTargets, branchDeleteMessage, type BranchDeleteScope } from '../model/branchDelete';
@@ -70,8 +70,7 @@ export interface RepositoryPaneProps {
 
 export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, onClosePalette = () => {}, workspaceCommands = [], tabId, location, active, sidebarOpen, inspectorOpen, inspectorWidth, sidebarWidth, setInspectorWidth, setSidebarWidth, setInspectorOpen, onIdentity, onBusyChange, onMeta }: RepositoryPaneProps) {
   const { theme, settings } = useSettings();
-  const [scale, setScale] = useState(loadScale);
-  const changeScale = (next: number) => { setScale(next); applyScale(next); };
+  const [scale, changeScale] = useScale();
   const stepScale = (dir: number) => changeScale(SCALES[Math.min(SCALES.length - 1, Math.max(0, SCALES.indexOf(scale as typeof SCALES[number]) + dir))]);
   const [state, setState] = useState<RepositoryState | null>(null);
   const [status, setStatus] = useState<RepositoryStatus | null>(null);
