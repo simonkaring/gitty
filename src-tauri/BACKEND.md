@@ -461,6 +461,16 @@ exactly-full final page is reported truncated); Bitbucket when the envelope has 
   explicit actions explain this. No user credential is embedded in a Git argument;
   ad-hoc prompt answers are not retained, while connected account tokens remain
   in the OS credential store until disconnected.
+- The askpass and editor loopback bridges bound unauthenticated input: the token
+  line is at most 256 bytes and the prompt line 4 KiB (editor frames keep their
+  128-byte token / 4096-byte path limits), the request must complete within an
+  absolute 10-second handshake deadline (the 90-second prompt wait is separate),
+  writes time out after 5 seconds, and at most 16 connections per bridge are
+  served at once; extra connections are dropped unread. See `src/bridge.rs`.
+- The helper scripts (`gitty-askpass-<uuid>`, `gitty-editor-<uuid>`) are removed
+  on window close, and stale ones older than seven days are cleaned from the temp
+  directory at startup (exact-name regular files only; symlinks and directories
+  are never touched).
 - Origin branch deletion uses the same explicit network, credential-helper,
   native/WSL askpass, activity-log, and write-deadline infrastructure as push.
 - The frontend auto-fetches only the focused tab of a visible window: when a
