@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { RepositorySession } from '../model/repository';
-import { NativeInspector } from './NativeInspector';
+import { NativeInspector, SELECTION_DEBOUNCE_MS } from './NativeInspector';
 import type { MutationOutcome } from '../model/workflow';
 
 type Args = { oid?: string; spec?: { oid?: string } };
@@ -56,6 +56,7 @@ it('shows placeholders only on first load, then keeps the previous commit in pla
     expect(host.querySelector('.native-sha')?.textContent).toBe('a');
     expect(host.querySelectorAll('.file-row')).toHaveLength(1);
     expect(host.querySelector<HTMLButtonElement>('.parent-link')?.disabled).toBe(true);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, SELECTION_DEBOUNCE_MS + 40)); });
     await act(async () => { gates.get('b')!.open(); });
     expect(aside().getAttribute('aria-busy')).toBe('false');
     expect(host.querySelector('.inspector-content')?.hasAttribute('data-stale')).toBe(false);
@@ -66,6 +67,7 @@ it('shows placeholders only on first load, then keeps the previous commit in pla
     // A failed load must not leave the previous commit's data under the new selection.
     gate('c', true);
     await render('c');
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, SELECTION_DEBOUNCE_MS + 40)); });
     await act(async () => { gates.get('c')!.open(); });
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('boom');
     expect(host.textContent).not.toContain('Subject b');
@@ -75,6 +77,46 @@ it('shows placeholders only on first load, then keeps the previous commit in pla
   }
 });
 
+it('fetches only the commit the selection settles on when it changes rapidly', async () => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  vi.useFakeTimers();
+  mocks.native.mockReset();
+  mocks.native.mockImplementation(async (command, args) => command === 'repository_commit' ? commit(args.oid!, `Subject ${args.oid}`) : files);
+  const host = document.createElement('div');
+  const root = createRoot(host);
+  const props = { session: { handle: 'h', head: null } as unknown as RepositorySession, revision: 0, base: '', target: '', onJump() {}, onBase() {}, onTarget() {}, onSwap() {}, onClear() {}, onClose() {}, activePath: null, onActiveDiffChange() {} };
+  const render = (selected: string, revision = 0) => act(async () => { root.render(<NativeInspector {...props} selected={selected} revision={revision} />); });
+  const fetched = (command: string) => mocks.native.mock.calls.filter(([name]) => name === command).map(([, args]) => args.oid ?? args.spec?.oid);
+  try {
+    // The first load is not delayed.
+    await render('a');
+    expect(fetched('repository_commit')).toEqual(['a']);
+    expect(host.querySelector('h2')?.textContent).toBe('Subject a');
+
+    // Three selections inside the window: nothing is fetched, the old commit stays dimmed, only the last lands.
+    await render('b');
+    await act(async () => { await vi.advanceTimersByTimeAsync(SELECTION_DEBOUNCE_MS - 20); });
+    await render('c');
+    await act(async () => { await vi.advanceTimersByTimeAsync(SELECTION_DEBOUNCE_MS - 20); });
+    await render('d');
+    expect(fetched('repository_commit')).toEqual(['a']);
+    expect(host.querySelector('aside')?.getAttribute('aria-busy')).toBe('true');
+    expect(host.querySelector('.inspector-content')?.hasAttribute('data-stale')).toBe(true);
+    expect(host.querySelector('h2')?.textContent).toBe('Subject a');
+    await act(async () => { await vi.advanceTimersByTimeAsync(SELECTION_DEBOUNCE_MS + 1); });
+    expect(fetched('repository_commit')).toEqual(['a', 'd']);
+    expect(fetched('repository_diff_files')).toEqual(['a', 'd']);
+    expect(host.querySelector('h2')?.textContent).toBe('Subject d');
+    expect(host.querySelector('aside')?.getAttribute('aria-busy')).toBe('false');
+
+    // A revision change of the same selection (status moved) still refetches right away so eligibility stays fresh.
+    await render('d', 1);
+    expect(fetched('repository_commit')).toEqual(['a', 'd', 'd']);
+  } finally {
+    await act(async () => { root.unmount(); });
+    vi.useRealTimers();
+  }
+});
 
 // ---- Inline editing of the HEAD commit message ----
 

@@ -136,7 +136,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const graphX = Math.min(graphScroll, graphScrollMax);
   const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - 8);
   const end = Math.min(loaded, Math.ceil((scrollTop + height) / ROW_HEIGHT) + 8);
-  const selectedIndex = commits.findIndex(commit => commit.id === selectedId);
+  const selectedIndex = useMemo(() => commits.findIndex(commit => commit.id === selectedId), [commits, selectedId]);
+  const refsByCommit = useMemo(() => groupRefsByCommit(refs), [refs]);
   const loadedIds = useMemo(() => new Set(commits.slice(0, loaded).map(commit => commit.id)), [commits, loaded]);
   const visibleEdges = useMemo(() => indexEdges(layout.edges, layout.edgeMaxTo), [layout.edges, layout.edgeMaxTo]);
   const colors = useMemo(() => Array.from({ length: 8 }, (_, index) => theme.colors[`graphLane${index + 1}`]), [theme]);
@@ -196,8 +197,10 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     const ctx = element.getContext('2d');
     if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
-    element.width = graphWidth * dpr;
-    element.height = height * dpr;
+    // Assigning width/height clears and reallocates the backing store, so only do it when the size really changed.
+    const pixelWidth = Math.floor(graphWidth * dpr), pixelHeight = Math.floor(height * dpr);
+    if (element.width !== pixelWidth) element.width = pixelWidth;
+    if (element.height !== pixelHeight) element.height = pixelHeight;
     const y = (row: number) => row * ROW_HEIGHT + ROW_HEIGHT / 2 - scrollTop;
     const bg = theme.colors.bg;
     ctx.setTransform(dpr, 0, 0, dpr, -graphX * dpr, 0);
