@@ -727,7 +727,9 @@ wsl_tests`). They create temporary repositories under `/tmp` inside the
 distribution and cover opening a path with spaces/Unicode, state, status and
 untracked-content fingerprints, stage/commit, index-lock detection, background
 fetch, pull and push against a local bare remote, and report refresh timing.
-Without the variable they return immediately.
+Without the variable they return immediately. A test-only, per-thread process-launch
+counter (`process::count_spawns`, propagated into `process::parallel` workers) lets
+tests assert launch counts for search hydration and the WSL metadata scan.
 
 Windows Job Objects and the graphical picker require platform/UI
 integration testing; they are not exercised by the macOS unit test suite. Killing
