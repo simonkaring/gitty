@@ -37,7 +37,7 @@ npm run desktop:build           # Production app and platform bundles
 npm run check:rust              # Cargo check (build the frontend first)
 ```
 
-`src-tauri/tauri.conf.json` sets the app identity, window limits, a restrictive CSP (including Gravatar images when enabled), and platform icons. `app-icon.svg` is the editable source; regenerate assets with `npm run tauri -- icon app-icon.svg --output src-tauri/icons`. The manual `.github/workflows/release.yml` workflow uses protected CI secrets to build and verify signed Windows installers and a notarized macOS DMG; a successful workflow run and installation are required before treating the bundles as release-ready. macOS secrets: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_CONTENT` (the private `.p8` contents). Windows secrets: `WINDOWS_CERTIFICATE` (base64 PFX) and `WINDOWS_CERTIFICATE_PASSWORD`. No signing secrets belong in this repository.
+`src-tauri/tauri.conf.json` sets the app identity, window limits, a restrictive CSP (including Gravatar images when enabled), and platform icons. `app-icon.svg` is the editable source; regenerate assets with `npm run tauri -- icon app-icon.svg --output src-tauri/icons`. Release packaging is paused while the app is validated locally. Signed Windows installers and a notarized macOS DMG must be built, verified, and tested on their target platforms before treating the bundles as release-ready. No signing secrets belong in this repository.
 
 ## Explore a real repository
 
@@ -253,7 +253,7 @@ npm run test:rust               # Real temporary repository integration tests
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 ```
 
-Testing is local-only for now; pushes and pull requests do not trigger GitHub Actions checks. Run `npm run build` before the Rust checks so the frontend assets are available. For native compilation, run `npm run tauri -- build --no-bundle` on the target platform. Local checks validate the host platform; Windows and Linux runtime behavior require testing on those platforms. Automated cross-platform checks can be introduced in Azure DevOps when needed. The signed-release GitHub workflow remains manually triggered for release packaging.
+Testing is local-only for now; pushes and pull requests do not trigger GitHub Actions checks. Run `npm run build` before the Rust checks so the frontend assets are available. For native compilation, run `npm run tauri -- build --no-bundle` on the target platform. Local checks validate the host platform; Windows and Linux runtime behavior require testing on those platforms. Automated cross-platform checks can be introduced in Azure DevOps when needed. The signed-release GitHub workflow has been removed while the app is validated locally.
 
 The verification notes below record results at the time of each implementation; they are not current test totals or claims that every historical browser scenario still matches the redesigned UI.
 
