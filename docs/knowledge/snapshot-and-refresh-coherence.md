@@ -36,6 +36,13 @@ a changed state triggers a walk bracketed by a live state check. Mixed
 generations, nonadvancing cursors, and inconsistent ancestry are rejected before
 publication.[^history][^loader]
 
+Search is separate from history generations: a session runs one search at a time,
+so a newer `repository_search` (or closing the session, or `repository_cancel_search`)
+cancels the in-flight one with the silent `cancelled` code, and results are hydrated
+by batched `cat-file --batch` rather than a process per result.[^history][^contract]
+On WSL, the operation-metadata part of a snapshot uses one `find` existence scan
+instead of one launch per file; that path awaits Windows/WSL runtime validation.[^snapshot][^contract]
+
 Automatic keep-visible IDs are filtered to the previous loaded history. After a
 confirmed amend, the old HEAD can be remapped to the returned OID before paging,
 only while that OID is the refreshed HEAD. Otherwise an unreachable old tip or

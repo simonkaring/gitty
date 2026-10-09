@@ -2128,3 +2128,27 @@ fn snapshot_of_a_bare_repository_has_an_empty_status() {
     assert_eq!(snapshot.status.fingerprint, "bare");
     assert_eq!(snapshot.operation.kind, OperationKind::None);
 }
+
+#[test]
+fn find_listing_is_parsed_into_git_dir_relative_paths() {
+    use crate::operations::find_listing_paths;
+    let listing = b"/r/.git/HEAD\0/r/.git/rebase-merge\0/r/.git/rebase-merge/head-name\0\
+/r/.git/with space/MERGE_MSG\0/elsewhere/MERGE_HEAD\0/r/.gitx/MERGE_HEAD\0\
+/r/.git/\0/r/.git\0/r/.git/bad-\xff-name\0/r/.git/sequencer/todo\0";
+    let found = find_listing_paths("/r/.git", listing);
+    let mut found: Vec<_> = found.iter().map(String::as_str).collect();
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            "HEAD",
+            "rebase-merge",
+            "rebase-merge/head-name",
+            "sequencer/todo",
+            "with space/MERGE_MSG",
+        ]
+    );
+    // A trailing slash on the Git directory and an empty listing both behave.
+    assert!(find_listing_paths("/r/.git/", b"/r/.git/MERGE_HEAD\0").contains("MERGE_HEAD"));
+    assert!(find_listing_paths("/r/.git", b"").is_empty());
+}
