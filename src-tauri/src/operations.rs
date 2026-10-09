@@ -5,7 +5,21 @@ use crate::{
     process::{self, args},
     repository::{fingerprint, resolve, Repository, Service},
 };
-use std::process::Command;
+use std::{collections::HashSet, process::Command};
+
+/// Parses NUL-separated `find <git_dir> …` output into paths relative to the Git
+/// directory. Entries outside it, the directory itself, and names that are not
+/// UTF-8 (which no constant metadata name can equal) are ignored.
+pub(crate) fn find_listing_paths(git_dir: &str, output: &[u8]) -> HashSet<String> {
+    let prefix = format!("{}/", git_dir.trim_end_matches('/'));
+    output
+        .split(|&b| b == 0)
+        .filter_map(|entry| std::str::from_utf8(entry).ok())
+        .filter_map(|entry| entry.strip_prefix(&prefix))
+        .filter(|relative| !relative.is_empty())
+        .map(String::from)
+        .collect()
+}
 
 type OperationMetadata = Vec<(&'static str, Option<Vec<u8>>)>;
 
@@ -80,15 +94,43 @@ impl Repository {
                 if !output.success {
                     return Err(self.failed(&output));
                 }
-                let mut cat = Command::new("wsl.exe");
-                cat.args(["--distribution", distribution, "--exec", "cat", "--", &path]);
-                let output = process::run(cat)?;
-                if !output.success {
-                    return Err(self.failed(&output));
-                }
-                Ok(Some(output.stdout))
+                self.wsl_cat(distribution, &path).map(Some)
             }
         }
+    }
+    fn wsl_cat(&self, distribution: &str, path: &str) -> Result<Vec<u8>> {
+        let mut cat = Command::new("wsl.exe");
+        cat.args(["--distribution", distribution, "--exec", "cat", "--", path]);
+        let output = process::run(cat)?;
+        if !output.success {
+            return Err(self.failed(&output));
+        }
+        Ok(output.stdout)
+    }
+    /// Which metadata paths exist under the Git directory (depth <= 2), from ONE `find` process
+    /// instead of a `test -e` launch per name (~100 ms each through `wsl.exe`).
+    /// `-L` makes symlinks behave as they do for `test -e` and `cat`: followed.
+    fn wsl_existing_metadata(&self, distribution: &str) -> Result<HashSet<String>> {
+        process::validate_distribution(distribution)?;
+        let mut find = Command::new("wsl.exe");
+        find.args([
+            "--distribution",
+            distribution,
+            "--exec",
+            "find",
+            "-L",
+            &self.session.git_dir,
+            "-mindepth",
+            "1",
+            "-maxdepth",
+            "2",
+            "-print0",
+        ]);
+        let output = process::run_for(find, process::CHECK_TIMEOUT)?;
+        if !output.success {
+            return Err(self.failed(&output));
+        }
+        Ok(find_listing_paths(&self.session.git_dir, &output.stdout))
     }
     /// Resolves several names in one `cat-file --batch-check`; a name that does
     /// not resolve is `None` rather than a failed process.
@@ -140,8 +182,17 @@ impl Repository {
         .try_into()
         .map_err(|_| Error::new("gitParse", "Unexpected reference-state response"))
     }
-    fn operation_metadata(&self) -> Result<OperationMetadata> {
+    pub(crate) fn operation_metadata(&self) -> Result<OperationMetadata> {
         let mut metadata = Vec::new();
+        // WSL: one process decides which files exist; only those are read (usually
+        // none). Anything the scan lists, even a directory, still goes to `cat` and
+        // fails there exactly as it did after `test -e`.
+        let existing = match self.location() {
+            RepositoryLocation::Wsl { distribution, .. } => {
+                Some((distribution, self.wsl_existing_metadata(distribution)?))
+            }
+            RepositoryLocation::Native { .. } => None,
+        };
         for path in [
             "MERGE_HEAD",
             "ORIG_HEAD",
@@ -173,7 +224,14 @@ impl Repository {
             "sequencer/opts",
             "BISECT_LOG",
         ] {
-            metadata.push((path, self.metadata(path)?));
+            let value = match &existing {
+                None => self.metadata(path)?,
+                Some((_, present)) if !present.contains(path) => None,
+                Some((distribution, _)) => {
+                    Some(self.wsl_cat(distribution, &format!("{}/{path}", self.session.git_dir))?)
+                }
+            };
+            metadata.push((path, value));
         }
         Ok(metadata)
     }

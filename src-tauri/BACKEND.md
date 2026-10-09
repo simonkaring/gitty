@@ -737,8 +737,18 @@ the Windows WSL launcher cannot promise termination of every Linux descendant
 inside the distribution. The app does not terminate an entire WSL distribution.
 Under WSL, the Git-directory listing used for lock and operation detection runs
 `find -maxdepth 1` in the distribution and therefore needs the same GNU `find`
-the browser already requires; it is not covered by the macOS suite. Graph
+the browser already requires; it is not covered by the macOS suite. Operation
+metadata (the 29 files under the Git directory that feed the operation fingerprint)
+is likewise determined with one `find -L <git_dir> -mindepth 1 -maxdepth 2 -print0`
+launch instead of a `test -e` per path; only files the scan lists are then read with
+`cat` (ordinarily none), and a listed directory still fails at `cat` exactly as it did
+after `test -e`. A non-zero `find` exit returns the same error as before. The
+output-parsing function is unit-tested on every platform, and
+`wsl_operation_metadata_uses_one_existence_scan` asserts the launch count, but the
+single-process scan **still requires Windows/WSL runtime validation** (it has never
+been run against a real distribution). A file removed between the scan and its `cat`
+surfaces as a Git error, where before the narrower `test`/`cat` window did the same. Graph
 operations, regular-file conflict resolution, hunk staging, stashes, remote
 operations, amend, and cloning are described above. Line staging and a scoped
 WSL askpass bridge have local tests; Windows/WSL runtime checks remain open.
-The current suite includes 189 passing library tests (one ignored) and two binary tests on macOS. One signing test, `operations_unsupported_state_bare_and_signing_errors`, depends on the machine's global Git configuration: a global `gpg.format =` with an empty value makes Git abort while reading configuration, which no repository-local setting can override, so run it with `GIT_CONFIG_GLOBAL=/dev/null` on such a machine.
+The current suite includes 230 passing library tests (one ignored) and two binary tests on macOS. One signing test, `operations_unsupported_state_bare_and_signing_errors`, depends on the machine's global Git configuration: a global `gpg.format =` with an empty value makes Git abort while reading configuration, which no repository-local setting can override, so run it with `GIT_CONFIG_GLOBAL=/dev/null` on such a machine.

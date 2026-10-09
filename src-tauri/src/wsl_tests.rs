@@ -243,3 +243,24 @@ fn wsl_refresh_timing() {
     let status = start.elapsed();
     eprintln!("WSL refresh: state {state:?}, status {status:?} (20 untracked files)");
 }
+
+/// Operation metadata is one `find` for a clean repository (it used to be a
+/// `test -e` launch for each of 29 paths), plus one `cat` per file that exists.
+#[test]
+fn wsl_operation_metadata_uses_one_existence_scan() {
+    let Some(d) = distro() else { return };
+    let tree = Tree::new(&d);
+    let f = Fixture::new(&tree, "metadata");
+    let (clean, spawns) = crate::process::count_spawns(|| f.repo.operation_metadata().unwrap());
+    assert_eq!(spawns, 1);
+    assert!(clean.iter().all(|(_, value)| value.is_none()));
+    f.write(".git/MERGE_MSG", "merging\n");
+    let (present, spawns) = crate::process::count_spawns(|| f.repo.operation_metadata().unwrap());
+    assert_eq!(spawns, 2);
+    let merge_msg = present.iter().find(|(name, _)| *name == "MERGE_MSG");
+    assert_eq!(merge_msg.unwrap().1.as_deref(), Some(&b"merging\n"[..]));
+    assert_eq!(present.iter().filter(|(_, v)| v.is_some()).count(), 1);
+    // A whole snapshot stays small: two state reads, status, entries, scan, refs.
+    let (_, spawns) = crate::process::count_spawns(|| f.repo.snapshot().unwrap());
+    assert!(spawns <= 20, "snapshot launched {spawns} processes");
+}
