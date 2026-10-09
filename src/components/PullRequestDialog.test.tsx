@@ -17,7 +17,7 @@ beforeEach(async () => {
   mocks.native.mockReset().mockImplementation(async (command: unknown) => {
     if (command === 'repository_remotes') return [{ name: 'origin', fetchUrl: 'https://github.com/org/repo.git', pushUrl: 'https://github.com/org/repo.git', branches: ['main', 'topic'], currentUpstream: null }];
     if (command === 'list_provider_accounts') return [{ id: 'alice-id', provider: 'github', username: 'alice' }];
-    if (command === 'provider_pull_requests') return [];
+    if (command === 'provider_pull_requests') return { requests: [], truncated: false };
     if (command === 'provider_create_pull_request') return { id: '2', title: 'Add feature', source: 'topic', target: 'main', url: 'https://github.com/org/repo/pull/2', state: 'open' };
   });
   container = document.createElement('div');
@@ -50,5 +50,15 @@ it('lists requests and creates one through the selected account without pushing'
     request: { source: 'topic', target: 'main', title: 'Add feature', description: '' },
   });
   expect(container.textContent).toContain('Add feature');
+  expect(container.textContent).not.toContain('more exist on the provider');
   expect(mocks.native.mock.calls.some(([command]) => command === 'repository_remote_action')).toBe(false);
+});
+
+it('tells the user when the provider list was truncated', async () => {
+  const requests = [1, 2].map(id => ({ id: String(id), title: `PR ${id}`, source: 'a', target: 'main', url: `https://github.com/org/repo/pull/${id}`, state: 'open' }));
+  const base = mocks.native.getMockImplementation()!;
+  mocks.native.mockImplementation(async (command: unknown, ...rest: unknown[]) => command === 'provider_pull_requests' ? { requests, truncated: true } : base(command, ...rest));
+  await act(async () => { root.render(<PullRequestDialog key="again" handle="repo" source="refs/heads/topic" onClose={() => {}} />); });
+  expect(container.textContent).toContain('PR 2');
+  expect(container.textContent).toContain('Showing the first 2 open pull requests; more exist on the provider.');
 });
