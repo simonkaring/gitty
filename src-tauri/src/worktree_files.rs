@@ -18,10 +18,11 @@ use std::{
 
 /// Extensions the OS treats as programs or launchers. Not a sandbox, only a refusal
 /// to start something just because it is in a cloned repository.
-const LAUNCHERS: [&str; 24] = [
+const LAUNCHERS: [&str; 39] = [
     "app", "bat", "cmd", "com", "command", "desktop", "dmg", "exe", "jar", "lnk", "msi", "pif",
     "pkg", "ps1", "reg", "scpt", "scr", "sh", "terminal", "vbs", "workflow", "wsf", "action",
-    "appimage",
+    "appimage", "js", "jse", "wsh", "hta", "vbe", "msc", "cpl", "inf", "url", "psm1", "psd1", "py",
+    "pyw", "rb", "pl",
 ];
 
 fn unsupported_location(repo: &Repository) -> Result<()> {
@@ -222,6 +223,12 @@ mod tests {
             ("setup.EXE", false),
             ("Tool.app", false),
             ("trap.command", false),
+            ("dropper.js", false),
+            ("page.HTA", false),
+            ("shortcut.url", false),
+            ("module.psm1", false),
+            ("script.py", false),
+            ("gem.rb", false),
         ] {
             let path = dir.path().join(name);
             std::fs::write(&path, "x").unwrap();
