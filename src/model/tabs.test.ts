@@ -189,6 +189,33 @@ describe('tabsReducer', () => {
     expect(tabsReducer(state, { type: 'select', tabId: 'a' })).toBe(state);
   });
 
+  it('moves tabs in both directions without changing active identity or tab state', () => {
+    const state: TabsState = { tabs: [record({ id: 'a', busy: true }), record({ id: 'b', location: null }), record({ id: 'c', dirty: true })], activeId: 'a', notice: 'hello' };
+    const right = tabsReducer(state, { type: 'move', tabId: 'a', targetId: 'c' });
+    expect(right.tabs).toEqual([state.tabs[1], state.tabs[2], state.tabs[0]]);
+    expect(right.activeId).toBe('a');
+    expect(right.notice).toBe('hello');
+    expect(tabsReducer(right, { type: 'move', tabId: 'a', targetId: 'b' })).toEqual(state);
+    expect(state.tabs.map(tab => tab.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('ignores moves when the source or destination has closed, or is unchanged', () => {
+    const state: TabsState = { tabs: [record({ id: 'a' })], activeId: 'a', notice: null };
+    for (const [tabId, targetId] of [['missing', 'a'], ['a', 'missing'], ['a', 'a']]) {
+      expect(tabsReducer(state, { type: 'move', tabId, targetId })).toBe(state);
+    }
+  });
+
+  it('restores reordered repositories and their active tab from storage', () => {
+    const state: TabsState = { tabs: [record({ id: 'a' }), record({ id: 'b' }), record({ id: 'c' })], activeId: 'b', notice: null };
+    const next = tabsReducer(state, { type: 'move', tabId: 'c', targetId: 'a' });
+    const storage = memoryStorage();
+    const persisted = { tabs: next.tabs.map(tab => ({ id: tab.id, location: tab.location! })), activeId: next.activeId };
+    savePersistedTabs(storage, persisted);
+    expect(loadPersistedTabs(storage)).toEqual(persisted);
+    expect(loadPersistedTabs(storage).tabs.map(tab => tab.id)).toEqual(['c', 'a', 'b']);
+  });
+
   it('clears the notice only via noticeShown', () => {
     const state: TabsState = { tabs: [], activeId: null, notice: 'hello' };
     expect(tabsReducer(state, { type: 'noticeShown' }).notice).toBeNull();

@@ -140,7 +140,7 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
     <header className={`titlebar${customWindowControls ? isLinux ? ' titlebar-linux' : ' titlebar-windows' : ''}`} data-tauri-drag-region={customWindowControls ? 'deep' : true} onMouseDown={customWindowControls ? undefined : handleWindowDrag}>
       {isLinux && leftButtons.length > 0 && <WindowControls buttons={leftButtons} onError={notify} />}
       <Brand demo={demo} />
-      <RepositoryTabs tabs={tabSummaries} activeId={activeId} onSelect={selectTab} onClose={closeTab} onNew={() => dispatch({ type: 'start' })} />
+      <RepositoryTabs tabs={tabSummaries} activeId={activeId} onSelect={selectTab} onClose={closeTab} onMove={(tabId, targetId) => dispatch({ type: 'move', tabId, targetId })} onNew={() => dispatch({ type: 'start' })} />
       <div className="native-actions">
         <button className="palette-trigger" aria-label="Search commands" aria-keyshortcuts={isMac ? 'Meta+K' : 'Control+K'} onClick={() => setPaletteOpen(true)}><Search size={14} /><span>Search commands</span><kbd>{isMac ? <><Command size={11} />K</> : 'Ctrl K'}</kbd></button>
         {onToggleDemo && <button className="text-button" disabled={anyBusy} title={anyBusy ? 'Finish or switch to the tab with a running operation first.' : undefined} onClick={requestDemo}>{demo ? 'Exit demo' : 'Demo'}</button>}

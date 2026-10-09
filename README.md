@@ -54,7 +54,7 @@ Run `npm run desktop`, choose **Open repository**, then use the native folder pi
 
 ## Repository tabs and action toolbar
 
-Use **+** or **Open repository…** to add a native or WSL repository tab. Opening the same worktree again focuses its existing tab; different linked worktrees remain separate. Tabs show the branch, uncommitted-change indicator, and operation status. Left/Right/Home/End navigate the focused tab strip.
+Use **+** or **Open repository…** to add a native or WSL repository tab. Opening the same worktree again focuses its existing tab; different linked worktrees remain separate. Tabs show the branch, uncommitted-change indicator, and operation status. Drag a tab left or right to reorder it, or use **Alt+Left/Right** on a focused tab. Reordering keeps the active repository selected, and repository tab order restores on restart. Left/Right/Home/End navigate the focused tab strip.
 
 Each open tab retains its graph selection, scroll position, search filters, and commit draft while switching. Open locations and the active tab restore on restart; commit drafts also persist per worktree. Inactive tabs pause routine polling and refresh when activated. You can switch repositories while an operation runs; its result belongs to its original tab. A running operation keeps that tab open until completion.
 

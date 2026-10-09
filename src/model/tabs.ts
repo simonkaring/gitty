@@ -112,6 +112,7 @@ export type TabsAction =
   | { type: 'meta'; tabId: string; branch: string | null; dirty: boolean }
   | { type: 'close'; tabId: string }
   | { type: 'select'; tabId: string }
+  | { type: 'move'; tabId: string; targetId: string }
   | { type: 'noticeShown' };
 
 export const START_TITLE = 'New tab';
@@ -181,6 +182,15 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       const tabs = state.tabs.filter(value => value.id !== action.tabId);
       const activeId = state.activeId !== action.tabId ? state.activeId : tabs.length ? (tabs[index] ?? tabs[index - 1])?.id ?? tabs[0].id : null;
       return { ...state, tabs, activeId };
+    }
+    case 'move': {
+      const from = state.tabs.findIndex(tab => tab.id === action.tabId);
+      const to = state.tabs.findIndex(tab => tab.id === action.targetId);
+      if (from < 0 || to < 0 || from === to) return state;
+      const tabs = [...state.tabs];
+      const [tab] = tabs.splice(from, 1);
+      tabs.splice(to, 0, tab);
+      return { ...state, tabs };
     }
     case 'select':
       return state.activeId === action.tabId ? state : { ...state, activeId: action.tabId };

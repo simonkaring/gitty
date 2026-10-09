@@ -649,6 +649,7 @@ button[data-danger='true']:hover:not(:disabled) {
   scrollbar-width: none;
 }
 .repository-tab {
+  flex-shrink: 0;
   position: relative;
   display: flex;
   align-items: stretch;
@@ -705,6 +706,9 @@ button[data-danger='true']:hover:not(:disabled) {
   color: var(--muted);
 }
 .repository-tab-select {
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -717,6 +721,14 @@ button[data-danger='true']:hover:not(:disabled) {
 }
 .repository-tab-select:hover:not(:disabled) {
   background: transparent;
+}
+.repository-tab[data-dragging='true'] {
+  border-color: var(--accent);
+  background: var(--raised);
+  opacity: 0.75;
+}
+.repository-tab[data-dragging='true'] .repository-tab-select {
+  cursor: grabbing;
 }
 .repository-tab-select:focus-visible {
   outline-offset: -2px;
