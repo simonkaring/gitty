@@ -129,13 +129,21 @@ pub fn set_git_log(sink: impl Fn(GitLog) + Send + Sync + 'static) {
 fn display_git(args: &[String]) -> String {
     let mut shown = vec!["git".to_string()];
     let mut rest = args.iter();
+    // Only the leading `-c key=value` overrides (before the subcommand) carry
+    // configuration; after the subcommand `-c` is that command's own option
+    // (`switch -c <branch>`) and is kept verbatim.
+    let mut subcommand = None;
     while let Some(arg) = rest.next() {
         if arg == "-c" {
             rest.next();
-        } else {
+        } else if arg.starts_with('-') {
             shown.push(arg.clone());
+        } else {
+            subcommand = Some(arg);
+            break;
         }
     }
+    shown.extend(subcommand.into_iter().chain(rest).cloned());
     shown.join(" ")
 }
 /// Callers bound their input (1 MiB of pathspecs, 64 KiB of message). Patches are
@@ -580,7 +588,15 @@ mod tests {
         ]
         .map(String::from)
         .into();
-        assert_eq!(display_git(&args), "git fetch -- origin");
+        assert_eq!(display_git(&args), "git fetch -- origin -c");
+        let switch: Vec<String> = ["-c", "x=y", "switch", "-c", "feature"]
+            .map(String::from)
+            .into();
+        assert_eq!(display_git(&switch), "git switch -c feature");
+        let global: Vec<String> = ["--no-pager", "-c", "x=y", "-c", "z=w", "switch", "-c", "b"]
+            .map(String::from)
+            .into();
+        assert_eq!(display_git(&global), "git --no-pager switch -c b");
     }
     #[test]
     fn logged_stdin_shows_paths_and_messages_but_never_patches() {
