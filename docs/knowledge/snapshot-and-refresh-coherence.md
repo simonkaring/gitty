@@ -18,6 +18,8 @@ sources:
     resource: ../../src-tauri/BACKEND.md
   - id: pane-refresh
     resource: ../../src/components/RepositoryPane.tsx
+  - id: working
+    resource: ../../src/components/WorkingChanges.tsx
 ---
 
 # Snapshot and refresh coherence
@@ -50,6 +52,13 @@ commit/amend use full refresh. A failed post-write refresh blocks further
 mutations until recovery. Following an amended selection also checks that the
 user has not navigated since submission.[^pane]
 
+The working-changes sidebar reserves a single-line progress/success region so
+staging feedback does not displace its file list or composer. Staging and unstaging
+finish without success text, including hunk and line actions. A diff for the same
+repository, file, and side remains visible during a write and revision refresh;
+its hunk actions stay blocked until the current revision's diff arrives. File or
+side navigation never reuses the retained preview.[^working]
+
 For changes, inspect `readNativeSnapshot`, `refreshStatus`, and `mutate`, plus
 the scripted-IPC regressions in
 [native.integration.test.ts](../../src/model/native.integration.test.ts).
@@ -68,3 +77,5 @@ Related: [mutation safeguards](git-mutation-safeguards.md),
 [^tests]: Scripted snapshot race and keep-visible regressions.
 [^contract]: Read limitations and fingerprint coverage.
 [^pane-refresh]: Deletion-specific exclusion passed to `readNativeSnapshot`.
+[^working]: [WorkingChanges](../../src/components/WorkingChanges.tsx) and the
+  “stable staging updates” regressions in [WorkingChanges.test.ts](../../src/components/WorkingChanges.test.ts).

@@ -2534,6 +2534,27 @@ button[data-danger='true']:hover:not(:disabled) {
   display: flex;
   gap: 2px;
 }
+.working-feedback {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 28px;
+  min-width: 0;
+  padding: 0 16px;
+  color: var(--accent-text);
+  font-size: var(--fs-xs);
+}
+.working-feedback[data-pending] {
+  color: var(--muted);
+}
+.working-feedback svg {
+  flex-shrink: 0;
+}
+.working-feedback span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 /* Vertical budget: actions and the composer header never shrink; the file list takes whatever is left (and gives
    way first, down to a floor); an open composer shrinks next and scrolls inside itself. Only one scrollbar is ever
    shown per region and the content column itself never scrolls. */
@@ -2549,6 +2570,7 @@ button[data-danger='true']:hover:not(:disabled) {
   min-height: 88px;
   overflow-y: auto;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 .file-list-actions {
   flex: 0 0 auto;
@@ -2634,7 +2656,6 @@ button[data-danger='true']:hover:not(:disabled) {
   -webkit-user-select: none;
   user-select: none;
   min-height: var(--h-compact);
-  animation: file-in var(--dur-slow) var(--ease-out);
 }
 .working-file:hover {
   background: var(--hover);

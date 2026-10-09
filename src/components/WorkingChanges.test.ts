@@ -204,6 +204,67 @@ async function mount(entries: StatusEntry[], onMutation = vi.fn(async () => ({})
 const click = (node: Element | null | undefined) => act(async () => { (node as HTMLButtonElement).click(); });
 const find = (host: HTMLElement, text: RegExp) => [...host.querySelectorAll('button')].find(button => text.test(button.textContent ?? ''));
 
+describe('stable staging updates', () => {
+  it.each(['stage', 'unstage'] as const)('keeps feedback and sidebar content mounted during %s', async kind => {
+    let finish!: (value: {}) => void;
+    const onMutation = vi.fn(() => new Promise<{}>(resolve => { finish = resolve; }));
+    const { host, unmount } = await mount([entry('edited', kind === 'stage' ? '.' : 'M', kind === 'stage' ? 'M' : '.')], onMutation);
+    try {
+      const feedback = host.querySelector('.working-feedback')!;
+      const content = host.querySelector('.working-sidebar-content');
+      const composer = host.querySelector('.commit-composer');
+      expect(feedback.textContent).toBe('');
+      await click(host.querySelector(`[aria-label="${kind === 'stage' ? 'Stage' : 'Unstage'} edited"]`));
+      expect(feedback.textContent).toContain(kind === 'stage' ? 'Staging' : 'Unstaging');
+      expect(host.querySelector('.working-sidebar-content')).toBe(content);
+      expect(host.querySelector('.commit-composer')).toBe(composer);
+      expect(host.querySelector<HTMLButtonElement>('.file-stage-button')!.disabled).toBe(true);
+      await act(async () => { finish({}); });
+      expect(host.querySelector('.working-feedback')).toBe(feedback);
+      expect(feedback.textContent).toBe('');
+      expect(host.querySelector('.workflow-status')).toBeNull();
+      expect(host.querySelector('.working-sidebar-content')).toBe(content);
+    } finally { await unmount(); }
+  });
+
+  it('retains the same diff during a write and refresh, blocks stale hunks, and clears it on file navigation', async () => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const host = document.createElement('div');
+    const root = createRoot(host);
+    const onMutation = vi.fn(async () => ({}));
+    let active: ActiveDiffState | null = null;
+    const onActiveDiffChange = (value: ActiveDiffState | null) => { active = value; };
+    let finish!: (value: FileDiff) => void;
+    const loadDiff = vi.fn(() => new Promise<FileDiff>(resolve => { finish = resolve; }));
+    const render = (revision: number, busy = false) => act(async () => {
+      root.render(createElement(WorkingChanges, { session, status: { entries: [entry('edited', '.', 'M'), entry('other', '.', 'M')], head: 'head', headRef: session.headRef, fingerprint: `${revision}` }, revision, busy, onMutation, loadDiff, onActiveDiffChange, onRefresh: async () => {} }));
+    });
+    const latest = (): ActiveDiffState => active!;
+    try {
+      await render(0);
+      await click(host.querySelector('[aria-label="Unstaged: edited"]'));
+      await act(async () => { finish(diff); });
+      expect(latest().diff).toBe(diff);
+      await render(0, true);
+      expect(latest().diff).toBe(diff);
+      expect(latest().loading).toBe(false);
+      expect(latest().busy).toBe(true);
+      await render(1);
+      expect(latest().diff).toBe(diff);
+      expect(latest().busy).toBe(true);
+      await act(async () => { latest().onHunk?.({ kind: 'stage_hunk', path: 'edited', hunkIndex: 0, fingerprint: 'backend-token' }); });
+      expect(onMutation).not.toHaveBeenCalled();
+      const refreshed = { ...diff, hunkAction: { fingerprint: 'new-token', reason: null } };
+      await act(async () => { finish(refreshed); });
+      expect(latest().diff).toBe(refreshed);
+      expect(latest().busy).toBe(false);
+      await click(host.querySelector('[aria-label="Unstaged: other"]'));
+      expect(latest().diff).toBeNull();
+      expect(latest().loading).toBe(true);
+    } finally { await act(async () => { root.unmount(); }); }
+  });
+});
+
 
 describe('discarding changes', () => {
   it('counts only what can be discarded, leaving staged-only, conflicted and intent-to-add entries out', async () => {
@@ -314,7 +375,7 @@ describe('file context menu', () => {
       await rightClick(host, 'Unstaged: src/deep/file.ts');
       await click(item(/Copy file name/));
       expect(writeText.mock.calls).toEqual([['src/deep/file.ts'], ['file.ts']]);
-      expect(host.querySelector('.workflow-status')?.textContent).toBe('Copied file name.');
+      expect(host.querySelector('.working-feedback')?.textContent).toBe('Copied file name.');
     } finally { await unmount(); }
   });
   it('opens and reveals through the backend without taking the write lock, and surfaces refusals', async () => {

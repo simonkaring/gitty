@@ -69,7 +69,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   const [amendError, setAmendError] = useState('');
   const [persisted, setPersisted] = useState(true);
   const [selection, setSelection] = useState<{ group: WorkingGroup; path: string } | null>(null);
-  const [preview, setPreview] = useState<{ scope: string; diff?: FileDiff; error?: string } | null>(null);
+  const [preview, setPreview] = useState<{ target: string; scope: string; diff?: FileDiff; error?: string } | null>(null);
   const [operation, setOperation] = useState('');
   const [outcome, setOutcome] = useState<MutationOutcome | null>(null);
   useEffect(() => { if (!mutationBlocked) setOutcome(value => value?.refreshError ? { ...value, refreshError: undefined } : value); }, [revision, mutationBlocked]);
@@ -96,15 +96,18 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   const groups = statusGroups(status?.entries ?? []);
   const chosen = selection && groups[selection.group].some(entry => entry.path === selection.path) ? selection : null;
   const active = chosen;
-  const scope = JSON.stringify([session.handle, active?.group, active?.path, revision, busy]);
+  const target = JSON.stringify([session.handle, active?.group, active?.path]);
+  const scope = JSON.stringify([target, revision]);
   const currentPreview = preview?.scope === scope ? preview : null;
+  // Keep the same file/side visible during refresh, but never expose its old hunk token as actionable.
+  const visiblePreview = preview?.target === target ? preview : null;
   useEffect(() => {
     let live = true;
-    setPreview(null);
+    setPreview(current => current?.target === target ? current : null);
     if (!active || busy) return;
-    loadDiff(session.handle, { kind: active.group }, active.path).then(diff => { if (live) setPreview({ scope, diff }); }).catch(error => { if (live) setPreview({ scope, error: errorMessage(error) }); });
+    loadDiff(session.handle, { kind: active.group }, active.path).then(diff => { if (live) setPreview({ target, scope, diff }); }).catch(error => { if (live) setPreview({ target, scope, error: errorMessage(error) }); });
     return () => { live = false; };
-  }, [scope, loadDiff]);
+  }, [scope, busy, loadDiff]);
 
   useEffect(() => {
     if (previousActivePath.current && activePath === null) {
@@ -154,13 +157,13 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
     onActiveDiffChange({
       path: active.path,
       group: active.group,
-      diff: currentPreview?.diff ?? null,
-      error: currentPreview?.error,
-      loading: !currentPreview,
+      diff: visiblePreview?.diff ?? null,
+      error: visiblePreview?.error,
+      loading: !visiblePreview,
       hunkAction: isStaged ? 'unstage_hunk' : active.group === 'unstaged' ? 'stage_hunk' : undefined,
-      busy: blocked,
+      busy: blocked || !currentPreview,
       unavailable: demo ? 'Hunk staging is unavailable in the demo. Open a desktop repository to stage individual hunks.' : undefined,
-      onHunk: mutation => void perform(mutation),
+      onHunk: mutation => { if (currentPreview && !busy) void perform(mutation); },
       onToggleStage: () => {
         const operationKind = isStaged ? 'unstage' : 'stage';
         const entry = groups[active.group].find(e => e.path === active.path);
@@ -168,7 +171,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
       },
       isStaged,
     });
-  }, [active, currentPreview, busy, blocked, demo, onActiveDiffChange]);
+  }, [active, currentPreview, visiblePreview, busy, blocked, demo, onActiveDiffChange]);
   const composerDraft = amending ? amendDraft ?? { subject: '', body: '' } : draft;
   const amendReady = amending && !!amendDraft && !!session.head && amendHead === session.head && status?.head === session.head && status.headRef === session.headRef;
   function edit(value: CommitDraft) {
@@ -212,7 +215,6 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
       else if (result.oid && mutation.kind === 'amend') { amendRequest.current++; setAmending(false); setAmendDraft(null); setAmendHead(''); setSuccess(`Rewrote last commit as ${result.oid.slice(0, 12)}.`); }
       else if (!result.error && !result.refreshError && mutation.kind === 'discard') setSuccess('Selected changes discarded.');
       else if (!result.error && !result.refreshError && mutation.kind === 'ignore') setSuccess('Added to .gitignore.');
-      else if (!result.error && !result.refreshError) setSuccess(mutation.kind === 'stage' || mutation.kind === 'stage_hunk' ? (hasLineIndices ? 'Selected lines staged.' : 'Selected changes staged.') : (hasLineIndices ? 'Selected lines unstaged.' : 'Selected changes unstaged.'));
     } catch (error) {
       if (alive.current) setOutcome({ error: errorMessage(error), refreshError: 'Repository state could not be confirmed.' });
     } finally { pending.current = false; if (alive.current) setOperation(''); }
@@ -225,7 +227,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
     finally { pending.current = false; if (alive.current) setOperation(''); }
   }
 
-  return <section className="working-inspector" aria-label="Working changes inspector" aria-busy={!!operation}>
+  return <section className="working-inspector" aria-label="Working changes inspector" aria-busy={busy || !!operation}>
       <div className="working-sidebar-header">
         <div>
           <span className="eyebrow">{session.headRef?.replace('refs/heads/', '') ?? 'Detached HEAD'}</span>
@@ -242,7 +244,9 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
       {!!groups.conflict.length && <div className="workflow-alert" role="status"><AlertTriangle size={15} />Unresolved conflicts.</div>}
       {outcome?.error && <div className="workflow-alert error" role="alert">{outcome.error}</div>}
       {outcome?.refreshError && <div className="workflow-alert error" role="alert">Refresh failed: {outcome.refreshError} <button className="text-button" onClick={() => void refresh()}>Retry</button></div>}
-      {success && <div className="workflow-status" role="status"><Check size={14} />{success}</div>}
+      <div className="working-feedback" role="status" aria-live="polite" aria-atomic="true" data-pending={busy || !!operation || undefined} title={operation || success || undefined}>
+        {operation ? <><RotateCw size={12} className="spin" aria-hidden="true" /><span>{operation}</span></> : success ? <><Check size={12} aria-hidden="true" /><span>{success}</span></> : busy ? <span>Updating repository…</span> : null}
+      </div>
       <div className="working-sidebar-content">
         <div className="file-list-actions">
           <button className="secondary-button" disabled={blocked || !unstagedCount} onClick={() => void perform({ kind: 'stage', paths: stagePaths }, unstagedCount)}>
