@@ -319,13 +319,17 @@ impl Repository {
                     };
                 #[cfg(not(windows))]
                 let wsl_bridge: Option<(String, crate::askpass::AskpassGuard<'_>)> = None;
+                let native_bridge = match (wsl, askpass) {
+                    (false, Some(registry)) => Some(registry.start_operation()),
+                    _ => None,
+                };
                 let (network, env) = match (&wsl_bridge, askpass) {
                     (Some((path, guard)), Some(registry)) => {
                         crate::remote::network_args_wsl(path, registry, guard.token())
                     }
                     _ => {
                         let (mut network, env) =
-                            crate::remote::network_args(true, if wsl { None } else { askpass });
+                            crate::remote::network_args(true, native_bridge.as_ref());
                         if wsl {
                             crate::remote::allow_credential_helper_ui(&mut network);
                         }

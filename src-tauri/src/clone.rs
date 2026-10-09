@@ -270,14 +270,12 @@ fn clone_repository(
     };
     ensure_absent(&request.parent, &destination)?;
 
-    let (mut args, env) = network_args(
-        true,
-        if matches!(request.parent, RepositoryLocation::Native { .. }) {
-            askpass
-        } else {
-            None
-        },
-    );
+    // The scoped token and its pending prompts live until the clone process ends.
+    let askpass_guard = match (&request.parent, askpass) {
+        (RepositoryLocation::Native { .. }, Some(registry)) => Some(registry.start_operation()),
+        _ => None,
+    };
+    let (mut args, env) = network_args(true, askpass_guard.as_ref());
     crate::credentials::configure(&mut args, &request.parent, &request.source)?;
     args.extend(crate::process::args(&[
         "clone",

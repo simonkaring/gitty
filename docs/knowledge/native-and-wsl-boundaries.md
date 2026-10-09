@@ -10,6 +10,8 @@ sources:
     resource: ../../src-tauri/src/remote.rs
   - id: askpass
     resource: ../../src-tauri/src/askpass.rs
+  - id: bridge
+    resource: ../../src-tauri/src/bridge.rs
   - id: bridge-test
     resource: ../../src-tauri/src/remote_tests.rs
   - id: contract
@@ -63,6 +65,16 @@ remains. Background fetch stays noninteractive. This is
 implemented capability, not a claim of successful Windows/WSL runtime
 verification.[^remote][^askpass][^readme]
 
+Native interactive actions (fetch/pull/push, origin branch deletion, clone) also
+hold a per-operation scoped askpass token, not the app token, so prompts end with
+the operation. The loopback bridges bound pre-authentication input (256-byte
+token, 4 KiB prompt), an absolute 10 s handshake deadline, and 16 concurrent
+connections; helper scripts are removed on window close.[^askpass][^bridge]
+
+Background fetch deliberately bypasses the Gitty mutation lock and read deadline:
+it moves only `refs/remotes/*` and must not block local writes behind the network.
+Explicit remote actions still use the lock.[^remote]
+
 Inspect `command_inner`, `remote_action`, `wsl_executable_path`, and
 `network_args_wsl` when changing transport/authentication. The
 `wsl_network_bridge_uses_scoped_token_and_linux_executable_path` test checks
@@ -71,10 +83,8 @@ argument/token construction, not real interop execution.[^bridge-test]
 Open verification point: `network_args_wsl` sets `SSH_ASKPASS` but inherits
 `core.sshCommand=ssh -oBatchMode=yes …` from `network_args(false, None)`.
 Do not infer interactive SSH passphrase support from that environment variable.
-The comment above `allow_credential_helper_ui` still describes WSL as unable to
-use the bridge; the caller now has a separate bridge branch. Follow the branch
-implementation and retain this caveat until that comment/runtime behavior is
-reconciled.[^remote]
+The `allow_credential_helper_ui` comment now describes only the WSL fallback
+branch (no registry, or `wslpath` translation failed).[^remote]
 
 For runtime scope, use [demo and native verification](demo-and-native-verification.md).
 The [backend contract](../../src-tauri/BACKEND.md#read-semantics) and
@@ -83,6 +93,7 @@ The [backend contract](../../src-tauri/BACKEND.md#read-semantics) and
 [^process]: Transport selection and environment isolation.
 [^remote]: Explicit/background authentication branches and fallback handling.
 [^askpass]: Executable translation and per-operation token lifecycle.
+[^bridge]: Connection cap, handshake deadline, bounded lines and stale-helper cleanup.
 [^bridge-test]: Construction-level WSL bridge regression.
 [^contract]: Filesystem, editor, and process-lifecycle platform limits.
 [^readme]: User-facing platform prerequisites and pending runtime checks.

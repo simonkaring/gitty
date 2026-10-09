@@ -1,12 +1,12 @@
+use crate::bridge::{self, ConnectionLimiter, DeadlineReader};
 use crate::operation_dto::RebaseStep;
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::Manager;
 use tauri::{AppHandle, Emitter, State};
 
@@ -73,6 +73,12 @@ impl EditorRegistry {
         }
     }
 
+    /// Removes the helper script. Best effort: the script lives in the shared
+    /// temp directory and is only needed while this process can spawn Git.
+    pub fn cleanup(&self) {
+        let _ = fs::remove_file(&self.script_path);
+    }
+
     pub fn reply(&self, request_id: usize, content: Option<String>) -> Result<(), String> {
         if let Some(request) = self.requests.lock().unwrap().remove(&request_id) {
             let _ = request.sender.send(content);
@@ -116,6 +122,7 @@ pub fn init(app: AppHandle) -> std::io::Result<()> {
     let token = uuid::Uuid::new_v4().to_string();
 
     let tmp_dir = std::env::temp_dir();
+    bridge::remove_stale_helpers(&tmp_dir, "gitty-editor-", bridge::STALE_HELPER_AGE);
     let script_id = uuid::Uuid::new_v4();
     let script_path = if cfg!(windows) {
         tmp_dir.join(format!("gitty-editor-{script_id}.bat"))
@@ -154,16 +161,12 @@ pub fn init(app: AppHandle) -> std::io::Result<()> {
     let app_handle = app.clone();
 
     std::thread::spawn(move || {
-        let request_counter = AtomicUsize::new(1);
-
-        for stream in listener.incoming().flatten() {
-            let registry = registry.clone();
-            let app_handle = app_handle.clone();
-            let request_id = request_counter.fetch_add(1, Ordering::SeqCst);
-
-            std::thread::spawn(move || {
-                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-                let app_h = app_handle.clone();
+        bridge::serve(
+            listener,
+            ConnectionLimiter::new(bridge::MAX_CONNECTIONS),
+            move |stream, request_id| {
+                let prompt_app = app_handle.clone();
+                let expired_app = app_handle.clone();
                 handle_connection(
                     stream,
                     &registry,
@@ -176,7 +179,7 @@ pub fn init(app: AppHandle) -> std::io::Result<()> {
                             file_name: String,
                             content: String,
                         }
-                        app_h
+                        prompt_app
                             .emit(
                                 "editor_prompt",
                                 EditorPromptPayload {
@@ -188,18 +191,18 @@ pub fn init(app: AppHandle) -> std::io::Result<()> {
                             .map_err(|_| ())
                     },
                     move |req_id| {
-                        let _ = app_handle.emit("editor_expired", req_id);
+                        let _ = expired_app.emit("editor_expired", req_id);
                     },
                 );
-            });
-        }
+            },
+        );
     });
 
     Ok(())
 }
 
 pub(crate) fn handle_connection<F, E>(
-    mut stream: std::net::TcpStream,
+    stream: std::net::TcpStream,
     registry: &Arc<EditorRegistry>,
     request_id: usize,
     emit_prompt: F,
@@ -208,37 +211,65 @@ pub(crate) fn handle_connection<F, E>(
     F: FnOnce(usize, String, String) -> Result<(), ()>,
     E: FnOnce(usize),
 {
-    let mut len_buf = [0u8; 4];
+    handle_connection_within(
+        stream,
+        registry,
+        request_id,
+        bridge::HANDSHAKE_DEADLINE,
+        emit_prompt,
+        emit_expired,
+    );
+}
 
-    // Read token length
-    if stream.read_exact(&mut len_buf).is_err() {
-        return;
-    }
-    let token_len = u32::from_be_bytes(len_buf) as usize;
-    if token_len == 0 || token_len > 128 {
-        return;
-    }
-    let mut token_buf = vec![0u8; token_len];
-    if stream.read_exact(&mut token_buf).is_err() {
-        return;
+/// `handshake` is the absolute time the client has to send its framed request.
+fn handle_connection_within<F, E>(
+    mut stream: std::net::TcpStream,
+    registry: &Arc<EditorRegistry>,
+    request_id: usize,
+    handshake: Duration,
+    emit_prompt: F,
+    emit_expired: E,
+) where
+    F: FnOnce(usize, String, String) -> Result<(), ()>,
+    E: FnOnce(usize),
+{
+    let _ = stream.set_write_timeout(Some(bridge::WRITE_TIMEOUT));
+    let mut len_buf = [0u8; 4];
+    let (token_buf, path_buf);
+    {
+        let mut reader = DeadlineReader::new(&stream, Instant::now() + handshake);
+        // Read token length
+        if reader.read_exact(&mut len_buf).is_err() {
+            return;
+        }
+        let token_len = u32::from_be_bytes(len_buf) as usize;
+        if token_len == 0 || token_len > 128 {
+            return;
+        }
+        let mut buf = vec![0u8; token_len];
+        if reader.read_exact(&mut buf).is_err() {
+            return;
+        }
+        token_buf = buf;
+
+        // Read path length
+        if reader.read_exact(&mut len_buf).is_err() {
+            return;
+        }
+        let path_len = u32::from_be_bytes(len_buf) as usize;
+        if path_len == 0 || path_len > 4096 {
+            return;
+        }
+        let mut buf = vec![0u8; path_len];
+        if reader.read_exact(&mut buf).is_err() {
+            return;
+        }
+        path_buf = buf;
     }
     let request_token = match String::from_utf8(token_buf) {
         Ok(token) => token,
         Err(_) => return,
     };
-
-    // Read path length
-    if stream.read_exact(&mut len_buf).is_err() {
-        return;
-    }
-    let path_len = u32::from_be_bytes(len_buf) as usize;
-    if path_len == 0 || path_len > 4096 {
-        return;
-    }
-    let mut path_buf = vec![0u8; path_len];
-    if stream.read_exact(&mut path_buf).is_err() {
-        return;
-    }
     let raw_path = match String::from_utf8(path_buf) {
         Ok(p) => p,
         Err(_) => {
@@ -246,7 +277,6 @@ pub(crate) fn handle_connection<F, E>(
             return;
         }
     };
-
     // Authenticate against this specific mutation, not another repository's
     // concurrently running rebase.
     let (expected_git_dir, expected_common_dir, plan) = {
@@ -561,6 +591,84 @@ pub mod tests {
         let mut resp = [0u8; 1];
         stream.read_exact(&mut resp)?;
         Ok(resp[0])
+    }
+
+    /// Serves one connection with a short handshake deadline and reports how long
+    /// the handler ran and whether it ever asked for a prompt.
+    fn serve_with_deadline(
+        deadline: Duration,
+    ) -> (
+        TcpStream,
+        std::thread::JoinHandle<(Duration, bool)>,
+        Arc<EditorRegistry>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let registry = Arc::new(EditorRegistry::new(port, "t".into(), PathBuf::from("s")));
+        let served = registry.clone();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let started = Instant::now();
+            let mut prompted = false;
+            handle_connection_within(
+                stream,
+                &served,
+                1,
+                deadline,
+                |_, _, _| {
+                    prompted = true;
+                    Err(())
+                },
+                |_| {},
+            );
+            (started.elapsed(), prompted)
+        });
+        let client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        (client, server, registry)
+    }
+
+    #[test]
+    fn idle_editor_connection_is_closed_by_the_handshake_deadline() {
+        let (mut client, server, _registry) = serve_with_deadline(Duration::from_millis(300));
+        let mut reply = Vec::new();
+        client.read_to_end(&mut reply).unwrap();
+        let (elapsed, prompted) = server.join().unwrap();
+        assert!(elapsed >= Duration::from_millis(250), "{elapsed:?}");
+        assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+        assert!(!prompted);
+    }
+
+    #[test]
+    fn dribbling_editor_connection_cannot_outlive_the_absolute_deadline() {
+        let (mut client, server, _registry) = serve_with_deadline(Duration::from_millis(300));
+        let writer = std::thread::spawn(move || {
+            // Announce a 64-byte token, then send it one byte at a time.
+            let _ = client.write_all(&64u32.to_be_bytes());
+            for _ in 0..100 {
+                if client.write_all(b"a").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let (elapsed, prompted) = server.join().unwrap();
+        assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+        assert!(!prompted);
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn cleanup_removes_the_helper_script_and_tolerates_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("gitty-editor-test.sh");
+        fs::write(&script, "#!/bin/sh\n").unwrap();
+        let registry = EditorRegistry::new(1, "t".into(), script.clone());
+        registry.cleanup();
+        assert!(!script.exists());
+        registry.cleanup();
     }
 
     #[test]

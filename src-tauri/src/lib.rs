@@ -1,5 +1,6 @@
 mod askpass;
 mod branch_delete;
+mod bridge;
 pub mod editor;
 
 mod clone;
@@ -625,9 +626,11 @@ pub fn run() {
                 window.state::<Shared>().cancel_all_clones();
                 if let Some(askpass) = window.try_state::<Arc<askpass::AskpassRegistry>>() {
                     askpass.cancel_all();
+                    askpass.cleanup();
                 }
                 if let Some(editor) = window.try_state::<Arc<editor::EditorRegistry>>() {
                     editor.cancel_all();
+                    editor.cleanup();
                 }
             }
         })
