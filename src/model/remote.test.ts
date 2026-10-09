@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultRemote, describeRemoteAction, describeStashAction, needsPublish, sortStashes, syncSummary } from './remote';
+import { defaultRemote, describeRemoteAction, describeStashAction, needsPublish, remoteSuccessMessage, sortStashes, stashSuccessMessage, syncSummary } from './remote';
 
 describe('sync summary', () => {
   it('is empty without sync info', () => { expect(syncSummary(null)).toBe(''); });
@@ -59,5 +59,38 @@ describe('action descriptions', () => {
     expect(describeStashAction({ kind: 'apply', oid: 'x' })).toBe('Apply stash');
     expect(describeStashAction({ kind: 'pop', oid: 'x' })).toBe('Pop stash');
     expect(describeStashAction({ kind: 'drop', oid: 'x' })).toBe('Drop stash');
+  });
+});
+
+describe('success notifications', () => {
+  const pushOutput = 'To https://github.com/simonkaring/gitty.git\n \trefs/heads/feat/branch-actions:refs/heads/feat/branch-actions\t5c3d0d8..a77d0d8\nDone';
+  const unchangedPush = 'To https://github.com/simonkaring/gitty.git\n=\trefs/heads/main:refs/heads/main\t[up to date]\nDone';
+
+  it('summarizes push reports without URLs, refspecs, or object IDs', () => {
+    expect(remoteSuccessMessage({ kind: 'push' }, pushOutput, 'feat/branch-actions')).toBe('Pushed feat/branch-actions.');
+    expect(remoteSuccessMessage({ kind: 'push', remote: 'origin', branch: 'feat/branch-actions' }, pushOutput)).toBe('Pushed feat/branch-actions to origin.');
+    expect(remoteSuccessMessage({ kind: 'push' }, '')).toBe('Pushed changes.');
+  });
+
+  it('distinguishes a no-op push from publishing an existing remote branch', () => {
+    expect(remoteSuccessMessage({ kind: 'push' }, unchangedPush)).toBe('Already up to date. Nothing to push.');
+    expect(remoteSuccessMessage({ kind: 'push', remote: 'origin', branch: 'main', setUpstream: true }, unchangedPush)).toBe('Published main to origin.');
+  });
+
+  it('summarizes fetch and pull for explicit and configured targets', () => {
+    expect(remoteSuccessMessage({ kind: 'fetch' }, 'terminal output')).toBe('Fetched remote updates.');
+    expect(remoteSuccessMessage({ kind: 'fetch', remote: 'team/origin' }, '')).toBe('Fetched updates from team/origin.');
+    expect(remoteSuccessMessage({ kind: 'pull' }, 'Updating 5c3d0d8..a77d0d8\nFast-forward')).toBe('Pulled updates.');
+    expect(remoteSuccessMessage({ kind: 'pull', remote: 'origin', branch: 'main' }, '')).toBe('Pulled updates from origin/main.');
+    expect(remoteSuccessMessage({ kind: 'pull' }, 'From example.com\nAlready up to date.\n')).toBe('Already up to date. Nothing to pull.');
+    expect(remoteSuccessMessage({ kind: 'pull', pullMode: 'rebase' }, 'Current branch feat/branch-actions is up to date.')).toBe('Already up to date. Nothing to pull.');
+  });
+
+  it('explains stash results and whether the saved stash is retained', () => {
+    expect(stashSuccessMessage({ kind: 'save' }, 'Saved working directory and index state WIP on main: abc123')).toBe('Saved working changes to a stash.');
+    expect(stashSuccessMessage({ kind: 'save' }, 'No local changes to save\n')).toBe('No changes to stash.');
+    expect(stashSuccessMessage({ kind: 'apply', oid: 'x' }, 'On branch main\nChanges not staged for commit:')).toBe('Applied stash. The saved stash is still available.');
+    expect(stashSuccessMessage({ kind: 'pop', oid: 'x' }, 'Dropped refs/stash@{0} (abc123)')).toBe('Applied stash and removed it from saved stashes.');
+    expect(stashSuccessMessage({ kind: 'drop', oid: 'x' }, 'Dropped refs/stash@{0} (abc123)')).toBe('Deleted saved stash.');
   });
 });

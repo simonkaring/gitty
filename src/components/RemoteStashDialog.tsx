@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { native, errorMessage } from '../model/native';
 import { Dialog } from './ui';
-import { describeStashAction, sortStashes, type StashActionRequest, type StashEntry } from '../model/remote';
+import { stashSuccessMessage, sortStashes, type StashActionRequest, type StashEntry } from '../model/remote';
 
 export function RemoteStashDialog({ handle, onWrite, onClose, notify }: {
   handle: string; onWrite: (command: string, args: Record<string, unknown>) => Promise<string>; onClose: () => void; notify: (message: string) => void;
@@ -24,7 +24,7 @@ export function RemoteStashDialog({ handle, onWrite, onClose, notify }: {
   async function run(action: StashActionRequest, key: string): Promise<boolean> {
     if (pending) return false;
     setPending(key); setError(''); setConfirmingOid(null);
-    try { const output = await onWrite('repository_stash_action', { action }); notify(output || `${describeStashAction(action)} complete.`); if (alive.current) setRetry(value => value + 1); return true; }
+    try { const output = await onWrite('repository_stash_action', { action }); notify(stashSuccessMessage(action, output)); if (alive.current) setRetry(value => value + 1); return true; }
     catch (e) { if (alive.current) setError(errorMessage(e)); return false; }
     finally { if (alive.current) setPending(null); }
   }

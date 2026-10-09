@@ -3695,7 +3695,7 @@ button[data-danger='true']:hover:not(:disabled) {
 /* Toasts: transient notices float instead of pushing the layout. */
 .toast-region {
   position: fixed;
-  right: 16px;
+  left: 16px;
   bottom: 40px;
   z-index: 40;
   display: flex;

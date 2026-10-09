@@ -2,7 +2,7 @@
  * backend agent. Reads (`repository_sync_info`, `repository_stashes`) are
  * local-only: ahead/behind counts come from locally known remote-tracking
  * refs and never touch the network. Only `repository_remote_action` (fetch,
- * pull, push) performs network I/O, and only when explicitly requested. */
+ * pull, push, backgroundFetch) performs network I/O. */
 export interface SyncInfo { branch: string | null; upstream: string | null; ahead: number | null; behind: number | null; remotes: string[] }
 export type PullMode = 'ffOnly' | 'merge' | 'rebase';
 export type RemoteActionRequest =
@@ -74,4 +74,33 @@ export function describeStashAction(action: StashActionRequest): string {
   if (action.kind === 'apply') return 'Apply stash';
   if (action.kind === 'pop') return 'Pop stash';
   return 'Drop stash';
+}
+
+/** Success notices use the requested action, not Git's terminal report. Only
+ * recognize known no-op results; never guess a remote from an upstream label. */
+export function remoteSuccessMessage(action: RemoteActionRequest, output: string, currentBranch?: string | null): string {
+  if (action.kind === 'fetch' || action.kind === 'backgroundFetch') {
+    return action.remote ? `Fetched updates from ${action.remote}.` : 'Fetched remote updates.';
+  }
+  if (action.kind === 'push') {
+    const branch = action.branch ?? currentBranch;
+    if (!action.setUpstream && (/^=\t[^\n]*\t\[up to date\]\s*$/m.test(output) || /^Everything up[- ]to[- ]date\.?\s*$/im.test(output))) {
+      return 'Already up to date. Nothing to push.';
+    }
+    const verb = action.setUpstream ? 'Published' : 'Pushed';
+    return `${verb}${branch ? ` ${branch}` : ' changes'}${action.remote ? ` to ${action.remote}` : ''}.`;
+  }
+  if (/^Already up[- ]to[- ]date\.?\s*$/im.test(output) || /^Current branch .+ is up to date\.\s*$/m.test(output)) {
+    return 'Already up to date. Nothing to pull.';
+  }
+  return `Pulled updates${action.remote ? ` from ${action.remote}${action.branch ? `/${action.branch}` : ''}` : ''}.`;
+}
+
+export function stashSuccessMessage(action: StashActionRequest, output: string): string {
+  if (action.kind === 'save') {
+    return /^No local changes to save\s*$/m.test(output) ? 'No changes to stash.' : 'Saved working changes to a stash.';
+  }
+  if (action.kind === 'apply') return 'Applied stash. The saved stash is still available.';
+  if (action.kind === 'pop') return 'Applied stash and removed it from saved stashes.';
+  return 'Deleted saved stash.';
 }

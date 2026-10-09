@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useDismiss } from './ui';
 import { Archive, Check, ChevronDown, Download, GitBranch, RefreshCw, Upload, UserRound } from 'lucide-react';
 import { native, errorMessage } from '../model/native';
-import { DEFAULT_PULL_MODE, PULL_MODE_LABELS, describeRemoteAction, needsPublish, syncSummary, type PullMode, type RemoteActionRequest, type SyncInfo } from '../model/remote';
+import { DEFAULT_PULL_MODE, PULL_MODE_LABELS, remoteSuccessMessage, needsPublish, syncSummary, type PullMode, type RemoteActionRequest, type SyncInfo } from '../model/remote';
 import { PublishDialog } from './PublishDialog';
 import { describeFetchStatus, type FetchStatus } from '../model/autoFetch';
 import { RepositoryIdentityDialog } from './RepositoryIdentityDialog';
@@ -71,7 +71,7 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
   async function run(action: RemoteActionRequest, kind: 'fetch' | 'pull' | 'push') {
     if (disabled || pending) return;
     setPending(kind); setPullMenuOpen(false);
-    try { const output = await onWrite('repository_remote_action', { action }); notify(output || `${describeRemoteAction(action)} complete.`); setDone(kind === 'fetch' ? 'pull' : kind); }
+    try { const output = await onWrite('repository_remote_action', { action }); notify(remoteSuccessMessage(action, output, sync?.branch)); setDone(kind === 'fetch' ? 'pull' : kind); }
     catch { /* The pane owns the dismissible operation error. */ }
     finally { setPending(null); }
   }
@@ -88,7 +88,8 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
   async function publish(remote: string, branch: string) {
     if (pending) throw new Error('Another action is already in progress.');
     setPending('push');
-    try { const output = await onWrite('repository_remote_action', { action: { kind: 'push', remote, branch, setUpstream: true } }); notify(output || 'Publish complete.'); setDone('push'); }
+    const action: RemoteActionRequest = { kind: 'push', remote, branch, setUpstream: true };
+    try { const output = await onWrite('repository_remote_action', { action }); notify(remoteSuccessMessage(action, output)); setDone('push'); }
     finally { setPending(null); }
   }
   function branchAction(action: () => void) { setBranchMenuOpen(false); action(); }

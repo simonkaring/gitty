@@ -58,7 +58,7 @@ export function Dialog({ title, onClose, size = 'md', footer, onSubmit, classNam
 }
 
 const ToastRoot = createContext<HTMLElement | null>(null);
-/** The single bottom-right notification region for the whole window. */
+/** The single bottom-left notification region for the whole window. */
 export function ToastRegion({ onMount }: { onMount: (element: HTMLElement | null) => void }) {
   return <div className="toast-region" ref={onMount} />;
 }
