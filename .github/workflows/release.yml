@@ -51,7 +51,6 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          GITTY_GITLAB_CLIENT_ID: ${{ vars.GITTY_GITLAB_CLIENT_ID }}
         run: npm run tauri -- build --bundles dmg
       - name: Verify signatures and notarization ticket
         shell: bash
@@ -99,7 +98,6 @@ jobs:
       - name: Build signed Windows installers
         shell: pwsh
         env:
-          GITTY_GITLAB_CLIENT_ID: ${{ vars.GITTY_GITLAB_CLIENT_ID }}
         run: npm run tauri -- build --config $env:GITTY_SIGN_CONFIG --bundles nsis,msi
       - name: Verify installer signatures
         shell: pwsh

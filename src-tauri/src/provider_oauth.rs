@@ -63,7 +63,7 @@ fn config(provider: Provider) -> Result<(&'static str, &'static str, &'static st
             "repo read:user",
         ),
         Provider::Gitlab => (
-            option_env!("GITTY_GITLAB_CLIENT_ID"),
+            Some("2927a987650cdd154efb9077e34de2dae1885a99feeb0a38e6dec4b8a313d7ae"),
             "https://gitlab.com/oauth/authorize_device",
             "https://gitlab.com/oauth/token",
             "api read_user write_repository",
