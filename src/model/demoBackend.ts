@@ -95,6 +95,7 @@ export async function demoInvoke(command: string, args: Record<string, unknown>)
       const text = String((args.query as { text?: string }).text ?? '').toLowerCase();
       return { commits: r().commits.filter(commit => `${commit.subject} ${commit.author} ${commit.id}`.toLowerCase().includes(text)).slice(0, 500).map(seconds), truncated: false };
     }
+    case 'repository_cancel_search': return;
     case 'repository_sync_info': return { branch: 'main', upstream: 'origin/main', ahead: r().ahead, behind: 0, remotes: ['origin'] };
     case 'repository_remotes': return [{ name: 'origin', fetchUrl: `https://example.com/${r().name}.git`, pushUrl: `https://example.com/${r().name}.git`, branches: ['main', 'feature/command-palette'], currentUpstream: 'main' }];
     case 'repository_git_identity': return { local: { name: null, email: null }, effective: { name: 'Demo User', email: 'demo@example.com' } };

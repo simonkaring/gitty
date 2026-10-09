@@ -538,6 +538,11 @@ async fn repository_search(
 ) -> Result<SearchResult> {
     with_service(state, move |s| s.repo(&handle)?.search(query)).await
 }
+/// Cancels the session's in-flight search, if any; a no-op otherwise.
+#[tauri::command]
+async fn repository_cancel_search(state: tauri::State<'_, Shared>, handle: String) -> Result<()> {
+    with_service(state, move |s| s.cancel_search(&handle)).await
+}
 #[tauri::command]
 async fn wsl_distributions() -> Result<Vec<WslDistribution>> {
     blocking(wsl::distributions).await
@@ -662,6 +667,7 @@ pub fn run() {
             repository_diff_files,
             repository_diff,
             repository_search,
+            repository_cancel_search,
             repository_stage,
             repository_unstage,
             repository_discard,

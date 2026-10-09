@@ -34,6 +34,7 @@ const QUIET_COMMANDS = new Set([
   'repository_diff',
   'repository_diff_files',
   'repository_search',
+  'repository_cancel_search',
   'repository_recent',
   'repository_remotes',
   'repository_sync_info',

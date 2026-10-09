@@ -5,6 +5,7 @@ import type { CommitSummary, DiffSpec, HistoryPage, RepositorySnapshot, Reposito
 import type { OperationState } from './operations';
 
 import { recordCommandEnd, recordCommandStart } from './activity';
+import { isCancelledSearch } from './searchFlow';
 
 let demoMode = false;
 /** While on, handle-less calls (open, recents, pickers) go to the in-memory demo backend. */
@@ -21,7 +22,9 @@ export const native = async <T,>(command: string, args: Record<string, unknown> 
     recordCommandEnd(activityId, 'success', performance.now() - start);
     return result;
   } catch (error) {
-    recordCommandEnd(activityId, 'error', performance.now() - start, errorMessage(error));
+    // A superseded search is routine, not a failure worth logging.
+    if (command === 'repository_search' && isCancelledSearch(error)) recordCommandEnd(activityId, 'success', performance.now() - start);
+    else recordCommandEnd(activityId, 'error', performance.now() - start, errorMessage(error));
     throw error;
   }
 };
