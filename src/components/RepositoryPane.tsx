@@ -3,6 +3,7 @@ import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus,
 import { CommandPalette, type PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
 import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
+import { isCancelledSearch } from '../model/searchFlow';
 import { appendUnique, errorMessage, graphCommit, isDemoHandle, native, readNativeSnapshot, validateHistory, WORKING_ID } from '../model/native';
 import { HistoryGraph, type GraphAnchor, type GraphHandle } from './HistoryGraph';
 import { NativeInspector } from './NativeInspector';
@@ -84,6 +85,9 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   // Notices are transient toasts; errors stay until dismissed.
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 6000); return () => clearTimeout(timer); }, [notice]);
   const [revision, setRevision] = useState(0);
+  /** Bumps only when the repository state fingerprint (refs/HEAD) changes or a session opens; working-tree status
+   * changes move `revision` but must not re-run history search. */
+  const [stateRevision, setStateRevision] = useState(0);
   const [activeDiff, setActiveDiff] = useState<ActiveDiffState | null>(null);
   /** Fold/open state of the working-changes list and commit composer. It lives here, not in WorkingChanges,
    * so it survives switching the inspector to a commit and back, and it is tagged with the repository
@@ -465,21 +469,37 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     if (status?.entries.length && status.head === state?.session.head && status.headRef === state?.session.headRef) list.unshift(graphCommit({ id: WORKING_ID, parents: status.head ? [status.head] : [], subject: `Working changes · ${status.entries.length} paths`, author: 'Working tree', email: '', timestamp: 0 }));
     return list;
   }, [commits, status, state?.session.head, state?.session.headRef]);
-  const { layout, count: layoutCount } = useGraphLayout(graphCommits);
+  const { layout, count: layoutCount, error: layoutError } = useGraphLayout(graphCommits);
   useLayoutEffect(() => { if (anchor.current && graphCommits.slice(0, layoutCount).some(commit => commit.id === anchor.current?.id)) { graph.current?.restore(anchor.current); anchor.current = null; } if (jumpTo.current) { const row = graphCommits.slice(0, layoutCount).findIndex(commit => commit.id === jumpTo.current); if (row >= 0) { graph.current?.scrollTo(row); jumpTo.current = null; } } }, [graphCommits, layoutCount]);
   const filtering = !!(text || branch || since || until || path);
   useEffect(() => { setSearchView('results'); }, [text, branch, since, until, path]);
   function clearFilters() { setText(''); setBranch(''); setSince(''); setUntil(''); setPath(''); }
+  /** Key of the last search whose result was delivered, so returning to a tab does not repeat a finished search. */
+  const deliveredSearch = useRef('');
   useEffect(() => {
     const queryKey = JSON.stringify([state?.session.handle, text, branch, since, until, path]);
     let live = true;
-    if (lastSearchQuery.current !== queryKey) { setResult(null); lastSearchQuery.current = queryKey; }
-    setSearchError(''); setSearchBusy(filtering && !!state);
-    if (!state || !filtering) return;
-    const timer = setTimeout(() => { native<SearchResult>('repository_search', { handle: state.session.handle, query: { text, ...(branch ? { branch } : {}), ...(since ? { since } : {}), ...(until ? { until } : {}), ...(path ? { path } : {}) } })
-      .then(value => { if (live) setResult(value); }).catch(e => { if (live) setSearchError(errorMessage(e)); }).finally(() => { if (live) setSearchBusy(false); }); }, 250);
-    return () => { live = false; clearTimeout(timer); };
-  }, [state?.session.handle, text, branch, since, until, path, filtering, revision, searchRetry]);
+    if (lastSearchQuery.current !== queryKey) { setResult(null); lastSearchQuery.current = queryKey; deliveredSearch.current = ''; }
+    const runKey = JSON.stringify([queryKey, stateRevision, searchRetry]);
+    const skip = !state || !filtering || !active || deliveredSearch.current === runKey;
+    // A hidden tab starts nothing; its pending filter runs when it becomes active again.
+    if (active || !filtering) { setSearchError(''); setSearchBusy(filtering && !!state && deliveredSearch.current !== runKey); }
+    if (skip || !state) return;
+    const handle = state.session.handle;
+    let inFlight = false;
+    const timer = setTimeout(() => {
+      inFlight = true;
+      native<SearchResult>('repository_search', { handle, query: { text, ...(branch ? { branch } : {}), ...(since ? { since } : {}), ...(until ? { until } : {}), ...(path ? { path } : {}) } })
+        .then(value => { if (live) { deliveredSearch.current = runKey; setResult(value); } })
+        .catch(e => { if (live && !isCancelledSearch(e)) setSearchError(errorMessage(e)); })
+        .finally(() => { inFlight = false; if (live) setSearchBusy(false); });
+    }, 250);
+    return () => {
+      live = false; clearTimeout(timer);
+      if (inFlight) native('repository_cancel_search', { handle }).catch(() => {});
+    };
+    // History changes arrive via stateRevision, not the working-tree `revision`.
+  }, [state?.session.handle, text, branch, since, until, path, filtering, stateRevision, searchRetry, active]);
   const matches = useMemo(() => result ? new Set(result.commits.map(commit => commit.id)) : null, [result]);
   function openMenu(context: ActionContext, x: number, y: number, trigger: HTMLElement) { setMenuTarget({ context, x, y, trigger }); }
   function finishBranchDelete(result: BranchDeleteResult) {

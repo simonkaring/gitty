@@ -78,6 +78,8 @@ export type RepositoryMutation =
  * repository_diff_files({handle, spec: DiffSpec}) -> DiffFile[]
  * repository_diff({handle, spec: DiffSpec, path}) -> FileDiff
  * repository_search({handle, query: SearchQuery}) -> SearchResult
+ * At most one search is in flight per session; a newer one cancels the older, which rejects with {code: 'cancelled'}.
+ * repository_cancel_search({handle}) -> void   (no-op when idle or for an unknown handle)
  * repository_stage({handle, paths: string[]}) -> void
  * repository_unstage({handle, paths: string[]}) -> void
  * repository_open_path({handle, path}) -> void   (default app; regular non-executable files only)

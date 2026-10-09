@@ -16,6 +16,8 @@ sources:
     resource: ../../src-tauri/BACKEND.md
   - id: tests
     resource: ../../src/components/search.smoke.mjs
+  - id: flow
+    resource: ../../src/components/RepositoryPane.search.test.tsx
 ---
 
 # History search and workspace entry points
@@ -26,8 +28,12 @@ short SHA, and reference labels. Selecting a result opens the inspector by objec
 ID without paging the graph; **Show in graph** uses the existing paged reveal.
 **Results / Graph** preserves the query and keeps the graph's real ancestry.
 Search state belongs to each mounted repository pane. Background re-searches
-retain existing results while loading; responses from superseded queries are
-ignored. Arrow keys and Home/End move focus between result buttons.[^pane][^results]
+retain existing results while loading and run only when the history state
+fingerprint changes (refs/HEAD), not on working-tree-only refreshes. A query
+change, cleared filters, or unmount cancels an in-flight native search through
+`repository_cancel_search`; a `cancelled` rejection is silent, and responses from
+superseded queries are ignored. Hidden tabs start no searches. Arrow keys and
+Home/End move focus between result buttons.[^pane][^results][^flow]
 
 Native search semantics and the 500-match limit remain defined by the backend;
 demo search uses simplified synthetic matches, not native Git coverage.[^backend]
@@ -47,3 +53,4 @@ or desktop mode switching.[^tests]
 [^settings]: SettingsDialog demo entry point and disabled states.
 [^backend]: Read architecture search semantics.
 [^tests]: Optional search browser smoke.
+[^flow]: Mocked-IPC regressions for cancellation, state-keyed re-search, and hidden tabs.
