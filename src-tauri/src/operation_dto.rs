@@ -59,6 +59,7 @@ pub enum GitAction {
         source: String,
         destination: Option<String>,
         no_fast_forward: bool,
+        message: Option<String>,
     },
     Rebase {
         onto: String,

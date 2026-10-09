@@ -576,7 +576,16 @@ remain unverified and require refresh/review.
   changes a tracked path that has local changes, so conflicts return as an
   `OperationResult` with `operation.conflicts` for the conflict editor (this can
   restage merged paths). Untracked/ignored obstructions are still refused by Git. Merges target the
-  current local branch with explicit `--ff` or `--no-ff`, and `--no-edit`.
+  current local branch (or switch to an explicit local `destination` first) with
+  explicit `--ff` or `--no-ff`, and `--no-edit`. An optional merge `message` is
+  validated before any destination switch: nonblank, at most 64 KiB of UTF-8,
+  and no NUL. Native Git reads an operation-owned temporary file; WSL Git reads
+  the message from stdin via `--file=/dev/stdin`. Absent messages retain
+  Git's generated default. The merge dialog supplies an editable source/destination
+  message and displays it during review. Fast-forward merges create no commit and
+  ignore the message. Conflict-producing merges retain it in Git's `MERGE_MSG`
+  for continuation, including after restarting the application; Git's cleanup,
+  hooks and signing remain active.
   Git preserves unrelated local changes and refuses changes that would be
   overwritten or ordinary staged changes that would enter a true merge commit.
   Switch/merge refuse ignored-file overwrites. Rebase/cherry-pick preflight

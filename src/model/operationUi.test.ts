@@ -6,6 +6,14 @@ import type { RepositorySession } from './repository';
 const session = { head: 'head', headRef: 'refs/heads/main', bare: false } as RepositorySession;
 const idle: OperationState = { kind: 'none', label: '', current: null, incoming: null, step: null, total: null, conflicts: [], canContinue: false, canSkip: false, fingerprint: 'idle' };
 describe('operation eligibility and ordered selection', () => {
+  it('validates supplied merge messages by UTF-8 bytes while permitting legacy requests', () => {
+    const merge = { kind: 'merge' as const, source: 'topic', noFastForward: false };
+    expect(actionReason(merge, session, idle)).toBe('');
+    expect(actionReason({ ...merge, message: 'Integrate topic\n\nDetails' }, session, idle)).toBe('');
+    expect(actionReason({ ...merge, message: ' \n' }, session, idle)).toMatch(/Enter/);
+    expect(actionReason({ ...merge, message: 'bad\0message' }, session, idle)).toMatch(/NUL/);
+    expect(actionReason({ ...merge, message: 'é'.repeat(32769) }, session, idle)).toMatch(/64 KiB/);
+  });
   it('uses explicit selection order without duplicates and supports reordering/removal', () => {
     let order = toggleCommit(toggleCommit([], 'newer'), 'older');
     expect(order).toEqual(['newer', 'older']);

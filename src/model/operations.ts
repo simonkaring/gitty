@@ -16,7 +16,7 @@ export interface OperationState {
 export type GitAction =
   | { kind: 'createBranch'; name: string; startPoint: string; checkout: boolean }
   | { kind: 'switchBranch'; branch: string; carryChanges?: boolean }
-  | { kind: 'merge'; source: string; destination?: string; noFastForward: boolean }
+  | { kind: 'merge'; source: string; destination?: string; noFastForward: boolean; message?: string }
   | { kind: 'rebase'; onto: string }
   | { kind: 'interactiveRebase'; onto: string; steps: RebaseStep[] }
   | { kind: 'cherryPick'; commits: string[]; mainline?: number }

@@ -602,6 +602,8 @@ impl Repository {
             return Err(Error::new("dirtyWorktree", "Commit or explicitly stash all staged, unstaged and untracked changes first. Gitty never automatically stashes."));
         }
         let mut input = Vec::new();
+        let mut merge_message_file = None;
+        let mut merge_message_path = None;
         let mut rebase_plan = None;
         let mut a = args(&[
             "-c",
@@ -672,7 +674,35 @@ impl Repository {
                 source,
                 destination,
                 no_fast_forward,
+                message,
             } => {
+                if let Some(message) = message {
+                    crate::mutate::validate_message(&message)?;
+                    input = message.into_bytes();
+                    // Unlike commit/tag, merge treats --file=- as a literal filename.
+                    // A native temporary file also avoids Windows argv limits; WSL
+                    // can read the supplied stdin through its Linux /dev/stdin.
+                    merge_message_path = Some(match self.location() {
+                        RepositoryLocation::Native { .. } => {
+                            use std::io::Write;
+                            let mut file = tempfile::NamedTempFile::new()?;
+                            file.write_all(&input)?;
+                            let path = file
+                                .path()
+                                .to_str()
+                                .ok_or_else(|| {
+                                    Error::new(
+                                        "unsupportedEncoding",
+                                        "Temporary message path is not UTF-8",
+                                    )
+                                })?
+                                .to_string();
+                            merge_message_file = Some(file);
+                            path
+                        }
+                        RepositoryLocation::Wsl { .. } => "/dev/stdin".into(),
+                    });
+                }
                 if state.session.head_ref.is_none() {
                     return Err(Error::new(
                         "detachedHead",
@@ -705,9 +735,11 @@ impl Repository {
                     "--no-autostash",
                     "--no-overwrite-ignore",
                     if no_fast_forward { "--no-ff" } else { "--ff" },
-                    "--",
-                    &oid,
                 ]));
+                if let Some(path) = &merge_message_path {
+                    a.extend(args(&["--file", path]));
+                }
+                a.extend(args(&["--", &oid]));
             }
             GitAction::Rebase { onto } => {
                 if state.session.head_ref.is_none() {
@@ -1014,6 +1046,7 @@ impl Repository {
             }
         }
         let output = self.write(&a, &env, &input, 65536)?;
+        drop(merge_message_file);
         let operation = self.operation_state().map_err(|e| {
             Error::new(
                 "mutationUnverified",
