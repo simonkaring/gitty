@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { ArrowUp, Clock3, Download, Folder, FolderGit2, FolderOpen, Search, Sparkles, SquareTerminal } from 'lucide-react';
+import { ArrowUp, Clock3, Download, Folder, FolderGit2, FolderOpen, Search, SquareTerminal } from 'lucide-react';
 import type { DirectoryEntry, RepositoryLocation, WslDistribution } from '../model/repository';
 import { errorMessage, native } from '../model/native';
 import { suggestedCloneName, type CloneRequest } from '../model/clone';
@@ -26,8 +26,8 @@ const parentPath = (path: string) => path.replace(/\/?[^/]+\/?$/, '') || '/';
 
 /** The start page: shown with no tabs open and in every new tab. Opening a
  * repository from a tab replaces that tab (see `tabsReducer` 'open'). */
-export function StartPage({ onOpen, onClone, cloneBusy, onDemo }: {
-  onOpen: (location: RepositoryLocation) => void; onClone: (request: CloneRequest) => void; cloneBusy: boolean; onDemo?: () => void;
+export function StartPage({ onOpen, onClone, cloneBusy }: {
+  onOpen: (location: RepositoryLocation) => void; onClone: (request: CloneRequest) => void; cloneBusy: boolean;
 }) {
   const [view, setView] = useState<View>('recent');
   const [recent, setRecent] = useState<RepositoryLocation[] | null>(null);
@@ -98,7 +98,6 @@ export function StartPage({ onOpen, onClone, cloneBusy, onDemo }: {
           <div role="tablist" aria-orientation="vertical" onKeyDown={navKey}>
             {views.map(([id, label, Icon]) => <button key={id} id={`start-${id}`} role="tab" aria-selected={view === id} aria-controls="start-panel" tabIndex={view === id ? 0 : -1} onClick={() => show(id)}><Icon size={15} />{label}</button>)}
           </div>
-          {onDemo && <button className="text-button start-demo" onClick={onDemo}><Sparkles size={15} />Explore the demo</button>}
         </nav>
         <section id="start-panel" className="start-panel" role="tabpanel" aria-labelledby={`start-${view}`}>
           {view === 'recent' && <>

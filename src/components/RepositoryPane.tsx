@@ -7,7 +7,7 @@ import { appendUnique, errorMessage, graphCommit, isDemoHandle, native, readNati
 import { HistoryGraph, type GraphAnchor, type GraphHandle } from './HistoryGraph';
 import { NativeInspector } from './NativeInspector';
 import { NativeSidebar } from './NativeSidebar';
-import { INSPECTOR_MAX_WIDTH, INSPECTOR_MIN_WIDTH, PaneResizer } from './WorkspaceControls';
+import { CommandSearchButton, INSPECTOR_MAX_WIDTH, INSPECTOR_MIN_WIDTH, PaneResizer } from './WorkspaceControls';
 import { DEFAULT_WORKING_DISCLOSURE, DiffPreview, WorkingChanges, type ActiveDiffState, type WorkingDisclosure, type WorkingDisclosureUpdate } from './WorkingChanges';
 import { writeAndRefresh, type MutationOutcome } from '../model/workflow';
 import { remoteAndRefresh } from '../model/remoteFlow';
@@ -32,6 +32,7 @@ import { DEFAULT_PULL_MODE, remoteSuccessMessage, needsPublish, type RemoteActio
 import { branchDeleteTargets, branchDeleteMessage, type BranchDeleteScope } from '../model/branchDelete';
 import type { BranchDeleteExecution, BranchDeleteRequest, BranchDeleteResult, BranchDeleteTargetResult } from '../model/operations';
 import { BranchDeleteDialog } from './BranchDeleteDialog';
+import { SearchResults } from './SearchResults';
 
 const GROUP_TONE = { staged: 'green', unstaged: 'amber', untracked: 'accent', conflict: 'red' } as const;
 
@@ -62,10 +63,11 @@ export interface RepositoryPaneProps {
   /** Command palette is owned by the workspace; the active pane adds repository commands. */
   paletteOpen?: boolean;
   onClosePalette?: () => void;
+  onOpenPalette?: () => void;
   workspaceCommands?: PaletteCommand[];
 }
 
-export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {}, workspaceCommands = [], tabId, location, active, sidebarOpen, inspectorOpen, inspectorWidth, sidebarWidth, setInspectorWidth, setSidebarWidth, setInspectorOpen, onIdentity, onBusyChange, onMeta }: RepositoryPaneProps) {
+export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, onClosePalette = () => {}, workspaceCommands = [], tabId, location, active, sidebarOpen, inspectorOpen, inspectorWidth, sidebarWidth, setInspectorWidth, setSidebarWidth, setInspectorOpen, onIdentity, onBusyChange, onMeta }: RepositoryPaneProps) {
   const { theme, settings } = useSettings();
   const [scale, setScale] = useState(loadScale);
   const changeScale = (next: number) => { setScale(next); applyScale(next); };
@@ -122,6 +124,8 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
   const [searchBusy, setSearchBusy] = useState(false);
   const [searchError, setSearchError] = useState('');
   const [searchRetry, setSearchRetry] = useState(0);
+  const [searchView, setSearchView] = useState('results');
+  const lastSearchQuery = useRef('');
   const graph = useRef<GraphHandle>(null);
   const search = useRef<HTMLInputElement>(null);
   const anchor = useRef<GraphAnchor | null>(null);
@@ -434,6 +438,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
   }
   function reveal(id: string) {
     navigation.current++;
+    setSearchView('graph');
     setNotice('');
     setActiveDiff(null);
     if (id === WORKING_ID) {
@@ -463,8 +468,13 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
   const { layout, count: layoutCount } = useGraphLayout(graphCommits);
   useLayoutEffect(() => { if (anchor.current && graphCommits.slice(0, layoutCount).some(commit => commit.id === anchor.current?.id)) { graph.current?.restore(anchor.current); anchor.current = null; } if (jumpTo.current) { const row = graphCommits.slice(0, layoutCount).findIndex(commit => commit.id === jumpTo.current); if (row >= 0) { graph.current?.scrollTo(row); jumpTo.current = null; } } }, [graphCommits, layoutCount]);
   const filtering = !!(text || branch || since || until || path);
+  useEffect(() => { setSearchView('results'); }, [text, branch, since, until, path]);
+  function clearFilters() { setText(''); setBranch(''); setSince(''); setUntil(''); setPath(''); }
   useEffect(() => {
-    let live = true; setResult(null); setSearchError(''); setSearchBusy(filtering && !!state);
+    const queryKey = JSON.stringify([state?.session.handle, text, branch, since, until, path]);
+    let live = true;
+    if (lastSearchQuery.current !== queryKey) { setResult(null); lastSearchQuery.current = queryKey; }
+    setSearchError(''); setSearchBusy(filtering && !!state);
     if (!state || !filtering) return;
     const timer = setTimeout(() => { native<SearchResult>('repository_search', { handle: state.session.handle, query: { text, ...(branch ? { branch } : {}), ...(since ? { since } : {}), ...(until ? { until } : {}), ...(path ? { path } : {}) } })
       .then(value => { if (live) setResult(value); }).catch(e => { if (live) setSearchError(errorMessage(e)); }).finally(() => { if (live) setSearchBusy(false); }); }, 250);
@@ -561,7 +571,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
           <label className="path-filter">Path <input aria-label="Filter path" placeholder="src/components/" value={path} onChange={event => setPath(event.target.value)} /></label>
         </div>
       </details>
-      {filtering && <button className="text-button" onClick={() => { setText(''); setBranch(''); setSince(''); setUntil(''); setPath(''); }}>Clear filters</button>}
+      {filtering && <button className="text-button" onClick={clearFilters}>Clear filters</button>}
     </div>
   </div>;
   function paletteCommands(): PaletteCommand[] {
@@ -602,7 +612,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
       {error && <Toast tone="error" action={<button className="secondary-button" disabled={busy} onClick={() => state ? void refresh() : void open()}>Retry</button>}>{error}</Toast>}
       {busy && !state && <Toast tone="progress">Opening {locationLabel(location)}…{location.kind === 'wsl' && ' A stopped WSL distribution can take a few seconds to start.'}</Toast>}
       {notice && <Toast onDismiss={() => setNotice('')}>{notice}</Toast>}
-      {state && selected && selected !== WORKING_ID && !commits.some(commit => commit.id === selected) && <Toast action={cursor && <button className="secondary-button" disabled={busy} onClick={() => reveal(selected)}>Reveal</button>}>Selected commit {selected.slice(0, 12)} is {cursor ? 'outside the loaded history' : 'no longer reachable from the current references'}. Its inspector remains open by object ID.</Toast>}
+      {state && selected && selected !== WORKING_ID && !result?.commits.some(commit => commit.id === selected) && !commits.some(commit => commit.id === selected) && <Toast action={cursor && <button className="secondary-button" disabled={busy} onClick={() => reveal(selected)}>Reveal</button>}>Selected commit {selected.slice(0, 12)} is {cursor ? 'outside the loaded history' : 'no longer reachable from the current references'}. Its inspector remains open by object ID.</Toast>}
     </>}
     {mutationBlocked && <div className="operation-banner" role="alert">Refresh failed after a write. Further writes are blocked until a successful refresh.<button className="secondary-button compact" onClick={() => void refresh()}>Refresh now</button></div>}
     {state && operation && (operation.kind !== 'none' || !!operation.conflicts.length) && <div className="operation-banner" role="status"><strong>{operation.label || operation.kind}</strong><span>{operation.current} {operation.incoming && `← ${operation.incoming}`}{operation.step !== null && ` · Step ${operation.step}${operation.total !== null ? ` / ${operation.total}` : ''}`}</span>{(['continue', 'skip', 'abort'] as const).map(kind => <button key={kind} className="secondary-button compact" disabled={mutationBusy || mutationBlocked || operation.kind === 'unsupported' || (kind === 'continue' && !operation.canContinue) || (kind === 'skip' && !operation.canSkip)} onClick={() => setActionContext({ oid: state.session.head ?? '', initial: kind })}>{kind === 'continue' ? 'Continue' : kind === 'skip' ? 'Skip' : 'Abort'}</button>)}{operation.conflicts.map(path => <button key={path} className="secondary-button compact" onClick={() => setConflictPath(path)}>Resolve {path}</button>)}</div>}
@@ -653,9 +663,12 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
             </section>
           ) : (
             <section className="history-pane" aria-label="Repository history">
-              {filtering && <div className="native-search-results"><p role="status">{searchBusy ? 'Searching full history…' : `${result?.commits.length ?? 0} matches${result?.truncated ? ' · Results truncated; narrow the query' : ''}`} · Ancestry preserved</p>{searchError && <p role="alert">{searchError} <button onClick={() => setSearchRetry(value => value + 1)}>Retry search</button></p>}<div>{result?.commits.map(commit => <button key={commit.id} disabled={busy} onClick={() => reveal(commit.id)}>{commit.id.slice(0, 7)} {commit.subject}</button>)}</div></div>}
+              {filtering && <><div className="search-results-header"><span role="status"><strong>Search results</strong><small>{searchBusy ? 'Searching…' : searchError ? 'Search failed' : `${result?.commits.length ?? 0}${result?.truncated ? '+' : ''} matching commits`}</small></span><Segmented label="Search view" value={searchView} options={[[ 'results', 'Results' ], [ 'graph', 'Graph' ]]} onChange={setSearchView} /><button className="icon-button sm" aria-label="Close search and clear filters" onClick={clearFilters}><X size={15} /></button></div>
+                <div className="search-results-container" hidden={searchView !== 'results'}><SearchResults result={result} loading={searchBusy} error={searchError} query={text} refs={state.refs} selected={selected} onSelect={id => { navigation.current++; setSelected(id); setActiveDiff(null); setInspectorOpen(true); }} onReveal={id => { setSearchView('graph'); requestAnimationFrame(() => reveal(id)); }} onRetry={() => setSearchRetry(value => value + 1)} onClear={clearFilters} /></div></>}
+              <div className="search-history-container" hidden={filtering && searchView === 'results'}>
               {!graphCommits.length && <div className="empty-state"><GitCommitHorizontal size={28} /><h2>No commits yet</h2><p>This repository has no commits or working changes. Add files, stage them, and make your first commit.</p></div>}
-               <HistoryGraph ref={graph} commits={graphCommits} layout={layout} refs={state.refs} selectedId={selected} head={state.session.head ?? ''} headRef={state.session.headRef} onActions={context => setActionContext(context)} onContextActions={openMenu} onSwitchBranch={ref => void switchBranch(ref)} pickOrder={pickOrder} onTogglePick={pickMode ? id => setPickOrder(order => toggleCommit(order, id)) : undefined} loaded={graphCommits.length} matches={matches} onSelect={id => reveal(id)} onLoadMore={() => void load()} onOpenDetails={() => setInspectorOpen(true)} theme={theme} hasMore={!!cursor} paging={busy} shallow={state.session.shallow} />
+                <HistoryGraph ref={graph} commits={graphCommits} layout={layout} refs={state.refs} selectedId={selected} head={state.session.head ?? ''} headRef={state.session.headRef} onActions={context => setActionContext(context)} onContextActions={openMenu} onSwitchBranch={ref => void switchBranch(ref)} pickOrder={pickOrder} onTogglePick={pickMode ? id => setPickOrder(order => toggleCommit(order, id)) : undefined} loaded={graphCommits.length} matches={matches} onSelect={id => reveal(id)} onLoadMore={() => void load()} onOpenDetails={() => setInspectorOpen(true)} theme={theme} hasMore={!!cursor} paging={busy} shallow={state.session.shallow} />
+              </div>
             </section>
           )}
           {inspectorOpen && <>
@@ -705,7 +718,7 @@ export function RepositoryPane({ paletteOpen = false, onClosePalette = () => {},
         </div>
       </div>
     </main>}
-    <footer className="statusbar"><span><button type="button" className="text-button" onClick={() => setActivityLogOpen(true)}><ScrollText size={13} /> Activity</button><span className="live-dot" />{mutationBusy ? 'Updating repository…' : isDemoHandle(state?.session.handle) ? 'Demo workspace · changes are simulated in memory' : 'Local workspace · automatic refresh'}</span><span className="status-keys"><span className="scale-control"><button className="icon-button sm" aria-label="Zoom out" disabled={scale === SCALES[0]} onClick={() => stepScale(-1)}><ZoomOut size={13} /></button><select className="scale-value" aria-label="Interface zoom" value={scale} onChange={event => changeScale(Number(event.target.value))}>{SCALES.map(s => <option key={s} value={s}>{s}%</option>)}</select><button className="icon-button sm" aria-label="Zoom in" disabled={scale === SCALES[SCALES.length - 1]} onClick={() => stepScale(1)}><ZoomIn size={13} /></button></span><kbd>/</kbd> search <kbd>{navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'} K</kbd> commands</span></footer>
+    <footer className="statusbar"><span><button type="button" className="text-button" onClick={() => setActivityLogOpen(true)}><ScrollText size={13} /> Activity</button><span className="live-dot" /><span className="workspace-status">{mutationBusy ? 'Updating repository…' : isDemoHandle(state?.session.handle) ? 'Demo workspace · changes are simulated in memory' : 'Local workspace · automatic refresh'}</span></span><span className="status-keys"><span className="scale-control"><button className="icon-button sm" aria-label="Zoom out" disabled={scale === SCALES[0]} onClick={() => stepScale(-1)}><ZoomOut size={13} /></button><select className="scale-value" aria-label="Interface zoom" value={scale} onChange={event => changeScale(Number(event.target.value))}>{SCALES.map(s => <option key={s} value={s}>{s}%</option>)}</select><button className="icon-button sm" aria-label="Zoom in" disabled={scale === SCALES[SCALES.length - 1]} onClick={() => stepScale(1)}><ZoomIn size={13} /></button></span><button className="text-button" disabled={!state} onClick={() => search.current?.focus()}><Search size={13} /><span className="footer-search-label">History</span><kbd>/</kbd></button><CommandSearchButton onClick={onOpenPalette} /></span></footer>
     {activityLogOpen && <ActivityLogDialog onClose={() => setActivityLogOpen(false)} />}
      {state && menuTarget && <GraphContextMenu target={menuTarget} state={state} busy={mutationBusy || mutationBlocked} onClose={() => setMenuTarget(null)} onOperation={context => { setMenuTarget(null); setActionContext(context); }} onSwitchBranch={ref => { setMenuTarget(null); void switchBranch(ref); }} onShowDetails={oid => { reveal(oid); setInspectorOpen(true); setMenuTarget(null); }} onSetBase={oid => setComparison(oid, 'base')} onSetTarget={oid => setComparison(oid, 'target')} onCompare={compareWithCurrent} onPullRequest={ref => { setMenuTarget(null); setPrSource(ref); }} onRemoteAction={action => void runMenuRemote(action)} onPush={() => void pushFromMenu(menuTarget.context.ref!)} onDeleteBranch={(fullName, scope) => { setMenuTarget(null); const target = branchDeleteTargets(state, fullName); setDeleteBranch(target ? { target, scope } : null); }} onCopy={(value, label) => void copyMenuValue(value, label)} />}
      {state && deleteBranch && <BranchDeleteDialog key={`${state.session.handle}:${deleteBranch.target.branch}:${deleteBranch.scope}`} state={state} target={deleteBranch.target} scope={deleteBranch.scope} onClose={() => setDeleteBranch(null)} onComplete={finishBranchDelete} onDelete={deleteBranchWrite} />}

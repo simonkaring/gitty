@@ -3,7 +3,6 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import './styles.css';
 import { SettingsProvider } from './model/settings';
-import { SettingsDialog } from './components/Settings';
 import { applyScale, loadScale } from './model/scale';
 
 applyScale(loadScale());
@@ -18,5 +17,5 @@ if (isMac && typeof document !== 'undefined') {
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode><SettingsProvider><App /><SettingsDialog /></SettingsProvider></React.StrictMode>,
+  <React.StrictMode><SettingsProvider><App /></SettingsProvider></React.StrictMode>,
 );

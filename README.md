@@ -48,7 +48,7 @@ Run `npm run desktop`, choose **Open repository**, then use the native folder pi
 - **Working changes:** when there are changes, a distinct graph entry attached to HEAD opens the right-side file list and commit composer. It groups staged, unstaged, untracked, and conflicted paths. A partially staged file can appear in both staged and unstaged lists. Right-click a file (or press **Shift+F10**) for stage/unstage, discard, copy path or name, open, reveal in the file manager, and add to `.gitignore`; **Discard all** reviews the Unstaged list before reverting supported changes.
 - **Real changes:** lazy file lists and Git-produced unified/side-by-side diffs, including rename/binary/mode metadata and explicit preview limits. Root commits compare against the empty tree; merge commits offer a parent selector.
 - **Compare commits:** select a commit as base and another as target, then swap direction if needed. The heading explains how the base tree becomes the target tree.
-- **Search/filter:** messages, authors/emails, full/prefix hashes, and reference labels across reachable history; optional branch, date, and literal-path scope. Matches are highlighted while nonmatching ancestry stays visible. Results are capped at 500 and explicitly labeled when truncated.
+- **Search/filter:** messages, authors/emails, full/prefix hashes, and reference labels across reachable history; optional branch, date, and literal-path scope. A full-height results list shows subjects, authors, dates, SHAs, and references, with literal text highlights. Select a result to inspect it without paging history, or use **Show in graph** to locate it. **Results / Graph** switches between the list and highlighted matches with nonmatching ancestry retained. Arrow keys and Home/End navigate results. Results are capped at 500 and explicitly labeled when truncated.
 - **Refresh:** every five seconds while visible, on window focus, or manually. Coherence checks reject mixed history snapshots; selection and the viewport's commit/pixel anchor are preserved where available. No filesystem watcher is installed yet.
 - **Background fetch:** approximately every five minutes while a tab is active and the app is visible. Fetch updates the selected remote's remote-tracking branches and graph; it does not move local branches, merge, pull, push, prune, or import tags. Fetches requiring new credentials fail without showing an unsolicited prompt.
 
@@ -118,6 +118,7 @@ Open the gear button or **Cmd/Ctrl+,** from either workspace, including the nati
 - **Author avatars:** Gravatar images in the history author column and commit details by default, or initials without network requests via Settings → Appearance. Enable **Show author avatars as graph nodes** to replace commit dots with author-column-sized avatars and branch-colored borders; graph avatar nodes are off by default. Graph lanes widen to fit the avatars. Merge nodes use a double border, and the working-tree marker remains square. Gravatar requests use a SHA-256 hash of the author's email; missing images fall back to initials.
 - **Commit profiles:** add, edit, or delete saved name/email identities for the desktop commit composer.
 - **Workspace reset:** restore pane sizes. Resizing and settings persist across reloads and native/demo switching within the app.
+- **About / shortcuts:** enter or exit the demo workspace in the desktop app. Switching is disabled while an operation runs or theme edits are unsaved. The footer’s **Commands** button opens the command palette; **Cmd/Ctrl+K** works throughout the workspace and welcome screen.
 
 ## Explore the demo
 
@@ -125,7 +126,7 @@ Open the gear button or **Cmd/Ctrl+,** from either workspace, including the nati
 - **Interactive graph:** canvas paths and nodes underneath accessible, virtualized HTML commit rows. Click a row to inspect it; double-click or press Enter to reopen a closed inspector.
 - **History with difficult topology:** 1,685 commits, 2,279 parent edges, nested branch synchronization, shared ancestors, multi-parent merges, and octopus merges. Local branches, remotes, and tags jump to their target commits.
 - **Progressive history:** load 200-commit pages. Search and parent/reference navigation reveal older targets while retaining the existing graph positions and scroll anchor where available.
-- **Simplified whole-history search:** match subjects, author names, and SHAs across the synthetic history, returning up to 500 matches. Choose a result to reveal it; unmatched rows fade rather than disappearing. Native email/reference search and branch/date/path filtering are not simulated.
+- **Simplified whole-history search:** match subjects, author names, and SHAs across the synthetic history, returning up to 500 matches in the shared results view. Select to inspect, or choose **Show in graph** to reveal it; unmatched graph rows fade rather than disappearing. Native email/reference search and branch/date/path filtering are not simulated.
 - **Simulated working changes:** stage or unstage whole files, discard sample changes, and create commits from the in-memory index. Cloning, hunk/line staging, amend, pull/push, and graph mutations require a desktop repository.
 - **Commit inspector:** author/date, full copyable SHA, navigable parents, and changed files. Selecting a file opens its illustrative unified or side-by-side diff in the center pane, with correct line numbers and added/deleted/context lines. File status covers additions, modifications, and deletions.
 - **Adjustable workspace:** collapse either side pane; resize the inspector by dragging its divider or using arrow keys while it is focused. Inspector width and light/dark preference persist locally. Small windows use overlay panes.
@@ -269,6 +270,7 @@ These historical browser suites require an existing Playwright/Chromium installa
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/tabs.smoke.mjs
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/hunks.smoke.mjs
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/graph-avatars.smoke.mjs
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/search.smoke.mjs
 ```
 
 ### Historical: Milestone 3 verification

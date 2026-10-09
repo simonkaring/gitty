@@ -11,6 +11,7 @@ okf_version: "0.2"
 - [History column sizing](history-column-sizing.md) - History column resizing, initial message fill, and graph alignment after reordering.
 - [Repository tab ordering](repository-tab-ordering.md) - Drag and keyboard tab reordering, active identity, and persisted repository order.
 - [Action notifications](action-notifications.md) - Readable remote and stash success summaries in the window's bottom-left toast region.
+- [History search and workspace entry points](history-search.md) - Search result inspection, graph reveal, footer commands, and settings-based demo switching.
 
 # Verification and upkeep
 

@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type CSSProperties } from 'react';
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { Command, FolderOpen, Palette, PanelLeft, PanelRight, Search, Settings as SettingsIcon, Sparkles } from 'lucide-react';
+import { FolderOpen, Palette, PanelLeft, PanelRight, Settings as SettingsIcon, Sparkles } from 'lucide-react';
 import { CommandPalette, type PaletteCommand } from './CommandPalette';
 import { useSettings } from '../model/settings';
 import type { RepositoryLocation } from '../model/repository';
 import { StartPage } from './Welcome';
-import { Brand, INSPECTOR_MAX_WIDTH, INSPECTOR_MIN_WIDTH, usePaneWidth } from './WorkspaceControls';
-import { SettingsButton } from './Settings';
+import { Brand, CommandSearchButton, INSPECTOR_MAX_WIDTH, INSPECTOR_MIN_WIDTH, usePaneWidth } from './WorkspaceControls';
+import { SettingsButton, SettingsDialog } from './Settings';
 import { Toast, ToastProvider, ToastRegion } from './ui';
 import { RepositoryPane } from './RepositoryPane';
 import { RepositoryTabs, type RepositoryTabSummary } from './RepositoryTabs';
@@ -129,12 +129,11 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
     ...(onToggleDemo ? [{ id: 'demo', group: 'Workspace', label: demo ? 'Exit demo workspace' : 'Explore demo workspace', icon: <Sparkles size={15} />, disabled: anyBusy, run: requestDemo }] : []),
     ...themes.filter(t => t.id !== theme.id).map(t => ({ id: `theme:${t.id}`, group: 'Theme', label: `Theme: ${t.name}`, hint: t.mode, icon: <Palette size={15} />, run: () => updateSettings({ themeMode: 'fixed', themeId: t.id }) })),
   ];
-  const isMac = document.documentElement.dataset.platform === 'macos' || /Mac/.test(navigator.platform);
   const customWindowControls = (document.documentElement.dataset.platform === 'windows' && isTauri()) || isLinux;
   const [leftButtons, rightButtons] = parseWindowButtonLayout(buttonLayout);
   const tabSummaries: RepositoryTabSummary[] = tabs.map(tab => ({ id: tab.id, title: tab.title, busy: tab.busy, branch: tab.branch, dirty: tab.dirty, start: !tab.location }));
   const activeTab = tabs.find(tab => tab.id === activeId);
-  const startPage = (fromTabId?: string) => <StartPage onOpen={location => openLocation(location, fromTabId)} onClone={request => startClone(request, fromTabId)} cloneBusy={cloneBusy} onDemo={onToggleDemo && requestDemo} />;
+  const startPage = (fromTabId?: string) => <><StartPage onOpen={location => openLocation(location, fromTabId)} onClone={request => startClone(request, fromTabId)} cloneBusy={cloneBusy} /><footer className="statusbar"><span>Open a repository to get started</span><span><CommandSearchButton onClick={() => setPaletteOpen(true)} /></span></footer></>;
   return <ToastProvider value={toastRoot}><div className="app-shell native-shell" style={{ '--inspector-width': `${inspectorWidth}px`, '--sidebar-width': `${sidebarWidth}px`, '--sidebar-space': `${sidebarOpen ? sidebarWidth : 0}px` } as CSSProperties}>
     {isLinux && <WindowResizeHandles onError={notify} />}
     <header className={`titlebar${customWindowControls ? isLinux ? ' titlebar-linux' : ' titlebar-windows' : ''}`} data-tauri-drag-region={customWindowControls ? 'deep' : true} onMouseDown={customWindowControls ? undefined : handleWindowDrag}>
@@ -142,8 +141,6 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
       <Brand demo={demo} />
       <RepositoryTabs tabs={tabSummaries} activeId={activeId} onSelect={selectTab} onClose={closeTab} onMove={(tabId, targetId) => dispatch({ type: 'move', tabId, targetId })} onNew={() => dispatch({ type: 'start' })} />
       <div className="native-actions">
-        <button className="palette-trigger" aria-label="Search commands" aria-keyshortcuts={isMac ? 'Meta+K' : 'Control+K'} onClick={() => setPaletteOpen(true)}><Search size={14} /><span>Search commands</span><kbd>{isMac ? <><Command size={11} />K</> : 'Ctrl K'}</kbd></button>
-        {onToggleDemo && <button className="text-button" disabled={anyBusy} title={anyBusy ? 'Finish or switch to the tab with a running operation first.' : undefined} onClick={requestDemo}>{demo ? 'Exit demo' : 'Demo'}</button>}
         <SettingsButton />
         <button className="icon-button" aria-label="Toggle references sidebar" aria-pressed={sidebarOpen} onClick={() => setSidebarOpen(!sidebarOpen)}><PanelLeft size={18} /></button>
         <button className="icon-button" aria-label="Toggle working changes and inspector" aria-pressed={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><PanelRight size={18} /></button>
@@ -163,9 +160,10 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
           sidebarOpen={sidebarOpen} inspectorOpen={inspectorOpen} inspectorWidth={inspectorWidth} sidebarWidth={sidebarWidth}
           setInspectorWidth={setInspectorWidth} setSidebarWidth={setSidebarWidth} setInspectorOpen={setInspectorOpen}
           onIdentity={handleIdentity} onBusyChange={handleBusyChange} onMeta={handleMeta}
-          paletteOpen={paletteOpen} onClosePalette={() => setPaletteOpen(false)} workspaceCommands={workspaceCommands} />}
+          paletteOpen={paletteOpen} onOpenPalette={() => setPaletteOpen(true)} onClosePalette={() => setPaletteOpen(false)} workspaceCommands={workspaceCommands} />}
       </div>)}
     {!activeTab?.location && paletteOpen && <CommandPalette commands={workspaceCommands} onClose={() => setPaletteOpen(false)} />}
+    <SettingsDialog demo={demo} onToggleDemo={onToggleDemo ? requestDemo : undefined} demoBusy={anyBusy} />
     <ToastRegion onMount={setToastRoot} />
   </div></ToastProvider>;
 }
