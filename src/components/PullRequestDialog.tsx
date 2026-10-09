@@ -6,6 +6,8 @@ import { Dialog } from './ui';
 
 interface ProviderAccount { id: string; provider: 'github' | 'gitlab' | 'azureDevops' | 'bitbucket'; username: string }
 interface ProviderPullRequest { id: string; title: string; url: string; source: string; target: string; state: string }
+/** `truncated` means the provider has more open requests than the backend returned. */
+interface ProviderPullRequestPage { requests: ProviderPullRequest[]; truncated: boolean }
 
 export function PullRequestDialog({ handle, source, onClose }: { handle: string; source: string; onClose: () => void }) {
   const [remotes, setRemotes] = useState<RemoteInfo[]>([]);
@@ -20,6 +22,7 @@ export function PullRequestDialog({ handle, source, onClose }: { handle: string;
   const [accounts, setAccounts] = useState<ProviderAccount[]>([]);
   const [accountId, setAccountId] = useState('');
   const [requests, setRequests] = useState<ProviderPullRequest[]>([]);
+  const [truncated, setTruncated] = useState(false);
   const [requestTitle, setRequestTitle] = useState('');
   const [description, setDescription] = useState('');
   const [loadingRequests, setLoadingRequests] = useState(false);
@@ -41,11 +44,11 @@ export function PullRequestDialog({ handle, source, onClose }: { handle: string;
   const activeAccount = matchingAccounts.find(account => account.id === accountId) ?? (matchingAccounts.length === 1 ? matchingAccounts[0] : null);
   useEffect(() => {
     let live = true;
-    setRequests([]);
+    setRequests([]); setTruncated(false);
     if (!remote || !activeAccount) return () => { live = false; };
     setLoadingRequests(true);
-    void native<ProviderPullRequest[]>('provider_pull_requests', { handle, remote, accountId: activeAccount.id })
-      .then(values => { if (live) setRequests(values); })
+    void native<ProviderPullRequestPage>('provider_pull_requests', { handle, remote, accountId: activeAccount.id })
+      .then(page => { if (live) { setRequests(page.requests); setTruncated(page.truncated); } })
       .catch(e => { if (live) setError(errorMessage(e)); })
       .finally(() => { if (live) setLoadingRequests(false); });
     return () => { live = false; };
@@ -92,6 +95,7 @@ export function PullRequestDialog({ handle, source, onClose }: { handle: string;
       <label className="field">Description<textarea value={description} maxLength={65536} onChange={e => setDescription(e.target.value)} /></label>
       <h3 className="section-label">Open pull requests {!loadingRequests && <span className="count">{requests.length}</span>}</h3>
       {loadingRequests ? <p className="muted" role="status">Loading pull requests…</p> : requests.length ? <ul className="plain-list">{requests.map(request => <li key={request.id}><button type="button" className="text-button" onClick={() => void native('open_external_url', { url: request.url }).catch(e => setError(errorMessage(e)))}>{request.title}</button><span className="muted small">{request.source} → {request.target}</span></li>)}</ul> : <p className="muted">No open pull requests found.</p>}
+      {!loadingRequests && truncated && <p className="muted small" role="status">Showing the first {requests.length} open pull requests; more exist on the provider.</p>}
     </>}
     {(error || (!activeAccount && urlError)) && <p className="alert" role="alert">{error || urlError}</p>}
     {url && <p className="operation-url"><code>{url}</code></p>}

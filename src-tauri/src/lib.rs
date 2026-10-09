@@ -102,7 +102,7 @@ async fn provider_pull_requests(
     handle: String,
     remote: String,
     account_id: String,
-) -> Result<Vec<provider_pr::ProviderPullRequest>> {
+) -> Result<provider_pr::ProviderPullRequests> {
     let accounts = accounts.inner().clone();
     with_service(state, move |s| {
         s.provider_pull_requests(&accounts, &handle, &remote, &account_id)

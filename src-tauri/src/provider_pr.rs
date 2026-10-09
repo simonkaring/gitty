@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{io::Read, time::Duration};
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderPullRequest {
     pub id: String,
@@ -17,6 +17,18 @@ pub struct ProviderPullRequest {
     pub target: String,
     pub state: String,
 }
+
+/// One page of open pull requests. `truncated` means the provider reported (or the
+/// page size implies) further results that this single-page request did not fetch.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderPullRequests {
+    pub requests: Vec<ProviderPullRequest>,
+    pub truncated: bool,
+}
+
+/// Page size requested from every provider (`per_page`, `$top`, `pagelen`).
+const LIST_PAGE_SIZE: usize = 50;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -161,6 +173,62 @@ fn response_json(response: reqwest::blocking::Response) -> Result<Value> {
         .map_err(|_| Error::new("providerApi", "Invalid provider response"))
 }
 
+/// Whether response headers advertise another page: GitHub's `Link: rel="next"` or
+/// GitLab's non-empty `x-next-page`. `None` for providers that signal it in the body.
+fn next_page_header(provider: Provider, headers: &reqwest::header::HeaderMap) -> Option<bool> {
+    let value = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    match provider {
+        Provider::Github => Some(
+            headers
+                .get_all(reqwest::header::LINK)
+                .iter()
+                .filter_map(|v| v.to_str().ok())
+                .any(|link| link.split(',').any(|part| part.contains("rel=\"next\""))),
+        ),
+        Provider::Gitlab => Some(value("x-next-page").is_some_and(|v| !v.trim().is_empty())),
+        Provider::AzureDevops | Provider::Bitbucket => None,
+    }
+}
+
+/// Extracts the pull requests and the provider-specific truncation flag from a list
+/// response body. Envelopes differ: GitHub/GitLab return a top-level array, Azure
+/// DevOps `{"value":[…],"count":N}`, Bitbucket `{"values":[…],"next":"…"}`.
+/// `next_page` is the header-derived hint from [`next_page_header`]; when absent,
+/// GitHub/GitLab fall back to "page is full" (len == page size), and Azure DevOps
+/// treats a full page (`count` or length == page size) as possibly truncated.
+fn parse_list(
+    repository: &ProviderRepository,
+    result: &Value,
+    next_page: Option<bool>,
+) -> Result<ProviderPullRequests> {
+    let invalid = || Error::new("providerApi", "Invalid pull request list");
+    let provider = repository.provider;
+    let entries = match provider {
+        Provider::Github | Provider::Gitlab => result,
+        Provider::AzureDevops => &result["value"],
+        Provider::Bitbucket => &result["values"],
+    }
+    .as_array()
+    .ok_or_else(invalid)?;
+    let truncated = match provider {
+        Provider::Github | Provider::Gitlab => next_page.unwrap_or(entries.len() >= LIST_PAGE_SIZE),
+        Provider::AzureDevops => {
+            entries.len() >= LIST_PAGE_SIZE
+                || result["count"]
+                    .as_u64()
+                    .is_some_and(|n| n >= LIST_PAGE_SIZE as u64)
+        }
+        Provider::Bitbucket => result.get("next").is_some_and(|n| !n.is_null()),
+    };
+    Ok(ProviderPullRequests {
+        requests: entries
+            .iter()
+            .map(|item| convert(item, repository))
+            .collect::<Result<_>>()?,
+        truncated,
+    })
+}
+
 fn authorized(
     client: &reqwest::blocking::Client,
     method: reqwest::Method,
@@ -276,33 +344,30 @@ impl Service {
         handle: &str,
         remote: &str,
         account_id: &str,
-    ) -> Result<Vec<ProviderPullRequest>> {
+    ) -> Result<ProviderPullRequests> {
         let (account, token) = accounts.credential(account_id)?;
         let repository = self.provider_remote(handle, remote, &account)?;
         let api = match repository.provider {
-            Provider::Github => format!("{}?state=open&per_page=50", repository.api),
-            Provider::Gitlab => format!("{}?state=opened&per_page=50", repository.api),
-            Provider::AzureDevops => {
-                format!("{}&searchCriteria.status=active&$top=50", repository.api)
+            Provider::Github => format!("{}?state=open&per_page={LIST_PAGE_SIZE}", repository.api),
+            Provider::Gitlab => {
+                format!("{}?state=opened&per_page={LIST_PAGE_SIZE}", repository.api)
             }
-            Provider::Bitbucket => format!("{}?state=OPEN&pagelen=50", repository.api),
+            Provider::AzureDevops => {
+                format!(
+                    "{}&searchCriteria.status=active&$top={LIST_PAGE_SIZE}",
+                    repository.api
+                )
+            }
+            Provider::Bitbucket => {
+                format!("{}?state=OPEN&pagelen={LIST_PAGE_SIZE}", repository.api)
+            }
         };
         let client = client()?;
-        let result = response_json(
-            authorized(&client, reqwest::Method::GET, &api, &account, &token)
-                .send()
-                .map_err(|_| Error::new("providerApi", "Could not contact provider"))?,
-        )?;
-        let entries = match repository.provider {
-            Provider::AzureDevops | Provider::Bitbucket => &result["values"],
-            _ => &result,
-        };
-        entries
-            .as_array()
-            .ok_or_else(|| Error::new("providerApi", "Invalid pull request list"))?
-            .iter()
-            .map(|item| convert(item, &repository))
-            .collect()
+        let response = authorized(&client, reqwest::Method::GET, &api, &account, &token)
+            .send()
+            .map_err(|_| Error::new("providerApi", "Could not contact provider"))?;
+        let next_page = next_page_header(repository.provider, response.headers());
+        parse_list(&repository, &response_json(response)?, next_page)
     }
 
     pub fn provider_create_pull_request(
@@ -403,5 +468,94 @@ mod tests {
         assert_eq!(pr.source, "refs/heads/fix");
         let github = repository_url("https://github.com/org/repo", Provider::Github).unwrap();
         assert_eq!(convert(&json!({"number": 2, "title": "Add feature", "html_url": "https://github.com/org/repo/pull/2", "head": {"ref": "topic"}, "base": {"ref": "main"}}), &github).unwrap().source, "topic");
+    }
+
+    fn github_item(n: usize) -> Value {
+        json!({"number": n, "title": format!("PR {n}"), "html_url": format!("https://github.com/org/repo/pull/{n}"), "head": {"ref": "topic"}, "base": {"ref": "main"}, "state": "open"})
+    }
+
+    #[test]
+    fn azure_devops_lists_use_the_value_envelope_and_count_for_truncation() {
+        let repo = repository_url(
+            "https://dev.azure.com/org/project/_git/repo",
+            Provider::AzureDevops,
+        )
+        .unwrap();
+        let item = json!({"pullRequestId": 7, "title": "Fix", "sourceRefName": "refs/heads/x", "targetRefName": "refs/heads/main", "status": "active"});
+        let page = parse_list(&repo, &json!({"value": [item.clone()], "count": 1}), None).unwrap();
+        assert_eq!(page.requests.len(), 1);
+        assert_eq!(page.requests[0].id, "7");
+        assert_eq!(page.requests[0].state, "active");
+        assert!(!page.truncated);
+        // The Bitbucket envelope key is not accepted for Azure DevOps.
+        assert!(parse_list(&repo, &json!({"values": [item.clone()]}), None).is_err());
+        let full = json!({"value": vec![item.clone(); 50], "count": 50});
+        assert!(parse_list(&repo, &full, None).unwrap().truncated);
+        let counted = json!({"value": [item], "count": 50});
+        assert!(parse_list(&repo, &counted, None).unwrap().truncated);
+        assert!(parse_list(&repo, &json!({"value": [], "count": 0}), None)
+            .unwrap()
+            .requests
+            .is_empty());
+    }
+
+    #[test]
+    fn bitbucket_lists_use_the_values_envelope_and_next_for_truncation() {
+        let repo = repository_url("https://bitbucket.org/team/repo", Provider::Bitbucket).unwrap();
+        let item = json!({"id": 3, "title": "Topic", "state": "OPEN", "links": {"html": {"href": "https://bitbucket.org/team/repo/pull-requests/3"}}, "source": {"branch": {"name": "topic"}}, "destination": {"branch": {"name": "main"}}});
+        let without = json!({"pagelen": 50, "values": [item.clone()], "page": 1, "size": 1});
+        let page = parse_list(&repo, &without, None).unwrap();
+        assert_eq!(page.requests[0].source, "topic");
+        assert_eq!(page.requests[0].target, "main");
+        assert!(!page.truncated);
+        let with = json!({"pagelen": 50, "values": [item.clone()], "next": "https://api.bitbucket.org/2.0/repositories/team/repo/pullrequests?page=2"});
+        assert!(parse_list(&repo, &with, None).unwrap().truncated);
+        assert!(parse_list(&repo, &json!({"value": [item]}), None).is_err());
+    }
+
+    #[test]
+    fn github_and_gitlab_lists_are_arrays_with_header_or_full_page_truncation() {
+        let github = repository_url("https://github.com/org/repo", Provider::Github).unwrap();
+        let page = |n: usize| Value::Array((1..=n).map(github_item).collect());
+        assert!(parse_list(&github, &page(50), None).unwrap().truncated);
+        assert!(!parse_list(&github, &page(49), None).unwrap().truncated);
+        // Headers are authoritative when present: a full last page is not truncated.
+        assert!(
+            !parse_list(&github, &page(50), Some(false))
+                .unwrap()
+                .truncated
+        );
+        assert!(parse_list(&github, &page(1), Some(true)).unwrap().truncated);
+        assert!(parse_list(&github, &json!({"value": []}), None).is_err());
+
+        let gitlab = repository_url("https://gitlab.com/team/project", Provider::Gitlab).unwrap();
+        let mr = json!({"iid": 9, "title": "MR", "web_url": "https://gitlab.com/team/project/-/merge_requests/9", "source_branch": "topic", "target_branch": "main", "state": "opened"});
+        let list = |n: usize| Value::Array(vec![mr.clone(); n]);
+        let parsed = parse_list(&gitlab, &list(2), None).unwrap();
+        assert_eq!(parsed.requests[0].id, "9");
+        assert!(!parsed.truncated);
+        assert!(parse_list(&gitlab, &list(50), None).unwrap().truncated);
+        assert!(parse_list(&gitlab, &list(1), Some(true)).unwrap().truncated);
+    }
+
+    #[test]
+    fn next_page_headers_are_provider_specific() {
+        use reqwest::header::{HeaderMap, HeaderValue, LINK};
+        let mut github = HeaderMap::new();
+        assert_eq!(next_page_header(Provider::Github, &github), Some(false));
+        github.insert(
+            LINK,
+            HeaderValue::from_static("<https://api.github.com/x?page=1>; rel=\"prev\""),
+        );
+        assert_eq!(next_page_header(Provider::Github, &github), Some(false));
+        github.insert(LINK, HeaderValue::from_static("<https://api.github.com/x?page=1>; rel=\"prev\", <https://api.github.com/x?page=3>; rel=\"next\""));
+        assert_eq!(next_page_header(Provider::Github, &github), Some(true));
+        let mut gitlab = HeaderMap::new();
+        gitlab.insert("x-next-page", HeaderValue::from_static(""));
+        assert_eq!(next_page_header(Provider::Gitlab, &gitlab), Some(false));
+        gitlab.insert("x-next-page", HeaderValue::from_static("2"));
+        assert_eq!(next_page_header(Provider::Gitlab, &gitlab), Some(true));
+        assert_eq!(next_page_header(Provider::AzureDevops, &gitlab), None);
+        assert_eq!(next_page_header(Provider::Bitbucket, &gitlab), None);
     }
 }

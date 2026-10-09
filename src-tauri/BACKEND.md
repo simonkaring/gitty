@@ -426,17 +426,33 @@ or browser preferences. WSL keeps its own distribution credential handling.
 `provider_pull_requests` and
 `provider_create_pull_request` call bounded, host-specific HTTPS provider APIs
 for a selected connected account. PR creation is explicit and does not push.
+`provider_pull_requests` requests one page of 50 open requests and returns
+`{ requests: ProviderPullRequest[], truncated: boolean }` (camelCase). The list
+envelope is provider-specific: GitHub/GitLab return a top-level array, Azure
+DevOps `{"value":[…],"count":N}`, Bitbucket `{"values":[…],"next":"…"}`.
+`truncated` is also per provider: GitHub is true when the `Link` header has
+`rel="next"`, GitLab when `x-next-page` is non-empty (both fall back to "the page
+holds 50 entries" if headers are unavailable); Azure DevOps when `count` or the
+`value` length reaches 50 (`$top=50`; no continuation header is consulted, so an
+exactly-full final page is reported truncated); Bitbucket when the envelope has a
+`next` link. Later pages are not fetched.
 
 - The native pane schedules a fetch of the selected/configured remote about every
   five minutes while active and visible. The backend's `backgroundFetch` action
   uses an explicit `refs/heads/*:refs/remotes/<remote>/*` refspec with `--no-tags`
   and no pruning; it never moves local heads, checks out, merges, or rebases.
-  The normal mutation lock and post-action refresh apply even on failure.
+  It intentionally bypasses `Service::mutate` (no Gitty mutation lock and no
+  read-deadline wrapper): it only moves `refs/remotes/*`, relies on Git's own ref
+  locks, and must not block local writes behind a slow network. Explicit
+  fetch/pull/push still take the mutation lock, and the caller refreshes after
+  any action result, including failure.
 - Background fetch remains noninteractive (`credential.interactive=false` plus
   `GCM_INTERACTIVE=false`) and can use existing credentials and SSH agents.
-  Explicit clone/fetch/pull/push allow helper sign-in. Native operations can use
-  a local per-app askpass bridge when those cannot supply credentials. Gitty
-  keeps answers in memory only. A cancelled or expired prompt fails the helper,
+  Explicit clone/fetch/pull/push (and origin branch deletion) allow helper
+  sign-in. Native operations can use a local askpass bridge when those cannot
+  supply credentials; each operation holds its own scoped token (an
+  `AskpassGuard`), so its pending prompts are cancelled when it ends. The
+  app-lifetime token is not given to Git. Gitty keeps answers in memory only. A cancelled or expired prompt fails the helper,
   and a prompt has a 90-second response deadline within Git's write deadline.
   On Windows, explicit WSL fetch/pull/push/branch deletion can use a per-operation scoped askpass
   bridge when `wslpath` translates the Gitty executable for Windows interop.
