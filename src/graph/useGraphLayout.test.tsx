@@ -1,9 +1,14 @@
 // @vitest-environment jsdom
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { appendHistory, buildEdgeIndex, createLayoutState, indexEdges, layoutHistory, type GraphCommit, type GraphLayout } from './layout';
-import { useGraphLayout } from './useGraphLayout';
+import { FALLBACK_SYNC_LIMIT, useGraphLayout } from './useGraphLayout';
+
+vi.mock('./layout', async importOriginal => {
+  const original = await importOriginal<typeof import('./layout')>();
+  return { ...original, layoutHistory: vi.fn(original.layoutHistory) };
+});
 
 class LayoutWorker {
   static instances: LayoutWorker[] = [];
@@ -28,7 +33,7 @@ class LayoutWorker {
 }
 
 const nativeWorker = globalThis.Worker;
-afterEach(() => { globalThis.Worker = nativeWorker; LayoutWorker.instances = []; });
+afterEach(() => { globalThis.Worker = nativeWorker; LayoutWorker.instances = []; vi.mocked(layoutHistory).mockClear(); vi.restoreAllMocks(); });
 
 it('keeps stale replies out of the graph, appends only new pages and resets on a changed head', async () => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -70,4 +75,53 @@ it('keeps stale replies out of the graph, appends only new pages and resets on a
   } finally {
     await act(async () => { root.unmount(); });
   }
+});
+
+class ConstructorFailure { constructor() { throw new Error('workers are blocked'); } }
+class CrashingWorker {
+  onerror: ((event: { message: string }) => void) | null = null;
+  onmessageerror: (() => void) | null = null;
+  onmessage: unknown = null;
+  postMessage() { this.onerror?.({ message: 'script failed to load' }); }
+  terminate() {}
+}
+class BadMessageWorker extends CrashingWorker { postMessage() { this.onmessageerror?.(); } }
+
+function chain(length: number): GraphCommit[] {
+  return Array.from({ length }, (_, index) => ({ id: `c${index}`, parents: index + 1 < length ? [`c${index + 1}`] : [] }));
+}
+
+async function renderLayout(WorkerClass: unknown, commits: GraphCommit[]) {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  globalThis.Worker = WorkerClass as typeof Worker;
+  vi.spyOn(console, 'error').mockImplementation(() => {});
+  const host = document.createElement('div'), root = createRoot(host);
+  function View() {
+    const { count, error } = useGraphLayout(commits);
+    return <span>{`${count}|${error ?? ''}`}</span>;
+  }
+  await act(async () => { root.render(<View />); });
+  return { text: () => host.textContent, unmount: () => act(async () => { root.unmount(); }) };
+}
+
+it.each([
+  ['a constructor that throws', ConstructorFailure],
+  ['a worker that fires onerror', CrashingWorker],
+  ['a worker that fires onmessageerror', BadMessageWorker],
+])('lays out a small history synchronously when %s', async (_name, WorkerClass) => {
+  const view = await renderLayout(WorkerClass, chain(3));
+  try { expect(view.text()).toBe('3|'); } finally { await view.unmount(); }
+});
+
+it.each([
+  ['a constructor that throws', ConstructorFailure],
+  ['a worker that fires onerror', CrashingWorker],
+])('reports an error instead of laying out a history above the fallback limit when %s', async (_name, WorkerClass) => {
+  const commits = chain(FALLBACK_SYNC_LIMIT + 1);
+  vi.mocked(layoutHistory).mockClear();
+  const view = await renderLayout(WorkerClass, commits);
+  try {
+    expect(view.text()).toMatch(/^0\|.+/);
+    expect(vi.mocked(layoutHistory).mock.calls.some(([list]) => list.length > FALLBACK_SYNC_LIMIT)).toBe(false);
+  } finally { await view.unmount(); }
 });
