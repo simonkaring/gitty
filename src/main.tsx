@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import './styles.css';
 import { SettingsProvider } from './model/settings';
 import { applyScale, loadScale } from './model/scale';
@@ -17,5 +18,5 @@ if (isMac && typeof document !== 'undefined') {
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode><SettingsProvider><App /></SettingsProvider></React.StrictMode>,
+  <React.StrictMode><ErrorBoundary label="Gitty hit an unexpected error"><SettingsProvider><App /></SettingsProvider></ErrorBoundary></React.StrictMode>,
 );

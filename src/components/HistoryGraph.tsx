@@ -8,6 +8,23 @@ import type { ActionContext } from './OperationDialog';
 import { DEFAULT_HISTORY_COLUMNS, useSettings, type HistoryColumnId, type ThemeDefinition } from '../model/settings';
 import { HistoryColumnMenu } from './HistoryColumnMenu';
 import { AuthorAvatar } from './AuthorAvatar';
+import { commitIsoString, formatCommitDate } from '../model/dates';
+
+const ROW_DATE: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false };
+
+type GraphRef = GitRef & { fullName?: string };
+/** Refs shown as badges, grouped once per `refs` array by commit (remote HEAD aliases such as origin/HEAD excluded), instead of filtering
+ * every ref for every rendered row. */
+export function groupRefsByCommit<T extends GitRef>(refs: readonly T[]): Map<string, T[]> {
+  const byCommit = new Map<string, T[]>();
+  for (const ref of refs) {
+    if (ref.kind === 'remote' && ref.name.endsWith('/HEAD')) continue;
+    const list = byCommit.get(ref.commitId);
+    if (list) list.push(ref); else byCommit.set(ref.commitId, [ref]);
+  }
+  return byCommit;
+}
+const NO_REFS: GraphRef[] = [];
 
 export interface GraphAnchor { id: string; offset: number }
 export interface GraphHandle { scrollTo: (row: number) => void; focus: () => void; anchor: () => GraphAnchor | null; restore: (anchor: GraphAnchor) => void }
@@ -303,16 +320,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
 
   const isGraphVisible = visibleColumns.some(c => c.id === 'graph');
 
-  const formatDate = (timestamp: number) => {
-    if (!timestamp) return '';
-    return new Intl.DateTimeFormat('en', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    }).format(timestamp < 1e11 ? timestamp * 1000 : timestamp);
-  };
+  const formatDate = (timestamp: number) => timestamp ? formatCommitDate(timestamp, ROW_DATE, 'en') : '';
 
   return <div className="history-body" style={{
     '--ref-width': `${widths.refs}px`,
@@ -419,7 +427,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                   return <span key="hash" className="row-hash hash-column">{commit.id === WORKING_ID ? 'Working' : commit.id.slice(0, 7)}</span>;
                 }
                 if (col.id === 'date') {
-                  return <span key="date" className="row-date date-column" title={commit.timestamp ? new Date(commit.timestamp < 1e11 ? commit.timestamp * 1000 : commit.timestamp).toISOString() : ''}>{formatDate(commit.timestamp)}</span>;
+                  return <span key="date" className="row-date date-column" title={commit.timestamp ? commitIsoString(commit.timestamp) : ''}>{formatDate(commit.timestamp)}</span>;
                 }
                 return null;
               })}

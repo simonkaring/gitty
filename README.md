@@ -176,6 +176,7 @@ src/
     Settings.tsx                 Themes, editor preferences, identities and avatars
     IntegrationsSettings.tsx     Provider account authorization
     AuthorAvatar.tsx             Initials and optional Gravatar images
+    ErrorBoundary.tsx            Contains render errors per pane/app with a Retry remount
   graph/
     layout.ts                    Pure renderer-independent appendable lane layout
     branchColor.ts               Name-based branch palette and first-parent color ownership
@@ -195,6 +196,7 @@ src/
     autoFetch.ts                 Active/visible-tab fetch scheduling
     tabs.ts                      Repository tab reducer and persistence
     activity.ts                  Bounded in-memory activity store and redaction
+    dates.ts                     Range-checked commit-second date formatting
     settings.tsx                 Preferences, theme application and persistence
     themes.ts                    Built-in themes and custom-theme validation
     scale.ts                     Native webview and browser-preview zoom
@@ -216,6 +218,7 @@ src-tauri/
   src/remote.rs                  Local sync metadata and explicit fetch/pull/push
   src/stash.rs                   Stash management with stable object identities
   src/identity.rs                Repository-local and effective Git identity
+  src/bridge.rs                  Shared loopback bridge limits (connection cap, deadlines, stale helper cleanup)
   src/askpass.rs                 Scoped native/WSL credential prompt bridge
   src/editor.rs                  Native Git message/sequence editor bridges
   src/credentials.rs             Bundled credential-manager configuration

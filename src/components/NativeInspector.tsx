@@ -4,8 +4,12 @@ import { errorMessage, inspectorSpec, native } from '../model/native';
 import { AlertTriangle, ArrowUpRight, Check, ChevronDown, Copy, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, GitMerge, Pencil, X } from 'lucide-react';
 import type { ActiveDiffState } from './WorkingChanges';
 import { AuthorAvatar } from './AuthorAvatar';
+import { formatCommitDate } from '../model/dates';
 import type { AuthorAvatarMode } from '../model/settings';
 import { commitMessage, draftFromCommitMessage, type MutationOutcome } from '../model/workflow';
+
+/** Pause before fetching a newly selected commit, so rapid keyboard navigation only loads where it lands. */
+export const SELECTION_DEBOUNCE_MS = 120;
 
 function statusClass(status: string): string {
   const s = status.toUpperCase();
@@ -196,7 +200,7 @@ export function NativeInspector({
   const additions = files.reduce((n, f) => n + (f.additions ?? 0), 0);
   const deletions = files.reduce((n, f) => n + (f.deletions ?? 0), 0);
   const date = detail
-    ? new Intl.DateTimeFormat('en', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }).format(detail.timestamp * 1000)
+    ? formatCommitDate(detail.timestamp, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }, 'en')
     : '';
 
   const isHead = !!session.head && viewId === session.head && selected === session.head;
