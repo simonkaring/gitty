@@ -44,7 +44,8 @@ fn native_network_askpass_runs_git_helper_from_environment() {
     std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
     let registry =
         crate::askpass::AskpassRegistry::new(4521, "app-token".into(), script_path.clone());
-    let (args, env) = crate::remote::network_args(true, Some(&registry));
+    let guard = registry.start_operation();
+    let (args, env) = crate::remote::network_args(true, Some(&guard));
     assert!(env
         .iter()
         .any(|(key, value)| { key == "GIT_ASKPASS" && value == script_path.to_str().unwrap() }));

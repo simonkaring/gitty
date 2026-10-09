@@ -245,12 +245,17 @@ impl Repository {
             };
         #[cfg(not(windows))]
         let wsl_bridge: Option<(String, crate::askpass::AskpassGuard<'_>)> = None;
+        // Native prompts use a token scoped to this action, so any prompt dies with it.
+        let native_bridge = match (interactive, wsl, askpass) {
+            (true, false, Some(registry)) => Some(registry.start_operation()),
+            _ => None,
+        };
         let network = || match (&wsl_bridge, askpass) {
             (Some((path, guard)), Some(registry)) => {
                 network_args_wsl(path, registry, guard.token())
             }
             _ => {
-                let (mut args, env) = network_args(interactive, if wsl { None } else { askpass });
+                let (mut args, env) = network_args(interactive, native_bridge.as_ref());
                 args.extend(helper_args.clone());
                 if wsl && interactive {
                     allow_credential_helper_ui(&mut args);
@@ -476,7 +481,7 @@ pub(crate) fn action_result(output: Output) -> Result<ActionOutput> {
 pub(crate) fn network_result(output: Output, wsl: bool) -> Result<ActionOutput> {
     action_result(output).map_err(|mut error| {
         if wsl {
-            error.message.push_str("\nGitty cannot prompt for passwords or passphrases in WSL. A credential helper with its own sign-in window (such as Git Credential Manager) can still ask; otherwise configure a credential helper or SSH agent inside the distribution, then retry.");
+            error.message.push_str("\nGitty can prompt for WSL passwords only when Windows interop can run the Gitty executable, and it never prompts for SSH passphrases. A credential helper with its own sign-in window (such as Git Credential Manager) can still ask; otherwise configure a credential helper or SSH agent inside the distribution, then retry.");
         }
         error
     })
@@ -486,11 +491,13 @@ pub(crate) fn network_error(output: Output, wsl: bool) -> Result<ActionOutput> {
     network_result(output, wsl)
 }
 
-/// Explicit WSL actions cannot use the native askpass bridge, but a credential
+/// WSL actions without a scoped askpass bridge (no registry, or `wslpath` could not
+/// translate the Gitty executable) cannot prompt through Gitty, but a credential
 /// helper that opens its own window — typically Windows Git Credential Manager
 /// reached through WSL interop — may sign the user in again. Terminal prompts,
 /// askpass programs and SSH passphrase prompts stay disabled, so nothing can
-/// wait on input Gitty cannot supply. Background fetch never calls this.
+/// wait on input Gitty cannot supply. Callers use this only for explicit WSL
+/// actions in that fallback branch; background fetch never calls it.
 pub(crate) fn allow_credential_helper_ui(a: &mut [String]) {
     for value in a.iter_mut() {
         if value == "credential.interactive=false" {
@@ -499,9 +506,11 @@ pub(crate) fn allow_credential_helper_ui(a: &mut [String]) {
     }
 }
 
+/// `askpass` is the per-operation guard of a native interactive action; its token
+/// (never the app-lifetime one) is what the helper process presents.
 pub(crate) fn network_args(
     interactive: bool,
-    askpass_registry: Option<&crate::askpass::AskpassRegistry>,
+    askpass: Option<&crate::askpass::AskpassGuard<'_>>,
 ) -> (Vec<String>, Vec<(String, String)>) {
     let mut a = args(&[
         "-c",
@@ -530,7 +539,8 @@ pub(crate) fn network_args(
         env.push(("GCM_INTERACTIVE".into(), "false".into()));
     }
 
-    if let Some(registry) = askpass_registry.filter(|_| interactive) {
+    if let Some(guard) = askpass.filter(|_| interactive) {
+        let registry = guard.registry();
         a.extend(args(&[
             "-c",
             "core.sshCommand=ssh -oStrictHostKeyChecking=yes",
@@ -548,7 +558,7 @@ pub(crate) fn network_args(
             env.push(("DISPLAY".into(), ":0".into()));
         }
         env.push(("GITTY_ASKPASS_PORT".into(), registry.port.to_string()));
-        env.push(("GITTY_ASKPASS_TOKEN".into(), registry.token.clone()));
+        env.push(("GITTY_ASKPASS_TOKEN".into(), guard.token().to_string()));
     } else {
         a.extend(args(&[
             "-c",
