@@ -12,6 +12,7 @@ okf_version: "0.2"
 - [Repository tab ordering](repository-tab-ordering.md) - Drag and keyboard tab reordering, active identity, and persisted repository order.
 - [Action notifications](action-notifications.md) - Readable remote and stash success summaries in the window's bottom-left toast region.
 - [History search and workspace entry points](history-search.md) - Search result inspection, graph reveal, footer commands, and settings-based demo switching.
+- [Split diff review](split-diff-review.md) - Paired before/after rows, fixed gutters, shared horizontal scrolling, and original line-selection identity.
 
 # Verification and upkeep
 

@@ -46,7 +46,7 @@ Run `npm run desktop`, choose **Open repository**, then use the native folder pi
 - **Repository identity:** native/WSL location, current branch or detached HEAD, linked worktree, shallow, and bare states.
 - **Live graph:** local branches, remote-tracking branches, commit-pointing tags, and HEAD; 200-commit cursor pages with original parent relationships. A branch pill selects its tip with one click/Enter/Space; right-click or **Shift+F10** opens its action menu. Remote information reflects locally stored refs, including those updated by background fetch.
 - **Working changes:** when there are changes, a distinct graph entry attached to HEAD opens the right-side file list and commit composer. It groups staged, unstaged, untracked, and conflicted paths. A partially staged file can appear in both staged and unstaged lists. Right-click a file (or press **Shift+F10**) for stage/unstage, discard, copy path or name, open, reveal in the file manager, and add to `.gitignore`; **Discard all** reviews the Unstaged list before reverting supported changes.
-- **Real changes:** lazy file lists and Git-produced unified/side-by-side diffs, including rename/binary/mode metadata and explicit preview limits. Root commits compare against the empty tree; merge commits offer a parent selector.
+- **Real changes:** lazy file lists and Git-produced unified/side-by-side diffs, including rename/binary/mode metadata and explicit preview limits. Split diffs align replacement blocks in equal **Before / After** columns, with dedicated line-number and selection gutters. Both sides scroll horizontally together while the gutters stay fixed; wrapped lines retain row alignment. Root commits compare against the empty tree; merge commits offer a parent selector.
 - **Compare commits:** select a commit as base and another as target, then swap direction if needed. The heading explains how the base tree becomes the target tree.
 - **Search/filter:** messages, authors/emails, full/prefix hashes, and reference labels across reachable history; optional branch, date, and literal-path scope. A full-height results list shows subjects, authors, dates, SHAs, and references, with literal text highlights. Select a result to inspect it without paging history, or use **Show in graph** to locate it. **Results / Graph** switches between the list and highlighted matches with nonmatching ancestry retained. Arrow keys and Home/End navigate results. Results are capped at 500 and explicitly labeled when truncated.
 - **Refresh:** every five seconds while visible, on window focus, or manually. Coherence checks reject mixed history snapshots; selection and the viewport's commit/pixel anchor are preserved where available. No filesystem watcher is installed yet.
@@ -271,6 +271,7 @@ PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/tab
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/hunks.smoke.mjs
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/graph-avatars.smoke.mjs
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/search.smoke.mjs
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/split-diff.smoke.mjs
 ```
 
 ### Historical: Milestone 3 verification

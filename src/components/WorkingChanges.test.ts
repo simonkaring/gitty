@@ -80,6 +80,27 @@ it('combines unstaged and new files while preserving diff and staging actions', 
 });
 
 describe('hunk preview actions', () => {
+  it('keeps before/after selection scoped to original line indices after pairing replacements', () => {
+    const replacement: FileDiff = { ...diff, hunks: [{ header: '@@ -1,2 +1,1 @@', lines: [
+      { kind: 'remove', content: 'old one', oldLine: 1, newLine: null },
+      { kind: 'remove', content: 'old two', oldLine: 2, newLine: null },
+      { kind: 'add', content: 'new one', oldLine: null, newLine: 1 },
+    ] }] };
+    const onHunk = vi.fn(), onToggleLine = vi.fn();
+    const tree = renderTree({ diff: replacement, split: true, hunkAction: 'stage_hunk', selectedLines: { 0: [2, 0] }, onHunk, onToggleLine });
+    const toggles = lineButtons(tree);
+    expect(toggles.map(toggle => toggle.props['aria-pressed'])).toEqual([true, true, false]);
+    toggles[1].props.onClick?.();
+    expect(onToggleLine).toHaveBeenCalledWith(0, 2);
+    hunkButtons(tree)[0].props.onClick?.();
+    expect(onHunk).toHaveBeenCalledWith({ kind: 'stage_hunk', path: 'file.txt', hunkIndex: 0, fingerprint: 'backend-token', lineIndices: [0, 2] });
+    const host = document.createElement('div');
+    host.innerHTML = renderToStaticMarkup(createElement(() => DiffPreview({ diff: replacement, split: true })));
+    const rows = host.querySelectorAll('.split-row');
+    expect(rows).toHaveLength(2);
+    expect([...rows[0].querySelectorAll('.split-code')].map(code => code.textContent)).toEqual(['old one', 'new one']);
+    expect(rows[1].querySelector('.split-cell-empty')).not.toBeNull();
+  });
   it.each([false, true])('routes the selected complete hunk in split=%s', split => {
     for (const kind of ['stage_hunk', 'unstage_hunk'] as const) {
       const onHunk = vi.fn();

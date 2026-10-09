@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useRef, useState } from 'react';
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { AlertTriangle, Check, ChevronDown, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, Minus, Plus, RotateCw, Undo2, User, X } from 'lucide-react';
 import type { CommitDetail, DiffSpec, FileDiff, RepositoryMutation, RepositorySession, RepositoryStatus, StatusEntry } from '../model/repository';
 import { errorMessage, isDemoHandle, native, statusGroups, type WorkingGroup } from '../model/native';
@@ -7,6 +7,7 @@ import { useSettings } from '../model/settings';
 import { commitProfileRepositoryKey } from '../model/commitProfiles';
 import { DiscardDialog } from './DiscardDialog';
 import { FileContextMenu, type FileMenuTarget } from './FileContextMenu';
+import { splitDiffRows, type SplitDiffLine } from '../model/splitDiff';
 
 const labels: Record<WorkingGroup, string> = { staged: 'Staged', unstaged: 'Unstaged', untracked: 'Untracked', conflict: 'Conflicts' };
 const readDiff = (handle: string, spec: DiffSpec, path: string) => native<FileDiff>('repository_diff', { handle, spec, path });
@@ -378,8 +379,60 @@ export function DiffPreview({
   };
 
   const actionVerb = hunkAction === 'unstage_hunk' ? 'unstaging' : 'staging';
+  const lineDigits = diff.hunks.reduce((max, hunk) => hunk.lines.reduce((digits, line) => Math.max(digits, String(line.oldLine ?? '').length, String(line.newLine ?? '').length), max), 4);
+  const splitSurface = useRef<HTMLDivElement>(null);
+  const horizontalScroll = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const surface = splitSurface.current;
+    const scrollbar = horizontalScroll.current;
+    if (!split || !surface || !scrollbar) return;
+    let live = true;
+    const measure = () => {
+      if (!live) return;
+      const wrapped = document.documentElement.dataset.diffWrap === 'true';
+      const overflow = wrapped ? 0 : Math.max(0, ...Array.from(surface.querySelectorAll<HTMLElement>('.split-code')).map(code => code.scrollWidth - code.clientWidth));
+      const track = scrollbar.firstElementChild as HTMLElement;
+      track.style.width = `${surface.clientWidth + overflow}px`;
+      scrollbar.style.display = overflow > 0 ? 'block' : 'none';
+      if (wrapped) scrollbar.scrollLeft = 0;
+      surface.style.setProperty('--split-scroll-offset', `${scrollbar.scrollLeft}px`);
+    };
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    observer?.observe(surface);
+    if (surface.firstElementChild) observer?.observe(surface.firstElementChild);
+    const preferences = new MutationObserver(measure);
+    preferences.observe(document.documentElement, { attributes: true, attributeFilter: ['data-diff-wrap', 'style'] });
+    measure();
+    const wheel = (event: WheelEvent) => {
+      const delta = event.deltaX || (event.shiftKey ? event.deltaY : 0);
+      if (!delta || scrollbar.style.display === 'none') return;
+      const previous = scrollbar.scrollLeft;
+      scrollbar.scrollLeft += delta * (event.deltaMode === 1 ? 24 : event.deltaMode === 2 ? surface.clientWidth : 1);
+      if (scrollbar.scrollLeft !== previous) {
+        event.preventDefault();
+        surface.style.setProperty('--split-scroll-offset', `${scrollbar.scrollLeft}px`);
+      }
+    };
+    surface.addEventListener('wheel', wheel, { passive: false });
+    void document.fonts?.ready.then(measure);
+    return () => { live = false; observer?.disconnect(); preferences.disconnect(); surface.removeEventListener('wheel', wheel); };
+  }, [split, diff]);
 
-  return <><div className="diff-messages" role="status">{diff.binary && <p>Binary file · textual preview unavailable.</p>}{diff.truncated && <p>Diff truncated · only the available preview is shown.</p>}{diff.message && <p>{diff.message}</p>}{reason && <p className="hunk-unavailable">{reason}</p>}{!diff.hunks.length && !diff.binary && <p>No textual hunks · metadata-only or empty file change.</p>}</div><div className={`native-diff ${split ? 'split' : ''}`} tabIndex={0} aria-label={`${split ? 'Side-by-side' : 'Unified'} diff for ${diff.path}`}>
+  function splitCell(item: SplitDiffLine | undefined, side: 'before' | 'after', hunkIndex: number) {
+    if (!item) return <div className="split-cell split-cell-empty" aria-hidden="true"><span className="split-gutter" /><span className="split-code" /></div>;
+    const { line, index: lineIndex } = item;
+    const selectable = !!hunkAction && !reason && !!fingerprint && (line.kind === 'add' || line.kind === 'remove');
+    const isSelected = selectable && (selected[hunkIndex] ?? []).includes(lineIndex);
+    const number = side === 'before' ? line.oldLine : line.newLine;
+    return <div className={`split-cell ${line.kind}${isSelected ? ' selected-line' : ''}`}>
+      <span className="split-gutter"><span className="split-line-action">{selectable && <button type="button" className="line-select-toggle" aria-pressed={isSelected} disabled={busy} title={`${isSelected ? 'Deselect' : 'Select'} line for ${actionVerb}`} aria-label={`${isSelected ? 'Deselect' : 'Select'} line ${number ?? ''} for ${actionVerb} (${side})`} onClick={() => toggleLine(hunkIndex, lineIndex)}>{isSelected && <Check size={10} strokeWidth={3} aria-hidden="true" />}</button>}</span><span className="split-line-number">{number ?? ''}</span><span className="split-line-sign" aria-hidden="true">{line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ''}</span></span>
+      <pre className="split-code">{line.content}</pre>
+    </div>;
+  }
+
+  return <><div className="diff-messages" role="status">{diff.binary && <p>Binary file · textual preview unavailable.</p>}{diff.truncated && <p>Diff truncated · only the available preview is shown.</p>}{diff.message && <p>{diff.message}</p>}{reason && <p className="hunk-unavailable">{reason}</p>}{!diff.hunks.length && !diff.binary && <p>No textual hunks · metadata-only or empty file change.</p>}</div><div ref={splitSurface} className={`native-diff ${split ? 'split' : ''}`} tabIndex={0} aria-label={`${split ? 'Side-by-side' : 'Unified'} diff for ${diff.path}`}>
+    <div className={split ? 'split-content' : 'unified-content'} style={split ? { '--split-line-number-width': `${lineDigits}ch` } as CSSProperties : undefined}>
+    {split && !!diff.hunks.length && <div className="split-column-header"><span><span className="split-side-dot before" />Before<small>Original</small></span><span><span className="split-side-dot after" />After<small>Modified</small></span></div>}
     {diff.hunks.map((hunk, index) => {
       const hunkSelected = selected[index] ?? [];
       const hasSelection = hunkSelected.length > 0;
@@ -421,47 +474,12 @@ export function DiffPreview({
             </button>
           )}
         </div>
-        {hunk.lines.map((line, i) => {
+        {split ? splitDiffRows(hunk.lines).map((row, rowIndex) => row.meta ? <pre className="split-meta" key={rowIndex}>{row.meta.line.content}</pre> : <div className="split-row" key={rowIndex}>{splitCell(row.before, 'before', index)}{splitCell(row.after, 'after', index)}</div>) : hunk.lines.map((line, i) => {
           const isSelectable = !!hunkAction && !reason && !!fingerprint && (line.kind === 'add' || line.kind === 'remove');
           const isSelected = isSelectable && hunkSelected.includes(i);
           const lineNum = line.kind === 'add' ? line.newLine : line.oldLine;
 
-          return split && line.kind !== 'meta' ? (
-            <div className={`split-row${isSelected ? ' selected-line' : ''}`} key={i}>
-              <pre className={`${line.kind === 'remove' ? 'remove' : ''}${isSelected && line.kind === 'remove' ? ' selected-line' : ''}`}>
-                {line.kind === 'remove' && isSelectable && (
-                  <button
-                    type="button"
-                    className="line-select-toggle"
-                    aria-pressed={isSelected}
-                    disabled={busy}
-                    title={`${isSelected ? 'Deselect' : 'Select'} line for ${actionVerb}`}
-                    aria-label={`${isSelected ? 'Deselect' : 'Select'} line ${line.oldLine ?? ''} for ${actionVerb}`}
-                    onClick={() => toggleLine(index, i)}
-                  >
-                    {isSelected && <Check size={10} strokeWidth={3} aria-hidden="true" />}
-                  </button>
-                )}
-                {line.kind !== 'add' ? `${line.oldLine ?? ''} ${line.content}` : ''}
-              </pre>
-              <pre className={`${line.kind === 'add' ? 'add' : ''}${isSelected && line.kind === 'add' ? ' selected-line' : ''}`}>
-                {line.kind === 'add' && isSelectable && (
-                  <button
-                    type="button"
-                    className="line-select-toggle"
-                    aria-pressed={isSelected}
-                    disabled={busy}
-                    title={`${isSelected ? 'Deselect' : 'Select'} line for ${actionVerb}`}
-                    aria-label={`${isSelected ? 'Deselect' : 'Select'} line ${line.newLine ?? ''} for ${actionVerb}`}
-                    onClick={() => toggleLine(index, i)}
-                  >
-                    {isSelected && <Check size={10} strokeWidth={3} aria-hidden="true" />}
-                  </button>
-                )}
-                {line.kind !== 'remove' ? `${line.newLine ?? ''} ${line.content}` : ''}
-              </pre>
-            </div>
-          ) : (
+          return (
             <pre key={i} className={`${line.kind}${isSelected ? ' selected-line' : ''}`}>
               {isSelectable && (
                 <button
@@ -485,5 +503,6 @@ export function DiffPreview({
         })}
       </section>;
     })}
-  </div></>;
+    </div>
+  </div>{split && <div ref={horizontalScroll} className="split-horizontal-scroll" tabIndex={0} role="region" aria-label="Scroll both diff sides horizontally" onScroll={event => splitSurface.current?.style.setProperty('--split-scroll-offset', `${event.currentTarget.scrollLeft}px`)}><div /></div>}</>;
 }
