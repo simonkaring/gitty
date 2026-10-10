@@ -73,7 +73,12 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   state, search, status, and diff reads run independently. Closing invalidates the
   handle immediately; acquired requests may finish before resources are released.
 - History resolves current local/remote/tag refs and HEAD to concrete commit IDs,
-  then starts **one** `rev-list --date-order <captured IDs> --` process per generation.
+  then starts **one** `rev-list --date-order --stdin --` process per generation. The
+  captured IDs are supplied newline-separated on stdin (a bounded anonymous file,
+  16 MiB cap; tip IDs are at most 65 bytes), never on argv, so repositories with
+  hundreds of refs cannot exceed Windows' ~32 KiB command-line limit. Search
+  likewise feeds its tips to `git log … --stdin -- [path]`; only the optional
+  pathspec stays on argv.
   History rows use committer timestamps, matching this ordering; original author dates
   remain in the underlying commit objects.
   It consumes only the requested page plus one lookahead ID. Backpressure pauses

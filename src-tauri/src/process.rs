@@ -530,19 +530,22 @@ pub fn run_with_input_for(
     timeout: Duration,
     max_input: usize,
 ) -> Result<Output> {
+    run_with_stdin(&mut command, timeout, input_stdio(input, max_input)?)
+}
+/// Bounded stdin backed by an anonymous file. It supplies EOF without a pipe
+/// writer that could deadlock against full stdout/stderr pipes. WSL requests pass
+/// this handle to wsl.exe using the same command runner.
+pub(crate) fn input_stdio(input: &[u8], max_input: usize) -> Result<Stdio> {
     if input.len() > max_input {
         return Err(Error::new(
             "inputLimit",
             format!("Git stdin input exceeded {max_input} bytes"),
         ));
     }
-    // A bounded anonymous file supplies EOF without a pipe writer that could
-    // deadlock against full stdout/stderr pipes. WSL requests pass this stdin
-    // handle to wsl.exe using the same command runner.
     let mut file = tempfile::tempfile()?;
     file.write_all(input)?;
     file.seek(SeekFrom::Start(0))?;
-    run_with_stdin(&mut command, timeout, file.into())
+    Ok(file.into())
 }
 fn checked_output(o: Output) -> Result<Vec<u8>> {
     if !o.success {

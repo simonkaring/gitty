@@ -62,10 +62,12 @@ impl Walk {
         let stream = if tips.is_empty() {
             None
         } else {
-            let mut a = args(&["rev-list", "--date-order"]);
-            a.extend(tips);
-            a.push("--".into());
-            Some(crate::stream::GitStream::git(location, &a, b'\n', 128)?)
+            // Tips travel on stdin: hundreds of distinct ref tips overflow argv limits.
+            let a = args(&["rev-list", "--date-order", "--stdin", "--"]);
+            let input = crate::stream::revision_input(&tips)?;
+            Some(crate::stream::GitStream::git_with_input(
+                location, &a, &input, b'\n', 128,
+            )?)
         };
         Ok(Self {
             stream,
@@ -853,15 +855,22 @@ impl Repository {
         if let Some(until) = query.until {
             a.push(format!("--until={until}"));
         }
-        a.extend(tips);
-        a.push("--".into());
+        // Tips travel on stdin; the pathspec after `--` stays on argv.
+        a.extend(args(&["--stdin", "--"]));
         if let Some(path) = query.path {
             validate_path(&path)?;
             a.push(path);
         }
+        let input = crate::stream::revision_input(&tips)?;
         // Apply structural filters in Git once, then OR textual fields on that same
         // topological stream. --grep plus --author would incorrectly be an AND.
-        let mut stream = crate::stream::GitStream::git(self.location(), &a, 0, 32 * 1024 * 1024)?;
+        let mut stream = crate::stream::GitStream::git_with_input(
+            self.location(),
+            &a,
+            &input,
+            0,
+            32 * 1024 * 1024,
+        )?;
         let mut ids = Vec::new();
         while let Some(raw) = stream.next()? {
             let id = process::text(raw)?.trim_start_matches('\n').to_string();

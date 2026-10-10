@@ -772,6 +772,90 @@ fn history_streams_more_than_one_hundred_thousand_commits_without_preloading() {
     assert_eq!(replay.cursor, replay_again.cursor);
 }
 
+#[test]
+fn history_and_search_survive_ref_tips_exceeding_the_argv_limit() {
+    use std::io::Write;
+    use std::process::Stdio;
+    // 1,200 distinct tips x 41 bytes is ~49 KB: more than Windows' ~32 KiB command line.
+    const REFS: usize = 1_200;
+    let d = init();
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(d.path())
+        .args(["fast-import", "--quiet"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let mut input = std::io::BufWriter::new(child.stdin.take().unwrap());
+        for i in 0..REFS {
+            let message = format!("tip {i:04}\n");
+            let content = format!("{i}\n");
+            write!(
+                input,
+                "commit refs/heads/b{i}\ncommitter Test <test@example.org> {} +0000\ndata {}\n{}M 644 inline shared.txt\ndata {}\n{}\n",
+                1_700_000_000 + i,
+                message.len(),
+                message,
+                content.len(),
+                content
+            )
+            .unwrap();
+        }
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    git(d.path(), &["symbolic-ref", "HEAD", "refs/heads/b0"]);
+    let data = tempfile::tempdir().unwrap();
+    let mut service = Service::new(data.path().into());
+    let state = open(&mut service, d.path());
+    assert_eq!(state.refs.len(), REFS);
+    let repo = service.repo(&state.session.handle).unwrap();
+    let (tips, _) = repo.tips(None).unwrap();
+    assert_eq!(tips.len(), REFS);
+    assert!(tips.iter().map(|t| t.len() + 1).sum::<usize>() > 32 * 1024);
+
+    let first = repo.history(None, 200, HistoryQuery::default()).unwrap();
+    assert_eq!(first.commits.len(), 200);
+    assert!(first.cursor.is_some());
+    let next = repo
+        .history(first.cursor.clone(), 200, HistoryQuery::default())
+        .unwrap();
+    assert_eq!(next.commits.len(), 200);
+    let all: std::collections::HashSet<_> = first
+        .commits
+        .iter()
+        .chain(&next.commits)
+        .map(|c| &c.id)
+        .collect();
+    assert_eq!(all.len(), 400);
+
+    let query = |text: &str, path: Option<&str>| SearchQuery {
+        text: text.into(),
+        branch: None,
+        since: None,
+        until: None,
+        path: path.map(String::from),
+    };
+    let one = repo.search(query("tip 0777", None)).unwrap();
+    assert_eq!(one.commits.len(), 1);
+    assert!(!one.truncated);
+    let last = repo.search(query("tip 1199", None)).unwrap();
+    assert_eq!(last.commits.len(), 1);
+    assert!(!last.truncated);
+    // `--stdin` revisions combine with a pathspec after `--`.
+    let pathed = repo.search(query("tip 0042", Some("shared.txt"))).unwrap();
+    assert_eq!(pathed.commits.len(), 1);
+    let none = repo.search(query("tip 0042", Some("missing.txt"))).unwrap();
+    assert!(none.commits.is_empty());
+}
+
 fn store_commit(path: &Path, bytes: &[u8]) -> String {
     use std::io::Write;
     use std::process::Stdio;
