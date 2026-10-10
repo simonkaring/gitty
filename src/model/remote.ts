@@ -14,7 +14,8 @@ export interface RemoteActionResult { output: string }
 export interface StashEntry { oid: string; selector: string; message: string }
 export type StashActionRequest =
   | { kind: 'save'; message?: string; includeUntracked?: boolean }
-  | { kind: 'apply' | 'pop' | 'drop'; oid: string };
+  | { kind: 'apply' | 'pop'; oid: string; restoreIndex?: boolean }
+  | { kind: 'drop'; oid: string };
 export interface StashActionResult { output: string }
 
 /* Tauri commands (camelCase arguments):

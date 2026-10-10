@@ -14,7 +14,7 @@ const state: RepositoryState = {
 };
 const idle: OperationState = { kind: 'none', label: '', current: null, incoming: null, step: null, total: null, conflicts: [], canContinue: false, canSkip: false, fingerprint: 'idle' };
 
-it('prefills the merge destination, validates edits, and executes the reviewed multiline message', async () => {
+it.each([[true, false], [false, false], [true, true]])('reviews merge policy noFastForward=%s and explicit stashChanges=%s', async (noFastForward, stashChanges) => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.setAttribute('open', ''); } });
   nativeCall.mockImplementation(async (command: string) => command === 'repository_state' ? state : idle);
@@ -31,19 +31,25 @@ it('prefills the merge destination, validates edits, and executes the reviewed m
   try {
     await act(async () => { root.render(<OperationDialog state={state} operation={idle} context={{ oid: 'tip', ref: 'refs/heads/topic', destination: 'refs/heads/release', initial: 'merge' }} commits={[]} busy={false} onWrite={onWrite} onCompare={() => {}} onPullRequest={() => {}} onClose={() => {}} />); });
     expect(host.querySelector('textarea')!.value).toBe("Merge branch 'topic' into 'release'");
+    expect(host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(true);
+    const stashCheck = host.querySelector<HTMLInputElement>('input[aria-describedby="merge-stash-help"]')!;
+    expect(stashCheck.checked).toBe(false);
     await edit(' \n');
     expect(button('Review operation').disabled).toBe(true);
     const message = 'Integrate topic\n\nReady for the release.';
     await edit(message);
-    await act(async () => { host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click(); });
+    if (!noFastForward) await act(async () => { host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click(); });
+    if (stashChanges) await act(async () => { stashCheck.click(); });
     await act(async () => { button('Review operation').click(); });
+    expect(host.querySelector('section[aria-label="Operation summary"]')!.textContent).toContain(noFastForward ? 'Always create a merge commit (--no-ff).' : 'Allow fast-forward when possible; otherwise create a merge commit.');
     expect(host.querySelector('section[aria-label="Operation summary"] pre')!.textContent).toBe(message);
+    if (stashChanges) expect(host.querySelector('section[aria-label="Operation summary"]')!.textContent).toContain('Stash before merging and restore staging afterward.');
     await act(async () => { button('Back').click(); });
     expect(host.querySelector('textarea')!.value).toBe(message);
     await act(async () => { button('Review operation').click(); });
     await act(async () => { button('Execute operation').click(); });
     expect(onWrite).toHaveBeenCalledWith('repository_run_operation', { request: {
-      action: { kind: 'merge', source: 'refs/heads/topic', destination: 'refs/heads/release', noFastForward: true, message },
+      action: { kind: 'merge', source: 'refs/heads/topic', destination: 'refs/heads/release', noFastForward, message, ...(stashChanges ? { stashChanges: true } : {}) },
       expectedHead: 'head', expectedHeadRef: 'refs/heads/main', expectedOperation: 'idle',
     } });
   } finally {

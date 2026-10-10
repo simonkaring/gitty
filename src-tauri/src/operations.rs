@@ -562,6 +562,111 @@ impl Repository {
     }
     fn run_operation(
         &self,
+        mut request: OperationRequest,
+        editor: Option<&crate::editor::EditorRegistry>,
+    ) -> Result<OperationResult> {
+        let GitAction::Merge {
+            source,
+            destination,
+            message,
+            stash_changes: true,
+            ..
+        } = &request.action
+        else {
+            return self.run_operation_inner(request, editor);
+        };
+        // Validate the captured review and every merge target before saving work.
+        // The entire save/merge/restore sequence holds Service's mutation lock.
+        self.operation_writable()?;
+        let before = self.operation_state()?;
+        let state = self.state()?;
+        if request.expected_operation != before.fingerprint
+            || request.expected_head != state.session.head
+            || request.expected_head_ref != state.session.head_ref
+        {
+            return Err(Error::new(
+                "staleOperation",
+                "Repository changed since this action was reviewed. Refresh and review it again.",
+            ));
+        }
+        if before.kind != OperationKind::None {
+            return Err(Error::new("operationInProgress", before.label));
+        }
+        if state.session.head_ref.is_none() {
+            return Err(Error::new(
+                "detachedHead",
+                "Switch to a local branch before merging.",
+            ));
+        }
+        if let Some(message) = message {
+            crate::mutate::validate_message(message)?;
+        }
+        let source_oid = resolve(self.location(), source)?;
+        let source = source.clone();
+        let destination_target = if let Some(destination) = destination {
+            let branch = destination
+                .strip_prefix("refs/heads/")
+                .unwrap_or(destination);
+            self.valid_name(branch, "heads")?;
+            let reference = format!("refs/heads/{branch}");
+            let oid = resolve(self.location(), &reference)?;
+            Some((reference, oid))
+        } else {
+            None
+        };
+        let Some(stash) = self.save_merge_work()? else {
+            return self.run_operation_inner(request, editor);
+        };
+        let recovery = format!("Local work was saved as '{}' ({}). Finish or abort any merge, then use Stashes with 'Restore staged changes' enabled to apply or pop it. Inspect the worktree and index before restoring; do not retry the merge or reapply the stash blindly.", stash.message, stash.oid);
+        let merged = (|| {
+            // Stashing changes the reviewed operation fingerprint. Recheck the
+            // selected refs before replacing only that expected fingerprint.
+            if resolve(self.location(), &source)? != source_oid
+                || destination_target
+                    .as_ref()
+                    .map(|(reference, oid)| {
+                        resolve(self.location(), reference).map(|actual| actual != *oid)
+                    })
+                    .transpose()?
+                    .unwrap_or(false)
+            {
+                return Err(Error::new(
+                    "staleOperation",
+                    "A merge target changed while saving local work. The merge was not attempted.",
+                ));
+            }
+            request.expected_operation = self.operation_state()?.fingerprint;
+            self.run_operation_inner(request, editor)
+        })();
+        let mut result = merged.map_err(|error| {
+            let code = if error.code == "mutationUnverified" {
+                "mutationUnverified"
+            } else {
+                "mergeWorkSaved"
+            };
+            Error::new(code, format!("{}\n{recovery}", error.message))
+        })?;
+        if result.operation.kind != OperationKind::None || !result.operation.conflicts.is_empty() {
+            result.notice = Some(format!(
+                "Finish or abort the merge before restoring local work. {recovery}"
+            ));
+            return Ok(result);
+        }
+        // Pop applies the pinned object with --index, then re-resolves its
+        // selector for deletion. Failed/uncertain applies never drop the stash.
+        self.stash_action(crate::remote_dto::StashAction::Pop {
+            oid: stash.oid,
+            restore_index: true,
+        }).map_err(|error| Error::new("mergeWorkSaved", format!("The merge completed, but restoring or removing its saved local work did not complete: {}\n{recovery}", error.message)))?;
+        result.operation = self.operation_state().map_err(|error| Error::new("mutationUnverified", format!("Merge and local-work restoration completed, but the final state could not be read: {} Refresh before another action.", error.message)))?;
+        result.head = self.head_commit().map_err(|error| Error::new("mutationUnverified", format!("Merge and local-work restoration completed, but HEAD could not be read: {} Refresh before another action.", error.message)))?;
+        result.notice =
+            Some("Merge completed. Local changes and their staging state were restored.".into());
+        Ok(result)
+    }
+
+    fn run_operation_inner(
+        &self,
         request: OperationRequest,
         editor: Option<&crate::editor::EditorRegistry>,
     ) -> Result<OperationResult> {
@@ -675,6 +780,7 @@ impl Repository {
                 destination,
                 no_fast_forward,
                 message,
+                stash_changes: _,
             } => {
                 if let Some(message) = message {
                     crate::mutate::validate_message(&message)?;
@@ -1075,6 +1181,7 @@ impl Repository {
         Ok(OperationResult {
             head,
             operation,
+            notice: None,
             output: if output.stdout.is_empty() && output.stderr.is_empty() && output.success {
                 String::new()
             } else {

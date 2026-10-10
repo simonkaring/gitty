@@ -646,7 +646,13 @@ fn stash_is_shared_with_linked_worktree_but_applies_to_requested_worktree() {
     let repo = f.service.repo(&handle).unwrap();
     assert_eq!(repo.stashes().unwrap()[0].oid, oid);
     f.service
-        .stash_action(&handle, StashAction::Pop { oid })
+        .stash_action(
+            &handle,
+            StashAction::Pop {
+                oid,
+                restore_index: false,
+            },
+        )
         .unwrap();
     assert_eq!(
         std::fs::read_to_string(path.join("file")).unwrap(),

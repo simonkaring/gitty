@@ -109,6 +109,7 @@ impl Fixture {
             destination: None,
             no_fast_forward,
             message: None,
+            stash_changes: false,
         })
     }
 }
@@ -403,6 +404,7 @@ fn operations_custom_merge_message_for_ff_no_ff_and_diverged_merge() {
             destination: None,
             no_fast_forward,
             message: Some(message.into()),
+            stash_changes: false,
         })
         .unwrap();
         if !no_fast_forward && !diverged {
@@ -431,6 +433,7 @@ fn operations_custom_merge_message_survives_conflict_and_session_restart() {
             destination: None,
             no_fast_forward: false,
             message: Some(message.into()),
+            stash_changes: false,
         })
         .unwrap();
     assert_eq!(result.operation.kind, OperationKind::Merge);
@@ -470,6 +473,7 @@ fn operations_invalid_merge_message_is_rejected_before_destination_switch() {
                 destination: Some("side".into()),
                 no_fast_forward: true,
                 message: Some(message),
+                stash_changes: false,
             })
             .unwrap_err();
         assert_eq!(error.code, "invalidRequest");
@@ -491,6 +495,7 @@ fn operations_maximum_merge_message_reaches_destination_without_argv_limits() {
         destination: Some("refs/heads/destination".into()),
         no_fast_forward: true,
         message: Some(message.clone()),
+        stash_changes: false,
     })
     .unwrap();
     assert_eq!(f.git(&["symbolic-ref", "--short", "HEAD"]), "destination");
@@ -526,6 +531,7 @@ fn operations_external_merge_restart_abort_and_stale_expectations() {
         destination: None,
         no_fast_forward: false,
         message: None,
+        stash_changes: false,
     });
     f.git(&["tag", "changed"]);
     assert_eq!(
@@ -669,6 +675,7 @@ fn operations_merge_into_another_branch_carries_unrelated_changes() {
         destination: Some("refs/heads/destination".into()),
         no_fast_forward: false,
         message: None,
+        stash_changes: false,
     })
     .unwrap();
     assert_eq!(f.git(&["symbolic-ref", "--short", "HEAD"]), "destination");
@@ -710,6 +717,243 @@ fn operations_merge_preserves_staged_changes_only_when_fast_forwarding() {
         assert_eq!(f.git(&["diff", "--cached"]), staged);
         assert_eq!(f.git(&["diff"]), unstaged);
         assert_eq!(f.git(&["show", "HEAD:file"]), "base");
+    }
+}
+
+#[test]
+fn operations_merge_explicit_stash_restores_partial_staging_untracked_and_prior_stash() {
+    for destination in [None, Some("refs/heads/destination".to_string())] {
+        let f = Fixture::new();
+        f.write("older", "older stash\n");
+        f.git(&["stash", "push", "-u", "-m", "older"]);
+        let older = f.git(&["rev-parse", "refs/stash"]);
+        f.git(&["branch", "destination"]);
+        f.git(&["switch", "-c", "side"]);
+        f.write("incoming", "incoming commit\n");
+        let incoming = f.commit("incoming");
+        f.git(&["switch", "main"]);
+        f.write("file", "staged\n");
+        f.git(&["add", "file"]);
+        f.write("file", "staged plus unstaged\n");
+        f.write("untracked space.txt", b"precious\0binary\n");
+        let staged = f.git(&["diff", "--cached"]);
+        let unstaged = f.git(&["diff"]);
+        let result = f
+            .run(GitAction::Merge {
+                source: "side".into(),
+                destination: destination.clone(),
+                no_fast_forward: true,
+                message: Some("Merge side with saved work".into()),
+                stash_changes: true,
+            })
+            .unwrap();
+        assert_eq!(result.operation.kind, OperationKind::None);
+        assert!(result
+            .notice
+            .unwrap()
+            .contains("staging state were restored"));
+        assert_eq!(
+            f.git(&["symbolic-ref", "--short", "HEAD"]),
+            if destination.is_some() {
+                "destination"
+            } else {
+                "main"
+            }
+        );
+        assert_eq!(f.git(&["rev-parse", "HEAD^2"]), incoming);
+        assert_eq!(f.git(&["show", "HEAD:file"]), "base");
+        assert_eq!(
+            f.git(&["log", "-1", "--format=%B"]),
+            "Merge side with saved work"
+        );
+        assert_eq!(f.git(&["diff", "--cached"]), staged);
+        assert_eq!(f.git(&["diff"]), unstaged);
+        assert_eq!(
+            std::fs::read(f.dir.path().join("untracked space.txt")).unwrap(),
+            b"precious\0binary\n"
+        );
+        let stashes = f.repo.stashes().unwrap();
+        assert_eq!(stashes.len(), 1);
+        assert_eq!(stashes[0].oid, older);
+    }
+}
+
+#[test]
+fn operations_merge_explicit_stash_conflicts_retain_work_across_restart_for_continue_or_abort() {
+    for abort in [false, true] {
+        let f = Fixture::new();
+        f.diverge();
+        f.write("local", "staged local\n");
+        f.git(&["add", "local"]);
+        f.write("local", "unstaged local\n");
+        f.write("untracked", "untracked local\n");
+        let staged = f.git(&["diff", "--cached"]);
+        let unstaged = f.git(&["diff"]);
+        let result = f
+            .run(GitAction::Merge {
+                source: "side".into(),
+                destination: None,
+                no_fast_forward: true,
+                message: Some("Merge with retained stash".into()),
+                stash_changes: true,
+            })
+            .unwrap();
+        assert_eq!(result.operation.kind, OperationKind::Merge);
+        assert!(result.notice.unwrap().contains("Local work was saved"));
+        let stashes = f.repo.stashes().unwrap();
+        assert_eq!(stashes.len(), 1);
+        let oid = stashes[0].oid.clone();
+        assert!(!f.dir.path().join("local").exists());
+        assert!(!f.dir.path().join("untracked").exists());
+        if !abort {
+            f.resolve(ConflictResolution::Ours).unwrap();
+        }
+        f.run(if abort {
+            GitAction::Abort
+        } else {
+            GitAction::Continue
+        })
+        .unwrap();
+        assert_eq!(f.repo.stashes().unwrap()[0].oid, oid);
+        let service = Service::new(f._data.path().into());
+        let state = service
+            .open(RepositoryLocation::Native {
+                path: f.dir.path().to_str().unwrap().into(),
+            })
+            .unwrap();
+        service
+            .stash_action(
+                &state.session.handle,
+                crate::remote_dto::StashAction::Pop {
+                    oid,
+                    restore_index: true,
+                },
+            )
+            .unwrap();
+        assert_eq!(f.git(&["diff", "--cached"]), staged);
+        assert_eq!(f.git(&["diff"]), unstaged);
+        assert_eq!(
+            std::fs::read(f.dir.path().join("untracked")).unwrap(),
+            b"untracked local\n"
+        );
+        assert!(f.repo.stashes().unwrap().is_empty());
+        assert_eq!(f.git(&["show", "HEAD:file"]), "current");
+    }
+}
+
+#[test]
+fn operations_merge_explicit_stash_restore_failure_keeps_saved_work_and_completed_merge() {
+    let f = Fixture::new();
+    f.git(&["switch", "-c", "side"]);
+    f.write("file", "incoming\n");
+    let incoming = f.commit("incoming");
+    f.git(&["switch", "main"]);
+    f.write("file", "local staged\n");
+    f.git(&["add", "file"]);
+    f.write("file", "local unstaged\n");
+    let error = f
+        .run(GitAction::Merge {
+            source: "side".into(),
+            destination: None,
+            no_fast_forward: true,
+            message: Some("Completed merge".into()),
+            stash_changes: true,
+        })
+        .unwrap_err();
+    assert_eq!(error.code, "mergeWorkSaved");
+    assert!(error.message.contains("The merge completed"));
+    assert_eq!(f.git(&["rev-parse", "HEAD^2"]), incoming);
+    assert_eq!(f.git(&["show", "HEAD:file"]), "incoming");
+    let stashes = f.repo.stashes().unwrap();
+    assert_eq!(stashes.len(), 1);
+    assert_eq!(
+        f.git(&["show", &format!("{}^2:file", stashes[0].oid)]),
+        "local staged"
+    );
+    assert_eq!(
+        f.git(&["show", &format!("{}:file", stashes[0].oid)]),
+        "local unstaged"
+    );
+}
+
+#[test]
+fn operations_merge_explicit_stash_validates_review_message_and_destination_before_saving() {
+    let f = Fixture::new();
+    f.git(&["branch", "side"]);
+    f.write("file", "local staged\n");
+    f.git(&["add", "file"]);
+    let status = f.git(&["status", "--porcelain"]);
+    for (message, destination) in [(" ", None), ("Merge", Some("missing".to_string()))] {
+        f.run(GitAction::Merge {
+            source: "side".into(),
+            destination,
+            no_fast_forward: true,
+            message: Some(message.into()),
+            stash_changes: true,
+        })
+        .unwrap_err();
+        assert!(f.repo.stashes().unwrap().is_empty());
+        assert_eq!(f.git(&["status", "--porcelain"]), status);
+    }
+    let request = f.request(GitAction::Merge {
+        source: "side".into(),
+        destination: None,
+        no_fast_forward: true,
+        message: Some("Merge".into()),
+        stash_changes: true,
+    });
+    f.write("external", "external edit\n");
+    assert_eq!(
+        f.service
+            .run_operation(&f.handle, request, None)
+            .unwrap_err()
+            .code,
+        "staleOperation"
+    );
+    assert!(f.repo.stashes().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn operations_merge_explicit_stash_keeps_work_after_hook_failure_and_drops_only_its_own_stash() {
+    use std::os::unix::fs::PermissionsExt;
+    for reject in [true, false] {
+        let f = Fixture::new();
+        f.git(&["switch", "-c", "side"]);
+        f.write("incoming", "incoming\n");
+        f.commit("incoming");
+        f.git(&["switch", "main"]);
+        f.write("file", "local staged\n");
+        f.git(&["add", "file"]);
+        let hook = f.dir.path().join(if reject {
+            ".git/hooks/pre-merge-commit"
+        } else {
+            ".git/hooks/post-merge"
+        });
+        std::fs::write(&hook, if reject { "#!/bin/sh\necho hook-refused >&2\nexit 1\n" } else { "#!/bin/sh\nif test ! -f .git/merge-hook-ran; then\n  touch .git/merge-hook-ran\n  printf 'hook work\\n' > hook-work\n  git --no-literal-pathspecs stash push -u -m external-hook-stash\nfi\n" }).unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let result = f.run(GitAction::Merge {
+            source: "side".into(),
+            destination: None,
+            no_fast_forward: true,
+            message: Some("Merge".into()),
+            stash_changes: true,
+        });
+        let stashes = f.repo.stashes().unwrap();
+        assert_eq!(
+            stashes.len(),
+            1,
+            "reject={reject}, result={result:?}, stashes={stashes:?}"
+        );
+        if reject {
+            assert!(result.unwrap_err().message.contains("Local work was saved"));
+            assert!(stashes[0].message.contains("Gitty merge work"));
+        } else {
+            result.unwrap();
+            assert!(stashes[0].message.contains("external-hook-stash"));
+            assert_eq!(f.git(&["show", ":file"]), "local staged");
+            assert_eq!(f.git(&["show", "HEAD:file"]), "base");
+        }
     }
 }
 
@@ -1564,6 +1808,7 @@ fn operations_merge_and_cherry_pick_abort_preserve_unrelated_edits() {
                 destination: None,
                 no_fast_forward: false,
                 message: None,
+                stash_changes: false,
             }
         })
         .unwrap();

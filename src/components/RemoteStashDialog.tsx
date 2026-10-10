@@ -12,6 +12,7 @@ export function RemoteStashDialog({ handle, onWrite, onClose, notify }: {
   const [retry, setRetry] = useState(0);
   const [message, setMessage] = useState('');
   const [includeUntracked, setIncludeUntracked] = useState(false);
+  const [restoreIndex, setRestoreIndex] = useState(true);
   const [pending, setPending] = useState<string | null>(null);
   const [confirmingOid, setConfirmingOid] = useState<string | null>(null);
   const alive = useRef(true);
@@ -49,13 +50,14 @@ export function RemoteStashDialog({ handle, onWrite, onClose, notify }: {
     {pending && <p className="muted" role="status">You can close this dialog; the action keeps running and its result appears in this repository.</p>}
     {error && <p className="alert" role="alert">{error}</p>}
     <h3 className="section-label">Saved stashes {!loading && <span className="count">{stashes.length}</span>}</h3>
+    <label className="check"><input type="checkbox" checked={restoreIndex} disabled={!!pending} onChange={e => setRestoreIndex(e.target.checked)} /> Restore staged changes</label>
     {loading ? <p className="muted" role="status">Reading stashes…</p> : !stashes.length ? <div className="empty-state compact"><p>No stashes.</p>{!error && <button className="text-button" onClick={() => setRetry(value => value + 1)}>Reload</button>}</div> :
       <ul className="stash-list">
         {stashes.map(stash => <li key={stash.oid} className="stash-entry">
           <div className="stash-entry-message"><span className="badge">{stash.selector}</span><span>{stash.message}</span></div>
           <div className="stash-entry-actions">
-            <button className="secondary-button" disabled={!!pending} onClick={() => void run({ kind: 'apply', oid: stash.oid }, `apply:${stash.oid}`)}>{pending === `apply:${stash.oid}` ? 'Applying…' : 'Apply'}</button>
-            <button className="secondary-button" disabled={!!pending} onClick={() => void run({ kind: 'pop', oid: stash.oid }, `pop:${stash.oid}`)}>{pending === `pop:${stash.oid}` ? 'Popping…' : 'Pop'}</button>
+            <button className="secondary-button" disabled={!!pending} onClick={() => void run({ kind: 'apply', oid: stash.oid, restoreIndex }, `apply:${stash.oid}`)}>{pending === `apply:${stash.oid}` ? 'Applying…' : 'Apply'}</button>
+            <button className="secondary-button" disabled={!!pending} onClick={() => void run({ kind: 'pop', oid: stash.oid, restoreIndex }, `pop:${stash.oid}`)}>{pending === `pop:${stash.oid}` ? 'Popping…' : 'Pop'}</button>
             <button className="secondary-button" data-danger="true" disabled={!!pending} onClick={() => requestDrop(stash.oid)}>{pending === `drop:${stash.oid}` ? 'Dropping…' : confirmingOid === stash.oid ? 'Confirm drop' : 'Drop'}</button>
           </div>
         </li>)}
