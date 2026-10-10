@@ -4,11 +4,12 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { createRoot } from 'react-dom/client';
 import { act, createElement, useState, type ReactElement, type ReactNode } from 'react';
 import { DIFF_ROW_ESTIMATE } from './DiffPreview';
+import { WORKING_FILE_ESTIMATE } from './WorkingFileWindow';
 import { diffRows, type DiffRow } from '../model/splitDiff';
 import { DEFAULT_WORKING_DISCLOSURE, DiffPreview, WorkingChanges, type ActiveDiffState, type WorkingDisclosure, type WorkingDisclosureUpdate } from './WorkingChanges';
 import { commitProfileRepositoryKey } from '../model/commitProfiles';
 import { draftKey, saveDraft } from '../model/workflow';
-import type { FileDiff, RepositorySession, StatusEntry } from '../model/repository';
+import type { FileDiff, RepositoryMutation, RepositorySession, StatusEntry } from '../model/repository';
 import { DEFAULT_SETTINGS } from '../model/settings';
 
 const nativeCall = vi.hoisted(() => vi.fn(async (..._args: unknown[]): Promise<unknown> => undefined));
@@ -753,6 +754,97 @@ describe('disclosure controls', () => {
       await click(toggle(host, 'Unstaged'));
       expect(toggle(host, 'Unstaged').getAttribute('aria-expanded')).toBe('false');
     } finally { await act(async () => { root.unmount(); }); host.remove(); }
+  });
+});
+
+describe('large working file lists', () => {
+  const entries = Array.from({ length: 10_000 }, (_, i) => entry(`file-${String(i).padStart(5, '0')}.txt`, i % 10 === 0 ? 'M' : '.', 'M', { untracked: i % 3 === 1 }));
+  async function mountLarge() {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const scroller = this.closest<HTMLElement>('.working-files-list');
+      const unstagedOpen = scroller?.querySelector('.unstaged h2 button')?.getAttribute('aria-expanded') !== 'false';
+      const top = this.classList.contains('working-file-window') ? (this.closest('.staged') ? (unstagedOpen ? entries.length * WORKING_FILE_ESTIMATE : 0) + 64 : 32) - (scroller?.scrollTop ?? 0) : 0;
+      return { x: 0, y: top, top, left: 0, right: 380, bottom: top, width: 380, height: 0, toJSON: () => ({}) };
+    });
+    const host = document.createElement('div'); document.body.append(host);
+    const root = createRoot(host);
+    const loadDiff = vi.fn(async (_handle: string, _spec: unknown, path: string) => ({ ...diff, path }));
+    const onMutation = vi.fn(async (_mutation: RepositoryMutation) => ({}));
+    const onActiveDiffChange = vi.fn();
+    const status = { entries, head: 'head', headRef: session.headRef, fingerprint: 'large' };
+    const props = { session, status, revision: 0, busy: false, onMutation, onRefresh: async () => {}, loadDiff, onActiveDiffChange };
+    await act(async () => { root.render(createElement(WorkingChanges, props)); });
+    const surface = host.querySelector<HTMLElement>('.working-files-list')!;
+    Object.defineProperty(surface, 'clientHeight', { configurable: true, value: 600 });
+    const scroll = (top: number) => act(async () => { surface.scrollTop = top; surface.dispatchEvent(new Event('scroll')); });
+    const button = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
+    return { host, root, props, surface, scroll, button, loadDiff, onMutation, onActiveDiffChange, unmount: async () => { await act(async () => { root.unmount(); }); host.remove(); rect.mockRestore(); } };
+  }
+
+  it('bounds mounted rows, loads and stages deep files, and keeps complete bulk actions', async () => {
+    const view = await mountLarge();
+    try {
+      expect(view.host.querySelectorAll('.working-file').length).toBeLessThan(100);
+      expect(view.button('Unstaged: file-00000.txt').textContent).toContain('Partially staged');
+      await view.scroll(5_000 * WORKING_FILE_ESTIMATE + 32);
+      expect(view.button('Unstaged: file-05000.txt')).not.toBeNull();
+      expect(view.host.querySelectorAll('.working-file').length).toBeLessThan(100);
+      await click(view.button('Unstaged: file-05000.txt'));
+      expect(view.loadDiff).toHaveBeenLastCalledWith('repo', { kind: 'unstaged' }, 'file-05000.txt');
+      expect(view.onActiveDiffChange.mock.lastCall?.[0]?.diff?.path).toBe('file-05000.txt');
+      await click(view.button('Stage file-05000.txt'));
+      expect(view.onMutation).toHaveBeenLastCalledWith({ kind: 'stage', paths: ['file-05000.txt'] });
+      await click([...view.host.querySelectorAll('button')].find(node => node.textContent?.includes('Stage all'))!);
+      const all = view.onMutation.mock.lastCall?.[0];
+      expect(all?.kind).toBe('stage');
+      if (all?.kind !== 'stage') throw new Error('Expected stage-all request');
+      expect(all.paths).toHaveLength(10_000);
+      expect(new Set(all.paths)).toEqual(new Set(entries.map(entry => entry.path)));
+      await act(async () => { view.root.render(createElement(WorkingChanges, { ...view.props, busy: true })); });
+      expect(view.button('Stage file-05000.txt').disabled).toBe(true);
+      expect(view.host.querySelectorAll('.working-file').length).toBeLessThan(100);
+    } finally { await view.unmount(); }
+  });
+
+  it('reaches offscreen files by keyboard and retains focus during mouse scrolling', async () => {
+    const view = await mountLarge();
+    const key = (target: Element, key: string) => act(async () => { target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })); });
+    try {
+      await act(async () => { view.button('Unstaged: file-00000.txt').focus(); });
+      await key(document.activeElement!, 'End');
+      expect(document.activeElement).toBe(view.button('Unstaged: file-09999.txt'));
+      await key(document.activeElement!, 'ArrowUp');
+      expect(document.activeElement).toBe(view.button('Unstaged: file-09998.txt'));
+      await view.scroll(0);
+      expect(document.activeElement).toBe(view.button('Unstaged: file-09998.txt'));
+      expect(view.host.querySelectorAll('.working-file').length).toBeLessThan(100);
+      const focused = document.activeElement;
+      await act(async () => { view.root.render(createElement(WorkingChanges, { ...view.props, revision: 1, status: { ...view.props.status, entries: entries.map(entry => ({ ...entry })) } })); });
+      expect(document.activeElement).toBe(focused);
+      expect(view.host.querySelectorAll('.working-file').length).toBeLessThan(100);
+      await key(document.activeElement!, 'Home');
+      expect(document.activeElement).toBe(view.button('Unstaged: file-00000.txt'));
+      // Native button activation still selects the exact file/side after keyboard reveal.
+      await click(view.button('Unstaged: file-00000.txt'));
+      expect(view.loadDiff).toHaveBeenLastCalledWith('repo', { kind: 'unstaged' }, 'file-00000.txt');
+    } finally { await view.unmount(); }
+  });
+
+  it('unmounts folded large groups while retaining the selected preview and all counts', async () => {
+    const view = await mountLarge();
+    try {
+      await click(view.button('Unstaged: file-00000.txt'));
+      const toggle = view.host.querySelector<HTMLButtonElement>('.unstaged h2 button')!;
+      await click(toggle);
+      expect(view.host.querySelectorAll('.unstaged .working-file')).toHaveLength(0);
+      expect(toggle.textContent).toContain('10000');
+      expect(toggle.dataset.holdsSelection).toBe('true');
+      expect(view.onActiveDiffChange.mock.lastCall?.[0]?.diff?.path).toBe('file-00000.txt');
+      expect(view.host.querySelectorAll('.staged .working-file').length).toBeGreaterThan(0);
+      await click(toggle);
+      expect(view.button('Unstaged: file-00000.txt').getAttribute('aria-pressed')).toBe('true');
+    } finally { await view.unmount(); }
   });
 });
 

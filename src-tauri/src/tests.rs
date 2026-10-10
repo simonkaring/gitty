@@ -238,6 +238,85 @@ fn pinned_topological_walk_merge_parents_and_moving_refs() {
 }
 
 #[test]
+fn working_file_previews_with_thousands_of_unrelated_changes() {
+    let d = init();
+    let count = 2_000;
+    for i in 0..count {
+        std::fs::write(d.path().join(format!("file-{i:04}")), "base\ncontext\n").unwrap();
+    }
+    commit(d.path(), "large base");
+    for i in 0..count {
+        std::fs::write(d.path().join(format!("file-{i:04}")), "indexed\ncontext\n").unwrap();
+    }
+    git(d.path(), &["add", "--all"]);
+    for i in 0..count {
+        std::fs::write(d.path().join(format!("file-{i:04}")), "working\ncontext\n").unwrap();
+    }
+    let data = tempfile::tempdir().unwrap();
+    let mut service = Service::new(data.path().into());
+    let state = open(&mut service, d.path());
+    let repo = service.repo(&state.session.handle).unwrap();
+    let start = std::time::Instant::now();
+    let unstaged = repo.diff(&DiffSpec::Unstaged, "file-1000").unwrap();
+    let staged = repo.diff(&DiffSpec::Staged, "file-1000").unwrap();
+    eprintln!(
+        "Two working previews with {count} partially staged files: {:?}",
+        start.elapsed()
+    );
+    assert_eq!(unstaged.hunks[0].lines[0].content, "indexed");
+    assert_eq!(unstaged.hunks[0].lines[1].content, "working");
+    assert_eq!(staged.hunks[0].lines[0].content, "base");
+    assert_eq!(staged.hunks[0].lines[1].content, "indexed");
+    let token = unstaged.hunk_action.unwrap().fingerprint.unwrap();
+    std::fs::write(d.path().join("file-1999"), "unrelated edit\n").unwrap();
+    assert_eq!(
+        repo.diff(&DiffSpec::Unstaged, "file-1000")
+            .unwrap()
+            .hunk_action
+            .unwrap()
+            .fingerprint
+            .as_deref(),
+        Some(token.as_str())
+    );
+    service
+        .stage_hunk(&state.session.handle, "file-1000", 0, &token, None)
+        .unwrap();
+    assert_eq!(git(d.path(), &["show", ":file-1000"]), "working\ncontext");
+    assert_eq!(git(d.path(), &["show", ":file-1999"]), "indexed\ncontext");
+    assert_eq!(
+        repo.diff(&DiffSpec::Unstaged, "file-1000")
+            .unwrap_err()
+            .code,
+        "fileNotInDiff"
+    );
+    assert_eq!(
+        repo.diff(&DiffSpec::Conflict, "file-1999")
+            .unwrap_err()
+            .code,
+        "fileNotInDiff"
+    );
+    assert_eq!(
+        repo.diff(&DiffSpec::Untracked, "file-1999")
+            .unwrap_err()
+            .code,
+        "notUntracked"
+    );
+    std::fs::write(d.path().join("fresh[1]"), "fresh\n").unwrap();
+    assert_eq!(
+        repo.diff(&DiffSpec::Untracked, "fresh[1]").unwrap().hunks[0].lines[0].content,
+        "fresh"
+    );
+    git(d.path(), &["mv", "--", "file-0000", "renamed[1]"]);
+    let renamed = repo.diff(&DiffSpec::Staged, "renamed[1]").unwrap();
+    assert!(renamed.message.unwrap().contains("rename from file-0000"));
+    assert!(renamed.hunk_action.unwrap().fingerprint.is_none());
+    assert_eq!(
+        repo.diff(&DiffSpec::Staged, "file-0000").unwrap_err().code,
+        "fileNotInDiff"
+    );
+}
+
+#[test]
 fn rename_binary_mode_and_unstaged_diff() {
     let d = init();
     std::fs::write(d.path().join("old\tname"), "first\nsecond\nthird\n").unwrap();

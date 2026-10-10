@@ -776,18 +776,25 @@ impl Repository {
     }
     // Internal diff validation needs paths/status only, not refresh fingerprints.
     pub(crate) fn status_entries(&self) -> Result<RepositoryStatus> {
+        self.status_entries_at(None)
+    }
+    /// Preview validation may inspect just one literal path; refreshes and writes
+    /// continue to use the complete working status above.
+    pub(crate) fn status_entries_at(&self, path: Option<&str>) -> Result<RepositoryStatus> {
         self.require_worktree()?;
-        let bytes = process::checked(
-            self.location(),
-            &args(&[
-                "status",
-                "--porcelain=v2",
-                "-z",
-                "--branch",
-                "--untracked-files=all",
-                "--ignore-submodules=none",
-            ]),
-        )?;
+        let mut a = args(&[
+            "status",
+            "--porcelain=v2",
+            "-z",
+            "--branch",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ]);
+        if let Some(path) = path {
+            validate_path(path)?;
+            a.extend(args(&["--", path]));
+        }
+        let bytes = process::checked(self.location(), &a)?;
         let fingerprint = fingerprint(&bytes);
         let raw = process::text(bytes)?;
         let mut fields = raw.split('\0').filter(|s| !s.is_empty());

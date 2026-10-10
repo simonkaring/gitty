@@ -82,6 +82,8 @@ History reads, search, and inspection remain read-only. The **Working changes** 
 
 A partially staged file appears in both lists. File-level controls stage its remaining working changes or unstage its indexed changes. Renames are handled as both source and destination where required.
 
+Large working-file groups render only rows near the viewport, including wrapped paths and partially staged labels. Use **ArrowUp/Down** or **Home/End** from a file button to navigate a large group, then **Enter/Space** to open its diff. Working-file previews avoid calculating line statistics for every other changed file.
+
 Discarding throws away unstaged work and cannot be undone. Right-click an unstaged or untracked file and choose **Discard changes…**, or use **Discard all** to review the whole Unstaged list. A confirmation names the files first. Supported tracked changes return to their staged content (so a partially staged file keeps its staged half) and untracked files are deleted from disk. Directory/nested-repository entries, intent-to-add, renames/copies, conflicts, and operations in progress are refused. Staged-only files are never discarded; unstage them first. If anything changed in the working tree after the confirmation opened, Gitty refuses and asks you to review again rather than discard something you have not seen. **Open file** and **Reveal** are desktop-only and Open refuses directories, executables and program or launcher files; neither is available for WSL repositories, and the browser demo disables them.
 
 For modified regular text files, use **Stage hunk** in an unstaged diff or **Unstage hunk** in a staged diff. Both unified and side-by-side views support complete hunks and individual changed lines. Toggle the added/removed lines you want within a hunk (or focus the diff, move between lines with the arrow keys, Home/End, and in side-by-side view Left/Right for the side, then press Space or Enter), then choose **Stage selected lines** or **Unstage selected lines**; with no selection, the button acts on the complete hunk. The backend validates the displayed diff fingerprint and builds the patch from Git's original bytes; stale previews require a fresh selection. Only the index changes, preserving working files and other staged edits. Gitty serializes its own writes; Git's index locks and patch validation also apply when external Git processes are active.
@@ -278,6 +280,7 @@ PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/hun
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/graph-avatars.smoke.mjs
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/search.smoke.mjs
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/split-diff.smoke.mjs
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/working-files.smoke.mjs
 ```
 
 ### Historical: Milestone 3 verification

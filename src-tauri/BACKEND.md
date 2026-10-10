@@ -178,6 +178,15 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   metadata are retained in that message because the contract has no mode fields.
   Hunk display is truncated at 20,000 lines with `truncated: true`; process output
   limits return an error rather than silently returning incomplete data.
+- Working-file previews read raw metadata without calculating repository-wide
+  numstat. Ordinary modifications use a literal-path, no-rename raw read; adds
+  and deletes use whole-diff raw rename pairing to preserve source paths (Git
+  may still read other rename candidates). The patch is scoped to the selected
+  path and any rename source. Untracked/conflict membership validation scopes
+  porcelain to the selected path; refresh fingerprints and write checks still
+  read complete repository status. The selected index entries are checked before
+  and after actionable patch reads, and hunk tokens still fingerprint original
+  patch bytes and index entries. Commit/comparison file-list behavior is unchanged.
 - Recent repositories are stored in app-data `recent-repositories.json`, capped
   at 20 and replaced atomically. No repository files are written.
 - Identity reads report both repository-local and effective Git `user.name` / `user.email` values. The local values are read without includes; effective values honor Git's normal configuration precedence.

@@ -66,6 +66,10 @@ repository, file, and side remains visible during a write and revision refresh;
 its hunk actions stay blocked until the current revision's diff arrives. File or
 side navigation never reuses the retained preview.[^working]
 
+Large working-file groups render measured viewport windows and retain their
+offsets when a refresh preserves path order; grouping and bulk-action candidates
+are memoized per status-entry array. See [working changes at scale](working-changes-at-scale.md).
+
 For changes, inspect `readNativeSnapshot`, `refreshStatus`, and `mutate`, plus
 the scripted-IPC regressions in
 [native.integration.test.ts](../../src/model/native.integration.test.ts).

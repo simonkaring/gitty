@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useRef, useState } from 'react';
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Check, ChevronDown, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, Minus, Plus, RotateCw, Undo2, User, X } from 'lucide-react';
 import type { CommitDetail, DiffSpec, FileDiff, RepositoryMutation, RepositorySession, RepositoryStatus, StatusEntry } from '../model/repository';
 import { errorMessage, isDemoHandle, native, statusGroups, type WorkingGroup } from '../model/native';
@@ -7,6 +7,7 @@ import { useSettings } from '../model/settings';
 import { commitProfileRepositoryKey } from '../model/commitProfiles';
 import { DiscardDialog } from './DiscardDialog';
 import { FileContextMenu, type FileMenuTarget } from './FileContextMenu';
+import { WorkingFileWindow } from './WorkingFileWindow';
 
 const labels: Record<WorkingGroup, string> = { staged: 'Staged', unstaged: 'Unstaged', untracked: 'Untracked', conflict: 'Conflicts' };
 const readDiff = (handle: string, spec: DiffSpec, path: string) => native<FileDiff>('repository_diff', { handle, spec, path });
@@ -92,8 +93,15 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   const amendRequest = useRef(0);
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  const groups = statusGroups(status?.entries ?? []);
-  const chosen = selection && groups[selection.group].some(entry => entry.path === selection.path) ? selection : null;
+  const files = useMemo(() => {
+    const entries = status?.entries ?? [];
+    const groups = statusGroups(entries);
+    const paths = Object.fromEntries(Object.entries(groups).map(([kind, rows]) => [kind, new Set(rows.map(entry => entry.path))])) as Record<WorkingGroup, Set<string>>;
+    const unstaged = [...groups.unstaged, ...groups.untracked].sort((a, b) => a.path.localeCompare(b.path));
+    return { groups, paths, sections: { conflict: groups.conflict, unstaged, staged: groups.staged }, stagePaths: operationPaths(entries, 'stage'), stagedPaths: operationPaths(entries, 'unstage'), discardable: discardableEntries(unstaged) };
+  }, [status?.entries]);
+  const { groups } = files;
+  const chosen = selection && files.paths[selection.group].has(selection.path) ? selection : null;
   const active = chosen;
   const target = JSON.stringify([session.handle, active?.group, active?.path]);
   const scope = JSON.stringify([target, revision]);
@@ -115,8 +123,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
     previousActivePath.current = activePath;
   }, [activePath]);
 
-  const stagePaths = operationPaths(status?.entries ?? [], 'stage');
-  const stagedPaths = operationPaths(status?.entries ?? [], 'unstage');
+  const { stagePaths, stagedPaths, discardable } = files;
   const stagedCount = groups.staged.length;
   // A conflict group that was folded away must not hide conflicts that appear later.
   const conflictCount = groups.conflict.length;
@@ -136,7 +143,6 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   /** Open and reveal only touch the user's desktop, never the repository, so they skip the write lock. */
   const fileAction = (command: 'repository_open_path' | 'repository_reveal_path', path: string) =>
     native(command, { handle: session.handle, path }).catch(error => { if (alive.current) setOutcome({ error: errorMessage(error) }); });
-  const discardable = discardableEntries([...groups.unstaged, ...groups.untracked]).sort((a, b) => a.path.localeCompare(b.path));
   const [discarding, setDiscarding] = useState<{ entries: StatusEntry[]; fingerprint: string } | null>(null);
   const requestDiscard = (entries: StatusEntry[]) => { if (status && !blocked && entries.length) setDiscarding({ entries, fingerprint: status.fingerprint }); };
   function confirmDiscard() {
@@ -260,27 +266,27 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
         </div>
         <div className="working-files-list">
           {SECTIONS.map(sectionKind => {
-            const entries = sectionKind === 'unstaged' ? [...groups.unstaged, ...groups.untracked].sort((a, b) => a.path.localeCompare(b.path)) : groups[sectionKind];
+            const entries = files.sections[sectionKind];
             const collapsed = ui.collapsed[sectionKind];
             const listId = `${composerId}-${sectionKind}-files`;
-            const holdsSelection = !!active && entries.some(entry => active.path === entry.path && active.group === (entry.untracked ? 'untracked' : sectionKind));
+            const holdsSelection = !!active && (active.group === sectionKind || (sectionKind === 'unstaged' && active.group === 'untracked'));
             return <section className={`working-category ${sectionKind}${entries.length ? ' has-entries' : ' is-empty'}${collapsed ? ' is-collapsed' : ''}`} key={sectionKind} aria-label={`${labels[sectionKind]} files`} hidden={sectionKind === 'conflict' && !entries.length}>
             <h2><button type="button" className="working-category-toggle" aria-expanded={!collapsed} aria-controls={listId} aria-label={`${labels[sectionKind]}, ${entries.length} ${entries.length === 1 ? 'file' : 'files'}`} data-holds-selection={holdsSelection || undefined} onClick={() => toggleSection(sectionKind)}>
               <ChevronDown size={13} className="working-category-chevron" aria-hidden="true" />{labels[sectionKind]}<span className="count">{entries.length}</span>
             </button></h2>
             <div className="working-category-files" id={listId} hidden={collapsed}>
             {!entries.length && <p className="empty-category">No {labels[sectionKind].toLowerCase()} files</p>}
-            {entries.map(entry => {
+            <WorkingFileWindow entries={entries} collapsed={collapsed} layoutKey={ui.collapsed}>{(entry, tabIndex) => {
               const kind = entry.untracked ? 'untracked' : sectionKind;
               const fileStatus = kind === 'staged' ? entry.indexStatus : entry.worktreeStatus;
               const isDeleted = fileStatus === 'D';
               const isNew = !isDeleted && (entry.untracked || entry.indexStatus === 'A');
               const iconStatus = entry.conflicted ? 'conflict' : isDeleted ? 'deleted' : isNew ? 'added' : fileStatus === 'C' ? 'copied' : fileStatus === 'R' ? 'renamed' : fileStatus === 'M' ? 'modified' : 'changed';
               const FileIcon = iconStatus === 'conflict' ? AlertTriangle : iconStatus === 'deleted' ? FileMinus2 : iconStatus === 'added' || iconStatus === 'copied' ? FilePlus2 : iconStatus === 'renamed' ? FileSymlink : iconStatus === 'modified' ? FilePenLine : FileCode2;
-              const partial = groups.staged.some(item => item.path === entry.path) && groups.unstaged.some(item => item.path === entry.path);
+              const partial = files.paths.staged.has(entry.path) && files.paths.unstaged.has(entry.path);
               const isSelected = active?.group === kind && active.path === entry.path;
               return <div className={`working-file ${isSelected ? 'selected' : ''}`} key={entry.path} onContextMenu={event => { event.preventDefault(); openMenu(entry, kind, event.clientX, event.clientY, event.currentTarget.querySelector('button')!); }}>
-                <button className="working-file-select" aria-pressed={isSelected} aria-label={`${labels[kind]}: ${entry.path}`} onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openMenu(entry, kind, rect.left, rect.bottom, event.currentTarget); } }} onClick={() => setSelection(current => current?.group === kind && current.path === entry.path ? null : { group: kind, path: entry.path })}>
+                <button className="working-file-select" tabIndex={tabIndex} aria-pressed={isSelected} aria-label={`${labels[kind]}: ${entry.path}`} onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openMenu(entry, kind, rect.left, rect.bottom, event.currentTarget); } }} onClick={() => setSelection(current => current?.group === kind && current.path === entry.path ? null : { group: kind, path: entry.path })}>
                   <FileIcon size={15} data-status={iconStatus} aria-label={iconStatus === 'added' ? 'New file' : `${iconStatus.charAt(0).toUpperCase()}${iconStatus.slice(1)} file`} />
                   <span>
                      <strong>{entry.path.split('/').map((part, index) => <Fragment key={index}>{index > 0 && <>/<wbr /></>}{part}</Fragment>)}</strong>
@@ -288,10 +294,10 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
                     {partial && <small>Partially staged</small>}
                   </span>
                 </button>
-                {kind === 'conflict' && onResolve && <button className="secondary-button compact" disabled={busy} onClick={() => onResolve(entry.path)}>Resolve…</button>}
-                {kind !== 'conflict' && <button className="icon-button sm file-stage-button" disabled={blocked} title={partial ? kind === 'staged' ? 'Unstage all indexed changes for this path' : 'Stage the remaining working-tree changes for this path' : undefined} aria-label={`${kind === 'staged' ? 'Unstage' : 'Stage'} ${entry.path}`} onClick={() => { const operationKind = kind === 'staged' ? 'unstage' : 'stage'; void perform({ kind: operationKind, paths: operationPaths([entry], operationKind) }); }}>{kind === 'staged' ? <Minus size={16} /> : <Plus size={16} />}</button>}
+                {kind === 'conflict' && onResolve && <button className="secondary-button compact" tabIndex={tabIndex} disabled={busy} onClick={() => onResolve(entry.path)}>Resolve…</button>}
+                {kind !== 'conflict' && <button className="icon-button sm file-stage-button" tabIndex={tabIndex} disabled={blocked} title={partial ? kind === 'staged' ? 'Unstage all indexed changes for this path' : 'Stage the remaining working-tree changes for this path' : undefined} aria-label={`${kind === 'staged' ? 'Unstage' : 'Stage'} ${entry.path}`} onClick={() => { const operationKind = kind === 'staged' ? 'unstage' : 'stage'; void perform({ kind: operationKind, paths: operationPaths([entry], operationKind) }); }}>{kind === 'staged' ? <Minus size={16} /> : <Plus size={16} />}</button>}
               </div>;
-            })}
+            }}</WorkingFileWindow>
             </div>
           </section>; })}
         </div>

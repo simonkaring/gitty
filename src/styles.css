@@ -2577,7 +2577,10 @@ button[data-danger='true']:hover:not(:disabled) {
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
+  /* Virtual row measurements explicitly preserve the visible anchor. */
+  overflow-anchor: none;
 }
+.working-file-spacer { pointer-events: none; }
 .file-list-actions {
   flex: 0 0 auto;
   display: flex;

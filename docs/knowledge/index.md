@@ -13,6 +13,7 @@ okf_version: "0.2"
 - [Action notifications](action-notifications.md) - Remote and stash success summaries and merge-work recovery notices in the bottom-left toast region.
 - [History search and workspace entry points](history-search.md) - Search result inspection, graph reveal, footer commands, and settings-based demo switching.
 - [Split diff review](split-diff-review.md) - Paired before/after rows, fixed gutters, shared horizontal scrolling, virtualized rows, roving line focus, and original line-selection identity.
+- [Working changes at scale](working-changes-at-scale.md) - Memoized working-file data, measured viewport-only rows, and targeted native patch reads.
 
 # Verification and upkeep
 

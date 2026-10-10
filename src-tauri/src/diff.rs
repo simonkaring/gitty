@@ -76,7 +76,7 @@ impl Repository {
     fn untracked_patch(&self, path: &str, stats: bool) -> Result<Vec<u8>> {
         validate_path(path)?;
         if !self
-            .status_entries()?
+            .status_entries_at(Some(path))?
             .entries
             .iter()
             .any(|e| e.path == path && e.untracked)
@@ -168,6 +168,46 @@ impl Repository {
                 }
             })
     }
+    /// A working-file preview needs status/rename metadata, not line statistics
+    /// for every changed file. Plain modifications use a path-scoped raw read.
+    /// Adds/deletes retain whole-diff rename pairing (without numstat), since
+    /// restricting the pathspec to a rename destination would turn it into an add.
+    fn working_diff_file(&self, spec: &DiffSpec, path: &str) -> Result<DiffFile> {
+        let missing = || Error::new("fileNotInDiff", "File is not part of the selected diff");
+        if matches!(spec, DiffSpec::Conflict)
+            && !self
+                .status_entries_at(Some(path))?
+                .entries
+                .iter()
+                .any(|entry| entry.path == path && entry.conflicted)
+        {
+            return Err(missing());
+        }
+        let mut a = self.diff_args(spec)?;
+        a.extend(args(&[
+            "--raw",
+            "-z",
+            "--no-abbrev",
+            "--no-renames",
+            "--",
+            path,
+        ]));
+        let raw = process::text(process::checked(self.location(), &a)?)?;
+        let file = parse_diff_files(&raw)?
+            .into_iter()
+            .find(|file| file.path == path)
+            .ok_or_else(missing)?;
+        if !matches!(file.status.as_str(), "A" | "D") {
+            return Ok(file);
+        }
+        let mut a = self.diff_args(spec)?;
+        a.extend(args(&["--raw", "-z", "--no-abbrev", "--"]));
+        let raw = process::text(process::checked(self.location(), &a)?)?;
+        parse_diff_files(&raw)?
+            .into_iter()
+            .find(|file| file.path == path)
+            .ok_or_else(missing)
+    }
     pub(crate) fn diff_snapshot(&self, spec: &DiffSpec, path: &str) -> Result<(FileDiff, Vec<u8>)> {
         validate_path(path)?;
         let actionable = matches!(spec, DiffSpec::Staged | DiffSpec::Unstaged);
@@ -182,10 +222,19 @@ impl Repository {
         let bytes = if matches!(spec, DiffSpec::Untracked) {
             self.untracked_patch(path, false)?
         } else {
-            let files = self.diff_files(spec)?;
-            let file = files.iter().find(|f| f.path == path).ok_or_else(|| {
-                Error::new("fileNotInDiff", "File is not part of the selected diff")
-            })?;
+            let file = if matches!(
+                spec,
+                DiffSpec::Staged | DiffSpec::Unstaged | DiffSpec::Conflict
+            ) {
+                self.working_diff_file(spec, path)?
+            } else {
+                self.diff_files(spec)?
+                    .into_iter()
+                    .find(|file| file.path == path)
+                    .ok_or_else(|| {
+                        Error::new("fileNotInDiff", "File is not part of the selected diff")
+                    })?
+            };
             modified = file.status == "M" && file.old_path.is_none() && !file.binary;
             let mut a = self.diff_args(spec)?;
             a.extend(args(&["--patch", "--unified=3", "--", path]));
