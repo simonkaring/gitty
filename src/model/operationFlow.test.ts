@@ -4,6 +4,13 @@ import type { native } from './native';
 
 const op = { kind: 'none', fingerprint: 'reviewed', conflicts: [] };
 const state = { session: { head: 'original-head', headRef: 'refs/heads/main', bare: false } };
+it('keeps merge recovery notices through refresh without replaying the mutation', async () => {
+  const invoke = vi.fn().mockResolvedValue({ notice: 'Local work remains saved in Stashes.' });
+  const refresh = vi.fn().mockResolvedValue(undefined);
+  expect(await operationAndRefresh('h', 'repository_run_operation', {}, refresh, () => true, invoke as typeof native)).toEqual({ notice: 'Local work remains saved in Stashes.' });
+  expect(invoke).toHaveBeenCalledOnce();
+  expect(refresh).toHaveBeenCalledOnce();
+});
 it('captures fresh expected state at review and executes it verbatim without rereading', async () => {
   const reads = vi.fn().mockResolvedValueOnce(op).mockResolvedValueOnce(state).mockResolvedValueOnce(op);
   const action = { kind: 'cherryPick' as const, commits: ['first', 'second'], mainline: 2 };

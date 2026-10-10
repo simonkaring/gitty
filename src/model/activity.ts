@@ -14,6 +14,8 @@ export interface ActivityEntry {
 const MAX_ENTRIES = 2000;
 // Per-field bound so a huge payload (e.g. a resolved file) can't bloat 2000 entries.
 const MAX_FIELD = 64 * 1024;
+// Total in-memory budget (summed field lengths) across all entries, in addition to MAX_ENTRIES.
+const MAX_TOTAL_CHARS = 4 * 1024 * 1024;
 const REDACT_KEY_REGEX = /token|password|secret|credential/i;
 
 // Routine reads, polling and UI plumbing: omitted on success so the log stays an
@@ -32,6 +34,7 @@ const QUIET_COMMANDS = new Set([
   'repository_diff',
   'repository_diff_files',
   'repository_search',
+  'repository_cancel_search',
   'repository_recent',
   'repository_remotes',
   'repository_sync_info',
@@ -53,9 +56,15 @@ export function scrubUrls(text: string, wholeValue = false): string {
   return wholeValue && /^[a-z][a-z0-9+.-]*:\/\//i.test(scrubbed) ? scrubbed.replace(/[?#][\s\S]*$/, '?[redacted]') : scrubbed;
 }
 
+const utf8Bytes = (text: string): number => new TextEncoder().encode(text).length;
+
 function redactValue(key: string, value: unknown): unknown {
   if (REDACT_KEY_REGEX.test(key)) {
     return '[redacted]';
+  }
+  // Defence in depth: file/resolution text is never retained, only its size.
+  if (key === 'content') {
+    return typeof value === 'string' ? { bytes: utf8Bytes(value) } : '[content omitted]';
   }
   if (typeof value === 'string') return scrubUrls(value, true);
   if (value && typeof value === 'object') {
@@ -75,10 +84,31 @@ function clip(text: string): string {
   return text.length > MAX_FIELD ? `${text.slice(0, MAX_FIELD)}\n… [${text.length - MAX_FIELD} more characters not kept]` : text;
 }
 
-export function summarizeArgs(args: Record<string, unknown> = {}): string {
+type ArgsSummarizer = (args: Record<string, unknown>) => Record<string, unknown>;
+
+// Commands whose arguments carry bulk or sensitive payloads get an explicit allowlist summary.
+const COMMAND_SUMMARIZERS: Record<string, ArgsSummarizer> = {
+  repository_resolve_conflict: args => {
+    const resolution = args.resolution && typeof args.resolution === 'object' ? args.resolution as Record<string, unknown> : undefined;
+    const summary: Record<string, unknown> = {};
+    if ('handle' in args) summary.handle = args.handle;
+    summary.path = args.path;
+    summary.fingerprint = args.fingerprint;
+    if (resolution) {
+      summary.resolution = {
+        kind: resolution.kind,
+        ...(typeof resolution.content === 'string' ? { contentBytes: utf8Bytes(resolution.content) } : {}),
+      };
+    }
+    return summary;
+  },
+};
+
+export function summarizeArgs(command: string, args: Record<string, unknown> = {}): string {
   try {
+    const source = COMMAND_SUMMARIZERS[command]?.(args) ?? args;
     const sanitized: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(args)) {
+    for (const [k, v] of Object.entries(source)) {
       sanitized[k] = redactValue(k, v);
     }
     const str = JSON.stringify(sanitized);
@@ -102,8 +132,19 @@ function notify() {
 // Quiet calls are held here until they finish; only failures reach `entries`.
 const pendingQuiet = new Map<number, { command: string; timestamp: number; args: Record<string, unknown> }>();
 
+const entrySize = (e: ActivityEntry) => e.command.length + e.args.length + (e.stdin?.length ?? 0) + (e.error?.length ?? 0);
+
+/** Drops oldest entries until the total size fits the budget (always keeps the newest entry). */
+function enforceBudget() {
+  let total = entries.reduce((n, e) => n + entrySize(e), 0);
+  let drop = 0;
+  while (total > MAX_TOTAL_CHARS && drop < entries.length - 1) total -= entrySize(entries[drop++]);
+  if (drop) entries = entries.slice(drop);
+}
+
 function append(entry: ActivityEntry) {
   entries = [...entries, entry].slice(-MAX_ENTRIES);
+  enforceBudget();
   notify();
 }
 
@@ -113,17 +154,17 @@ export function recordCommandStart(command: string, rawArgs: Record<string, unkn
     pendingQuiet.set(id, { command, timestamp: Date.now(), args: rawArgs });
     return id;
   }
-  append({ id, timestamp: Date.now(), command, args: summarizeArgs(rawArgs), status: 'running' });
+  append({ id, timestamp: Date.now(), command, args: summarizeArgs(command, rawArgs), status: 'running' });
   return id;
 }
 
 export function recordCommandEnd(id: number, status: 'success' | 'error', durationMs: number, error?: string): void {
-  const safeError = error === undefined ? undefined : scrubUrls(error);
+  const safeError = error === undefined ? undefined : clip(scrubUrls(error));
   const quiet = pendingQuiet.get(id);
   if (quiet) {
     pendingQuiet.delete(id);
     if (status === 'error') {
-      append({ id, timestamp: quiet.timestamp, command: quiet.command, args: summarizeArgs(quiet.args), status, durationMs: Math.round(durationMs), ...(safeError ? { error: safeError } : {}) });
+      append({ id, timestamp: quiet.timestamp, command: quiet.command, args: summarizeArgs(quiet.command, quiet.args), status, durationMs: Math.round(durationMs), ...(safeError ? { error: safeError } : {}) });
     }
     return;
   }
@@ -131,6 +172,7 @@ export function recordCommandEnd(id: number, status: 'success' | 'error', durati
   if (index === -1) return;
   const updated: ActivityEntry = { ...entries[index], status, durationMs: Math.round(durationMs), ...(safeError ? { error: safeError } : {}) };
   entries = [...entries.slice(0, index), updated, ...entries.slice(index + 1)];
+  enforceBudget();
   notify();
 }
 

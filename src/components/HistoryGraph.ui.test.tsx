@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { laneX, layoutHistory } from '../graph/layout';
 import { BUILTIN_THEMES } from '../model/themes';
 import { DEFAULT_HISTORY_COLUMNS } from '../model/settings';
-import { groupRefs, HistoryGraph, sortRefs } from './HistoryGraph';
+import { groupRefs, groupRefsByCommit, HistoryGraph, sortRefs } from './HistoryGraph';
 import { WORKING_ID } from '../model/native';
 
 const preferences = vi.hoisted(() => ({ graphAuthorAvatars: false, authorAvatarMode: 'initials' as 'initials' | 'gravatar', graphOnly: false }));
@@ -41,22 +41,22 @@ it('switches graph nodes between dots, initials and Gravatar while preserving wo
     arc.mockClear(); roundRect.mockClear();
     await render();
     expect(host.querySelectorAll('.graph-avatar-node')).toHaveLength(3);
-    expect(host.querySelector(`[id="commit-${WORKING_ID}"]`)).not.toBeNull();
-    expect(host.querySelector(`[id="commit-${WORKING_ID}"] .graph-avatar-node`)).toBeNull();
-    expect(host.querySelector('#commit-merge .graph-avatar-node.merge')?.textContent).toBe('AL');
-    expect(host.querySelector('#commit-b.dimmed .graph-avatar-node')?.textContent).toBe('GH');
+    expect(host.querySelector(`[id$="-commit-${WORKING_ID}"]`)).not.toBeNull();
+    expect(host.querySelector(`[id$="-commit-${WORKING_ID}"] .graph-avatar-node`)).toBeNull();
+    expect(host.querySelector('[id$="-commit-merge"] .graph-avatar-node.merge')?.textContent).toBe('AL');
+    expect(host.querySelector('[id$="-commit-b"].dimmed .graph-avatar-node')?.textContent).toBe('GH');
     expect(arc).not.toHaveBeenCalled();
     expect(roundRect).toHaveBeenCalled();
     expect(avatarUrl).not.toHaveBeenCalled();
     const pan = host.querySelector('.graph-hscroll') as HTMLDivElement;
     await act(async () => { pan.scrollLeft = 18; pan.dispatchEvent(new Event('scroll', { bubbles: true })); });
-    expect((host.querySelector('#commit-b .graph-avatar-node') as HTMLElement).style.left).toBe(`${laneX(0) + layout.nodes[3].lane * 30 - 18}px`);
+    expect((host.querySelector('[id$="-commit-b"] .graph-avatar-node') as HTMLElement).style.left).toBe(`${laneX(0) + layout.nodes[3].lane * 30 - 18}px`);
     preferences.authorAvatarMode = 'gravatar';
     await render();
     expect(host.querySelectorAll('.graph-avatar-node img')).toHaveLength(3);
-    await act(async () => { host.querySelector('#commit-b img')!.dispatchEvent(new Event('error')); });
-    expect(host.querySelector('#commit-b img')).toBeNull();
-    expect(host.querySelector('#commit-b .graph-avatar-node')?.textContent).toBe('GH');
+    await act(async () => { host.querySelector('[id$="-commit-b"] img')!.dispatchEvent(new Event('error')); });
+    expect(host.querySelector('[id$="-commit-b"] img')).toBeNull();
+    expect(host.querySelector('[id$="-commit-b"] .graph-avatar-node')?.textContent).toBe('GH');
     await render(true);
     expect(host.querySelectorAll('[role="option"]')).toHaveLength(4);
     expect(host.querySelector('.graph-avatar-node')).toBeNull();
@@ -103,6 +103,49 @@ it('groupRefs merges a local branch with its same-named remote ref', () => {
   const groups = groupRefs([r('origin/x', 'remote'), r('x', 'local'), r('origin/y', 'remote'), r('v1', 'tag')]);
   expect(groups.map(g => [g.ref.name, g.remote?.name])).toEqual([['x', 'origin/x'], ['origin/y', undefined], ['v1', undefined]]);
 });
+it('groupRefsByCommit groups badges per commit and drops remote */HEAD aliases', () => {
+  const r = (name: string, kind: 'local' | 'remote' | 'tag', commitId: string) => ({ name, kind, commitId });
+  const refs = [r('main', 'local', 'a'), r('origin/main', 'remote', 'a'), r('origin/HEAD', 'remote', 'a'), r('v1', 'tag', 'b'), r('upstream/HEAD', 'remote', 'c'), r('HEAD', 'local', 'c')];
+  const grouped = groupRefsByCommit(refs);
+  expect([...grouped.keys()]).toEqual(['a', 'b', 'c']);
+  expect(grouped.get('a')?.map(ref => ref.name)).toEqual(['main', 'origin/main']);
+  expect(grouped.get('b')?.map(ref => ref.name)).toEqual(['v1']);
+  // Only remote-kind refs are aliases; a local ref that merely ends in /HEAD is kept.
+  expect(r('feature/HEAD', 'local', 'd')).toEqual(groupRefsByCommit([r('feature/HEAD', 'local', 'd')]).get('d')?.[0]);
+  expect(grouped.get('missing')).toBeUndefined();
+  expect(groupRefsByCommit([]).size).toBe(0);
+});
+
+it('only reallocates the graph canvas backing store when its pixel size changes', async () => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const originalObserver = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} unobserve() {} } as typeof ResizeObserver;
+  const clearRect = vi.fn();
+  const getContext = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(new Proxy({}, { get: (_, key) => key === 'clearRect' ? clearRect : () => {} }) as CanvasRenderingContext2D);
+  const widthAssignments = vi.fn(), heightAssignments = vi.fn();
+  const originalWidth = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'width')!, originalHeight = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'height')!;
+  Object.defineProperty(HTMLCanvasElement.prototype, 'width', { configurable: true, get: originalWidth.get, set(value) { widthAssignments(value); originalWidth.set!.call(this, value); } });
+  Object.defineProperty(HTMLCanvasElement.prototype, 'height', { configurable: true, get: originalHeight.get, set(value) { heightAssignments(value); originalHeight.set!.call(this, value); } });
+  const host = document.createElement('div'), root = createRoot(host);
+  const commits = [{ id: 'a', parents: [], subject: 'A', body: '', author: 'Ada', email: '', timestamp: 1, branch: 'main', files: [] }];
+  const render = (matches: Set<string> | null) => act(async () => root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={[]} selectedId="a" head="a" loaded={1} matches={matches} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />));
+  try {
+    await render(null);
+    const widthWrites = widthAssignments.mock.calls.length, heightWrites = heightAssignments.mock.calls.length;
+    expect(clearRect).toHaveBeenCalled();
+    // A different matches set redraws the canvas (a fresh draw effect run) without touching its size.
+    clearRect.mockClear();
+    await render(new Set(['a']));
+    expect(clearRect).toHaveBeenCalled();
+    expect(widthAssignments).toHaveBeenCalledTimes(widthWrites);
+    expect(heightAssignments).toHaveBeenCalledTimes(heightWrites);
+  } finally {
+    await act(async () => root.unmount());
+    Object.defineProperty(HTMLCanvasElement.prototype, 'width', originalWidth); Object.defineProperty(HTMLCanvasElement.prototype, 'height', originalHeight);
+    getContext.mockRestore(); globalThis.ResizeObserver = originalObserver;
+  }
+});
+
 it.each(['refs/heads/topic', 'refs/remotes/origin/feature/topic'])('branch pill %s selects its tip and switches on double-click', async fullName => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const originalObserver = globalThis.ResizeObserver;
@@ -223,5 +266,32 @@ it('renders graph nodes without selection halo, HEAD glow, or HEAD center dot', 
     await act(async () => { root.unmount(); });
     canvas.mockRestore();
     globalThis.ResizeObserver = originalObserver;
+  }
+});
+
+it('gives every mounted history graph unique ids so hidden tabs sharing commits do not collide', async () => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const originalObserver = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} unobserve() {} } as typeof ResizeObserver;
+  const canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(new Proxy({}, { get: () => () => {} }) as CanvasRenderingContext2D);
+  const commits = [{ id: 'shared', parents: [], subject: 'Shared', body: '', author: 'A', email: '', timestamp: 1, branch: 'main', files: [] }];
+  const hosts = [document.createElement('div'), document.createElement('div')];
+  const roots = hosts.map(host => { document.body.append(host); return createRoot(host); });
+  try {
+    await act(async () => { roots.forEach(root => root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={[]} selectedId="shared" head="shared" loaded={1} matches={null} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />)); });
+    const ids = [...document.querySelectorAll('[id]')].map(element => element.id);
+    expect(ids.length).toBeGreaterThanOrEqual(4);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const host of hosts) {
+      const listbox = host.querySelector('[role="listbox"]')!;
+      const option = host.querySelector('[role="option"]')!;
+      expect(listbox.getAttribute('aria-activedescendant')).toBe(option.id);
+      expect(host.contains(document.getElementById(listbox.getAttribute('aria-activedescendant')!))).toBe(true);
+      expect(host.contains(document.getElementById(listbox.getAttribute('aria-describedby')!))).toBe(true);
+    }
+  } finally {
+    await act(async () => { roots.forEach(root => root.unmount()); });
+    hosts.forEach(host => host.remove());
+    canvas.mockRestore(); globalThis.ResizeObserver = originalObserver;
   }
 });

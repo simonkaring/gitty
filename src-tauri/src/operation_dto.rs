@@ -59,6 +59,9 @@ pub enum GitAction {
         source: String,
         destination: Option<String>,
         no_fast_forward: bool,
+        message: Option<String>,
+        #[serde(default)]
+        stash_changes: bool,
     },
     Rebase {
         onto: String,
@@ -124,6 +127,8 @@ pub struct OperationResult {
     pub head: Option<String>,
     pub operation: OperationState,
     pub output: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

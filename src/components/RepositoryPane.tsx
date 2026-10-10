@@ -3,6 +3,7 @@ import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus,
 import { CommandPalette, type PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
 import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
+import { isCancelledSearch } from '../model/searchFlow';
 import { appendUnique, errorMessage, graphCommit, isDemoHandle, native, readNativeSnapshot, validateHistory, WORKING_ID } from '../model/native';
 import { HistoryGraph, type GraphAnchor, type GraphHandle } from './HistoryGraph';
 import { NativeInspector } from './NativeInspector';
@@ -26,7 +27,7 @@ import { SwitchBlockedDialog } from './SwitchBlockedDialog';
 import { Segmented, Toast } from './ui';
 import { locationLabel, sessionKey } from '../model/tabs';
 import { useSettings } from '../model/settings';
-import { SCALES, applyScale, loadScale } from '../model/scale';
+import { SCALES, useScale } from '../model/scale';
 import { AUTO_FETCH_CHECK, autoFetchDue, isFetchingAction, type FetchStatus } from '../model/autoFetch';
 import { DEFAULT_PULL_MODE, remoteSuccessMessage, needsPublish, type RemoteActionRequest, type SyncInfo } from '../model/remote';
 import { branchDeleteTargets, branchDeleteMessage, type BranchDeleteScope } from '../model/branchDelete';
@@ -69,8 +70,7 @@ export interface RepositoryPaneProps {
 
 export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, onClosePalette = () => {}, workspaceCommands = [], tabId, location, active, sidebarOpen, inspectorOpen, inspectorWidth, sidebarWidth, setInspectorWidth, setSidebarWidth, setInspectorOpen, onIdentity, onBusyChange, onMeta }: RepositoryPaneProps) {
   const { theme, settings } = useSettings();
-  const [scale, setScale] = useState(loadScale);
-  const changeScale = (next: number) => { setScale(next); applyScale(next); };
+  const [scale, changeScale] = useScale();
   const stepScale = (dir: number) => changeScale(SCALES[Math.min(SCALES.length - 1, Math.max(0, SCALES.indexOf(scale as typeof SCALES[number]) + dir))]);
   const [state, setState] = useState<RepositoryState | null>(null);
   const [status, setStatus] = useState<RepositoryStatus | null>(null);
@@ -84,6 +84,9 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   // Notices are transient toasts; errors stay until dismissed.
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 6000); return () => clearTimeout(timer); }, [notice]);
   const [revision, setRevision] = useState(0);
+  /** Bumps only when the repository state fingerprint (refs/HEAD) changes or a session opens; working-tree status
+   * changes move `revision` but must not re-run history search. */
+  const [stateRevision, setStateRevision] = useState(0);
   const [activeDiff, setActiveDiff] = useState<ActiveDiffState | null>(null);
   /** Fold/open state of the working-changes list and commit composer. It lives here, not in WorkingChanges,
    * so it survives switching the inspector to a commit and back, and it is tagged with the repository
@@ -183,7 +186,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       if (token !== epoch.current) { void close(handle); return; }
       session.current = snapshot.state; setState(snapshot.state); setStatus(snapshot.status); fingerprint.current = snapshot.status.fingerprint; generation.current = snapshot.generation;
       setOperation(activeOperation); operationSig.current = operationContent(activeOperation);
-      installHistory(snapshot.commits, snapshot.cursor); setSelected(snapshot.state.session.head ?? snapshot.commits[0]?.id ?? ''); if (!snapshot.state.session.head && snapshot.status.entries.length) { setSelected(WORKING_ID); setInspectorOpen(true); } setRevision(value => value + 1);
+      installHistory(snapshot.commits, snapshot.cursor); setSelected(snapshot.state.session.head ?? snapshot.commits[0]?.id ?? ''); if (!snapshot.state.session.head && snapshot.status.entries.length) { setSelected(WORKING_ID); setInspectorOpen(true); } setRevision(value => value + 1); setStateRevision(value => value + 1);
       onIdentityRef.current(tabId, sessionKey(location, snapshot.state.session), snapshot.state.session.name);
     } catch (e) { if (opened) void close(opened.session.handle); if (token === epoch.current) { setError(errorMessage(e)); onIdentityRef.current(tabId, null, null); } }
     finally { if (token === epoch.current) { lock.current = false; setBusy(false); } }
@@ -232,6 +235,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       if (changed || force) setState(updated);
       if (changed || workingChanged || force) setStatus(working);
       fingerprint.current = working.fingerprint;
+      if (changed) setStateRevision(value => value + 1);
       if (changed || workingChanged || operationChanged || force) setRevision(value => value + 1);
       setError('');
       blockedRef.current = false; setMutationBlocked(false);
@@ -322,6 +326,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       if (!isCurrent()) throw new Error('Repository session changed.');
       const outcome = await operationAndRefresh(current.session.handle, command, args, () => refresh(true), isCurrent);
       if (outcome.superseded) throw new Error('Repository session changed.');
+      if (outcome.notice) setNotice(outcome.notice);
       if (outcome.refreshError) { blockedRef.current = true; setMutationBlocked(true); }
       if (outcome.error || outcome.refreshError) throw new Error([outcome.error, outcome.refreshError && `Refresh failed: ${outcome.refreshError}. Further writes are blocked until refresh succeeds.`].filter(Boolean).join('\n'));
     } finally { if (isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
@@ -465,21 +470,37 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     if (status?.entries.length && status.head === state?.session.head && status.headRef === state?.session.headRef) list.unshift(graphCommit({ id: WORKING_ID, parents: status.head ? [status.head] : [], subject: `Working changes · ${status.entries.length} paths`, author: 'Working tree', email: '', timestamp: 0 }));
     return list;
   }, [commits, status, state?.session.head, state?.session.headRef]);
-  const { layout, count: layoutCount } = useGraphLayout(graphCommits);
+  const { layout, count: layoutCount, error: layoutError } = useGraphLayout(graphCommits);
   useLayoutEffect(() => { if (anchor.current && graphCommits.slice(0, layoutCount).some(commit => commit.id === anchor.current?.id)) { graph.current?.restore(anchor.current); anchor.current = null; } if (jumpTo.current) { const row = graphCommits.slice(0, layoutCount).findIndex(commit => commit.id === jumpTo.current); if (row >= 0) { graph.current?.scrollTo(row); jumpTo.current = null; } } }, [graphCommits, layoutCount]);
   const filtering = !!(text || branch || since || until || path);
   useEffect(() => { setSearchView('results'); }, [text, branch, since, until, path]);
   function clearFilters() { setText(''); setBranch(''); setSince(''); setUntil(''); setPath(''); }
+  /** Key of the last search whose result was delivered, so returning to a tab does not repeat a finished search. */
+  const deliveredSearch = useRef('');
   useEffect(() => {
     const queryKey = JSON.stringify([state?.session.handle, text, branch, since, until, path]);
     let live = true;
-    if (lastSearchQuery.current !== queryKey) { setResult(null); lastSearchQuery.current = queryKey; }
-    setSearchError(''); setSearchBusy(filtering && !!state);
-    if (!state || !filtering) return;
-    const timer = setTimeout(() => { native<SearchResult>('repository_search', { handle: state.session.handle, query: { text, ...(branch ? { branch } : {}), ...(since ? { since } : {}), ...(until ? { until } : {}), ...(path ? { path } : {}) } })
-      .then(value => { if (live) setResult(value); }).catch(e => { if (live) setSearchError(errorMessage(e)); }).finally(() => { if (live) setSearchBusy(false); }); }, 250);
-    return () => { live = false; clearTimeout(timer); };
-  }, [state?.session.handle, text, branch, since, until, path, filtering, revision, searchRetry]);
+    if (lastSearchQuery.current !== queryKey) { setResult(null); lastSearchQuery.current = queryKey; deliveredSearch.current = ''; }
+    const runKey = JSON.stringify([queryKey, stateRevision, searchRetry]);
+    const skip = !state || !filtering || !active || deliveredSearch.current === runKey;
+    // A hidden tab starts nothing; its pending filter runs when it becomes active again.
+    if (active || !filtering) { setSearchError(''); setSearchBusy(filtering && !!state && deliveredSearch.current !== runKey); }
+    if (skip || !state) return;
+    const handle = state.session.handle;
+    let inFlight = false;
+    const timer = setTimeout(() => {
+      inFlight = true;
+      native<SearchResult>('repository_search', { handle, query: { text, ...(branch ? { branch } : {}), ...(since ? { since } : {}), ...(until ? { until } : {}), ...(path ? { path } : {}) } })
+        .then(value => { if (live) { deliveredSearch.current = runKey; setResult(value); } })
+        .catch(e => { if (live && !isCancelledSearch(e)) setSearchError(errorMessage(e)); })
+        .finally(() => { inFlight = false; if (live) setSearchBusy(false); });
+    }, 250);
+    return () => {
+      live = false; clearTimeout(timer);
+      if (inFlight) native('repository_cancel_search', { handle }).catch(() => {});
+    };
+    // History changes arrive via stateRevision, not the working-tree `revision`.
+  }, [state?.session.handle, text, branch, since, until, path, filtering, stateRevision, searchRetry, active]);
   const matches = useMemo(() => result ? new Set(result.commits.map(commit => commit.id)) : null, [result]);
   function openMenu(context: ActionContext, x: number, y: number, trigger: HTMLElement) { setMenuTarget({ context, x, y, trigger }); }
   function finishBranchDelete(result: BranchDeleteResult) {
@@ -612,6 +633,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       {error && <Toast tone="error" action={<button className="secondary-button" disabled={busy} onClick={() => state ? void refresh() : void open()}>Retry</button>}>{error}</Toast>}
       {busy && !state && <Toast tone="progress">Opening {locationLabel(location)}…{location.kind === 'wsl' && ' A stopped WSL distribution can take a few seconds to start.'}</Toast>}
       {notice && <Toast onDismiss={() => setNotice('')}>{notice}</Toast>}
+      {layoutError && <Toast tone="error">Graph layout is unavailable: {layoutError}. Rows remain navigable.</Toast>}
       {state && selected && selected !== WORKING_ID && !result?.commits.some(commit => commit.id === selected) && !commits.some(commit => commit.id === selected) && <Toast action={cursor && <button className="secondary-button" disabled={busy} onClick={() => reveal(selected)}>Reveal</button>}>Selected commit {selected.slice(0, 12)} is {cursor ? 'outside the loaded history' : 'no longer reachable from the current references'}. Its inspector remains open by object ID.</Toast>}
     </>}
     {mutationBlocked && <div className="operation-banner" role="alert">Refresh failed after a write. Further writes are blocked until a successful refresh.<button className="secondary-button compact" onClick={() => void refresh()}>Refresh now</button></div>}

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useId, useRef, type FormEvent, type ReactNode, type RefObject } from 'react';
+import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, type FormEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
@@ -27,6 +27,33 @@ export function useDismiss(open: boolean, onClose: () => void, inside: RefObject
     document.addEventListener('keydown', key, true);
     return () => { document.removeEventListener('pointerdown', pointer); document.removeEventListener('keydown', key, true); };
   }, [open]); // refs are stable; onClose is read through `close`
+}
+
+/** Keyboard behavior of a menu of `role="menuitem"` elements inside `menu` (which may also
+ * contain its toggle): focus its first enabled item when it opens
+ * (and whenever `focusKey` changes), ArrowUp/ArrowDown cycle, Home/End jump, and Tab closes.
+ * Escape and outside clicks stay with `useDismiss`. */
+export function useMenuKeyboard(menu: RefObject<HTMLElement | null>, open: boolean, onClose: () => void, focusKey?: unknown) {
+  const close = useRef(onClose);
+  close.current = onClose;
+  useLayoutEffect(() => {
+    if (open) menu.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus();
+  }, [open, focusKey]);
+  useEffect(() => {
+    if (!open) return;
+    function keydown(event: KeyboardEvent) {
+      if (event.key === 'Tab') close.current();
+      if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) && menu.current?.contains(document.activeElement)) {
+        event.preventDefault();
+        const items = [...menu.current.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)')];
+        const index = items.indexOf(document.activeElement as HTMLElement);
+        const step = event.key === 'ArrowDown' ? 1 : -1;
+        items[event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : index < 0 ? (step > 0 ? 0 : items.length - 1) : (index + step + items.length) % items.length]?.focus();
+      }
+    }
+    document.addEventListener('keydown', keydown, true);
+    return () => document.removeEventListener('keydown', keydown, true);
+  }, [open]); // the menu ref is stable; onClose is read through `close`
 }
 
 /** Modal frame: title + close, scrolling body, optional footer action row.

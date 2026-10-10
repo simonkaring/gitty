@@ -39,7 +39,7 @@ pub struct AmendOptions {
     pub require_unpushed: bool,
 }
 
-fn validate_message(message: &str) -> Result<()> {
+pub(crate) fn validate_message(message: &str) -> Result<()> {
     if message.trim().is_empty() {
         return Err(Error::new(
             "invalidRequest",

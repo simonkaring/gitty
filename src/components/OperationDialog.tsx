@@ -35,8 +35,12 @@ export function OperationDialog({ state, operation, context, commits, busy, onWr
   const [source, setSource] = useState(context.ref ?? context.oid);
   const [name, setName] = useState('');
   const [checkout, setCheckout] = useState(true);
-  const [noFastForward, setNoFastForward] = useState(false);
+  const [noFastForward, setNoFastForward] = useState(true);
+  const [stashChanges, setStashChanges] = useState(false);
   const [message, setMessage] = useState('');
+  const [mergeMessage, setMergeMessage] = useState<string | null>(null);
+  const mergeDestination = (context.destination ?? state.session.headRef ?? 'HEAD').replace(/^refs\/heads\//, '');
+  const effectiveMergeMessage = mergeMessage ?? `Merge branch '${source.replace(/^refs\/heads\//, '')}' into '${mergeDestination}'`;
   const [order, setOrder] = useState(context.commits?.length ? context.commits : [context.oid].filter(Boolean));
   const [mainline, setMainline] = useState('');
   const [plan, setPlan] = useState<{ base: string; steps: RebaseStep[] } | null>(null);
@@ -56,7 +60,7 @@ export function OperationDialog({ state, operation, context, commits, busy, onWr
   switch (kind) {
     case 'createBranch': action = { kind, name, startPoint: source, checkout }; break;
     case 'switchBranch': action = { kind, branch: source }; break;
-    case 'merge': action = { kind, source, ...(context.destination ? { destination: context.destination } : {}), noFastForward }; break;
+    case 'merge': action = { kind, source, ...(context.destination ? { destination: context.destination } : {}), noFastForward, message: effectiveMergeMessage, ...(stashChanges ? { stashChanges: true } : {}) }; break;
     case 'rebase': action = { kind, onto: source }; break;
     case 'interactiveRebase': action = { kind, onto: source, steps }; break;
     case 'createTag': action = { kind, name, oid: context.oid, ...(message ? { message } : {}) }; break;
@@ -112,7 +116,8 @@ export function OperationDialog({ state, operation, context, commits, busy, onWr
       {['merge', 'rebase', 'interactiveRebase', 'createBranch', 'switchBranch'].includes(kind) && <label className="field">{kind === 'switchBranch' ? 'Local branch' : kind === 'interactiveRebase' ? 'Base commit (ancestor of HEAD)' : 'Source / starting revision'}<input list="operation-refs" value={source} onChange={e => setSource(e.target.value)} /><datalist id="operation-refs">{state.refs.filter(ref => kind !== 'switchBranch' || ref.kind === 'local').map(ref => <option key={ref.fullName} value={ref.fullName}>{ref.name}</option>)}</datalist></label>}
       {['createBranch', 'createTag'].includes(kind) && <label className="field">Name<input autoFocus value={name} onChange={e => setName(e.target.value)} /></label>}
       {kind === 'createBranch' && <label className="check"><input type="checkbox" checked={checkout} onChange={e => setCheckout(e.target.checked)} /> Switch to new branch</label>}
-      {kind === 'merge' && <label className="check"><input type="checkbox" checked={noFastForward} onChange={e => setNoFastForward(e.target.checked)} /> Always create a merge commit</label>}
+      {kind === 'merge' && <><label className="check"><input type="checkbox" checked={noFastForward} onChange={e => setNoFastForward(e.target.checked)} /> Always create a merge commit</label><label className="field">Commit message<textarea rows={4} value={effectiveMergeMessage} onChange={e => setMergeMessage(e.target.value)} aria-describedby="merge-message-help" /></label><p id="merge-message-help" className="muted small">Used when this merge creates a commit, including after resolving conflicts. Fast-forward merges create no new commit.</p></>}
+      {kind === 'merge' && <><label className="check"><input type="checkbox" checked={stashChanges} onChange={e => setStashChanges(e.target.checked)} aria-describedby="merge-stash-help" /> Stash local changes during merge</label><p id="merge-stash-help" className="muted small">Saves staged, unstaged and untracked changes before merging, then restores them with their staging state after a clean merge. If the merge or restoration needs attention, your work stays in Stashes for recovery after finishing or aborting the merge. Ignored files stay in place.</p></>}
       {kind === 'rebase' && <p className="muted">Replays the current branch onto the source and rewrites its commit IDs.</p>}
       {kind === 'interactiveRebase' && <><p className="muted">Reorder, drop, reword, squash, or fixup the commits since this base. Existing commit IDs will change; publish rewritten branches separately.</p><ol className="sequence" aria-label="Interactive rebase sequence">{steps.map((step, index) => <li key={step.oid}><code>{step.oid.slice(0, 12)}</code><span className="sequence-subject">{commits.find(commit => commit.id === step.oid)?.subject}</span><select aria-label={`Action for ${step.oid.slice(0, 12)}`} value={step.instruction} onChange={event => updateStep(index, { instruction: event.target.value as RebaseStep['instruction'] })}>{(['pick', 'drop', 'reword', 'squash', 'fixup'] as const).map(value => <option key={value} value={value}>{value}</option>)}</select><button type="button" className="icon-button sm" aria-label={`Move ${step.oid.slice(0, 7)} earlier`} disabled={!index} onClick={() => setPlan({ base: baseId, steps: moveCommit(steps, index, -1) })}><ArrowUp size={14} /></button><button type="button" className="icon-button sm" aria-label={`Move ${step.oid.slice(0, 7)} later`} disabled={index === steps.length - 1} onClick={() => setPlan({ base: baseId, steps: moveCommit(steps, index, 1) })}><ArrowDown size={14} /></button></li>)}</ol></>}
       {kind === 'abort' && <p className="muted">Abort the in-progress operation and discard its resolution progress.</p>}
@@ -137,6 +142,8 @@ function OperationSummary({ request, commits }: { request: OperationRequest; com
   const current = request.expectedHeadRef ? revisionLabel(request.expectedHeadRef) : 'Detached HEAD';
   const titles: Record<GitAction['kind'], string> = { merge: 'Merge branches', rebase: 'Rebase branch', interactiveRebase: 'Interactive rebase', cherryPick: 'Cherry-pick commits', createBranch: 'Create branch', switchBranch: 'Switch branch', createTag: 'Create tag', continue: 'Continue operation', skip: 'Skip current commit', abort: 'Abort operation' };
   return <section aria-label="Operation summary"><h3>{titles[action.kind]}</h3>
+    {action.kind === 'merge' && action.message && <><p>Commit message:</p><pre className="operation-review">{action.message}</pre></>}
+    {action.kind === 'merge' && action.stashChanges && <p>Local changes: <strong>Stash before merging and restore staging afterward.</strong> If the merge or restoration needs attention, the saved work remains in Stashes for recovery.</p>}
     {action.kind === 'merge' && <><p>Source: <strong>{revisionLabel(action.source)}</strong></p><p>Destination: <strong>{action.destination ? revisionLabel(action.destination) : current}</strong></p>{action.destination && action.destination !== request.expectedHeadRef && <p>Gitty will switch to the destination branch before merging.</p>}<p>Fast-forward policy: {action.noFastForward ? 'Always create a merge commit (--no-ff).' : 'Allow fast-forward when possible; otherwise create a merge commit.'}</p></>}
     {action.kind === 'rebase' && <><p>Source branch to replay: <strong>{current}</strong></p><p>Destination (new base): <strong>{revisionLabel(action.onto)}</strong></p><p>Updates {current} with replayed commits. Their commit IDs change.</p></>}
     {action.kind === 'interactiveRebase' && <><p>Rewriting <strong>{current}</strong> from base <code>{action.onto}</code>. Commit IDs will change; conflicts may require Continue or Abort.</p><ol aria-label="Reviewed rebase order">{action.steps.map(step => <li key={step.oid}><strong>{step.instruction}</strong> <code>{step.oid}</code> — {commits.find(commit => commit.id === step.oid)?.subject}</li>)}</ol></>}

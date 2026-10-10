@@ -772,6 +772,90 @@ fn history_streams_more_than_one_hundred_thousand_commits_without_preloading() {
     assert_eq!(replay.cursor, replay_again.cursor);
 }
 
+#[test]
+fn history_and_search_survive_ref_tips_exceeding_the_argv_limit() {
+    use std::io::Write;
+    use std::process::Stdio;
+    // 1,200 distinct tips x 41 bytes is ~49 KB: more than Windows' ~32 KiB command line.
+    const REFS: usize = 1_200;
+    let d = init();
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(d.path())
+        .args(["fast-import", "--quiet"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let mut input = std::io::BufWriter::new(child.stdin.take().unwrap());
+        for i in 0..REFS {
+            let message = format!("tip {i:04}\n");
+            let content = format!("{i}\n");
+            write!(
+                input,
+                "commit refs/heads/b{i}\ncommitter Test <test@example.org> {} +0000\ndata {}\n{}M 644 inline shared.txt\ndata {}\n{}\n",
+                1_700_000_000 + i,
+                message.len(),
+                message,
+                content.len(),
+                content
+            )
+            .unwrap();
+        }
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    git(d.path(), &["symbolic-ref", "HEAD", "refs/heads/b0"]);
+    let data = tempfile::tempdir().unwrap();
+    let mut service = Service::new(data.path().into());
+    let state = open(&mut service, d.path());
+    assert_eq!(state.refs.len(), REFS);
+    let repo = service.repo(&state.session.handle).unwrap();
+    let (tips, _) = repo.tips(None).unwrap();
+    assert_eq!(tips.len(), REFS);
+    assert!(tips.iter().map(|t| t.len() + 1).sum::<usize>() > 32 * 1024);
+
+    let first = repo.history(None, 200, HistoryQuery::default()).unwrap();
+    assert_eq!(first.commits.len(), 200);
+    assert!(first.cursor.is_some());
+    let next = repo
+        .history(first.cursor.clone(), 200, HistoryQuery::default())
+        .unwrap();
+    assert_eq!(next.commits.len(), 200);
+    let all: std::collections::HashSet<_> = first
+        .commits
+        .iter()
+        .chain(&next.commits)
+        .map(|c| &c.id)
+        .collect();
+    assert_eq!(all.len(), 400);
+
+    let query = |text: &str, path: Option<&str>| SearchQuery {
+        text: text.into(),
+        branch: None,
+        since: None,
+        until: None,
+        path: path.map(String::from),
+    };
+    let one = repo.search(query("tip 0777", None)).unwrap();
+    assert_eq!(one.commits.len(), 1);
+    assert!(!one.truncated);
+    let last = repo.search(query("tip 1199", None)).unwrap();
+    assert_eq!(last.commits.len(), 1);
+    assert!(!last.truncated);
+    // `--stdin` revisions combine with a pathspec after `--`.
+    let pathed = repo.search(query("tip 0042", Some("shared.txt"))).unwrap();
+    assert_eq!(pathed.commits.len(), 1);
+    let none = repo.search(query("tip 0042", Some("missing.txt"))).unwrap();
+    assert!(none.commits.is_empty());
+}
+
 fn store_commit(path: &Path, bytes: &[u8]) -> String {
     use std::io::Write;
     use std::process::Stdio;
@@ -3049,4 +3133,222 @@ fn open_path_refuses_what_it_must_not_launch_before_starting_anything() {
         service.reveal_path(&handle, "gone").unwrap_err().code,
         "notFound"
     );
+}
+
+/// One linear `main` of `count` commits (oldest first), written with a single
+/// `git fast-import` stream. `message(i)` is the full commit message.
+fn import_linear(path: &Path, count: usize, message: impl Fn(usize) -> String) {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["fast-import", "--quiet"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let mut input = std::io::BufWriter::new(child.stdin.take().unwrap());
+        for i in 0..count {
+            let message = format!("{}\n", message(i));
+            write!(
+                input,
+                "commit refs/heads/main\ncommitter Test <test@example.org> {} +0000\ndata {}\n{}\n",
+                1_700_000_000 + i,
+                message.len(),
+                message
+            )
+            .unwrap();
+        }
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn text_query(text: &str) -> SearchQuery {
+    SearchQuery {
+        text: text.into(),
+        branch: None,
+        since: None,
+        until: None,
+        path: None,
+    }
+}
+
+#[test]
+fn search_hydrates_results_in_one_batch_with_the_summaries_of_the_per_commit_path() {
+    let d = init();
+    import_linear(d.path(), 100, |i| {
+        if i % 5 == 0 {
+            format!("plain {i}")
+        } else {
+            format!("subject {i} hydrate-token\n\nbody of {i}")
+        }
+    });
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    let (found, spawns) =
+        crate::process::count_spawns(|| repo.search(text_query("hydrate-token")).unwrap());
+    assert_eq!(found.commits.len(), 80);
+    assert!(!found.truncated);
+    // Previously ~3 processes per result (~240). Now: state reads + one log
+    // stream + one `cat-file --batch`.
+    assert!(spawns <= 10, "search launched {spawns} processes");
+    let expected = git(
+        d.path(),
+        &["log", "--topo-order", "--grep=hydrate-token", "--format=%H"],
+    );
+    assert_eq!(
+        found
+            .commits
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect::<Vec<_>>(),
+        expected.lines().collect::<Vec<_>>()
+    );
+    for index in [0, 1, 39, 79] {
+        let summary = &found.commits[index];
+        assert_eq!(
+            serde_json::to_value(summary).unwrap(),
+            serde_json::to_value(repo.commit(&summary.id).unwrap().summary).unwrap()
+        );
+    }
+}
+
+#[test]
+fn search_truncation_boundary_and_process_count_with_501_matches() {
+    let d = init();
+    // Commit 0 (the oldest) lacks the "alpha" token: 500 alpha matches, 501 boundary matches.
+    import_linear(d.path(), 501, |i| {
+        if i == 0 {
+            "boundary 0".into()
+        } else {
+            format!("boundary {i} alpha")
+        }
+    });
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    let (exact, exact_spawns) =
+        crate::process::count_spawns(|| repo.search(text_query("alpha")).unwrap());
+    assert_eq!(exact.commits.len(), 500);
+    assert!(!exact.truncated);
+    let (over, over_spawns) =
+        crate::process::count_spawns(|| repo.search(text_query("boundary")).unwrap());
+    assert_eq!(over.commits.len(), 500);
+    assert!(over.truncated);
+    // 500 results hydrate as three batches (200 + 200 + 100), not 1,500 processes.
+    assert!(exact_spawns <= 12, "{exact_spawns} processes");
+    assert!(over_spawns <= 12, "{over_spawns} processes");
+    let expected = git(d.path(), &["rev-list", "--topo-order", "main"]);
+    assert_eq!(
+        over.commits
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect::<Vec<_>>(),
+        expected.lines().take(500).collect::<Vec<_>>()
+    );
+}
+
+/// Holds the first search on `repo` mid-scan until `release` is signalled. The
+/// searching thread reports `started` once its first record has been scanned.
+fn paused_search(
+    repo: std::sync::Arc<crate::repository::Repository>,
+    text: &'static str,
+) -> (
+    std::thread::JoinHandle<Result<SearchResult>>,
+    std::sync::mpsc::Receiver<()>,
+    std::sync::mpsc::Sender<()>,
+) {
+    let (started_tx, started) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel::<()>();
+    let worker = std::thread::spawn(move || {
+        let mut first = true;
+        crate::repository::SEARCH_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                if std::mem::take(&mut first) {
+                    started_tx.send(()).unwrap();
+                    release_rx
+                        .recv_timeout(std::time::Duration::from_secs(20))
+                        .unwrap();
+                }
+            }));
+        });
+        repo.search(text_query(text))
+    });
+    (worker, started, release)
+}
+
+#[test]
+fn a_newer_search_cancels_the_in_flight_one_for_the_same_session() {
+    let d = init();
+    import_linear(d.path(), 600, |i| format!("scan {i}"));
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    let (first, started, release) = paused_search(repo.clone(), "matches-nothing");
+    started
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .unwrap();
+    // The superseding search runs on this thread (no hook installed here).
+    let second = repo.search(text_query("scan 599")).unwrap();
+    assert_eq!(second.commits.len(), 1);
+    release.send(()).unwrap();
+    let error = first.join().unwrap().unwrap_err();
+    assert_eq!(error.code, "cancelled");
+    assert_eq!(error.message, "Search superseded");
+    // A finished search leaves nothing behind to cancel.
+    assert_eq!(
+        repo.search(text_query("scan 1")).unwrap().commits.len(),
+        111
+    );
+}
+
+#[test]
+fn repository_cancel_search_is_a_no_op_when_idle_and_cancels_when_in_flight() {
+    let d = init();
+    import_linear(d.path(), 50, |i| format!("scan {i}"));
+    let (service, _data, handle) = service_for(d.path());
+    service.cancel_search(&handle).unwrap();
+    service.cancel_search("unknown-handle").unwrap();
+    // Cancelling an idle session does not poison the next search.
+    assert_eq!(
+        service
+            .repo(&handle)
+            .unwrap()
+            .search(text_query("scan 7"))
+            .unwrap()
+            .commits
+            .len(),
+        1
+    );
+    let repo = service.repo(&handle).unwrap();
+    let (running, started, release) = paused_search(repo, "matches-nothing");
+    started
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .unwrap();
+    service.cancel_search(&handle).unwrap();
+    release.send(()).unwrap();
+    assert_eq!(running.join().unwrap().unwrap_err().code, "cancelled");
+}
+
+#[test]
+fn closing_a_session_cancels_its_in_flight_search_with_code_cancelled() {
+    let d = init();
+    import_linear(d.path(), 50, |i| format!("scan {i}"));
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    let (running, started, release) = paused_search(repo, "matches-nothing");
+    started
+        .recv_timeout(std::time::Duration::from_secs(20))
+        .unwrap();
+    service.close(&handle).unwrap();
+    release.send(()).unwrap();
+    // The in-flight search reports `cancelled` (not invalidHandle); new lookups fail.
+    assert_eq!(running.join().unwrap().unwrap_err().code, "cancelled");
+    assert_eq!(service.repo(&handle).err().unwrap().code, "invalidHandle");
 }

@@ -1,5 +1,6 @@
 mod askpass;
 mod branch_delete;
+mod bridge;
 pub mod editor;
 
 mod clone;
@@ -101,7 +102,7 @@ async fn provider_pull_requests(
     handle: String,
     remote: String,
     account_id: String,
-) -> Result<Vec<provider_pr::ProviderPullRequest>> {
+) -> Result<provider_pr::ProviderPullRequests> {
     let accounts = accounts.inner().clone();
     with_service(state, move |s| {
         s.provider_pull_requests(&accounts, &handle, &remote, &account_id)
@@ -537,6 +538,11 @@ async fn repository_search(
 ) -> Result<SearchResult> {
     with_service(state, move |s| s.repo(&handle)?.search(query)).await
 }
+/// Cancels the session's in-flight search, if any; a no-op otherwise.
+#[tauri::command]
+async fn repository_cancel_search(state: tauri::State<'_, Shared>, handle: String) -> Result<()> {
+    with_service(state, move |s| s.cancel_search(&handle)).await
+}
 #[tauri::command]
 async fn wsl_distributions() -> Result<Vec<WslDistribution>> {
     blocking(wsl::distributions).await
@@ -625,9 +631,11 @@ pub fn run() {
                 window.state::<Shared>().cancel_all_clones();
                 if let Some(askpass) = window.try_state::<Arc<askpass::AskpassRegistry>>() {
                     askpass.cancel_all();
+                    askpass.cleanup();
                 }
                 if let Some(editor) = window.try_state::<Arc<editor::EditorRegistry>>() {
                     editor.cancel_all();
+                    editor.cleanup();
                 }
             }
         })
@@ -659,6 +667,7 @@ pub fn run() {
             repository_diff_files,
             repository_diff,
             repository_search,
+            repository_cancel_search,
             repository_stage,
             repository_unstage,
             repository_discard,

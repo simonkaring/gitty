@@ -15,6 +15,7 @@ import { loadPersistedTabs, locationLabel, savePersistedTabs, tabsReducer, type 
 import { errorMessage, handleWindowDrag, native } from '../model/native';
 import { DEMO_REPOS, demoLocation } from '../model/demoBackend';
 import { cloneReducer, type CloneProgress, type CloneRequest } from '../model/clone';
+import { ErrorBoundary } from './ErrorBoundary';
 import { DEFAULT_BUTTON_LAYOUT, parseWindowButtonLayout, WindowControls, WindowResizeHandles } from './WindowControls';
 
 function initialTabsState(demo: boolean): TabsState {
@@ -156,11 +157,11 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
     {clone.status === 'error' && <Toast tone="error" onDismiss={() => dispatchClone({ type: 'dismiss' })}>Clone failed: {clone.message}</Toast>}
     {!tabs.length ? startPage()
       : tabs.map(tab => <div key={tab.id} id={`tabpanel-${tab.id}`} role="tabpanel" aria-labelledby={`tab-${tab.id}`} hidden={tab.id !== activeId} className="tab-pane-host">
-        {!tab.location ? startPage(tab.id) : <RepositoryPane tabId={tab.id} location={tab.location} active={tab.id === activeId}
+        <ErrorBoundary label="This repository view hit an error">{!tab.location ? startPage(tab.id) : <RepositoryPane tabId={tab.id} location={tab.location} active={tab.id === activeId}
           sidebarOpen={sidebarOpen} inspectorOpen={inspectorOpen} inspectorWidth={inspectorWidth} sidebarWidth={sidebarWidth}
           setInspectorWidth={setInspectorWidth} setSidebarWidth={setSidebarWidth} setInspectorOpen={setInspectorOpen}
           onIdentity={handleIdentity} onBusyChange={handleBusyChange} onMeta={handleMeta}
-          paletteOpen={paletteOpen} onOpenPalette={() => setPaletteOpen(true)} onClosePalette={() => setPaletteOpen(false)} workspaceCommands={workspaceCommands} />}
+          paletteOpen={paletteOpen} onOpenPalette={() => setPaletteOpen(true)} onClosePalette={() => setPaletteOpen(false)} workspaceCommands={workspaceCommands} />}</ErrorBoundary>
       </div>)}
     {!activeTab?.location && paletteOpen && <CommandPalette commands={workspaceCommands} onClose={() => setPaletteOpen(false)} />}
     <SettingsDialog demo={demo} onToggleDemo={onToggleDemo ? requestDemo : undefined} demoBusy={anyBusy} />

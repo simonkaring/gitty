@@ -28,7 +28,7 @@ try {
   const nodes = page.locator('.graph-avatar-node');
   await nodes.first().waitFor();
   assert.equal(await nodes.locator('img').count(), 0);
-  assert.equal(await page.locator('[id="commit-gitty:working-tree"] .graph-avatar-node').count(), 0);
+  assert.equal(await page.locator('[id$="-commit-gitty:working-tree"] .graph-avatar-node').count(), 0);
   const checkAlignment = () => page.waitForFunction(() => [...document.querySelectorAll('.graph-avatar-node')].every(node => {
     const rect = node.getBoundingClientRect(), cell = node.closest('.commit-graph-cell').getBoundingClientRect();
     const avatar = node.querySelector('.avatar').getBoundingClientRect();

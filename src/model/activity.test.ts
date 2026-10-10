@@ -87,7 +87,7 @@ describe('activity log', () => {
         userCredential: 'creds',
       },
     };
-    const summary = summarizeArgs(raw);
+    const summary = summarizeArgs('repository_test', raw);
     expect(summary).not.toContain('ghp_secret123');
     expect(summary).not.toContain('super-secret-password');
     expect(summary).not.toContain('creds');
@@ -96,7 +96,7 @@ describe('activity log', () => {
   });
 
   it('strips credentials from URLs in arguments and errors', () => {
-    const summary = summarizeArgs({ request: { source: 'https://user:p@ss@example.com/repo.git?access_token=abc#frag', directoryName: 'repo' } });
+    const summary = summarizeArgs('repository_test', { request: { source: 'https://user:p@ss@example.com/repo.git?access_token=abc#frag', directoryName: 'repo' } });
     expect(summary).toBe('{"request":{"source":"https://[redacted]@example.com/repo.git?[redacted]","directoryName":"repo"}}');
     expect(scrubUrls('fatal: unable to access https://u:secret@host/x.git/: 403')).toBe('fatal: unable to access https://[redacted]@host/x.git/: 403');
     clearActivityLog();
@@ -107,15 +107,15 @@ describe('activity log', () => {
   it('safely handles circular or unserializable arguments', () => {
     const circular: Record<string, unknown> = { a: 1 };
     circular.self = circular;
-    expect(summarizeArgs(circular)).toBe('[unserializable]');
+    expect(summarizeArgs('repository_test', circular)).toBe('[unserializable]');
 
     const withBigInt = { num: BigInt(9007199254740991) };
-    expect(summarizeArgs(withBigInt)).toBe('[unserializable]');
+    expect(summarizeArgs('repository_test', withBigInt)).toBe('[unserializable]');
   });
 
   it('keeps long arguments whole up to a large bound, then says what was dropped', () => {
-    expect(summarizeArgs({ data: 'a'.repeat(5000) })).toHaveLength('{"data":""}'.length + 5000);
-    const summary = summarizeArgs({ data: 'a'.repeat(100_000) });
+    expect(summarizeArgs('repository_test', { data: 'a'.repeat(5000) })).toHaveLength('{"data":""}'.length + 5000);
+    const summary = summarizeArgs('repository_test', { data: 'a'.repeat(100_000) });
     expect(summary).toMatch(/more characters not kept\]$/);
     expect(summary.length).toBeLessThan(65_700);
   });
@@ -133,5 +133,43 @@ describe('activity log', () => {
 
     // Ending an evicted id (e.g. id = 1) should be a safe no-op
     expect(() => recordCommandEnd(1, 'success', 10)).not.toThrow();
+  });
+
+  it('never retains resolved conflict text, only its size', () => {
+    clearActivityLog();
+    const secretText = 'API_KEY=hunter2\nüñí';
+    const args = { handle: 'h1', path: 'src/a.ts', fingerprint: 'fp1', resolution: { kind: 'text', content: secretText } };
+    recordCommandEnd(recordCommandStart('repository_resolve_conflict', args), 'success', 1);
+    const [entry] = getActivityLog();
+    expect(JSON.stringify(getActivityLog())).not.toContain('hunter2');
+    expect(JSON.parse(entry.args)).toEqual({ handle: 'h1', path: 'src/a.ts', fingerprint: 'fp1', resolution: { kind: 'text', contentBytes: new TextEncoder().encode(secretText).length } });
+    // Non-text resolutions keep only their kind.
+    expect(summarizeArgs('repository_resolve_conflict', { path: 'a', fingerprint: 'f', resolution: { kind: 'ours' } })).toBe('{"path":"a","fingerprint":"f","resolution":{"kind":"ours"}}');
+  });
+
+  it('omits any content key generically', () => {
+    const summary = summarizeArgs('repository_other', { nested: { content: 'top secret body' }, list: [{ content: 'also secret' }], content: 42 });
+    expect(summary).not.toContain('secret');
+    expect(JSON.parse(summary)).toEqual({ nested: { content: { bytes: 15 } }, list: [{ content: { bytes: 11 } }], content: '[content omitted]' });
+  });
+
+  it('clips very long errors', () => {
+    clearActivityLog();
+    recordCommandEnd(recordCommandStart('repository_push', {}), 'error', 1, 'e'.repeat(200_000));
+    const error = getActivityLog()[0].error!;
+    expect(error.length).toBeLessThan(65_700);
+    expect(error).toMatch(/more characters not kept\]$/);
+  });
+
+  it('evicts oldest entries beyond the total byte budget', () => {
+    clearActivityLog();
+    for (let i = 0; i < 120; i++) recordCommandStart(`cmd_${i}`, { data: 'x'.repeat(60_000) });
+    const entries = getActivityLog();
+    expect(entries.length).toBeLessThan(120);
+    expect(entries.length).toBeGreaterThan(10);
+    expect(entries.reduce((n, e) => n + e.command.length + e.args.length, 0)).toBeLessThanOrEqual(4 * 1024 * 1024);
+    expect(entries[entries.length - 1].command).toBe('cmd_119');
+    expect(entries.some(e => e.command === 'cmd_0')).toBe(false);
+    clearActivityLog();
   });
 });

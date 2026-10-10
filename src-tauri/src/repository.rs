@@ -8,7 +8,7 @@ use std::{
     hash::{Hash, Hasher},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{atomic::AtomicBool, atomic::Ordering, Arc, Mutex, MutexGuard},
 };
 
 pub fn fingerprint(data: impl Hash) -> String {
@@ -62,10 +62,12 @@ impl Walk {
         let stream = if tips.is_empty() {
             None
         } else {
-            let mut a = args(&["rev-list", "--date-order"]);
-            a.extend(tips);
-            a.push("--".into());
-            Some(crate::stream::GitStream::git(location, &a, b'\n', 128)?)
+            // Tips travel on stdin: hundreds of distinct ref tips overflow argv limits.
+            let a = args(&["rev-list", "--date-order", "--stdin", "--"]);
+            let input = crate::stream::revision_input(&tips)?;
+            Some(crate::stream::GitStream::git_with_input(
+                location, &a, &input, b'\n', 128,
+            )?)
         };
         Ok(Self {
             stream,
@@ -116,6 +118,9 @@ impl Walk {
 pub struct Repository {
     pub session: RepositorySession,
     pub(crate) history: Mutex<History>,
+    /// Cancel flag of the one in-flight search, if any. Held only to swap the flag,
+    /// never across a Git subprocess.
+    search: Mutex<Option<Arc<AtomicBool>>>,
 }
 #[derive(Default)]
 pub(crate) struct History {
@@ -244,6 +249,7 @@ impl Service {
         let repo = Repository {
             session,
             history: Mutex::new(History::default()),
+            search: Mutex::new(None),
         };
         let state = repo.state()?;
         // Only recent-file updates serialize with one another; discovery and every
@@ -404,15 +410,59 @@ impl Service {
             repo.change_hunk(path, hunk_index, fingerprint, true, line_indices.as_deref())
         })
     }
+    /// Cancels the session's in-flight search. Idle or already-closed sessions are
+    /// a no-op: a cancel racing with close or completion is not an error.
+    pub fn cancel_search(&self, handle: &str) -> Result<()> {
+        let repo = lock(&self.repositories)?.get(handle).cloned();
+        if let Some(repo) = repo {
+            repo.cancel_search();
+        }
+        Ok(())
+    }
     pub fn close(&self, handle: &str) -> Result<()> {
         let removed = lock(&self.repositories)?.remove(handle);
         // Reaping pinned streams must never hold the registry lock. In-flight
-        // requests retain their Arc and may finish; subsequent lookups fail.
+        // requests retain their Arc and may finish; subsequent lookups fail. A
+        // search would otherwise keep scanning for a session nobody can read.
+        if let Some(repo) = &removed {
+            repo.cancel_search();
+        }
         drop(removed);
         Ok(())
     }
 }
+/// Unregisters a finished search, unless a newer one has already replaced it.
+struct SearchSlot<'a> {
+    repo: &'a Repository,
+    flag: Arc<AtomicBool>,
+}
+impl Drop for SearchSlot<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = self.repo.search.lock() {
+            if slot.as_ref().is_some_and(|f| Arc::ptr_eq(f, &self.flag)) {
+                *slot = None;
+            }
+        }
+    }
+}
+// Test seam: runs on the searching thread after each scanned record, so a test
+// can hold a search mid-scan deterministically instead of racing a fast Git.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static SEARCH_HOOK: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+fn search_superseded() -> Error {
+    Error::new("cancelled", "Search superseded")
+}
 impl Repository {
+    /// Cancels the in-flight search of this session, if any.
+    pub fn cancel_search(&self) {
+        let flag = self.search.lock().ok().and_then(|mut slot| slot.take());
+        if let Some(flag) = flag {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
     pub fn location(&self) -> &RepositoryLocation {
         &self.session.location
     }
@@ -808,11 +858,35 @@ impl Repository {
             fingerprint,
         })
     }
+    /// At most one search runs per session: starting one cancels the previous, which
+    /// fails with the `cancelled` code (as does closing the session).
     pub fn search(&self, query: SearchQuery) -> Result<SearchResult> {
         if query.text.len() > 4096 {
             return Err(Error::new("invalidQuery", "Search text is too long"));
         }
+        let flag = Arc::new(AtomicBool::new(false));
+        let previous = lock(&self.search)?.replace(flag.clone());
+        if let Some(previous) = previous {
+            previous.store(true, Ordering::Relaxed);
+        }
+        let _slot = SearchSlot {
+            repo: self,
+            flag: flag.clone(),
+        };
+        self.search_with(query, &flag).map_err(|e| {
+            if e.code == "cancelled" {
+                search_superseded()
+            } else {
+                e
+            }
+        })
+    }
+    fn search_with(&self, query: SearchQuery, cancel: &Arc<AtomicBool>) -> Result<SearchResult> {
+        let cancelled = || cancel.load(Ordering::Relaxed);
         let state = self.state()?;
+        if cancelled() {
+            return Err(search_superseded());
+        }
         let needle = query.text.to_lowercase();
         let mut ref_matches: HashSet<String> = state
             .refs
@@ -853,15 +927,23 @@ impl Repository {
         if let Some(until) = query.until {
             a.push(format!("--until={until}"));
         }
-        a.extend(tips);
-        a.push("--".into());
+        // Tips travel on stdin; the pathspec after `--` stays on argv.
+        a.extend(args(&["--stdin", "--"]));
         if let Some(path) = query.path {
             validate_path(&path)?;
             a.push(path);
         }
+        let input = crate::stream::revision_input(&tips)?;
         // Apply structural filters in Git once, then OR textual fields on that same
         // topological stream. --grep plus --author would incorrectly be an AND.
-        let mut stream = crate::stream::GitStream::git(self.location(), &a, 0, 32 * 1024 * 1024)?;
+        let mut stream = crate::stream::GitStream::git_with_input(
+            self.location(),
+            &a,
+            &input,
+            0,
+            32 * 1024 * 1024,
+        )?
+        .with_cancel(cancel.clone());
         let mut ids = Vec::new();
         while let Some(raw) = stream.next()? {
             let id = process::text(raw)?.trim_start_matches('\n').to_string();
@@ -881,6 +963,12 @@ impl Repository {
             let author = field()?;
             let email = field()?;
             let message = field()?;
+            #[cfg(test)]
+            SEARCH_HOOK.with(|hook| {
+                if let Some(hook) = hook.borrow_mut().as_mut() {
+                    hook();
+                }
+            });
             if needle.is_empty()
                 || id.starts_with(&needle)
                 || author.to_lowercase().contains(&needle)
@@ -895,11 +983,18 @@ impl Repository {
             }
         }
         drop(stream);
-        let commits = ids
-            .iter()
-            .take(500)
-            .map(|id| self.commit(id).map(|c| c.summary))
-            .collect::<Result<_>>()?;
+        // Results need only summaries: one `cat-file --batch` per chunk of IDs
+        // instead of rev-parse + cat-file + an eligibility check per result.
+        let mut commits = Vec::with_capacity(ids.len().min(500));
+        for chunk in ids[..ids.len().min(500)].chunks(200) {
+            if cancelled() {
+                return Err(search_superseded());
+            }
+            commits.extend(crate::commit::batch(self.location(), chunk)?);
+        }
+        if cancelled() {
+            return Err(search_superseded());
+        }
         Ok(SearchResult {
             commits,
             truncated: ids.len() > 500,

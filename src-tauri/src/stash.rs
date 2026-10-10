@@ -65,7 +65,7 @@ impl Repository {
         Ok(entries)
     }
 
-    fn stash_action(&self, action: StashAction) -> Result<ActionOutput> {
+    pub(crate) fn stash_action(&self, action: StashAction) -> Result<ActionOutput> {
         self.require_writable()?;
         if !self.unmerged()?.is_empty() {
             return Err(Error::new(
@@ -104,7 +104,9 @@ impl Repository {
                 }
                 a.push("--".into());
             }
-            StashAction::Apply { oid } | StashAction::Pop { oid } | StashAction::Drop { oid } => {
+            StashAction::Apply { oid, .. }
+            | StashAction::Pop { oid, .. }
+            | StashAction::Drop { oid } => {
                 if !matches!(oid.len(), 40 | 64) || !oid.bytes().all(|b| b.is_ascii_hexdigit()) {
                     return Err(Error::new(
                         "invalidStash",
@@ -128,7 +130,20 @@ impl Repository {
                 } else {
                     // Apply the pinned object, not a selector an external Git
                     // process could have renumbered while we checked the tree.
-                    a.extend(args(&["apply", "--", oid]));
+                    a.push("apply".into());
+                    if matches!(
+                        action,
+                        StashAction::Apply {
+                            restore_index: true,
+                            ..
+                        } | StashAction::Pop {
+                            restore_index: true,
+                            ..
+                        }
+                    ) {
+                        a.push("--index".into());
+                    }
+                    a.extend(args(&["--", oid]));
                     let applied = action_result(self.write(&a, &[], &[], 0)?)?;
                     if verb == "apply" {
                         return Ok(applied);
@@ -157,5 +172,43 @@ impl Repository {
             }
         }
         action_result(self.write(&a, &[], &[], 0)?)
+    }
+
+    /// An explicitly requested merge save, identified independently of reflog order.
+    pub(crate) fn save_merge_work(&self) -> Result<Option<StashEntry>> {
+        if self.status_entries()?.entries.is_empty() {
+            return Ok(None);
+        }
+        let label = format!("Gitty merge work {}", crate::repository::token());
+        let saved = (|| {
+            self.stash_action(StashAction::Save {
+                message: Some(label.clone()),
+                include_untracked: true,
+            })?;
+            let mut matches = self
+                .stashes()?
+                .into_iter()
+                .filter(|stash| stash.message.ends_with(&label));
+            let stash = matches.next().ok_or_else(|| {
+                Error::new(
+                    "mutationUnverified",
+                    "The saved merge stash could not be identified.",
+                )
+            })?;
+            if matches.next().is_some() {
+                return Err(Error::new(
+                    "mutationUnverified",
+                    "The saved merge stash is ambiguous.",
+                ));
+            }
+            if !self.status_entries()?.entries.is_empty() {
+                return Err(Error::new(
+                    "dirtyWorktree",
+                    "Some local changes could not be stashed. The merge was not attempted.",
+                ));
+            }
+            Ok(Some(stash))
+        })();
+        saved.map_err(|error: Error| Error::new(&error.code, format!("{} Refresh and inspect local work and Stashes before retrying. Any saved work is labeled '{label}'.", error.message)))
     }
 }

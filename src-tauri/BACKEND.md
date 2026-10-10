@@ -73,7 +73,12 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   state, search, status, and diff reads run independently. Closing invalidates the
   handle immediately; acquired requests may finish before resources are released.
 - History resolves current local/remote/tag refs and HEAD to concrete commit IDs,
-  then starts **one** `rev-list --date-order <captured IDs> --` process per generation.
+  then starts **one** `rev-list --date-order --stdin --` process per generation. The
+  captured IDs are supplied newline-separated on stdin (a bounded anonymous file,
+  16 MiB cap; tip IDs are at most 65 bytes), never on argv, so repositories with
+  hundreds of refs cannot exceed Windows' ~32 KiB command-line limit. Search
+  likewise feeds its tips to `git log … --stdin -- [path]`; only the optional
+  pathspec stays on argv.
   History rows use committer timestamps, matching this ordering; original author dates
   remain in the underlying commit objects.
   It consumes only the requested page plus one lookahead ID. Backpressure pauses
@@ -101,6 +106,23 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   OR-matched in the backend and matching IDs are deduplicated by that single walk.
   Results are capped at 500, with a 501st match setting `truncated`. A scan that cannot
   finish within the request budget returns a timeout rather than incomplete results.
+  Result summaries are hydrated with `cat-file --batch` in chunks of at most 200 IDs
+  (the same strict-framing reader as history pages), preserving scan order: a full
+  500-result search launches about nine processes in total instead of roughly three
+  per result. Search needs only `CommitSummary`, so it does not run the per-commit
+  message-edit eligibility check that `repository_commit` does.
+  **Cancellation:** a session runs at most one search. `repository_search` registers a
+  cancel flag at start and cancels the session's previous in-flight search, which then
+  fails with `{code: "cancelled", message: "Search superseded"}` (clients treat it as
+  silent). `repository_cancel_search({handle}) -> void` cancels the in-flight search of
+  that session and is a no-op when none is running or the handle is unknown/closed.
+  Closing a session also cancels its in-flight search; that search fails with
+  `cancelled` (not `invalidHandle`). The flag is polled every ~10 ms while waiting for
+  Git and per record, so a scan that has produced no output is interrupted promptly,
+  and again before each hydration chunk and before returning; dropping the stream
+  kills and reaps Git. The flag is swapped under a short per-session lock that is never
+  held across a subprocess, and a search superseded after it has finished scanning
+  still returns `cancelled`.
   Date filtering uses `--since-as-filter` to avoid pruning newer ancestors behind a
   timestamp-skewed commit (requires Git 2.37+). Summary parents always come from the
   actual commit objects, never path-simplified log parent lists.
@@ -404,17 +426,33 @@ or browser preferences. WSL keeps its own distribution credential handling.
 `provider_pull_requests` and
 `provider_create_pull_request` call bounded, host-specific HTTPS provider APIs
 for a selected connected account. PR creation is explicit and does not push.
+`provider_pull_requests` requests one page of 50 open requests and returns
+`{ requests: ProviderPullRequest[], truncated: boolean }` (camelCase). The list
+envelope is provider-specific: GitHub/GitLab return a top-level array, Azure
+DevOps `{"value":[…],"count":N}`, Bitbucket `{"values":[…],"next":"…"}`.
+`truncated` is also per provider: GitHub is true when the `Link` header has
+`rel="next"`, GitLab when `x-next-page` is non-empty (both fall back to "the page
+holds 50 entries" if headers are unavailable); Azure DevOps when `count` or the
+`value` length reaches 50 (`$top=50`; no continuation header is consulted, so an
+exactly-full final page is reported truncated); Bitbucket when the envelope has a
+`next` link. Later pages are not fetched.
 
 - The native pane schedules a fetch of the selected/configured remote about every
   five minutes while active and visible. The backend's `backgroundFetch` action
   uses an explicit `refs/heads/*:refs/remotes/<remote>/*` refspec with `--no-tags`
   and no pruning; it never moves local heads, checks out, merges, or rebases.
-  The normal mutation lock and post-action refresh apply even on failure.
+  It intentionally bypasses `Service::mutate` (no Gitty mutation lock and no
+  read-deadline wrapper): it only moves `refs/remotes/*`, relies on Git's own ref
+  locks, and must not block local writes behind a slow network. Explicit
+  fetch/pull/push still take the mutation lock, and the caller refreshes after
+  any action result, including failure.
 - Background fetch remains noninteractive (`credential.interactive=false` plus
   `GCM_INTERACTIVE=false`) and can use existing credentials and SSH agents.
-  Explicit clone/fetch/pull/push allow helper sign-in. Native operations can use
-  a local per-app askpass bridge when those cannot supply credentials. Gitty
-  keeps answers in memory only. A cancelled or expired prompt fails the helper,
+  Explicit clone/fetch/pull/push (and origin branch deletion) allow helper
+  sign-in. Native operations can use a local askpass bridge when those cannot
+  supply credentials; each operation holds its own scoped token (an
+  `AskpassGuard`), so its pending prompts are cancelled when it ends. The
+  app-lifetime token is not given to Git. Gitty keeps answers in memory only. A cancelled or expired prompt fails the helper,
   and a prompt has a 90-second response deadline within Git's write deadline.
   On Windows, explicit WSL fetch/pull/push/branch deletion can use a per-operation scoped askpass
   bridge when `wslpath` translates the Gitty executable for Windows interop.
@@ -428,6 +466,16 @@ for a selected connected account. PR creation is explicit and does not push.
   explicit actions explain this. No user credential is embedded in a Git argument;
   ad-hoc prompt answers are not retained, while connected account tokens remain
   in the OS credential store until disconnected.
+- The askpass and editor loopback bridges bound unauthenticated input: the token
+  line is at most 256 bytes and the prompt line 4 KiB (editor frames keep their
+  128-byte token / 4096-byte path limits), the request must complete within an
+  absolute 10-second handshake deadline (the 90-second prompt wait is separate),
+  writes time out after 5 seconds, and at most 16 connections per bridge are
+  served at once; extra connections are dropped unread. See `src/bridge.rs`.
+- The helper scripts (`gitty-askpass-<uuid>`, `gitty-editor-<uuid>`) are removed
+  on window close, and stale ones older than seven days are cleaned from the temp
+  directory at startup (exact-name regular files only; symlinks and directories
+  are never touched).
 - Origin branch deletion uses the same explicit network, credential-helper,
   native/WSL askpass, activity-log, and write-deadline infrastructure as push.
 - The frontend auto-fetches only the focused tab of a visible window: when a
@@ -512,7 +560,7 @@ remain unverified and require refresh/review.
   local changes that Git can safely preserve; other new actions require a clean
   worktree/index, including no untracked files (except carrying a branch switch,
   described below). Bare repositories are rejected. Gitty never forces,
-  automatically stashes, removes locks or automatically retries writes. Branch
+  stashes without an explicit request, removes locks or automatically retries writes. Branch
   deletion is the narrow exception to the no-force rule: local `-D` follows a
   separately confirmed, positively classified `-d` failure; origin deletion
   uses an expected-OID force-with-lease on one explicit refspec.
@@ -528,12 +576,42 @@ remain unverified and require refresh/review.
   changes a tracked path that has local changes, so conflicts return as an
   `OperationResult` with `operation.conflicts` for the conflict editor (this can
   restage merged paths). Untracked/ignored obstructions are still refused by Git. Merges target the
-  current local branch with explicit `--ff` or `--no-ff`, and `--no-edit`.
+  current local branch (or switch to an explicit local `destination` first) with
+  explicit `--ff` or `--no-ff`, and `--no-edit`. An optional merge `message` is
+  validated before any destination switch: nonblank, at most 64 KiB of UTF-8,
+  and no NUL. Native Git reads an operation-owned temporary file; WSL Git reads
+  the message from stdin via `--file=/dev/stdin`. Absent messages retain
+  Git's generated default. The merge dialog supplies an editable source/destination
+  message and displays it during review. The dialog defaults `noFastForward` to
+  `true`; users can uncheck **Always create a merge commit** to allow fast-forward.
+  Fast-forward merges create no commit and
+  ignore the message. Conflict-producing merges retain it in Git's `MERGE_MSG`
+  for continuation, including after restarting the application; Git's cleanup,
+  hooks and signing remain active.
   Git preserves unrelated local changes and refuses changes that would be
   overwritten or ordinary staged changes that would enter a true merge commit.
   Switch/merge refuse ignored-file overwrites. Rebase/cherry-pick preflight
   destination/replay trees, including queued continuation steps, for obstructing
   ignored or untracked files.
+- Merge `stashChanges` is optional and defaults to `false`. Explicit opt-in saves
+  staged, unstaged and untracked work with `stash push --include-untracked` under
+  the same mutation lock as the merge. Reviewed state, message and targets are
+  validated before saving; saved work is identified by its unique **Gitty merge
+  work** label and pinned OID, not its reflog position. Any work not cleared by
+  stash prevents the merge. Ignored files are not saved; the existing obstruction
+  safeguards still apply. Targets and HEAD are rechecked after saving, and only
+  the stash-induced expected operation fingerprint is replaced.
+  A clean merge restores with `stash apply --index <oid>` and drops only that
+  stash after success, re-resolving the selector. Conflicted merges retain it and
+  return an optional `OperationResult.notice` with recovery instructions. Continue
+  and Abort do not automatically reapply it: the caller recovers through Stashes
+  after the operation finishes, including after application restart. Post-save
+  merge errors include the saved-work identity and report `mergeWorkSaved` or
+  `mutationUnverified`. Restoration/removal failures report `mergeWorkSaved`,
+  explaining that the merge already completed and the stash must not be blindly
+  reapplied. Final state is refreshed after all outcomes.
+  Stash Apply/Pop accept optional `restoreIndex` (IPC default `false`); the stash
+  dialog enables it by default and provides a checkbox to opt out.
 - Rebase is noninteractive, uses the merge backend and disables autostash,
   autosquash and update-refs. A range containing merge commits is rejected with
   `mergeHistory` rather than silently flattening it. Detached merge/rebase
@@ -679,7 +757,9 @@ wsl_tests`). They create temporary repositories under `/tmp` inside the
 distribution and cover opening a path with spaces/Unicode, state, status and
 untracked-content fingerprints, stage/commit, index-lock detection, background
 fetch, pull and push against a local bare remote, and report refresh timing.
-Without the variable they return immediately.
+Without the variable they return immediately. A test-only, per-thread process-launch
+counter (`process::count_spawns`, propagated into `process::parallel` workers) lets
+tests assert launch counts for search hydration and the WSL metadata scan.
 
 Windows Job Objects and the graphical picker require platform/UI
 integration testing; they are not exercised by the macOS unit test suite. Killing
@@ -687,8 +767,18 @@ the Windows WSL launcher cannot promise termination of every Linux descendant
 inside the distribution. The app does not terminate an entire WSL distribution.
 Under WSL, the Git-directory listing used for lock and operation detection runs
 `find -maxdepth 1` in the distribution and therefore needs the same GNU `find`
-the browser already requires; it is not covered by the macOS suite. Graph
+the browser already requires; it is not covered by the macOS suite. Operation
+metadata (the 29 files under the Git directory that feed the operation fingerprint)
+is likewise determined with one `find -L <git_dir> -mindepth 1 -maxdepth 2 -print0`
+launch instead of a `test -e` per path; only files the scan lists are then read with
+`cat` (ordinarily none), and a listed directory still fails at `cat` exactly as it did
+after `test -e`. A non-zero `find` exit returns the same error as before. The
+output-parsing function is unit-tested on every platform, and
+`wsl_operation_metadata_uses_one_existence_scan` asserts the launch count, but the
+single-process scan **still requires Windows/WSL runtime validation** (it has never
+been run against a real distribution). A file removed between the scan and its `cat`
+surfaces as a Git error, where before the narrower `test`/`cat` window did the same. Graph
 operations, regular-file conflict resolution, hunk staging, stashes, remote
 operations, amend, and cloning are described above. Line staging and a scoped
 WSL askpass bridge have local tests; Windows/WSL runtime checks remain open.
-The current suite includes 189 passing library tests (one ignored) and two binary tests on macOS. One signing test, `operations_unsupported_state_bare_and_signing_errors`, depends on the machine's global Git configuration: a global `gpg.format =` with an empty value makes Git abort while reading configuration, which no repository-local setting can override, so run it with `GIT_CONFIG_GLOBAL=/dev/null` on such a machine.
+The current suite includes 230 passing library tests (one ignored) and two binary tests on macOS. One signing test, `operations_unsupported_state_bare_and_signing_errors`, depends on the machine's global Git configuration: a global `gpg.format =` with an empty value makes Git abort while reading configuration, which no repository-local setting can override, so run it with `GIT_CONFIG_GLOBAL=/dev/null` on such a machine.

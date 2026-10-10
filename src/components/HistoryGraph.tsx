@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Check, GitMerge, Globe2, Laptop, Settings as SettingsIcon, Tag } from 'lucide-react';
 import { indexEdges, laneX, LANE_WIDTH, ROW_HEIGHT, type GraphLayout } from '../graph/layout';
 import { assignBranchColors, branchName } from '../graph/branchColor';
@@ -8,6 +8,23 @@ import type { ActionContext } from './OperationDialog';
 import { DEFAULT_HISTORY_COLUMNS, useSettings, type HistoryColumnId, type ThemeDefinition } from '../model/settings';
 import { HistoryColumnMenu } from './HistoryColumnMenu';
 import { AuthorAvatar } from './AuthorAvatar';
+import { commitIsoString, formatCommitDate } from '../model/dates';
+
+const ROW_DATE: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false };
+
+type GraphRef = GitRef & { fullName?: string };
+/** Refs shown as badges, grouped once per `refs` array by commit (remote HEAD aliases such as origin/HEAD excluded), instead of filtering
+ * every ref for every rendered row. */
+export function groupRefsByCommit<T extends GitRef>(refs: readonly T[]): Map<string, T[]> {
+  const byCommit = new Map<string, T[]>();
+  for (const ref of refs) {
+    if (ref.kind === 'remote' && ref.name.endsWith('/HEAD')) continue;
+    const list = byCommit.get(ref.commitId);
+    if (list) list.push(ref); else byCommit.set(ref.commitId, [ref]);
+  }
+  return byCommit;
+}
+const NO_REFS: GraphRef[] = [];
 
 export interface GraphAnchor { id: string; offset: number }
 export interface GraphHandle { scrollTo: (row: number) => void; focus: () => void; anchor: () => GraphAnchor | null; restore: (anchor: GraphAnchor) => void }
@@ -66,6 +83,7 @@ interface Props {
 
 const MIN_GRAPH_WIDTH = laneX(2) + 14; // three lanes plus padding; also fits the "GRAPH" label
 export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, loaded, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onContextActions, onSwitchBranch, pickOrder, onTogglePick }, ref) {
+  const uid = useId();
   const { settings, updateSettings } = useSettings();
   const graphLaneWidth = settings.graphAuthorAvatars ? 30 : LANE_WIDTH;
   const graphLaneX = useMemo(() => (lane: number) => laneX(0) + lane * graphLaneWidth, [graphLaneWidth]);
@@ -118,7 +136,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const graphX = Math.min(graphScroll, graphScrollMax);
   const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - 8);
   const end = Math.min(loaded, Math.ceil((scrollTop + height) / ROW_HEIGHT) + 8);
-  const selectedIndex = commits.findIndex(commit => commit.id === selectedId);
+  const selectedIndex = useMemo(() => commits.findIndex(commit => commit.id === selectedId), [commits, selectedId]);
+  const refsByCommit = useMemo(() => groupRefsByCommit(refs), [refs]);
   const loadedIds = useMemo(() => new Set(commits.slice(0, loaded).map(commit => commit.id)), [commits, loaded]);
   const visibleEdges = useMemo(() => indexEdges(layout.edges, layout.edgeMaxTo), [layout.edges, layout.edgeMaxTo]);
   const colors = useMemo(() => Array.from({ length: 8 }, (_, index) => theme.colors[`graphLane${index + 1}`]), [theme]);
@@ -178,8 +197,10 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     const ctx = element.getContext('2d');
     if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
-    element.width = graphWidth * dpr;
-    element.height = height * dpr;
+    // Assigning width/height clears and reallocates the backing store, so only do it when the size really changed.
+    const pixelWidth = Math.floor(graphWidth * dpr), pixelHeight = Math.floor(height * dpr);
+    if (element.width !== pixelWidth) element.width = pixelWidth;
+    if (element.height !== pixelHeight) element.height = pixelHeight;
     const y = (row: number) => row * ROW_HEIGHT + ROW_HEIGHT / 2 - scrollTop;
     const bg = theme.colors.bg;
     ctx.setTransform(dpr, 0, 0, dpr, -graphX * dpr, 0);
@@ -303,16 +324,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
 
   const isGraphVisible = visibleColumns.some(c => c.id === 'graph');
 
-  const formatDate = (timestamp: number) => {
-    if (!timestamp) return '';
-    return new Intl.DateTimeFormat('en', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    }).format(timestamp < 1e11 ? timestamp * 1000 : timestamp);
-  };
+  const formatDate = (timestamp: number) => timestamp ? formatCommitDate(timestamp, ROW_DATE, 'en') : '';
 
   return <div className="history-body" style={{
     '--ref-width': `${widths.refs}px`,
@@ -357,8 +369,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       />
     )}
     <div className="graph-viewport">
-      <div className="history-scroll" ref={scroller} role="listbox" aria-label="Commit history" aria-describedby="history-keyboard-help" tabIndex={0}
-        aria-activedescendant={selectedIndex >= start && selectedIndex < end ? `commit-${selectedId}` : undefined}
+      <div className="history-scroll" ref={scroller} role="listbox" aria-label="Commit history" aria-describedby={`${uid}-help`} tabIndex={0}
+        aria-activedescendant={selectedIndex >= start && selectedIndex < end ? `${uid}-commit-${selectedId}` : undefined}
         onScroll={event => { setScrollTop(event.currentTarget.scrollTop); setScrollLeft(event.currentTarget.scrollLeft); }}
         onDragOver={event => { if (![REF_DRAG_TYPE, COMMIT_DRAG_TYPE].some(type => event.dataTransfer.types.includes(type))) return; const bounds = event.currentTarget.getBoundingClientRect(); dragVelocity.current = event.clientY < bounds.top + 45 ? -10 : event.clientY > bounds.bottom - 45 ? 10 : 0; if (!dragFrame.current) autoScroll(); }}
         onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) stopDrag(); }}
@@ -375,9 +387,9 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
             const node = layout.nodes[row];
             const lane = node?.lane ?? 0;
             const branchColor = palette[branchColors.rows[row] ?? lane % colors.length];
-            const badges = refs.filter(ref => ref.commitId === commit.id && !(ref.kind === 'remote' && ref.name.endsWith('/HEAD')));
+            const badges = refsByCommit.get(commit.id) ?? NO_REFS;
             const groups = groupRefs(badges, headRef);
-            return <div key={commit.id} id={`commit-${commit.id}`} role="option" aria-selected={commit.id === selectedId}
+            return <div key={commit.id} id={`${uid}-commit-${commit.id}`} role="option" aria-selected={commit.id === selectedId}
               aria-posinset={row + 1} aria-setsize={commits.length}
               aria-label={`${commit.subject}, ${commit.author}, ${commit.id.slice(0, 7)}${commit.parents.length > 1 ? ', merge commit' : ''}${commit.id === head ? ', HEAD' : ''}${badges.length ? `, ${badges.map(b => b.name).join(', ')}` : ''}`}
               className={`commit-row ${commit.id === selectedId ? 'selected' : ''} ${matches && !matches.has(commit.id) ? 'dimmed' : ''} ${freshIds.has(commit.id) ? 'fresh' : ''}`}
@@ -419,7 +431,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                   return <span key="hash" className="row-hash hash-column">{commit.id === WORKING_ID ? 'Working' : commit.id.slice(0, 7)}</span>;
                 }
                 if (col.id === 'date') {
-                  return <span key="date" className="row-date date-column" title={commit.timestamp ? new Date(commit.timestamp < 1e11 ? commit.timestamp * 1000 : commit.timestamp).toISOString() : ''}>{formatDate(commit.timestamp)}</span>;
+                  return <span key="date" className="row-date date-column" title={commit.timestamp ? commitIsoString(commit.timestamp) : ''}>{formatDate(commit.timestamp)}</span>;
                 }
                 return null;
               })}
@@ -433,6 +445,6 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     <div className="history-bottom"><span><span className="live-dot" />{(loaded - (commits[0]?.id === WORKING_ID ? 1 : 0)).toLocaleString()} commits loaded{shallow ? ' · Shallow repository boundary' : ''}</span>
       {(hasMore ?? loaded < commits.length) ? <button className="text-button" disabled={paging} onClick={onLoadMore}>{paging ? 'Loading…' : 'Load older history ↓'}</button> : <span className="muted">{shallow ? 'Available history loaded' : 'All history loaded'}</span>}
     </div>
-    <span id="history-keyboard-help" className="sr-only">Use Up and Down to select commits, Page Up and Page Down to move a page, Home and End to move to the loaded boundaries. Press Enter to open details.{onActions && ' Press Shift+F10 for commit actions. Tab to a branch badge and press Enter or Shift+F10 for branch actions.'}{onSwitchBranch && ' Double-click a local or origin branch badge to switch branches, creating a local tracking branch if needed.'}</span>
+    <span id={`${uid}-help`} className="sr-only">Use Up and Down to select commits, Page Up and Page Down to move a page, Home and End to move to the loaded boundaries. Press Enter to open details.{onActions && ' Press Shift+F10 for commit actions. Tab to a branch badge and press Enter or Shift+F10 for branch actions.'}{onSwitchBranch && ' Double-click a local or origin branch badge to switch branches, creating a local tracking branch if needed.'}</span>
   </div>;
 });

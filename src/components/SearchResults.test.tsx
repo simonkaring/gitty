@@ -44,3 +44,18 @@ it('shows loading, empty, and retry states without misleading empty results duri
     expect(onClear).toHaveBeenCalledOnce();
   } finally { await act(async () => root.unmount()); }
 });
+
+it('renders commits with out-of-range or non-finite timestamps without throwing', async () => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const host = document.createElement('div'); const root = createRoot(host);
+  const commits = [1e20, NaN, 1_700_000_000].map((timestamp, i) => ({ id: `abcdef${i}`, subject: 'Subject', author: 'Ada', email: 'ada@example.com', parents: [], timestamp }));
+  try {
+    await act(async () => root.render(<SearchResults result={{ commits, truncated: false }} loading={false} error="" query="" refs={[]} selected="" onSelect={() => {}} onReveal={() => {}} onRetry={() => {}} onClear={() => {}} />));
+    const times = Array.from(host.querySelectorAll('time'));
+    expect(times).toHaveLength(3);
+    expect(times[0].textContent).toBe('—');
+    expect(times[0].hasAttribute('datetime')).toBe(false);
+    expect(times[1].textContent).toBe('—');
+    expect(times[2].getAttribute('datetime')).toBe('2023-11-14T22:13:20.000Z');
+  } finally { await act(async () => root.unmount()); }
+});

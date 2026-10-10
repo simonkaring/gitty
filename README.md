@@ -10,7 +10,7 @@ Neutral light and dark themes with a burnt-orange accent, locally bundled **Geis
 
 The graph is the main workspace. Select a commit to inspect its files in the right panel, or select the **Working changes** graph entry to review files, stage changes, and compose a commit there. Selecting a file opens its diff in the center pane; close the diff to return to the graph. The repository action toolbar remains above the workspace. Sidebar and inspector widths persist; narrow windows use collapsible/overlay panes rather than reducing text size. Search and reference scope sit in the sidebar, with date/path filters in a disclosure; when the sidebar is hidden, these controls move above the main pane. Native search supports the full set of filters; demo search is a simplified text search.
 
-Use **Customize columns** to show, hide, and reorder branch/tag, graph, message, author, hash, and date columns; visibility and order persist. Column dividers support dragging and arrow-key resizing. **Cmd/Ctrl+K** opens the command palette for repository actions, navigation, themes, and workspace controls. The footer provides interface zoom (50–300%) and an **Activity** log of operations, errors, and reported native Git writes, with status and timing; the log is bounded and kept in memory for the app session.
+Use **Customize columns** to show, hide, and reorder branch/tag, graph, message, author, hash, and date columns; visibility and order persist. Column dividers support dragging and arrow-key resizing. **Cmd/Ctrl+K** opens the command palette for repository actions, navigation, themes, and workspace controls. The footer provides interface zoom (50–300%) and an **Activity** log of operations, errors, and reported native Git writes, with status and timing; the log is bounded and kept in memory for the app session. Credentials are redacted and conflict-resolution text content is never recorded (only its size).
 
 ## Run it
 
@@ -48,7 +48,7 @@ Run `npm run desktop`, choose **Open repository**, then use the native folder pi
 - **Working changes:** when there are changes, a distinct graph entry attached to HEAD opens the right-side file list and commit composer. It groups staged, unstaged, untracked, and conflicted paths. A partially staged file can appear in both staged and unstaged lists. Right-click a file (or press **Shift+F10**) for stage/unstage, discard, copy path or name, open, reveal in the file manager, and add to `.gitignore`; **Discard all** reviews the Unstaged list before reverting supported changes.
 - **Real changes:** lazy file lists and Git-produced unified/side-by-side diffs, including rename/binary/mode metadata and explicit preview limits. Split diffs align replacement blocks in equal **Before / After** columns, with dedicated line-number and selection gutters. Both sides scroll horizontally together while the gutters stay fixed; wrapped lines retain row alignment. Root commits compare against the empty tree; merge commits offer a parent selector.
 - **Compare commits:** select a commit as base and another as target, then swap direction if needed. The heading explains how the base tree becomes the target tree.
-- **Search/filter:** messages, authors/emails, full/prefix hashes, and reference labels across reachable history; optional branch, date, and literal-path scope. A full-height results list shows subjects, authors, dates, SHAs, and references, with literal text highlights. Select a result to inspect it without paging history, or use **Show in graph** to locate it. **Results / Graph** switches between the list and highlighted matches with nonmatching ancestry retained. Arrow keys and Home/End navigate results. Results are capped at 500 and explicitly labeled when truncated.
+- **Search/filter:** messages, authors/emails, full/prefix hashes, and reference labels across reachable history; optional branch, date, and literal-path scope. A full-height results list shows subjects, authors, dates, SHAs, and references, with literal text highlights. Select a result to inspect it without paging history, or use **Show in graph** to locate it. **Results / Graph** switches between the list and highlighted matches with nonmatching ancestry retained. Arrow keys and Home/End navigate results. Results are capped at 500 and explicitly labeled when truncated. A newer search cancels the one in flight, and search re-runs only when history (refs/HEAD) changes, not on working-tree edits.
 - **Refresh:** every five seconds while visible, on window focus, or manually. Coherence checks reject mixed history snapshots; selection and the viewport's commit/pixel anchor are preserved where available. No filesystem watcher is installed yet.
 - **Background fetch:** approximately every five minutes while a tab is active and the app is visible. Fetch updates the selected remote's remote-tracking branches and graph; it does not move local branches, merge, pull, push, prune, or import tags. Fetches requiring new credentials fail without showing an unsolicited prompt.
 
@@ -63,7 +63,7 @@ The toolbar beneath the tabs stays available while inspecting history or working
 - **Pull:** fast-forward-only by default. Its dropdown also offers **Fetch only**, **Pull (merge)**, and **Pull (rebase)**. Fast-forward and merge pulls preserve local changes when Git can carry them safely and refuse overwrites. Rebase pulls require no tracked staged or unstaged changes; untracked files may remain if they do not obstruct incoming changes. Gitty never automatically stashes. Conflicts between commits use the operation banner and editor.
 - **Push / Publish…:** push the current branch to its configured upstream, or select a remote and destination branch to publish and set upstream. Push targets one branch and does not force updates.
 - **Branch:** create or switch a branch. When commits are selected, the menu also offers the ordered cherry-pick workflow.
-- **Stash…:** save tracked changes with an optional message and optional untracked files, then browse/apply/pop/drop stashes. Pop retains the stash when application conflicts.
+- **Stash…:** save tracked changes with an optional message and optional untracked files, then browse/apply/pop/drop stashes. **Restore staged changes** is enabled by default when applying or popping; uncheck it for worktree-only restoration. Pop retains the stash when application conflicts.
 - **Refresh:** update local repository state. Ahead/behind counts reflect locally known remote-tracking refs; fetching updates that information.
 - **Git identity…:** inspect the repository-local and effective name/email, then explicitly apply a saved profile to this repository’s Git config. Linked worktrees share that local identity, including for commits made outside Gitty.
 
@@ -101,9 +101,11 @@ The browser demo does not modify repository files. Its history and diffs are syn
 - Use **New branch…** or **Switch branch…**, or open a reference/commit's action menu with its button, right-click, or **Shift+F10**. Local and matching origin branches can be deleted from the shared menu; nested branch names appear in collapsible folders, while tags stay flat. Sidebar reference buttons navigate on click and switch a local branch on double-click.
 - Deletion requires a fresh confirmation naming the exact branch and origin push destination. Local deletion uses Git's safe `-d` behavior first; an unmerged failure offers a separate explicit confirmation for local `-D`. Origin deletion is pinned to the locally reviewed branch OID and push URL, and uses a force-with-lease so a branch moved on the server is preserved. Partial and uncertain outcomes remain visible per target; working files and staged changes are not part of branch deletion.
 - Drag a branch onto the **outlined current branch** in the graph or sidebar to review a merge. Drag a commit subject onto that target to review a cherry-pick. Dropping opens the action dialog; execution follows an explicit review.
+- **Merge commit messages:** the merge dialog defaults to **Always create a merge commit**, with a dedicated editable message prefilled with the source and destination branches and shown in the review. The message is retained through conflict resolution. Uncheck this option to allow fast-forward merges, which create no new commit.
+- **Merge with local work:** enable **Stash local changes during merge** to save staged, unstaged and untracked work before merging, then restore it with its staging state after a clean merge. Ignored files stay in place. If the merge or restoration needs attention, a named **Gitty merge work** stash is retained. Finish or abort the merge, then recover it from **Stash…** with **Restore staged changes** enabled; inspect any partially restored work before applying again.
 - Other actions include rebasing the current branch onto a selected source, editing up to 100 recent linear commits with a reviewed interactive rebase (reorder/drop/reword/squash/fixup), ordered multi-commit cherry-picks, comparison, and lightweight/annotated tags. Merge commits require an explicit cherry-pick mainline parent.
 - The operation banner provides **Continue**, **Skip** where applicable, **Abort**, and conflict links. The built-in conflict editor shows full base/current/incoming versions, editable results, block acceptance, and whole-file/deletion choices. On Unix and WSL, symlink conflicts allow exact side selection or deletion; external edits are detected before saving.
-- **Create pull request…** can list open requests and create one directly through a matching connected GitHub.com, GitLab.com, Azure DevOps, or Bitbucket Cloud account. The dialog also offers a provider browser form where supported. Choose a local source branch and remote; use the toolbar's **Push / Publish…** first when needed. Creating a request never pushes your branch automatically.
+- **Create pull request…** can list open requests (with a notice when the provider has more than the backend returned) and create one directly through a matching connected GitHub.com, GitLab.com, Azure DevOps, or Bitbucket Cloud account. The dialog also offers a provider browser form where supported. Choose a local source branch and remote; use the toolbar's **Push / Publish…** first when needed. Creating a request never pushes your branch automatically.
 
 Branch creation and merges preserve local changes when Git can safely carry them and refuse overwrites. Branch switching offers an explicit carry-changes workflow; overlapping tracked edits can require a three-way merge and conflict resolution. Other new graph actions require a clean index/worktree, including no untracked files. Gitty never automatically stashes or forces a switch. Interactive rebase requires a native checkout and an ancestor base; WSL interactive editing is still unsupported. Submodule conflicts with two gitlink sides permit an index-only pointer selection without changing the nested worktree. Rebase ranges containing merge commits and directory/file conflicts have explicit limitations. See the [backend contract](src-tauri/BACKEND.md) for current operation semantics and [Milestone 3](docs/milestone-3.md) for the historical implementation record.
 
@@ -130,7 +132,7 @@ Open the gear button or **Cmd/Ctrl+,** from either workspace, including the nati
 - **Simulated working changes:** stage or unstage whole files, discard sample changes, and create commits from the in-memory index. Cloning, hunk/line staging, amend, pull/push, and graph mutations require a desktop repository.
 - **Commit inspector:** author/date, full copyable SHA, navigable parents, and changed files. Selecting a file opens its illustrative unified or side-by-side diff in the center pane, with correct line numbers and added/deleted/context lines. File status covers additions, modifications, and deletions.
 - **Adjustable workspace:** collapse either side pane; resize the inspector by dragging its divider or using arrow keys while it is focused. Inspector width and light/dark preference persist locally. Small windows use overlay panes.
-- **Keyboard and accessibility:** labeled listbox/options, selected and positional metadata, visible focus, semantic buttons, keyboard-accessible tabs and divider, native modal focus containment, and reduced-motion support.
+- **Keyboard and accessibility:** labeled listbox/options, selected and positional metadata, visible focus, semantic buttons, keyboard-accessible tabs and divider, toolbar and context menus that focus their first item and support Arrow/Home/End navigation (Escape closes, Tab leaves), unique element ids when several repository tabs are mounted, native modal focus containment, and reduced-motion support.
 
 ### Shortcuts
 
@@ -176,6 +178,7 @@ src/
     Settings.tsx                 Themes, editor preferences, identities and avatars
     IntegrationsSettings.tsx     Provider account authorization
     AuthorAvatar.tsx             Initials and optional Gravatar images
+    ErrorBoundary.tsx            Contains render errors per pane/app with a Retry remount
   graph/
     layout.ts                    Pure renderer-independent appendable lane layout
     branchColor.ts               Name-based branch palette and first-parent color ownership
@@ -195,6 +198,7 @@ src/
     autoFetch.ts                 Active/visible-tab fetch scheduling
     tabs.ts                      Repository tab reducer and persistence
     activity.ts                  Bounded in-memory activity store and redaction
+    dates.ts                     Range-checked commit-second date formatting
     settings.tsx                 Preferences, theme application and persistence
     themes.ts                    Built-in themes and custom-theme validation
     scale.ts                     Native webview and browser-preview zoom
@@ -216,6 +220,7 @@ src-tauri/
   src/remote.rs                  Local sync metadata and explicit fetch/pull/push
   src/stash.rs                   Stash management with stable object identities
   src/identity.rs                Repository-local and effective Git identity
+  src/bridge.rs                  Shared loopback bridge limits (connection cap, deadlines, stale helper cleanup)
   src/askpass.rs                 Scoped native/WSL credential prompt bridge
   src/editor.rs                  Native Git message/sequence editor bridges
   src/credentials.rs             Bundled credential-manager configuration

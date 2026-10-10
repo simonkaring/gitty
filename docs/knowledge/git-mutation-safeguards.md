@@ -20,6 +20,16 @@ sources:
     resource: ../../src-tauri/src/branch_delete.rs
   - id: branch-delete-ui
     resource: ../../src/model/branchDelete.ts
+  - id: operations
+    resource: ../../src-tauri/src/operations.rs
+  - id: operation-tests
+    resource: ../../src-tauri/src/operation_tests.rs
+  - id: operation-dialog
+    resource: ../../src/components/OperationDialog.tsx
+  - id: stashes
+    resource: ../../src-tauri/src/stash.rs
+  - id: stash-dialog
+    resource: ../../src/components/RemoteStashDialog.tsx
 ---
 
 # Git mutation safeguards
@@ -43,6 +53,23 @@ Discard deliberately destroys selected unstaged content; tracked files restore
 from the index. Message-only amend preserves the old tree; ordinary amend folds
 in staged content. Remote-tracking refs are local evidence, not proof of the
 remote's current state.[^contract][^hunk-tests]
+
+Merge review includes a dedicated editable commit message and defaults to
+`--no-ff`, creating a merge commit even when fast-forward is possible. Users can
+explicitly allow fast-forward by unchecking the option. Supplied messages are
+validated before switching destinations and sent through a native temporary file
+or WSL stdin rather than message-sized command arguments; fast-forward
+merges create no commit. Git retains the chosen message for conflict continuation
+and session restart. Omitted messages preserve Git's default, and hooks, cleanup,
+and signing still apply.[^operations][^operation-tests][^operation-dialog]
+
+An explicit merge `stashChanges` option saves staged, unstaged and untracked work
+before merging, then restores its index with the pinned stash OID after a clean
+merge. Failed or conflicted merges retain a uniquely labeled recovery stash;
+Continue/Abort leave it for manual recovery once the operation finishes. Failed
+restoration does not drop it or retry the merge. The stash dialog defaults to
+restoring staging and offers a worktree-only opt-out. Ignored files remain subject
+to the existing obstruction checks.[^operations][^operation-tests][^stashes][^stash-dialog]
 
 Attempt a mutation once. An error can follow a partial or completed write;
 `mutationUnverified` requires refresh and review, not automatic retry.[^contract]
@@ -76,3 +103,8 @@ Related: [refresh coherence](snapshot-and-refresh-coherence.md) and
 [^workflow-tests]: Mocked write/refresh lifecycle regressions.
 [^branch-delete]: Dedicated branch deletion preflight and remote/local outcomes.
 [^branch-delete-ui]: Branch target resolution and confirmation request construction.
+[^operations]: Merge message validation, bounded delivery and Git-based continuation.
+[^operation-tests]: Custom merge message, fast-forward, conflict restart and invalid-input regressions.
+[^operation-dialog]: Editable merge message and captured review display.
+[^stashes]: Unique merge-work stash identity, index restoration and OID-pinned apply/drop.
+[^stash-dialog]: Explicit staging restoration choice for manual recovery.

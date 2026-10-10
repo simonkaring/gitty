@@ -4791,3 +4791,21 @@ dialog[open]::backdrop {
     scroll-behavior: auto !important;
   }
 }
+
+.error-boundary {
+  display: grid;
+  gap: var(--sp-2, 8px);
+  justify-items: start;
+  margin: var(--sp-4, 16px);
+  padding: var(--sp-3, 12px) var(--sp-4, 16px);
+  border: 1px solid color-mix(in srgb, var(--red) 40%, transparent);
+  border-radius: var(--r-sm);
+  background: var(--red-wash);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+.error-boundary p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
