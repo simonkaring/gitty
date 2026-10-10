@@ -42,6 +42,7 @@ pub struct GitStream {
     overflow: Arc<AtomicBool>,
     finished: bool,
     allow_difference_exit: bool,
+    cancel: Option<Arc<AtomicBool>>,
     #[cfg(windows)]
     job: process::ProcessJob,
 }
@@ -101,6 +102,7 @@ impl GitStream {
         let mut child = command
             .spawn()
             .map_err(|e| Error::new("processStart", e.to_string()))?;
+        process::note_spawn();
         #[cfg(windows)]
         let job = match process::ProcessJob::attach(&child) {
             Ok(job) => job,
@@ -152,9 +154,27 @@ impl GitStream {
             overflow,
             finished: false,
             allow_difference_exit: false,
+            cancel: None,
             #[cfg(windows)]
             job,
         })
+    }
+    /// Makes `next` fail with the `cancelled` error as soon as `flag` is set, even
+    /// while Git is still scanning and has produced no record. Dropping the stream
+    /// afterwards kills and reaps the child.
+    pub fn with_cancel(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.cancel = Some(flag);
+        self
+    }
+    fn check_cancelled(&self) -> Result<()> {
+        if self
+            .cancel
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            return Err(Error::new("cancelled", "Stream cancelled"));
+        }
+        Ok(())
     }
     pub fn next(&mut self) -> Result<Option<Vec<u8>>> {
         if self.finished {
@@ -162,6 +182,7 @@ impl GitStream {
         }
         let deadline = Instant::now() + process::remaining_timeout()?;
         loop {
+            self.check_cancelled()?;
             if self.overflow.load(Ordering::Relaxed) {
                 return Err(Error::new("outputLimit", "Git stderr exceeded 32 MiB"));
             }
@@ -183,6 +204,7 @@ impl GitStream {
                     // EOF is not success until Git's exit status and stderr have been collected.
                     let mut nap = Duration::from_millis(1);
                     loop {
+                        self.check_cancelled()?;
                         if Instant::now() >= deadline {
                             return Err(Error::new("timeout", "Timed out finalizing Git stream"));
                         }
@@ -270,6 +292,30 @@ mod tests {
         command.arg("record");
         let stream = GitStream::spawn(command, Stdio::null(), b'\n', 128).unwrap();
         let id = stream.child.id();
+        drop(stream);
+        assert_eq!(unsafe { libc::kill(id as i32, 0) }, -1);
+    }
+    #[test]
+    #[cfg(unix)]
+    fn cancelling_interrupts_a_silent_stream_promptly_and_reaps_it() {
+        let mut command = Command::new("sleep");
+        command.arg("60");
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut stream = GitStream::spawn(command, Stdio::null(), b'\n', 8)
+            .unwrap()
+            .with_cancel(flag.clone());
+        let id = stream.child.id();
+        let canceller = thread::spawn({
+            let flag = flag.clone();
+            move || {
+                thread::sleep(Duration::from_millis(50));
+                flag.store(true, Ordering::Relaxed);
+            }
+        });
+        let start = Instant::now();
+        assert_eq!(stream.next().unwrap_err().code, "cancelled");
+        assert!(start.elapsed() < Duration::from_secs(5));
+        canceller.join().unwrap();
         drop(stream);
         assert_eq!(unsafe { libc::kill(id as i32, 0) }, -1);
     }

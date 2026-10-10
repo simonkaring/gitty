@@ -106,6 +106,23 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   OR-matched in the backend and matching IDs are deduplicated by that single walk.
   Results are capped at 500, with a 501st match setting `truncated`. A scan that cannot
   finish within the request budget returns a timeout rather than incomplete results.
+  Result summaries are hydrated with `cat-file --batch` in chunks of at most 200 IDs
+  (the same strict-framing reader as history pages), preserving scan order: a full
+  500-result search launches about nine processes in total instead of roughly three
+  per result. Search needs only `CommitSummary`, so it does not run the per-commit
+  message-edit eligibility check that `repository_commit` does.
+  **Cancellation:** a session runs at most one search. `repository_search` registers a
+  cancel flag at start and cancels the session's previous in-flight search, which then
+  fails with `{code: "cancelled", message: "Search superseded"}` (clients treat it as
+  silent). `repository_cancel_search({handle}) -> void` cancels the in-flight search of
+  that session and is a no-op when none is running or the handle is unknown/closed.
+  Closing a session also cancels its in-flight search; that search fails with
+  `cancelled` (not `invalidHandle`). The flag is polled every ~10 ms while waiting for
+  Git and per record, so a scan that has produced no output is interrupted promptly,
+  and again before each hydration chunk and before returning; dropping the stream
+  kills and reaps Git. The flag is swapped under a short per-session lock that is never
+  held across a subprocess, and a search superseded after it has finished scanning
+  still returns `cancelled`.
   Date filtering uses `--since-as-filter` to avoid pruning newer ancestors behind a
   timestamp-skewed commit (requires Git 2.37+). Summary parents always come from the
   actual commit objects, never path-simplified log parent lists.
@@ -694,7 +711,9 @@ wsl_tests`). They create temporary repositories under `/tmp` inside the
 distribution and cover opening a path with spaces/Unicode, state, status and
 untracked-content fingerprints, stage/commit, index-lock detection, background
 fetch, pull and push against a local bare remote, and report refresh timing.
-Without the variable they return immediately.
+Without the variable they return immediately. A test-only, per-thread process-launch
+counter (`process::count_spawns`, propagated into `process::parallel` workers) lets
+tests assert launch counts for search hydration and the WSL metadata scan.
 
 Windows Job Objects and the graphical picker require platform/UI
 integration testing; they are not exercised by the macOS unit test suite. Killing

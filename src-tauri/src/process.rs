@@ -18,6 +18,37 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 pub const MUTATION_TIMEOUT: Duration = Duration::from_secs(120);
 /// Checks around a mutation share the mutation lock, not the read deadline.
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+// Test-only, per-thread process-launch counter. Tests run on parallel threads, so
+// a thread-local (propagated into `parallel` workers) keeps counts uncontaminated.
+#[cfg(test)]
+thread_local! {
+    static SPAWN_COUNTER: std::cell::RefCell<Option<Arc<std::sync::atomic::AtomicUsize>>> =
+        const { std::cell::RefCell::new(None) };
+}
+/// Records one successful child launch for [`count_spawns`]; a no-op outside tests.
+pub(crate) fn note_spawn() {
+    #[cfg(test)]
+    SPAWN_COUNTER.with(|c| {
+        if let Some(counter) = &*c.borrow() {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+}
+/// Runs `f` and reports how many Git/helper processes it launched through
+/// `run_with_stdin` and `GitStream::spawn`, including those on `parallel` workers.
+#[cfg(test)]
+pub(crate) fn count_spawns<T>(f: impl FnOnce() -> T) -> (T, usize) {
+    struct Restore(Option<Arc<std::sync::atomic::AtomicUsize>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SPAWN_COUNTER.with(|c| *c.borrow_mut() = self.0.take());
+        }
+    }
+    let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let _restore = Restore(SPAWN_COUNTER.with(|c| c.borrow_mut().replace(counter.clone())));
+    let value = f();
+    (value, counter.load(Ordering::Relaxed))
+}
 thread_local! { static REQUEST_DEADLINE: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) }; }
 pub fn request<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     struct Reset;
@@ -48,12 +79,18 @@ pub(crate) fn without_read_deadline<T>(f: impl FnOnce() -> Result<T>) -> Result<
 /// caller's request deadline is carried into every worker thread.
 pub(crate) fn parallel<T: Send>(jobs: Vec<Box<dyn FnOnce() -> T + Send + '_>>) -> Vec<T> {
     let deadline = REQUEST_DEADLINE.with(|d| d.get());
+    #[cfg(test)]
+    let counter = SPAWN_COUNTER.with(|c| c.borrow().clone());
     thread::scope(|scope| {
         let handles: Vec<_> = jobs
             .into_iter()
             .map(|job| {
+                #[cfg(test)]
+                let counter = counter.clone();
                 scope.spawn(move || {
                     REQUEST_DEADLINE.with(|d| d.set(deadline));
+                    #[cfg(test)]
+                    SPAWN_COUNTER.with(|c| *c.borrow_mut() = counter);
                     job()
                 })
             })
@@ -249,6 +286,7 @@ fn run_with_stdin(command: &mut Command, timeout: Duration, stdin: Stdio) -> Res
     let mut child = command
         .spawn()
         .map_err(|e| Error::new("processStart", e.to_string()))?;
+    note_spawn();
     #[cfg(windows)]
     let job = match ProcessJob::attach(&child) {
         Ok(job) => job,
@@ -629,6 +667,29 @@ mod tests {
         .unwrap();
         assert!(bytes.len() <= MAX_OUTPUT);
         assert!(overflow.load(Ordering::Relaxed));
+    }
+    #[test]
+    #[cfg(unix)]
+    fn count_spawns_covers_parallel_workers_and_is_per_thread() {
+        let run = || {
+            let mut c = Command::new("true");
+            run_with_timeout(&mut c, Duration::from_secs(10)).unwrap();
+        };
+        let ((), count) = count_spawns(|| {
+            run();
+            let jobs: Vec<Box<dyn FnOnce() + Send>> = (0..3)
+                .map(|_| Box::new(run) as Box<dyn FnOnce() + Send>)
+                .collect();
+            parallel(jobs);
+            // A nested counter shadows, then restores, the outer one.
+            let ((), inner) = count_spawns(run);
+            assert_eq!(inner, 1);
+        });
+        assert_eq!(count, 4);
+        // Outside a counting scope, launches are not recorded anywhere.
+        run();
+        let ((), none) = count_spawns(|| ());
+        assert_eq!(none, 0);
     }
     #[test]
     #[cfg(unix)]
