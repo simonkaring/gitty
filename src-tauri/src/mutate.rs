@@ -207,7 +207,7 @@ impl Repository {
                     "-print0",
                 ]);
                 let o = process::run_for(command, CHECK_TIMEOUT)?;
-                if !o.success {
+                if !crate::operations::find_outcome_acceptable(o.success, o.code, &o.stdout) {
                     return Err(Error::new("git", report(&o)));
                 }
                 Ok(process::text(o.stdout)?

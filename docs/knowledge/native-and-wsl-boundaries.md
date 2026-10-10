@@ -54,7 +54,10 @@ browsing and operation detection require Linux tools; conflict filesystem access
 uses a fixed Python 3 helper with pinned directory descriptors. Native conflict
 access uses capability-rooted handles. Ignore/open/reveal and interactive rebase
 editing have explicit WSL limitations; consult the detailed contract before
-extending platform support.[^contract]
+extending platform support.[^contract] The WSL operation-metadata scan is one
+`find` that must keep `test -e`/`cat` parity: symlinks followed, dangling links absent,
+heavy Git-directory subtrees pruned, and exit 1 from entries vanishing under
+concurrent Git tolerated; it has no Windows/WSL runtime verification yet.[^contract]
 
 Git authentication and provider API accounts are separate. WSL retains its
 distribution credential helpers; bundled native GCM is not injected there.

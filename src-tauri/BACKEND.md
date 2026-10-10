@@ -769,11 +769,22 @@ Under WSL, the Git-directory listing used for lock and operation detection runs
 `find -maxdepth 1` in the distribution and therefore needs the same GNU `find`
 the browser already requires; it is not covered by the macOS suite. Operation
 metadata (the 29 files under the Git directory that feed the operation fingerprint)
-is likewise determined with one `find -L <git_dir> -mindepth 1 -maxdepth 2 -print0`
-launch instead of a `test -e` per path; only files the scan lists are then read with
+is likewise determined with one shell-free
+`find -L <git_dir> -mindepth 1 -maxdepth 2 ( -path <git_dir>/objects -o … ) -prune -o ! -type l -print0`
+launch instead of a `test -e` per path. The pruned subtrees are `objects`, `refs`,
+`logs`, `hooks`, `worktrees`, `lfs` and `modules`; none of the 29 metadata paths
+(all at most two levels deep: `MERGE_HEAD` … `rebase-merge/*`, `rebase-apply/*`,
+`sequencer/*`, `BISECT_LOG`) live there, and a unit test asserts that. `! -type l` drops
+dangling symlinks (under `-L`, `-type l` matches only broken links), so they are
+absent exactly as with `test -e`. Only files the scan lists are then read with
 `cat` (ordinarily none), and a listed directory still fails at `cat` exactly as it did
-after `test -e`. A non-zero `find` exit returns the same error as before. The
-output-parsing function is unit-tested on every platform, and
+after `test -e`. `find` exit status 1, which GNU `find` returns when an entry vanishes
+between readdir and stat (concurrent Git lock files) or a subdirectory is unreadable,
+is accepted when it printed a listing (the vanished entry is simply absent); empty
+output with status 1, and every other status, return the same error as before. The
+Git-directory listing for lock detection applies the same exit-1 rule. The
+argv construction, the exit-status decision and the
+output-parsing function are unit-tested on every platform, and
 `wsl_operation_metadata_uses_one_existence_scan` asserts the launch count, but the
 single-process scan **still requires Windows/WSL runtime validation** (it has never
 been run against a real distribution). A file removed between the scan and its `cat`
