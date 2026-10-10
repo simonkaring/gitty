@@ -25,10 +25,19 @@ const diff = { path: 'src/diff/render.ts', binary: false, truncated: false, mess
   { header: '@@ -201,2 +202,2 @@ long content', lines: [line('remove', long, 201), line('add', '  const description = "Short replacement";', null, 202), line('context', '  return description;', 202, 203)] },
   { header: '@@ -301,1 +302,2 @@ trailing metadata', lines: [line('remove', 'old ending', 301), line('add', 'new ending', null, 302), line('add', 'extra ending', null, 303), line('meta', '\\\\ No newline at end of file')] },
 ] };
+const params = new URLSearchParams(location.search);
+// ?large renders a 20,000-line diff through the virtualized path; ?unified switches layout.
+const large = params.has('large') ? { ...diff, path: 'src/large.ts', hunks: [0, 1].map(h => ({ header: '@@ large ' + h + ' @@', lines: Array.from({ length: 10000 }, (_, i) => {
+  const number = h * 100000 + i;
+  if (i % 100 === 50) return line('remove', (i === 50 && h === 0 ? long : '  removed ' + i), number);
+  if (i % 100 === 51) return line('add', '  added ' + i, null, number);
+  return line('context', '  context ' + i, number, number);
+}) })) } : diff;
+const split = !params.has('unified');
 window.diffWrites = [];
 function Preview() {
   const { settings, updateSettings } = useSettings();
-  return <div className="app-shell"><section className="diff-view-pane"><div className="diff-view-header"><span className="diff-view-filepath">src/diff/render.ts</span><div className="diff-view-actions"><button className="secondary-button" onClick={() => updateSettings({ diffWrap: !settings.diffWrap })}>{settings.diffWrap ? 'Unwrap lines' : 'Wrap lines'}</button><button className="secondary-button" onClick={() => updateSettings({ themeId: settings.themeId === 'gitty-dark' ? 'gitty-light' : 'gitty-dark' })}>Toggle theme</button></div></div><div className="diff-view-body"><DiffPreview diff={diff} split hunkAction="stage_hunk" onHunk={request => window.diffWrites.push(request)} /></div></section></div>;
+  return <div className="app-shell"><section className="diff-view-pane"><div className="diff-view-header"><span className="diff-view-filepath">src/diff/render.ts</span><div className="diff-view-actions"><button className="secondary-button" onClick={() => updateSettings({ diffWrap: !settings.diffWrap })}>{settings.diffWrap ? 'Unwrap lines' : 'Wrap lines'}</button><button className="secondary-button" onClick={() => updateSettings({ themeId: settings.themeId === 'gitty-dark' ? 'gitty-light' : 'gitty-dark' })}>Toggle theme</button></div></div><div className="diff-view-body"><DiffPreview diff={large} split={split} hunkAction="stage_hunk" onHunk={request => window.diffWrites.push(request)} /></div></section></div>;
 }
 createRoot(document.getElementById('root')).render(<SettingsProvider><Preview /></SettingsProvider>);
 `;
@@ -37,7 +46,7 @@ const server = await createServer({ logLevel: 'error', server: { host: '127.0.0.
   resolveId(id) { if (id === '/split-fixture.tsx') return id; },
   load(id) { if (id === '/split-fixture.tsx') return fixture; },
   configureServer(server) { server.middlewares.use((req, res, next) => {
-    if (req.url !== '/split-preview') return next();
+    if (req.url.split('?')[0] !== '/split-preview') return next();
     res.setHeader('Content-Type', 'text/html');
     void server.transformIndexHtml('/split-preview', '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1" /></head><body><div id="root"></div><script type="module" src="/split-fixture.tsx"></script></body></html>').then(html => res.end(html)).catch(next);
   }); },
@@ -91,5 +100,57 @@ try {
   await page.mouse.wheel(120, 0);
   await page.waitForFunction(() => document.querySelector('.split-horizontal-scroll').scrollLeft > 200);
   assert.deepEqual(errors, []);
-  console.log('Split diff browser smoke passed: equal columns, paired rows, original line indices, shared scrolling, wrapped alignment, both themes and narrow layouts.');
+
+  // Large diffs: bounded DOM, measured rows, anchored wrapping, keyboard reveal, and original indices.
+  for (const layout of ['split', 'unified']) {
+    const big = await browser.newPage({ viewport: { width: 1100, height: 780 }, reducedMotion: 'reduce' });
+    big.on('pageerror', error => { errors.push(error.message); console.error(error.message); });
+    const started = Date.now();
+    await big.goto(`${server.resolvedUrls.local[0]}split-preview?large${layout === 'unified' ? '&unified' : ''}`);
+    const view = big.locator('.native-diff');
+    await view.locator('[data-row]').first().waitFor();
+    const loadMs = Date.now() - started;
+    assert.equal(await view.getAttribute('data-virtual'), 'true');
+    const count = () => view.locator(':scope > div > [data-row]').count();
+    assert.ok(await count() < 200, `rendered ${await count()} rows`);
+    // Rows directly at the viewport top must exist after a long jump (no blank gap).
+    const firstVisible = () => view.evaluate(el => { const top = el.getBoundingClientRect().top + (el.querySelector('.split-column-header')?.offsetHeight ?? 0) + 1; const row = [...el.querySelectorAll('[data-row]')].find(node => { const box = (node.classList.contains('split-row') ? node.firstElementChild : node).getBoundingClientRect(); return box.top <= top && box.bottom > top; }); return row ? Number(row.dataset.row) : -1; });
+    await view.evaluate(el => { el.scrollTop = el.scrollHeight / 2; });
+    await big.waitForTimeout(100);
+    const middle = await firstVisible();
+    assert.ok(middle > 5000, `first visible row ${middle}`);
+    assert.ok(await count() < 200);
+    if (layout === 'split') {
+      // The long line was measured near the top; the shared scrollbar keeps its width after it leaves the window.
+      assert.equal(await big.locator('.split-horizontal-scroll').evaluate(el => getComputedStyle(el).display), 'block');
+    }
+    // Wrapping changes row heights; the first visible row stays put and pairs stay aligned.
+    await big.getByRole('button', { name: 'Wrap lines', exact: true }).click();
+    await big.waitForTimeout(150);
+    assert.ok(Math.abs(await firstVisible() - middle) <= 2, `anchor moved from ${middle} to ${await firstVisible()}`);
+    if (layout === 'split') {
+      const cells = await view.locator('.split-row').nth(5).locator('.split-cell').evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().top));
+      assert.equal(cells[0], cells[1]);
+    }
+    await big.getByRole('button', { name: 'Unwrap lines', exact: true }).click();
+    // Keyboard: End reveals the last row, Home returns; Space toggles the active changed line.
+    await view.focus();
+    await big.keyboard.press('End');
+    await big.waitForTimeout(100);
+    const last = await view.evaluate(el => Number(el.querySelector('.diff-active')?.closest('[data-row]')?.dataset.row ?? -1));
+    assert.ok(last > 19000, `active ${last}`);
+    assert.ok(await view.evaluate(el => { const active = el.querySelector('.diff-active').getBoundingClientRect(); const box = el.getBoundingClientRect(); return active.top >= box.top && active.bottom <= box.bottom + 1; }));
+    assert.equal(await view.evaluate(el => !!document.getElementById(el.getAttribute('aria-activedescendant'))), true);
+    await big.keyboard.press('Home');
+    await big.waitForTimeout(50);
+    for (let i = 0; i < 50; i++) await big.keyboard.press('ArrowDown');
+    await big.keyboard.press('Space');
+    await big.getByRole('button', { name: 'Stage selected lines 1 in src/large.ts', exact: true }).click();
+    assert.deepEqual(await big.evaluate(() => window.diffWrites.at(-1).lineIndices), [50]);
+    assert.ok(await big.evaluate(() => document.querySelectorAll('.line-select-toggle[tabindex="0"], .line-select-toggle:not([tabindex])').length === 0));
+    console.log(`Large ${layout} diff: ${await count()} rows rendered, first paint ${loadMs}ms.`);
+    await big.close();
+  }
+  assert.deepEqual(errors, []);
+  console.log('Split diff browser smoke passed: equal columns, paired rows, original line indices, shared scrolling, wrapped alignment, both themes, narrow layouts, and virtualized large diffs.');
 } finally { await browser?.close(); await server.close(); }

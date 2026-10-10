@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseHostingRemote, pullRequestUrl } from './pullRequest';
+import { parseHostingRemote, providerHostFromRemote, pullRequestUrl } from './pullRequest';
 
 describe('user-triggered provider links', () => {
   it('preserves source/base direction and encodes branch URL characters', () => {
@@ -21,5 +21,14 @@ describe('user-triggered provider links', () => {
   it('rejects ambiguous providers, credentials, URL suffixes and invalid refs', () => {
     for (const remote of ['https://github.com.evil.test/a/b', 'https://token@github.com/a/b', 'ssh://git:secret@github.com/a/b', 'file:///repo', 'https://github.com/a/b?query=1', 'https://github.com/a%2fb/c', '/local/repo']) expect(() => pullRequestUrl(remote, 'feature', 'main')).toThrow();
     for (const name of ['', '../main', '-main', 'a b', 'a..b', 'a\\b', 'refs/heads/main']) expect(() => pullRequestUrl('https://github.com/a/b', name, 'main')).toThrow();
+  });
+  it('derives the provider host from https, ssh and scp-like remotes for account matching', () => {
+    expect(providerHostFromRemote('git@github.com:o/r.git')).toBe('github.com');
+    expect(providerHostFromRemote('ssh://git@gitlab.com/g/r')).toBe('gitlab.com');
+    expect(providerHostFromRemote('git@ssh.dev.azure.com:v3/o/p/r')).toBe('dev.azure.com');
+    expect(providerHostFromRemote('https://Bitbucket.org/t/r')).toBe('bitbucket.org');
+    expect(providerHostFromRemote('C:\\repos\\x')).toBe('');
+    expect(providerHostFromRemote('/local/repo')).toBe('');
+    expect(providerHostFromRemote('')).toBe('');
   });
 });

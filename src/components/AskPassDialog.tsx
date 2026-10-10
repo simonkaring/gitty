@@ -3,9 +3,16 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { Dialog } from './ui';
 
+/** App-supplied label for the operation asking; null for prompts without a known operation. */
+interface AskPassContext {
+  repository: string;
+  operation: string;
+}
+
 interface AskPassPrompt {
   requestId: number;
   prompt: string;
+  context?: AskPassContext | null;
 }
 
 export function AskPassDialog() {
@@ -57,13 +64,15 @@ export function AskPassDialog() {
   };
   const onCancel = () => { void answer(null); };
   const username = /username/i.test(current.prompt);
+  const contextLabel = [current.context?.repository, current.context?.operation].filter(Boolean).join(' · ');
 
   const secretLabel = username ? 'Username' : /github\.com/i.test(current.prompt) ? 'Personal access token' : 'Token or SSH passphrase';
   return <Dialog title="Authentication required" size="sm" onClose={onCancel} onSubmit={onSubmit} footer={<>
     <button type="button" className="secondary-button" disabled={submitting} onClick={onCancel}>Cancel</button>
     <button type="submit" className="primary-button" disabled={submitting}>Submit</button>
   </>}>
-    <p className="muted">{current.prompt}</p>
+    {contextLabel && <p className="askpass-context"><strong>{contextLabel}</strong></p>}
+    <p className="muted"><span>Git says:</span> {current.prompt}</p>
     <label className="field">{secretLabel}
       <input key={current.requestId} ref={passwordRef} type={username ? 'text' : 'password'} required autoComplete={username ? 'username' : 'current-password'} autoFocus />
     </label>

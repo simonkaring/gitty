@@ -69,4 +69,22 @@ describe('AskPassDialog', () => {
     await act(async () => { button('Cancel').click(); });
     expect(container.querySelector('dialog')).toBeNull();
   });
+
+  it('shows the repository and operation separately from Git\'s own prompt text', async () => {
+    await emit('git_askpass_prompt', { requestId: 4, prompt: 'Password for https://example.test', context: { repository: 'gitty', operation: 'push origin' } });
+    const dialog = container.querySelector('dialog')!;
+    const text = dialog.textContent ?? '';
+    expect(text).toContain('gitty · push origin');
+    expect(text).toContain('Git says: Password for https://example.test');
+    expect(text.indexOf('gitty · push origin')).toBeLessThan(text.indexOf('Git says:'));
+  });
+
+  it('omits the context line when the prompt has none', async () => {
+    await emit('git_askpass_prompt', { requestId: 5, prompt: 'Password for example', context: null });
+    expect(container.querySelector('.askpass-context')).toBeNull();
+    expect(container.querySelector('dialog')?.textContent).toContain('Git says: Password for example');
+    await act(async () => { button('Cancel').click(); });
+    await emit('git_askpass_prompt', { requestId: 6, prompt: 'Password for example' });
+    expect(container.querySelector('.askpass-context')).toBeNull();
+  });
 });

@@ -2360,6 +2360,12 @@ button[data-danger='true']:hover:not(:disabled) {
 .split-cell.remove.selected-line {
   background: color-mix(in srgb, var(--red-wash) 60%, var(--accent-wash));
 }
+/* Virtualized rows: spacers stand in for unrendered rows; scroll anchoring is done in DiffPreview. */
+.native-diff[data-virtual] { position: relative; overflow-anchor: none; }
+.diff-virtual-spacer { pointer-events: none; }
+.split-content > .diff-virtual-spacer { grid-column: 1 / -1; }
+/* Roving line focus: the diff surface keeps focus and marks the active line or split cell. */
+.native-diff:focus-visible .diff-active { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* Full-width diff view that replaces the graph */
 .diff-view-pane {
@@ -4808,4 +4814,26 @@ dialog[open]::backdrop {
   margin: 0;
   overflow-wrap: anywhere;
   user-select: text;
+}
+
+/* history listbox roving focus */
+.row-control-active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.commit-refs:has(.row-control-active) {
+  z-index: 4;
+}
+.commit-refs:has(.row-control-active) .ref-stack {
+  display: flex;
+}
+.commit-refs > .ref-pill.row-control-active {
+  flex-shrink: 0;
+  max-width: none;
+}
+.commit-refs > .ref-pill.row-control-active .ref-pill-name {
+  overflow: visible;
+}
+.graph-action-button.row-control-active {
+  opacity: 1;
 }

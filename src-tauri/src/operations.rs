@@ -21,6 +21,105 @@ pub(crate) fn find_listing_paths(git_dir: &str, output: &[u8]) -> HashSet<String
         .collect()
 }
 
+/// Git-directory subtrees none of the operation metadata paths live in; the WSL
+/// scan prunes them so `find` never walks the (potentially huge) object store.
+pub(crate) const METADATA_SCAN_PRUNED: [&str; 7] = [
+    "objects",
+    "refs",
+    "logs",
+    "hooks",
+    "worktrees",
+    "lfs",
+    "modules",
+];
+
+/// Escapes `find -path` (fnmatch) metacharacters so a Git directory is matched literally.
+fn find_path_literal(path: &str) -> String {
+    let mut escaped = String::with_capacity(path.len());
+    for ch in path.chars() {
+        if matches!(ch, '\\' | '*' | '?' | '[') {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
+}
+
+/// Shell-free argv (after `wsl.exe --distribution <d> --exec`) of the metadata scan:
+/// `-L` follows symlinks like `test -e`/`cat`; `! -type l` then drops only broken
+/// links (absent for `test -e`); heavy subtrees are pruned.
+pub(crate) fn metadata_scan_args(git_dir: &str) -> Vec<String> {
+    let root = git_dir.trim_end_matches('/');
+    let mut argv: Vec<String> = [
+        "find",
+        "-L",
+        git_dir,
+        "-mindepth",
+        "1",
+        "-maxdepth",
+        "2",
+        "(",
+    ]
+    .map(String::from)
+    .into();
+    for (index, name) in METADATA_SCAN_PRUNED.iter().enumerate() {
+        if index > 0 {
+            argv.push("-o".into());
+        }
+        argv.push("-path".into());
+        argv.push(format!("{}/{name}", find_path_literal(root)));
+    }
+    argv.extend([")", "-prune", "-o", "!", "-type", "l", "-print0"].map(String::from));
+    argv
+}
+
+/// Whether a `find` outcome may be parsed. GNU `find` exits 1 after printing the
+/// rest when an entry vanishes between readdir and stat (concurrent Git lock files)
+/// or a subdirectory is unreadable; that entry is simply absent. Exit 1 with empty
+/// output is a failure instead (missing Git directory), since a real Git directory
+/// always lists at least `HEAD`. Any other status fails.
+pub(crate) fn find_outcome_acceptable(success: bool, code: Option<i32>, stdout: &[u8]) -> bool {
+    success || (code == Some(1) && !stdout.is_empty())
+}
+
+/// Every Git-directory file whose content feeds the operation fingerprint. The WSL
+/// scan (depth 2, pruned subtrees) must keep covering all of them.
+pub(crate) const OPERATION_METADATA_PATHS: [&str; 29] = [
+    "MERGE_HEAD",
+    "ORIG_HEAD",
+    "MERGE_MSG",
+    "MERGE_MODE",
+    "MERGE_AUTOSTASH",
+    "AUTO_MERGE",
+    "rebase-merge/head-name",
+    "rebase-merge/orig-head",
+    "rebase-merge/autostash",
+    "rebase-merge/message",
+    "rebase-merge/author-script",
+    "rebase-merge/amend",
+    "rebase-merge/update-refs",
+    "rebase-merge/rewritten-list",
+    "rebase-merge/rewritten-pending",
+    "rebase-merge/onto",
+    "rebase-merge/msgnum",
+    "rebase-merge/end",
+    "rebase-merge/git-rebase-todo",
+    "rebase-merge/done",
+    "rebase-merge/interactive",
+    "rebase-merge/stopped-sha",
+    "rebase-apply/rebasing",
+    "rebase-apply/next",
+    "rebase-apply/last",
+    "sequencer/todo",
+    "sequencer/head",
+    "sequencer/opts",
+    "BISECT_LOG",
+];
+
+const DIRTY_WORKTREE_MESSAGE: &str = "Commit or explicitly stash all staged, unstaged and untracked changes first. Gitty never automatically stashes.";
+/// Tags do not touch the worktree, but this version still requires it to be clean.
+pub(crate) const CREATE_TAG_DIRTY_MESSAGE: &str = "Creating a tag requires a clean working tree in this version; commit or stash your changes first. Gitty never automatically stashes.";
+
 type OperationMetadata = Vec<(&'static str, Option<Vec<u8>>)>;
 
 impl Service {
@@ -109,25 +208,16 @@ impl Repository {
     }
     /// Which metadata paths exist under the Git directory (depth <= 2), from ONE `find` process
     /// instead of a `test -e` launch per name (~100 ms each through `wsl.exe`).
-    /// `-L` makes symlinks behave as they do for `test -e` and `cat`: followed.
+    /// `-L` makes symlinks behave as they do for `test -e` and `cat`: followed, and
+    /// dangling links are dropped (`! -type l`). See [`metadata_scan_args`] and
+    /// [`find_outcome_acceptable`] (exit 1 from vanished entries is tolerated).
     fn wsl_existing_metadata(&self, distribution: &str) -> Result<HashSet<String>> {
         process::validate_distribution(distribution)?;
         let mut find = Command::new("wsl.exe");
-        find.args([
-            "--distribution",
-            distribution,
-            "--exec",
-            "find",
-            "-L",
-            &self.session.git_dir,
-            "-mindepth",
-            "1",
-            "-maxdepth",
-            "2",
-            "-print0",
-        ]);
+        find.args(["--distribution", distribution, "--exec"])
+            .args(metadata_scan_args(&self.session.git_dir));
         let output = process::run_for(find, process::CHECK_TIMEOUT)?;
-        if !output.success {
+        if !find_outcome_acceptable(output.success, output.code, &output.stdout) {
             return Err(self.failed(&output));
         }
         Ok(find_listing_paths(&self.session.git_dir, &output.stdout))
@@ -193,37 +283,7 @@ impl Repository {
             }
             RepositoryLocation::Native { .. } => None,
         };
-        for path in [
-            "MERGE_HEAD",
-            "ORIG_HEAD",
-            "MERGE_MSG",
-            "MERGE_MODE",
-            "MERGE_AUTOSTASH",
-            "AUTO_MERGE",
-            "rebase-merge/head-name",
-            "rebase-merge/orig-head",
-            "rebase-merge/autostash",
-            "rebase-merge/message",
-            "rebase-merge/author-script",
-            "rebase-merge/amend",
-            "rebase-merge/update-refs",
-            "rebase-merge/rewritten-list",
-            "rebase-merge/rewritten-pending",
-            "rebase-merge/onto",
-            "rebase-merge/msgnum",
-            "rebase-merge/end",
-            "rebase-merge/git-rebase-todo",
-            "rebase-merge/done",
-            "rebase-merge/interactive",
-            "rebase-merge/stopped-sha",
-            "rebase-apply/rebasing",
-            "rebase-apply/next",
-            "rebase-apply/last",
-            "sequencer/todo",
-            "sequencer/head",
-            "sequencer/opts",
-            "BISECT_LOG",
-        ] {
+        for path in OPERATION_METADATA_PATHS {
             let value = match &existing {
                 None => self.metadata(path)?,
                 Some((_, present)) if !present.contains(path) => None,
@@ -704,7 +764,12 @@ impl Repository {
                 }
         );
         if !control && !preserves_changes && !self.status_entries()?.entries.is_empty() {
-            return Err(Error::new("dirtyWorktree", "Commit or explicitly stash all staged, unstaged and untracked changes first. Gitty never automatically stashes."));
+            let message = if matches!(request.action, GitAction::CreateTag { .. }) {
+                CREATE_TAG_DIRTY_MESSAGE
+            } else {
+                DIRTY_WORKTREE_MESSAGE
+            };
+            return Err(Error::new("dirtyWorktree", message));
         }
         let mut input = Vec::new();
         let mut merge_message_file = None;

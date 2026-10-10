@@ -272,7 +272,10 @@ fn clone_repository(
 
     // The scoped token and its pending prompts live until the clone process ends.
     let askpass_guard = match (&request.parent, askpass) {
-        (RepositoryLocation::Native { .. }, Some(registry)) => Some(registry.start_operation()),
+        (RepositoryLocation::Native { .. }, Some(registry)) => Some(
+            registry
+                .start_operation_with(crate::askpass::AskpassContext::new(&destination, "clone")),
+        ),
         _ => None,
     };
     let (mut args, env) = network_args(true, askpass_guard.as_ref());

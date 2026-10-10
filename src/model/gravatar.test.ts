@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { clearGravatarCache, gravatarUrl, normalizeGravatarEmail } from './gravatar';
+import { clearGravatarCache, FAILURE_TTL_MS, gravatarImageFailed, gravatarUrl, markGravatarImageFailed, normalizeGravatarEmail } from './gravatar';
 
-afterEach(() => { clearGravatarCache(); vi.restoreAllMocks(); });
+afterEach(() => { clearGravatarCache(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe('Gravatar hashing', () => {
   it('normalizes email and produces the official SHA-256 URL', async () => {
@@ -19,5 +19,22 @@ describe('Gravatar hashing', () => {
     await expect(first).resolves.toBe(await second);
     await gravatarUrl('a@example.com');
     expect(digest).toHaveBeenCalledTimes(1);
+  });
+});
+describe('Gravatar failure cache', () => {
+  it('remembers failed images for ten minutes, then allows a retry', () => {
+    vi.useFakeTimers(); vi.setSystemTime(0);
+    expect(FAILURE_TTL_MS).toBe(600_000);
+    markGravatarImageFailed('Ada@Example.com');
+    expect(gravatarImageFailed('ada@example.com')).toBe(true);
+    vi.advanceTimersByTime(9 * 60_000 + 59_000);
+    expect(gravatarImageFailed('ada@example.com')).toBe(true);
+    vi.advanceTimersByTime(1_000);
+    expect(gravatarImageFailed('ada@example.com')).toBe(false);
+  });
+  it('bounds the failure cache', () => {
+    for (let i = 0; i < 600; i++) markGravatarImageFailed(`u${i}@example.com`);
+    expect(gravatarImageFailed('u0@example.com')).toBe(false);
+    expect(gravatarImageFailed('u599@example.com')).toBe(true);
   });
 });

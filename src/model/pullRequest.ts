@@ -33,6 +33,20 @@ export function parseHostingRemote(remote: string): HostingRemote {
   throw new Error('PR links currently support github.com, gitlab.com, and Azure DevOps. Open this hosting provider manually.');
 }
 
+/** Lowercased provider host of a remote (https, ssh:// or scp-like `[user@]host:path`); '' when unparseable.
+ * Azure DevOps SSH remotes live on `ssh.dev.azure.com` but the account is keyed on `dev.azure.com`. */
+export function providerHostFromRemote(remote: string): string {
+  const value = remote.trim();
+  const scp = !value.includes('://') && /^(?:[^@/\s]+@)?([^:/\s]+):(?!\/\/)/.exec(value);
+  let host = '';
+  if (scp) host = scp[1];
+  else { try { host = new URL(value).hostname; } catch { return ''; } }
+  host = host.toLowerCase();
+  // A bare drive letter (`C:\repo`) is a path, not a host.
+  if (/^[a-z]$/.test(host)) return '';
+  return host === 'ssh.dev.azure.com' ? 'dev.azure.com' : host;
+}
+
 function branchName(value: string): string {
   const name = value.replace(/^refs\/heads\//, '');
   if (!name || name === '@' || name.startsWith('-') || /[\s\x00-\x1f\x7f~^:?*\[\\]/.test(name) || name.includes('..') || name.includes('@{') || name.split('/').some(part => !part || part.startsWith('.') || part.endsWith('.') || part.endsWith('.lock'))) {

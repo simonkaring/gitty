@@ -426,6 +426,17 @@ or browser preferences. WSL keeps its own distribution credential handling.
 `provider_pull_requests` and
 `provider_create_pull_request` call bounded, host-specific HTTPS provider APIs
 for a selected connected account. PR creation is explicit and does not push.
+The repository is derived from the remote's push URL, which may be
+`https://<host>/…`, scp-like `[user@]host:path` (no scheme) or
+`ssh://[user@]host[:22]/path`, where `host` must equal the provider's host exactly
+(`github.com`, `gitlab.com`, `bitbucket.org`; Azure DevOps SSH uses
+`ssh.dev.azure.com` with the `v3/{org}/{project}/{repo}` layout, mapped to
+`{org}/{project}/_git/{repo}`). A `.git` suffix is stripped and the result is the same
+repository the HTTPS form yields. Other SSH ports, host aliases from SSH
+configuration (for example `github-work`), self-hosted servers, SSH passwords,
+queries/fragments and extra path segments are rejected with `invalidRemote`
+("Only HTTPS or SSH remotes for <host> are supported…"). Tokens are only ever sent to
+the provider's HTTPS API, never to the remote host named in an SSH URL.
 `provider_pull_requests` requests one page of 50 open requests and returns
 `{ requests: ProviderPullRequest[], truncated: boolean }` (camelCase). The list
 envelope is provider-specific: GitHub/GitLab return a top-level array, Azure
@@ -452,7 +463,14 @@ exactly-full final page is reported truncated); Bitbucket when the envelope has 
   sign-in. Native operations can use a local askpass bridge when those cannot
   supply credentials; each operation holds its own scoped token (an
   `AskpassGuard`), so its pending prompts are cancelled when it ends. The
-  app-lifetime token is not given to Git. Gitty keeps answers in memory only. A cancelled or expired prompt fails the helper,
+  app-lifetime token is not given to Git. The `git_askpass_prompt` event payload is
+  `{requestId, prompt, context}` where `context` is `{repository, operation}`
+  (strings, single-line, at most 200 characters; for example `gitty` / `fetch origin`,
+  `push origin`, `delete origin/<branch>`, or the clone destination / `clone`) supplied
+  by the app when the operation's scoped token is created
+  (`AskpassRegistry::start_operation_with`), or `null` for a token without a label.
+  `prompt` is Git's own text and can be influenced by hooks or remotes, so the dialog
+  renders `context` separately as provenance. Gitty keeps answers in memory only. A cancelled or expired prompt fails the helper,
   and a prompt has a 90-second response deadline within Git's write deadline.
   On Windows, explicit WSL fetch/pull/push/branch deletion can use a per-operation scoped askpass
   bridge when `wslpath` translates the Gitty executable for Windows interop.
@@ -559,7 +577,10 @@ remain unverified and require refresh/review.
 - New actions require no in-progress operation. Branch creation and merges allow
   local changes that Git can safely preserve; other new actions require a clean
   worktree/index, including no untracked files (except carrying a branch switch,
-  described below). Bare repositories are rejected. Gitty never forces,
+  described below); tag creation is included although it does not touch the worktree,
+  and its `dirtyWorktree` refusal says so ("Creating a tag requires a clean working
+  tree in this version; commit or stash your changes first…") while other
+  refused actions keep the generic commit-or-stash wording. Bare repositories are rejected. Gitty never forces,
   stashes without an explicit request, removes locks or automatically retries writes. Branch
   deletion is the narrow exception to the no-force rule: local `-D` follows a
   separately confirmed, positively classified `-d` failure; origin deletion
@@ -769,11 +790,22 @@ Under WSL, the Git-directory listing used for lock and operation detection runs
 `find -maxdepth 1` in the distribution and therefore needs the same GNU `find`
 the browser already requires; it is not covered by the macOS suite. Operation
 metadata (the 29 files under the Git directory that feed the operation fingerprint)
-is likewise determined with one `find -L <git_dir> -mindepth 1 -maxdepth 2 -print0`
-launch instead of a `test -e` per path; only files the scan lists are then read with
+is likewise determined with one shell-free
+`find -L <git_dir> -mindepth 1 -maxdepth 2 ( -path <git_dir>/objects -o … ) -prune -o ! -type l -print0`
+launch instead of a `test -e` per path. The pruned subtrees are `objects`, `refs`,
+`logs`, `hooks`, `worktrees`, `lfs` and `modules`; none of the 29 metadata paths
+(all at most two levels deep: `MERGE_HEAD` … `rebase-merge/*`, `rebase-apply/*`,
+`sequencer/*`, `BISECT_LOG`) live there, and a unit test asserts that. `! -type l` drops
+dangling symlinks (under `-L`, `-type l` matches only broken links), so they are
+absent exactly as with `test -e`. Only files the scan lists are then read with
 `cat` (ordinarily none), and a listed directory still fails at `cat` exactly as it did
-after `test -e`. A non-zero `find` exit returns the same error as before. The
-output-parsing function is unit-tested on every platform, and
+after `test -e`. `find` exit status 1, which GNU `find` returns when an entry vanishes
+between readdir and stat (concurrent Git lock files) or a subdirectory is unreadable,
+is accepted when it printed a listing (the vanished entry is simply absent); empty
+output with status 1, and every other status, return the same error as before. The
+Git-directory listing for lock detection applies the same exit-1 rule. The
+argv construction, the exit-status decision and the
+output-parsing function are unit-tested on every platform, and
 `wsl_operation_metadata_uses_one_existence_scan` asserts the launch count, but the
 single-process scan **still requires Windows/WSL runtime validation** (it has never
 been run against a real distribution). A file removed between the scan and its `cat`
@@ -781,4 +813,4 @@ surfaces as a Git error, where before the narrower `test`/`cat` window did the s
 operations, regular-file conflict resolution, hunk staging, stashes, remote
 operations, amend, and cloning are described above. Line staging and a scoped
 WSL askpass bridge have local tests; Windows/WSL runtime checks remain open.
-The current suite includes 230 passing library tests (one ignored) and two binary tests on macOS. One signing test, `operations_unsupported_state_bare_and_signing_errors`, depends on the machine's global Git configuration: a global `gpg.format =` with an empty value makes Git abort while reading configuration, which no repository-local setting can override, so run it with `GIT_CONFIG_GLOBAL=/dev/null` on such a machine.
+One signing test, `operations_unsupported_state_bare_and_signing_errors`, depends on the machine's global Git configuration: a global `gpg.format =` with an empty value makes Git abort while reading configuration, which no repository-local setting can override, so run it with `GIT_CONFIG_GLOBAL=/dev/null` on such a machine.

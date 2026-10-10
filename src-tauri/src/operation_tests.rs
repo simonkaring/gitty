@@ -2513,3 +2513,106 @@ fn find_listing_is_parsed_into_git_dir_relative_paths() {
     assert!(find_listing_paths("/r/.git/", b"/r/.git/MERGE_HEAD\0").contains("MERGE_HEAD"));
     assert!(find_listing_paths("/r/.git", b"").is_empty());
 }
+
+#[test]
+fn metadata_scan_argv_prunes_heavy_subtrees_and_drops_dangling_links() {
+    use crate::operations::{metadata_scan_args, METADATA_SCAN_PRUNED};
+    let argv = metadata_scan_args("/r/.git/");
+    assert_eq!(
+        argv,
+        [
+            "find",
+            "-L",
+            "/r/.git/",
+            "-mindepth",
+            "1",
+            "-maxdepth",
+            "2",
+            "(",
+            "-path",
+            "/r/.git/objects",
+            "-o",
+            "-path",
+            "/r/.git/refs",
+            "-o",
+            "-path",
+            "/r/.git/logs",
+            "-o",
+            "-path",
+            "/r/.git/hooks",
+            "-o",
+            "-path",
+            "/r/.git/worktrees",
+            "-o",
+            "-path",
+            "/r/.git/lfs",
+            "-o",
+            "-path",
+            "/r/.git/modules",
+            ")",
+            "-prune",
+            "-o",
+            "!",
+            "-type",
+            "l",
+            "-print0",
+        ]
+    );
+    assert_eq!(METADATA_SCAN_PRUNED.len(), 7);
+    // Glob metacharacters in the Git directory match literally.
+    let odd = metadata_scan_args("/r/a[1]*?\\b/.git");
+    assert!(odd.contains(&"/r/a\\[1]\\*\\?\\\\b/.git/objects".to_string()));
+}
+
+#[test]
+fn metadata_scan_keeps_every_metadata_path_within_depth_two_and_unpruned() {
+    use crate::operations::{METADATA_SCAN_PRUNED, OPERATION_METADATA_PATHS};
+    let paths = OPERATION_METADATA_PATHS;
+    assert_eq!(paths.len(), 29);
+    for path in paths {
+        let parts: Vec<&str> = path.split('/').collect();
+        assert!(parts.len() <= 2, "{path} deeper than the scan");
+        assert!(
+            !METADATA_SCAN_PRUNED.contains(&parts[0]),
+            "{path} lives in a pruned subtree"
+        );
+    }
+}
+
+#[test]
+fn find_exit_one_with_output_is_tolerated_but_other_failures_are_not() {
+    use crate::operations::find_outcome_acceptable;
+    // Success, and exit 1 (vanished lock file / unreadable subdirectory) with a listing.
+    assert!(find_outcome_acceptable(true, Some(0), b"/r/.git/HEAD\0"));
+    assert!(find_outcome_acceptable(false, Some(1), b"/r/.git/HEAD\0"));
+    // Exit 1 without any listing means the Git directory itself was not scanned.
+    assert!(!find_outcome_acceptable(false, Some(1), b""));
+    // Other codes, signals and timeouts fail even with partial output.
+    assert!(!find_outcome_acceptable(false, Some(2), b"/r/.git/HEAD\0"));
+    assert!(!find_outcome_acceptable(false, Some(127), b""));
+    assert!(!find_outcome_acceptable(false, None, b"/r/.git/HEAD\0"));
+}
+
+#[test]
+fn creating_a_tag_with_a_dirty_worktree_gets_a_tag_specific_refusal() {
+    let f = Fixture::new();
+    f.write("untracked", "work in progress\n");
+    let tag = |name: &str| GitAction::CreateTag {
+        name: name.into(),
+        oid: "HEAD".into(),
+        message: None,
+    };
+    let error = f.run(tag("blocked")).unwrap_err();
+    assert_eq!(error.code, "dirtyWorktree");
+    assert_eq!(error.message, crate::operations::CREATE_TAG_DIRTY_MESSAGE);
+    assert!(error.message.starts_with("Creating a tag requires a clean"));
+    assert!(f.git(&["tag", "--list", "blocked"]).is_empty());
+    // Other refused actions keep the generic wording.
+    let error = f
+        .run(GitAction::Rebase {
+            onto: "main".into(),
+        })
+        .unwrap_err();
+    assert_eq!(error.code, "dirtyWorktree");
+    assert!(error.message.starts_with("Commit or explicitly stash"));
+}

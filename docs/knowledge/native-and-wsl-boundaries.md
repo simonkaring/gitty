@@ -54,7 +54,10 @@ browsing and operation detection require Linux tools; conflict filesystem access
 uses a fixed Python 3 helper with pinned directory descriptors. Native conflict
 access uses capability-rooted handles. Ignore/open/reveal and interactive rebase
 editing have explicit WSL limitations; consult the detailed contract before
-extending platform support.[^contract]
+extending platform support.[^contract] The WSL operation-metadata scan is one
+`find` that must keep `test -e`/`cat` parity: symlinks followed, dangling links absent,
+heavy Git-directory subtrees pruned, and exit 1 from entries vanishing under
+concurrent Git tolerated; it has no Windows/WSL runtime verification yet.[^contract]
 
 Git authentication and provider API accounts are separate. WSL retains its
 distribution credential helpers; bundled native GCM is not injected there.
@@ -70,6 +73,9 @@ hold a per-operation scoped askpass token, not the app token, so prompts end wit
 the operation. The loopback bridges bound pre-authentication input (256-byte
 token, 4 KiB prompt), an absolute 10 s handshake deadline, and 16 concurrent
 connections; helper scripts are removed on window close.[^askpass][^bridge]
+Each scoped token carries an app-supplied `{repository, operation}` label that the
+`git_askpass_prompt` payload forwards as `context` (null for an unlabelled token), so
+the dialog shows provenance apart from Git's own, hook-influenceable prompt text.[^askpass]
 
 Background fetch deliberately bypasses the Gitty mutation lock and read deadline:
 it moves only `refs/remotes/*` and must not block local writes behind the network.
