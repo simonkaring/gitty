@@ -30,6 +30,8 @@ sources:
     resource: ../../src-tauri/src/stash.rs
   - id: stash-dialog
     resource: ../../src/components/RemoteStashDialog.tsx
+  - id: origin-reset-dialog
+    resource: ../../src/components/OriginResetDialog.tsx
 ---
 
 # Git mutation safeguards
@@ -86,6 +88,15 @@ failure/uncertainty prevents the remote attempt; partial target outcomes remain
 structured for the UI. Deletion refresh excludes removed target tips from
 automatic keep-visible paging while leaving explicit navigation unchanged.[^branch-delete][^branch-delete-ui]
 
+Origin reset is an explicitly confirmed destructive graph action for the
+checked-out same-named local branch. Review shows the fetched tip, local-only
+commit count and tracked change count. Execution pins HEAD/ref, operation/content
+fingerprint and origin OID; it discards staged/unstaged tracked work, while
+untracked/ignored target obstructions are refused before `reset --hard`. It does
+not fetch or push, and failures require refresh and an explicit new review rather
+than retry. See `operations_reset_origin_*` real-Git regressions and the dialog
+tests for source-backed entry points.[^operations][^operation-tests][^origin-reset-dialog]
+
 When changing this area, inspect `Service::mutate`, the action's Rust preflight,
 and `writeAndRefresh`. Existing regression entry points include
 `stage_and_commit_only_selected_hunk_preserves_worktree_and_other_staged_edits`
@@ -108,3 +119,4 @@ Related: [refresh coherence](snapshot-and-refresh-coherence.md) and
 [^operation-dialog]: Editable merge message and captured review display.
 [^stashes]: Unique merge-work stash identity, index restoration and OID-pinned apply/drop.
 [^stash-dialog]: Explicit staging restoration choice for manual recovery.
+[^origin-reset-dialog]: Captured origin reset review, destructive confirmation and no automatic retry.

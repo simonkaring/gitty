@@ -18,6 +18,10 @@ export function actionReason(action: GitAction, session: RepositorySession, oper
   if (action.kind === 'createTag') return action.name.trim() && action.oid ? '' : 'Enter a tag name and commit.';
   if (action.kind === 'cherryPick') return action.commits.length ? '' : 'Choose commits in the order they should be applied.';
   if (!session.headRef) return 'Check out a local branch first.';
+  if (action.kind === 'resetToOrigin') {
+    if (operation.conflicts.length) return 'Resolve existing conflicts before resetting the branch.';
+    return action.branch.startsWith('refs/remotes/origin/') && action.branch !== 'refs/remotes/origin/HEAD' && action.branch.replace(/^refs\/remotes\/origin\//, 'refs/heads/') === session.headRef && !!action.expectedOriginOid ? '' : 'Reset requires the checked-out same-named local branch and an origin tip.';
+  }
   if (action.kind === 'merge' && action.message !== undefined) {
     if (!action.message.trim()) return 'Enter a merge commit message.';
     if (action.message.includes('\0')) return 'Commit messages cannot contain NUL bytes.';

@@ -7,7 +7,8 @@ import type { CommitSummary, RepositoryState } from '../model/repository';
 import { actionReason, moveCommit } from '../model/operationUi';
 import { captureOperation } from '../model/operationFlow';
 
-export interface ActionContext { oid: string; ref?: string; destination?: string; initial?: GitAction['kind']; commits?: string[] }
+type DialogActionKind = Exclude<GitAction['kind'], 'resetToOrigin'>;
+export interface ActionContext { oid: string; ref?: string; destination?: string; initial?: DialogActionKind; commits?: string[] }
 export type OperationWrite = (command: string, args: Record<string, unknown>) => Promise<void>;
 
 /** Follow the checked-out branch rather than the interleaved graph row order. */
@@ -31,7 +32,7 @@ export function OperationDialog({ state, operation, context, commits, busy, onWr
   state: RepositoryState; operation: OperationState | null; context: ActionContext; commits: CommitSummary[]; busy: boolean;
   onWrite: OperationWrite; onCompare: (source: string) => void; onPullRequest: (source: string) => void; onClose: () => void;
 }) {
-  const [kind, setKind] = useState<GitAction['kind']>(context.initial ?? (context.ref ? context.ref === state.session.headRef ? 'createBranch' : 'merge' : 'cherryPick'));
+  const [kind, setKind] = useState<DialogActionKind>(context.initial ?? (context.ref ? context.ref === state.session.headRef ? 'createBranch' : 'merge' : 'cherryPick'));
   const [source, setSource] = useState(context.ref ?? context.oid);
   const [name, setName] = useState('');
   const [checkout, setCheckout] = useState(true);
@@ -91,7 +92,7 @@ export function OperationDialog({ state, operation, context, commits, busy, onWr
   const prBranch = state.refs.find(ref => ref.fullName === context.ref && ref.kind === 'local');
   const prReason = prBranch ? '' : context.ref?.startsWith('refs/tags/') ? 'Tags cannot be pull-request source branches. Choose a local branch.' : context.ref?.startsWith('refs/remotes/') ? 'Pull requests require a local source branch. Create or check out a local branch from this remote-tracking ref first.' : 'Choose an existing local branch as the pull-request source.';
   const close = () => { if (!pending) onClose(); };
-  const choice = (value: GitAction['kind'], label: ReactNode) => <label key={value} className="choice"><input type="radio" name="operation-action" value={value} checked={kind === value} onChange={() => setKind(value)} />{label}</label>;
+  const choice = (value: DialogActionKind, label: ReactNode) => <label key={value} className="choice"><input type="radio" name="operation-action" value={value} checked={kind === value} onChange={() => setKind(value)} />{label}</label>;
   const footer = review ? <>
     <button className="secondary-button" disabled={pending || busy} onClick={() => setReview(null)}>Back</button>
     <span className="spacer" />
@@ -140,7 +141,7 @@ function revisionLabel(value: string): string {
 function OperationSummary({ request, commits }: { request: OperationRequest; commits: CommitSummary[] }) {
   const { action } = request;
   const current = request.expectedHeadRef ? revisionLabel(request.expectedHeadRef) : 'Detached HEAD';
-  const titles: Record<GitAction['kind'], string> = { merge: 'Merge branches', rebase: 'Rebase branch', interactiveRebase: 'Interactive rebase', cherryPick: 'Cherry-pick commits', createBranch: 'Create branch', switchBranch: 'Switch branch', createTag: 'Create tag', continue: 'Continue operation', skip: 'Skip current commit', abort: 'Abort operation' };
+  const titles: Record<GitAction['kind'], string> = { resetToOrigin: 'Reset to origin', merge: 'Merge branches', rebase: 'Rebase branch', interactiveRebase: 'Interactive rebase', cherryPick: 'Cherry-pick commits', createBranch: 'Create branch', switchBranch: 'Switch branch', createTag: 'Create tag', continue: 'Continue operation', skip: 'Skip current commit', abort: 'Abort operation' };
   return <section aria-label="Operation summary"><h3>{titles[action.kind]}</h3>
     {action.kind === 'merge' && action.message && <><p>Commit message:</p><pre className="operation-review">{action.message}</pre></>}
     {action.kind === 'merge' && action.stashChanges && <p>Local changes: <strong>Stash before merging and restore staging afterward.</strong> If the merge or restoration needs attention, the saved work remains in Stashes for recovery.</p>}

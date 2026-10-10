@@ -273,7 +273,7 @@ targeted conflict resolutions have the additional contract documented below.
   the working tree**. Partially staged files keep their working-tree content.
   Paths that match nothing are a silent no-op in Git, so a stale selection
   resolves on the frontend's next refresh rather than failing.
-- Discard is the only write that destroys working-tree content, so it is guarded
+- Ordinary discard destroys selected working-tree content, so it is guarded
   twice. Under the mutation lock it re-reads the status and compares its fingerprint
   with the one the caller reviewed (`staleOperation`, nothing touched, when it moved),
   then classifies every requested path from that fresh status and refuses the whole
@@ -576,7 +576,7 @@ remain unverified and require refresh/review.
   remain authoritative and an external change can still race a subprocess.
 - New actions require no in-progress operation. Branch creation and merges allow
   local changes that Git can safely preserve; other new actions require a clean
-  worktree/index, including no untracked files (except carrying a branch switch,
+  worktree/index, including no untracked files (except the explicitly reviewed origin reset and carrying a branch switch,
   described below); tag creation is included although it does not touch the worktree,
   and its `dirtyWorktree` refusal says so ("Creating a tag requires a clean working
   tree in this version; commit or stash your changes first…") while other
@@ -633,6 +633,20 @@ remain unverified and require refresh/review.
   reapplied. Final state is refreshed after all outcomes.
   Stash Apply/Pop accept optional `restoreIndex` (IPC default `false`); the stash
   dialog enables it by default and provides a checkbox to opt out.
+- `resetToOrigin` accepts an explicit `branch: refs/remotes/origin/<name>` and
+  `expectedOriginOid`. It requires the checked-out same-named local branch with
+  an existing HEAD, no operation and no unresolved conflicts. The ordinary
+  expected HEAD/ref/operation fingerprint checks pin the reviewed refs, index and
+  working content under the mutation lock; the origin ref must still equal the
+  supplied OID. It runs `git reset --hard --no-recurse-submodules <expectedOriginOid> --`, moving only the
+  current local branch and restoring its index/tracked worktree (including removal
+  of staged additions). This deliberately discards tracked work after UI
+  confirmation. Untracked and ignored paths are retained; `protect_untracked`
+  rejects target-tree obstructions before writing. No clean, fetch, push, tracking
+  configuration change or recursive submodule reset is performed. Local origin
+  refs are fetched evidence, not live server state. External Git can race the
+  preflight as with other graph operations. Every outcome requires refresh and
+  failed/uncertain writes must not be automatically retried.
 - Rebase is noninteractive, uses the merge backend and disables autostash,
   autosquash and update-refs. A range containing merge commits is rejected with
   `mergeHistory` rather than silently flattening it. Detached merge/rebase

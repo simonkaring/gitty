@@ -763,7 +763,12 @@ impl Repository {
                     ..
                 }
         );
-        if !control && !preserves_changes && !self.status_entries()?.entries.is_empty() {
+        let discards_tracked_changes = matches!(request.action, GitAction::ResetToOrigin { .. });
+        if !control
+            && !preserves_changes
+            && !discards_tracked_changes
+            && !self.status_entries()?.entries.is_empty()
+        {
             let message = if matches!(request.action, GitAction::CreateTag { .. }) {
                 CREATE_TAG_DIRTY_MESSAGE
             } else {
@@ -839,6 +844,62 @@ impl Repository {
                 } else {
                     a.extend(args(&["--", &name]));
                 }
+            }
+            GitAction::ResetToOrigin {
+                branch,
+                expected_origin_oid,
+            } => {
+                if !before.conflicts.is_empty() {
+                    return Err(Error::new(
+                        "unresolvedConflict",
+                        "Resolve existing conflicts before resetting the branch.",
+                    ));
+                }
+                let name = branch
+                    .strip_prefix("refs/remotes/origin/")
+                    .filter(|name| *name != "HEAD")
+                    .ok_or_else(|| {
+                        Error::new(
+                            "invalidReference",
+                            "Reset requires an explicit origin branch, not origin/HEAD.",
+                        )
+                    })?;
+                self.valid_name(name, "heads")?;
+                let local_ref = format!("refs/heads/{name}");
+                if state.session.head_ref.as_deref() != Some(local_ref.as_str())
+                    || state.session.head.is_none()
+                {
+                    return Err(Error::new(
+                        "invalidReference",
+                        "Reset requires the checked-out same-named local branch.",
+                    ));
+                }
+                let target = state
+                    .refs
+                    .iter()
+                    .find(|r| r.full_name == branch)
+                    .ok_or_else(|| {
+                        Error::new(
+                            "invalidReference",
+                            "The reviewed origin branch no longer exists.",
+                        )
+                    })?;
+                if target.commit_id != expected_origin_oid
+                    || resolve(self.location(), &branch)? != expected_origin_oid
+                {
+                    return Err(Error::new(
+                        "staleOperation",
+                        "The origin tip changed. Refresh and review the reset again.",
+                    ));
+                }
+                self.protect_untracked(std::slice::from_ref(&expected_origin_oid))?;
+                a.extend(args(&[
+                    "reset",
+                    "--hard",
+                    "--no-recurse-submodules",
+                    &expected_origin_oid,
+                    "--",
+                ]));
             }
             GitAction::Merge {
                 source,

@@ -2400,6 +2400,171 @@ fn operations_switch_origin_carries_overlapping_changes_as_conflicts() {
 }
 
 #[test]
+fn operations_reset_origin_discards_local_commits_and_tracked_work_only() {
+    let f = Fixture::new();
+    let origin = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["update-ref", "refs/remotes/origin/main", &origin]);
+    f.write("file", "local commit\n");
+    let local = f.commit("local commit");
+    f.write("file", "staged\n");
+    f.git(&["add", "file"]);
+    f.write("file", "unstaged\n");
+    f.write("new-staged", "staged addition\n");
+    f.git(&["add", "new-staged"]);
+    f.write("untracked", "keep\n");
+    f.write(".gitignore", "ignored\n");
+    f.write("ignored", "keep ignored\n");
+    let result = f
+        .run(GitAction::ResetToOrigin {
+            branch: "refs/remotes/origin/main".into(),
+            expected_origin_oid: origin.clone(),
+        })
+        .unwrap();
+    assert_eq!(result.head, Some(origin.clone()));
+    assert_eq!(f.git(&["symbolic-ref", "HEAD"]), "refs/heads/main");
+    assert_eq!(f.git(&["rev-parse", "refs/remotes/origin/main"]), origin);
+    assert_eq!(f.git(&["rev-parse", "ORIG_HEAD"]), local);
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("file")).unwrap(),
+        "base\n"
+    );
+    assert!(!f.dir.path().join("new-staged").exists());
+    assert!(f.git(&["diff", "--cached"]).is_empty());
+    for (path, content) in [
+        ("untracked", "keep\n"),
+        ("ignored", "keep ignored\n"),
+        (".gitignore", "ignored\n"),
+    ] {
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join(path)).unwrap(),
+            content
+        );
+    }
+}
+
+#[test]
+fn operations_reset_origin_rejects_stale_reviews_and_invalid_targets() {
+    let f = Fixture::new();
+    let origin = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["update-ref", "refs/remotes/origin/main", &origin]);
+    let action = || GitAction::ResetToOrigin {
+        branch: "refs/remotes/origin/main".into(),
+        expected_origin_oid: origin.clone(),
+    };
+    let request = f.request(action());
+    f.write("file", "new work\n");
+    assert_eq!(
+        f.service
+            .run_operation(&f.handle, request, None)
+            .unwrap_err()
+            .code,
+        "staleOperation"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("file")).unwrap(),
+        "new work\n"
+    );
+    let request = f.request(action());
+    let moved = f.commit("moved");
+    f.git(&["update-ref", "refs/remotes/origin/main", &moved]);
+    assert_eq!(
+        f.service
+            .run_operation(&f.handle, request, None)
+            .unwrap_err()
+            .code,
+        "staleOperation"
+    );
+    assert_eq!(f.run(action()).unwrap_err().code, "staleOperation");
+    for branch in [
+        "refs/remotes/origin/HEAD",
+        "refs/remotes/upstream/main",
+        "refs/heads/main",
+        "refs/remotes/origin/other",
+    ] {
+        assert_eq!(
+            f.run(GitAction::ResetToOrigin {
+                branch: branch.into(),
+                expected_origin_oid: moved.clone()
+            })
+            .unwrap_err()
+            .code,
+            "invalidReference"
+        );
+    }
+    f.git(&["switch", "--detach"]);
+    assert_eq!(f.run(action()).unwrap_err().code, "invalidReference");
+}
+
+#[test]
+fn operations_reset_origin_preserves_nested_work_even_when_recursion_is_configured() {
+    let source = Fixture::new();
+    let base = source.git(&["rev-parse", "HEAD"]);
+    source.write("file", "next\n");
+    let next = source.commit("next");
+    let f = Fixture::new();
+    f.git(&[
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        source.dir.path().to_str().unwrap(),
+        "nested",
+    ]);
+    let nested = f.dir.path().join("nested");
+    git(&nested, &["checkout", &base]);
+    let origin = f.commit("origin pointer");
+    f.git(&["update-ref", "refs/remotes/origin/main", &origin]);
+    git(&nested, &["checkout", &next]);
+    f.git(&["add", "nested"]);
+    f.git(&["commit", "-m", "local pointer"]);
+    std::fs::write(nested.join("file"), "nested work\n").unwrap();
+    f.git(&["config", "submodule.recurse", "true"]);
+    f.run(GitAction::ResetToOrigin {
+        branch: "refs/remotes/origin/main".into(),
+        expected_origin_oid: origin.clone(),
+    })
+    .unwrap();
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), origin);
+    assert_eq!(f.git(&["rev-parse", "HEAD:nested"]), base);
+    assert_eq!(git(&nested, &["rev-parse", "HEAD"]), next);
+    assert_eq!(
+        std::fs::read_to_string(nested.join("file")).unwrap(),
+        "nested work\n"
+    );
+}
+
+#[test]
+fn operations_reset_origin_protects_obstructing_untracked_and_ignored_files() {
+    for ignored in [false, true] {
+        let f = Fixture::new();
+        f.git(&["switch", "-c", "incoming"]);
+        f.write("obstruction", "incoming\n");
+        let origin = f.commit("incoming");
+        f.git(&["update-ref", "refs/remotes/origin/main", &origin]);
+        f.git(&["switch", "main"]);
+        let head = f.git(&["rev-parse", "HEAD"]);
+        f.write("obstruction", "keep\n");
+        if ignored {
+            f.write(".gitignore", "obstruction\n");
+        }
+        assert_eq!(
+            f.run(GitAction::ResetToOrigin {
+                branch: "refs/remotes/origin/main".into(),
+                expected_origin_oid: origin
+            })
+            .unwrap_err()
+            .code,
+            "dirtyWorktree"
+        );
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), head);
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join("obstruction")).unwrap(),
+            "keep\n"
+        );
+    }
+}
+
+#[test]
 fn operations_switch_carries_changes_and_surfaces_conflicts() {
     let f = Fixture::new();
     f.git(&["switch", "-c", "side"]);

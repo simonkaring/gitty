@@ -55,6 +55,10 @@ pub enum GitAction {
         #[serde(default)]
         carry_changes: bool,
     },
+    ResetToOrigin {
+        branch: String,
+        expected_origin_oid: String,
+    },
     Merge {
         source: String,
         destination: Option<String>,

@@ -16,6 +16,30 @@ const makeState = (headRef = 'refs/heads/main', handle = 'handle'): RepositorySt
     { name: 'origin/topic', fullName: 'refs/remotes/origin/topic', commitId: 'origin-tip', kind: 'remote' },
   ], remotes: ['origin'], fingerprint: 'state',
 });
+
+it('offers keyboard-accessible origin reset only for the checked-out counterpart with commits or tracked work', async () => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  nativeCall.mockResolvedValue([1, 1]);
+  const host = document.createElement('div'); const root = createRoot(host); const onSwitch = vi.fn();
+  const originTarget = { ...target, context: { oid: 'origin-tip', ref: 'refs/remotes/origin/topic' } };
+  const render = (state: RepositoryState, hasTrackedChanges = false) => <GraphContextMenu target={originTarget} state={state} busy={false} hasTrackedChanges={hasTrackedChanges} onOperation={noop} onSwitchBranch={onSwitch} onShowDetails={noop} onSetBase={noop} onSetTarget={noop} onCompare={noop} onPullRequest={noop} onRemoteAction={noop} onPush={noop} onCopy={noop} onDeleteBranch={noop} onClose={noop} />;
+  const reset = () => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent?.startsWith('Reset local branch'));
+  try {
+    await act(async () => root.render(render(makeState())));
+    expect(reset()).toBeUndefined();
+    const state = makeState('refs/heads/topic');
+    await act(async () => root.render(render(state)));
+    await act(async () => reset()!.click());
+    expect(onSwitch).toHaveBeenCalledWith('refs/remotes/origin/topic');
+    state.refs[2].commitId = state.session.head!;
+    await act(async () => root.render(render(state)));
+    expect(reset()).toBeUndefined();
+    await act(async () => root.render(render(state, true)));
+    expect(reset()?.disabled).toBe(false);
+    await act(async () => root.render(render(makeState('refs/heads/topic', 'demo:repo'))));
+    expect(reset()?.disabled).toBe(true);
+  } finally { await act(async () => root.unmount()); }
+});
 const target: MenuTarget = { context: { oid: 'local-tip', ref: 'refs/heads/topic' }, x: 20, y: 20, trigger: document.body };
 const noop = () => {};
 
