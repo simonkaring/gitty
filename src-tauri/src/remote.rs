@@ -232,6 +232,12 @@ impl Repository {
         let mut helper_args = Vec::new();
         crate::credentials::configure(&mut helper_args, self.location(), account_url.trim_end())?;
 
+        let prompt_context = || {
+            crate::askpass::AskpassContext::new(
+                &self.session.name,
+                format!("{} {remote}", action_verb(&action)),
+            )
+        };
         #[cfg(windows)]
         let wsl_bridge =
             if let (true, RepositoryLocation::Wsl { distribution, .. }, Some(registry)) =
@@ -239,7 +245,7 @@ impl Repository {
             {
                 crate::askpass::wsl_executable_path(distribution)
                     .ok()
-                    .map(|path| (path, registry.start_operation()))
+                    .map(|path| (path, registry.start_operation_with(prompt_context())))
             } else {
                 None
             };
@@ -247,7 +253,7 @@ impl Repository {
         let wsl_bridge: Option<(String, crate::askpass::AskpassGuard<'_>)> = None;
         // Native prompts use a token scoped to this action, so any prompt dies with it.
         let native_bridge = match (interactive, wsl, askpass) {
-            (true, false, Some(registry)) => Some(registry.start_operation()),
+            (true, false, Some(registry)) => Some(registry.start_operation_with(prompt_context())),
             _ => None,
         };
         let network = || match (&wsl_bridge, askpass) {
@@ -598,6 +604,15 @@ pub(crate) fn network_args_wsl(
         ("GITTY_ASKPASS_TOKEN".into(), token.into()),
     ]);
     (args, env)
+}
+
+/// Short verb shown with askpass prompts ("fetch origin", "push origin").
+fn action_verb(action: &RemoteAction) -> &'static str {
+    match action {
+        RemoteAction::Fetch { .. } | RemoteAction::BackgroundFetch => "fetch",
+        RemoteAction::Pull { .. } => "pull",
+        RemoteAction::Push { .. } => "push",
+    }
 }
 
 #[cfg(test)]

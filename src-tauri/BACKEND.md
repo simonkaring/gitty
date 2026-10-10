@@ -463,7 +463,14 @@ exactly-full final page is reported truncated); Bitbucket when the envelope has 
   sign-in. Native operations can use a local askpass bridge when those cannot
   supply credentials; each operation holds its own scoped token (an
   `AskpassGuard`), so its pending prompts are cancelled when it ends. The
-  app-lifetime token is not given to Git. Gitty keeps answers in memory only. A cancelled or expired prompt fails the helper,
+  app-lifetime token is not given to Git. The `git_askpass_prompt` event payload is
+  `{requestId, prompt, context}` where `context` is `{repository, operation}`
+  (strings, single-line, at most 200 characters; for example `gitty` / `fetch origin`,
+  `push origin`, `delete origin/<branch>`, or the clone destination / `clone`) supplied
+  by the app when the operation's scoped token is created
+  (`AskpassRegistry::start_operation_with`), or `null` for a token without a label.
+  `prompt` is Git's own text and can be influenced by hooks or remotes, so the dialog
+  renders `context` separately as provenance. Gitty keeps answers in memory only. A cancelled or expired prompt fails the helper,
   and a prompt has a 90-second response deadline within Git's write deadline.
   On Windows, explicit WSL fetch/pull/push/branch deletion can use a per-operation scoped askpass
   bridge when `wslpath` translates the Gitty executable for Windows interop.
@@ -806,4 +813,4 @@ surfaces as a Git error, where before the narrower `test`/`cat` window did the s
 operations, regular-file conflict resolution, hunk staging, stashes, remote
 operations, amend, and cloning are described above. Line staging and a scoped
 WSL askpass bridge have local tests; Windows/WSL runtime checks remain open.
-The current suite includes 230 passing library tests (one ignored) and two binary tests on macOS. One signing test, `operations_unsupported_state_bare_and_signing_errors`, depends on the machine's global Git configuration: a global `gpg.format =` with an empty value makes Git abort while reading configuration, which no repository-local setting can override, so run it with `GIT_CONFIG_GLOBAL=/dev/null` on such a machine.
+The current suite includes 246 passing library tests (one ignored, one environment-dependent failure described below) and two binary tests on macOS. One signing test, `operations_unsupported_state_bare_and_signing_errors`, depends on the machine's global Git configuration: a global `gpg.format =` with an empty value makes Git abort while reading configuration, which no repository-local setting can override, so run it with `GIT_CONFIG_GLOBAL=/dev/null` on such a machine.

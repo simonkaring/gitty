@@ -306,6 +306,12 @@ impl Repository {
                 let wsl = matches!(self.location(), RepositoryLocation::Wsl { .. });
                 let mut a = Vec::new();
                 crate::credentials::configure(&mut a, self.location(), &url)?;
+                let prompt_context = || {
+                    crate::askpass::AskpassContext::new(
+                        &self.session.name,
+                        format!("delete origin/{branch}"),
+                    )
+                };
                 #[cfg(windows)]
                 let wsl_bridge =
                     if let (RepositoryLocation::Wsl { distribution, .. }, Some(registry)) =
@@ -313,14 +319,16 @@ impl Repository {
                     {
                         crate::askpass::wsl_executable_path(distribution)
                             .ok()
-                            .map(|path| (path, registry.start_operation()))
+                            .map(|path| (path, registry.start_operation_with(prompt_context())))
                     } else {
                         None
                     };
                 #[cfg(not(windows))]
                 let wsl_bridge: Option<(String, crate::askpass::AskpassGuard<'_>)> = None;
                 let native_bridge = match (wsl, askpass) {
-                    (false, Some(registry)) => Some(registry.start_operation()),
+                    (false, Some(registry)) => {
+                        Some(registry.start_operation_with(prompt_context()))
+                    }
                     _ => None,
                 };
                 let (network, env) = match (&wsl_bridge, askpass) {

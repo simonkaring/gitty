@@ -9,7 +9,8 @@ use tauri::{AppHandle, Emitter, State};
 
 pub struct AskpassRegistry {
     requests: Mutex<HashMap<usize, PendingPrompt>>,
-    active_tokens: Mutex<std::collections::HashSet<String>>,
+    /// Scoped operation tokens and the label (if any) shown with their prompts.
+    active_tokens: Mutex<HashMap<String, Option<AskpassContext>>>,
     pub port: u16,
     pub token: String,
     pub script_path: std::path::PathBuf,
@@ -20,11 +21,42 @@ struct PendingPrompt {
     reply: std::sync::mpsc::Sender<Option<String>>,
 }
 
+/// Which repository and operation a scoped token belongs to. Git's prompt text can
+/// be influenced by hooks or remote servers, so the dialog shows this app-supplied
+/// label separately from it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct AskpassContext {
+    pub repository: String,
+    pub operation: String,
+}
+
+impl AskpassContext {
+    const MAX_LEN: usize = 200;
+
+    pub fn new(repository: impl AsRef<str>, operation: impl AsRef<str>) -> Self {
+        // Labels are single-line display text; control characters never reach the UI.
+        let clean = |value: &str| {
+            value
+                .chars()
+                .map(|ch| if ch.is_control() { ' ' } else { ch })
+                .take(Self::MAX_LEN)
+                .collect::<String>()
+                .trim()
+                .to_string()
+        };
+        Self {
+            repository: clean(repository.as_ref()),
+            operation: clean(operation.as_ref()),
+        }
+    }
+}
+
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AskpassPromptPayload {
     request_id: usize,
     prompt: String,
+    context: Option<AskpassContext>,
 }
 
 pub struct AskpassGuard<'a> {
@@ -64,16 +96,30 @@ impl AskpassRegistry {
     pub fn new(port: u16, token: String, script_path: std::path::PathBuf) -> Self {
         Self {
             requests: Mutex::new(HashMap::new()),
-            active_tokens: Mutex::new(std::collections::HashSet::new()),
+            active_tokens: Mutex::new(HashMap::new()),
             port,
             token,
             script_path,
         }
     }
 
+    /// Starts an operation scope without a prompt label.
+    #[cfg(test)]
     pub fn start_operation(&self) -> AskpassGuard<'_> {
+        self.start_scope(None)
+    }
+
+    /// Starts an operation scope whose prompts carry `context` to the dialog.
+    pub fn start_operation_with(&self, context: AskpassContext) -> AskpassGuard<'_> {
+        self.start_scope(Some(context))
+    }
+
+    fn start_scope(&self, context: Option<AskpassContext>) -> AskpassGuard<'_> {
         let token = uuid::Uuid::new_v4().to_string();
-        self.active_tokens.lock().unwrap().insert(token.clone());
+        self.active_tokens
+            .lock()
+            .unwrap()
+            .insert(token.clone(), context);
         AskpassGuard {
             registry: self,
             token,
@@ -120,7 +166,7 @@ fn handle_connection<F, E>(
     emit_prompt: F,
     emit_expired: E,
 ) where
-    F: FnOnce(usize, String) -> Result<(), ()>,
+    F: FnOnce(usize, String, Option<AskpassContext>) -> Result<(), ()>,
     E: FnOnce(usize),
 {
     let _ = stream.set_write_timeout(Some(bridge::WRITE_TIMEOUT));
@@ -139,12 +185,14 @@ fn handle_connection<F, E>(
     let prompt = prompt.trim_end().to_string();
 
     let (tx, rx) = std::sync::mpsc::channel();
-    {
+    let context = {
         // Revalidate under the lock: the operation may have ended while reading.
         let active = registry.active_tokens.lock().unwrap();
-        if supplied != registry.token && !active.contains(supplied) {
-            return;
-        }
+        let context = match active.get(supplied) {
+            Some(context) => context.clone(),
+            None if supplied == registry.token => None,
+            None => return,
+        };
         registry.requests.lock().unwrap().insert(
             request_id,
             PendingPrompt {
@@ -152,10 +200,11 @@ fn handle_connection<F, E>(
                 reply: tx,
             },
         );
-    }
+        context
+    };
 
     let mut writer = &stream;
-    if emit_prompt(request_id, prompt).is_ok() {
+    if emit_prompt(request_id, prompt, context).is_ok() {
         // The child process has a shorter read timeout. A dismissed or lost
         // prompt must not strand a thread.
         let response = rx.recv_timeout(limits.prompt_wait);
@@ -172,7 +221,7 @@ fn handle_connection<F, E>(
 
 impl AskpassRegistry {
     fn accepts(&self, supplied: &str) -> bool {
-        supplied == self.token || self.active_tokens.lock().unwrap().contains(supplied)
+        supplied == self.token || self.active_tokens.lock().unwrap().contains_key(supplied)
     }
 }
 
@@ -236,11 +285,15 @@ pub fn init(app: AppHandle) -> std::io::Result<()> {
                     &registry,
                     request_id,
                     LIMITS,
-                    move |request_id, prompt| {
+                    move |request_id, prompt, context| {
                         prompt_app
                             .emit(
                                 "git_askpass_prompt",
-                                AskpassPromptPayload { request_id, prompt },
+                                AskpassPromptPayload {
+                                    request_id,
+                                    prompt,
+                                    context,
+                                },
                             )
                             .map_err(|_| ())
                     },
@@ -332,8 +385,8 @@ pub(crate) fn wsl_env_mapping(previous: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        encode_response, handle_connection, shell_quote, wsl_env_mapping, AskpassPromptPayload,
-        AskpassRegistry, Limits,
+        encode_response, handle_connection, shell_quote, wsl_env_mapping, AskpassContext,
+        AskpassPromptPayload, AskpassRegistry, Limits,
     };
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
@@ -352,7 +405,7 @@ mod tests {
         limits: Limits,
     ) -> (
         TcpStream,
-        mpsc::Receiver<(usize, String)>,
+        mpsc::Receiver<(usize, String, Option<AskpassContext>)>,
         std::thread::JoinHandle<Duration>,
     ) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -366,7 +419,7 @@ mod tests {
                 &registry,
                 1,
                 limits,
-                |id, prompt| prompts.send((id, prompt)).map_err(|_| ()),
+                |id, prompt, context| prompts.send((id, prompt, context)).map_err(|_| ()),
                 |_| {},
             );
             started.elapsed()
@@ -453,7 +506,11 @@ mod tests {
             client
                 .write_all(format!("{token}\nPassword for example\n").as_bytes())
                 .unwrap();
-            let (id, prompt) = prompts.recv_timeout(Duration::from_secs(5)).unwrap();
+            let (id, prompt, context) = prompts.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(
+                context, None,
+                "unlabelled scopes and the app token carry no context"
+            );
             assert_eq!(prompt, "Password for example");
             registry
                 .requests
@@ -495,11 +552,11 @@ mod tests {
                 .expect("interactive native actions pass an askpass token");
             assert_ne!(token, registry.token, "never the app-lifetime token");
             assert_eq!(token, guard.token());
-            assert!(registry.active_tokens.lock().unwrap().contains(&token));
+            assert!(registry.active_tokens.lock().unwrap().contains_key(&token));
             assert!(!env.iter().any(|(_, value)| value == "app-token"));
             token
         };
-        assert!(!registry.active_tokens.lock().unwrap().contains(&token));
+        assert!(!registry.active_tokens.lock().unwrap().contains_key(&token));
         assert!(!registry.accepts(&token));
     }
 
@@ -520,10 +577,79 @@ mod tests {
             serde_json::to_value(AskpassPromptPayload {
                 request_id: 7,
                 prompt: "Username for example".into(),
+                context: None,
             })
             .unwrap(),
-            serde_json::json!({ "requestId": 7, "prompt": "Username for example" })
+            serde_json::json!({ "requestId": 7, "prompt": "Username for example", "context": null })
         );
+        assert_eq!(
+            serde_json::to_value(AskpassPromptPayload {
+                request_id: 8,
+                prompt: "Password".into(),
+                context: Some(AskpassContext::new("repo", "fetch origin")),
+            })
+            .unwrap(),
+            serde_json::json!({
+                "requestId": 8,
+                "prompt": "Password",
+                "context": { "repository": "repo", "operation": "fetch origin" }
+            })
+        );
+    }
+
+    #[test]
+    fn scoped_token_prompt_carries_its_operation_context() {
+        let registry = registry();
+        let first = registry.start_operation_with(AskpassContext::new("gitty", "push origin"));
+        let second = registry.start_operation_with(AskpassContext::new("other", "clone"));
+        for (guard, repository, operation) in [
+            (&first, "gitty", "push origin"),
+            (&second, "other", "clone"),
+        ] {
+            let (mut client, prompts, server) = serve_once(registry.clone(), TEST_LIMITS);
+            client
+                .write_all(format!("{}\nPassword for example\n", guard.token()).as_bytes())
+                .unwrap();
+            let (id, prompt, context) = prompts.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(prompt, "Password for example");
+            assert_eq!(context, Some(AskpassContext::new(repository, operation)));
+            registry
+                .requests
+                .lock()
+                .unwrap()
+                .remove(&id)
+                .unwrap()
+                .reply
+                .send(None)
+                .unwrap();
+            let mut reply = Vec::new();
+            client.read_to_end(&mut reply).unwrap();
+            server.join().unwrap();
+        }
+        // The app-lifetime token never carries a label.
+        let (mut client, prompts, server) = serve_once(registry.clone(), TEST_LIMITS);
+        client.write_all(b"app-token\nPassword\n").unwrap();
+        let (id, _, context) = prompts.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(context, None);
+        registry
+            .requests
+            .lock()
+            .unwrap()
+            .remove(&id)
+            .unwrap()
+            .reply
+            .send(None)
+            .unwrap();
+        let mut reply = Vec::new();
+        client.read_to_end(&mut reply).unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn context_labels_are_single_line_and_bounded() {
+        let context = AskpassContext::new("repo\nname\u{7}", "x".repeat(500));
+        assert_eq!(context.repository, "repo name");
+        assert_eq!(context.operation.chars().count(), 200);
     }
 
     #[test]
@@ -550,10 +676,10 @@ mod tests {
                 .active_tokens
                 .lock()
                 .unwrap()
-                .contains(guard.token()));
+                .contains_key(guard.token()));
             guard.token().to_string()
         };
-        assert!(!registry.active_tokens.lock().unwrap().contains(&token));
+        assert!(!registry.active_tokens.lock().unwrap().contains_key(&token));
         let mapped = wsl_env_mapping(Some("CUSTOM/p:GITTY_ASKPASS_TOKEN/w"));
         assert!(mapped.starts_with("CUSTOM/p:"));
         assert_eq!(mapped.matches("GITTY_ASKPASS_TOKEN").count(), 1);
