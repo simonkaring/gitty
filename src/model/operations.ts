@@ -16,7 +16,7 @@ export interface OperationState {
 export type GitAction =
   | { kind: 'createBranch'; name: string; startPoint: string; checkout: boolean }
   | { kind: 'switchBranch'; branch: string; carryChanges?: boolean }
-  | { kind: 'merge'; source: string; destination?: string; noFastForward: boolean; message?: string }
+  | { kind: 'merge'; source: string; destination?: string; noFastForward: boolean; message?: string; stashChanges?: boolean }
   | { kind: 'rebase'; onto: string }
   | { kind: 'interactiveRebase'; onto: string; steps: RebaseStep[] }
   | { kind: 'cherryPick'; commits: string[]; mainline?: number }
@@ -29,7 +29,7 @@ export interface OperationRequest {
   expectedHeadRef: string | null;
   expectedOperation: string;
 }
-export interface OperationResult { head: string | null; operation: OperationState; output: string }
+export interface OperationResult { head: string | null; operation: OperationState; output: string; notice?: string }
 export interface ConflictVersion { oid: string; mode: string; content: string | null }
 export interface ConflictFile {
   path: string;

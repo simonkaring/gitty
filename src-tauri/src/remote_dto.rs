@@ -76,9 +76,13 @@ pub enum StashAction {
     },
     Apply {
         oid: String,
+        #[serde(default)]
+        restore_index: bool,
     },
     Pop {
         oid: String,
+        #[serde(default)]
+        restore_index: bool,
     },
     Drop {
         oid: String,

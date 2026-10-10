@@ -560,7 +560,7 @@ remain unverified and require refresh/review.
   local changes that Git can safely preserve; other new actions require a clean
   worktree/index, including no untracked files (except carrying a branch switch,
   described below). Bare repositories are rejected. Gitty never forces,
-  automatically stashes, removes locks or automatically retries writes. Branch
+  stashes without an explicit request, removes locks or automatically retries writes. Branch
   deletion is the narrow exception to the no-force rule: local `-D` follows a
   separately confirmed, positively classified `-d` failure; origin deletion
   uses an expected-OID force-with-lease on one explicit refspec.
@@ -582,7 +582,9 @@ remain unverified and require refresh/review.
   and no NUL. Native Git reads an operation-owned temporary file; WSL Git reads
   the message from stdin via `--file=/dev/stdin`. Absent messages retain
   Git's generated default. The merge dialog supplies an editable source/destination
-  message and displays it during review. Fast-forward merges create no commit and
+  message and displays it during review. The dialog defaults `noFastForward` to
+  `true`; users can uncheck **Always create a merge commit** to allow fast-forward.
+  Fast-forward merges create no commit and
   ignore the message. Conflict-producing merges retain it in Git's `MERGE_MSG`
   for continuation, including after restarting the application; Git's cleanup,
   hooks and signing remain active.
@@ -591,6 +593,25 @@ remain unverified and require refresh/review.
   Switch/merge refuse ignored-file overwrites. Rebase/cherry-pick preflight
   destination/replay trees, including queued continuation steps, for obstructing
   ignored or untracked files.
+- Merge `stashChanges` is optional and defaults to `false`. Explicit opt-in saves
+  staged, unstaged and untracked work with `stash push --include-untracked` under
+  the same mutation lock as the merge. Reviewed state, message and targets are
+  validated before saving; saved work is identified by its unique **Gitty merge
+  work** label and pinned OID, not its reflog position. Any work not cleared by
+  stash prevents the merge. Ignored files are not saved; the existing obstruction
+  safeguards still apply. Targets and HEAD are rechecked after saving, and only
+  the stash-induced expected operation fingerprint is replaced.
+  A clean merge restores with `stash apply --index <oid>` and drops only that
+  stash after success, re-resolving the selector. Conflicted merges retain it and
+  return an optional `OperationResult.notice` with recovery instructions. Continue
+  and Abort do not automatically reapply it: the caller recovers through Stashes
+  after the operation finishes, including after application restart. Post-save
+  merge errors include the saved-work identity and report `mergeWorkSaved` or
+  `mutationUnverified`. Restoration/removal failures report `mergeWorkSaved`,
+  explaining that the merge already completed and the stash must not be blindly
+  reapplied. Final state is refreshed after all outcomes.
+  Stash Apply/Pop accept optional `restoreIndex` (IPC default `false`); the stash
+  dialog enables it by default and provides a checkbox to opt out.
 - Rebase is noninteractive, uses the merge backend and disables autostash,
   autosquash and update-refs. A range containing merge commits is rejected with
   `mergeHistory` rather than silently flattening it. Detached merge/rebase

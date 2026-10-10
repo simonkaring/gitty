@@ -326,6 +326,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       if (!isCurrent()) throw new Error('Repository session changed.');
       const outcome = await operationAndRefresh(current.session.handle, command, args, () => refresh(true), isCurrent);
       if (outcome.superseded) throw new Error('Repository session changed.');
+      if (outcome.notice) setNotice(outcome.notice);
       if (outcome.refreshError) { blockedRef.current = true; setMutationBlocked(true); }
       if (outcome.error || outcome.refreshError) throw new Error([outcome.error, outcome.refreshError && `Refresh failed: ${outcome.refreshError}. Further writes are blocked until refresh succeeds.`].filter(Boolean).join('\n'));
     } finally { if (isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }

@@ -1,7 +1,7 @@
 ---
 type: UI Behavior
 title: Action notifications
-description: Readable remote and stash success summaries in the window's bottom-left toast region.
+description: Remote and stash success summaries and merge-work recovery notices in the bottom-left toast region.
 status: draft
 sources:
   - id: summaries
@@ -18,6 +18,10 @@ sources:
     resource: ../../src/components/ui.tsx
   - id: styles
     resource: ../../src/styles.css
+  - id: operation-flow
+    resource: ../../src/model/operationFlow.ts
+  - id: operation-flow-tests
+    resource: ../../src/model/operationFlow.test.ts
 ---
 
 # Action notifications
@@ -33,6 +37,12 @@ Toolbar, branch-menu, publish, and stash paths use these summaries after their
 write/refresh lifecycle succeeds. Write or refresh failures continue through the
 existing error path rather than a success notice.[^pane][^toolbar][^stash]
 
+Explicit merge stash-and-restore operations can return an optional native
+`notice`: either work/staging was restored, or saved work needs recovery after
+conflict resolution. The operation write lifecycle carries it through refresh,
+and the pane publishes it only for the current session. Merge/restoration errors
+still use the error path with the saved-work identity.[^pane][^operation-flow][^operation-flow-tests]
+
 The shared notification region floats at the bottom-left of the window. Callers
 own transient notice timers; error toasts remain dismissible.[^ui][^styles]
 
@@ -43,3 +53,5 @@ own transient notice timers; error toasts remain dismissible.[^ui][^styles]
 [^stash]: Stash notification caller.
 [^ui]: Shared toast portal and dismissal semantics.
 [^styles]: `.toast-region` positioning and responsive width.
+[^operation-flow]: Single-attempt operation writes and notice propagation.
+[^operation-flow-tests]: Recovery notice preservation through refresh.
