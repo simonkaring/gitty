@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createRoot } from 'react-dom/client';
 import { act, createElement, useState, type ReactElement, type ReactNode } from 'react';
+import { DIFF_ROW_ESTIMATE } from './DiffPreview';
+import { diffRows, type DiffRow } from '../model/splitDiff';
 import { DEFAULT_WORKING_DISCLOSURE, DiffPreview, WorkingChanges, type ActiveDiffState, type WorkingDisclosure, type WorkingDisclosureUpdate } from './WorkingChanges';
 import { commitProfileRepositoryKey } from '../model/commitProfiles';
 import { draftKey, saveDraft } from '../model/workflow';
@@ -751,5 +753,169 @@ describe('disclosure controls', () => {
       await click(toggle(host, 'Unstaged'));
       expect(toggle(host, 'Unstaged').getAttribute('aria-expanded')).toBe('false');
     } finally { await act(async () => { root.unmount(); }); host.remove(); }
+  });
+});
+
+describe('virtualized diff rows', () => {
+  const HUNK_LINES = 10_000;
+  /** Two 10,000-line hunks: mostly context, with a removal/addition pair every 100 lines. */
+  const big: FileDiff = {
+    path: 'big.txt', binary: false, truncated: false, message: null,
+    hunkAction: { fingerprint: 'big-token', reason: null },
+    hunks: [0, 1].map(h => ({ header: `@@ big ${h} @@`, lines: Array.from({ length: HUNK_LINES }, (_, i) => {
+      const number = h * 100_000 + i;
+      return i % 100 === 50 ? { kind: 'remove' as const, content: `removed ${i}`, oldLine: number, newLine: null }
+        : i % 100 === 51 ? { kind: 'add' as const, content: `added ${i}`, oldLine: null, newLine: number }
+        : { kind: 'context' as const, content: `context ${i}`, oldLine: number, newLine: number };
+    }) })),
+  };
+  /** Offset of a row from the estimates DiffPreview uses before jsdom (which has no layout) measures anything. */
+  const offsetOf = (split: boolean, predicate: (row: DiffRow, index: number) => boolean) => {
+    const rows = diffRows(big.hunks, split);
+    const index = rows.findIndex(predicate);
+    let offset = 0;
+    for (let i = 0; i < index; i++) offset += rows[i].kind === 'hunk' ? DIFF_ROW_ESTIMATE.hunk : split ? DIFF_ROW_ESTIMATE.split : DIFF_ROW_ESTIMATE.unified;
+    return { index, offset, total: rows.reduce((sum, row) => sum + (row.kind === 'hunk' ? DIFF_ROW_ESTIMATE.hunk : split ? DIFF_ROW_ESTIMATE.split : DIFF_ROW_ESTIMATE.unified), 0) };
+  };
+  async function mountDiff(props: Parameters<typeof DiffPreview>[0]) {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () => { root.render(createElement(DiffPreview, props)); });
+    const surface = host.querySelector<HTMLElement>('.native-diff')!;
+    let top = 0;
+    Object.defineProperty(surface, 'clientHeight', { configurable: true, get: () => 600 });
+    Object.defineProperty(surface, 'scrollTop', { configurable: true, get: () => top, set: (value: number) => { top = Math.max(0, value); } });
+    const rows = () => [...host.querySelectorAll<HTMLElement>('[data-row]')];
+    const spacers = () => [...host.querySelectorAll<HTMLElement>('.diff-virtual-spacer')].map(spacer => parseFloat(spacer.style.height));
+    return {
+      host, surface, rows, spacers,
+      scrollTo: (value: number) => act(async () => { top = value; surface.dispatchEvent(new Event('scroll')); }),
+      key: (key: string, target: Element = surface) => act(async () => { target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })); }),
+      button: (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`),
+      unmount: async () => { await act(async () => { root.unmount(); }); host.remove(); },
+    };
+  }
+
+  it('renders a bounded window of a 20,000-line diff with spacers for the rest, and reaches off-screen hunk headers', async () => {
+    const view = await mountDiff({ diff: big, split: false, hunkAction: 'stage_hunk', onHunk: vi.fn() });
+    try {
+      const { total, offset: secondHunk } = offsetOf(false, row => row.kind === 'hunk' && row.hunkIndex === 1);
+      expect(view.surface.dataset.virtual).toBe('true');
+      expect(view.rows().length).toBeLessThan(200);
+      expect(Number(view.host.querySelector<HTMLElement>('.unified-content')!.dataset.virtualHeight)).toBe(total);
+      const renderedHeight = view.rows().reduce((sum, row) => sum + (row.classList.contains('hunk-header') ? DIFF_ROW_ESTIMATE.hunk : DIFF_ROW_ESTIMATE.unified), 0);
+      expect(view.spacers()[0] + renderedHeight + view.spacers()[1]).toBe(total);
+      expect(view.button('Stage hunk 2 in big.txt')).toBeNull();
+
+      await view.scrollTo(secondHunk - 100);
+      const indices = view.rows().map(row => Number(row.dataset.row));
+      expect(indices.length).toBeLessThan(200);
+      expect(Math.min(...indices)).toBeGreaterThan(0);
+      expect(view.spacers()[0]).toBe(offsetOf(false, (_, index) => index === Math.min(...indices)).offset);
+      expect(view.button('Stage hunk 2 in big.txt')).not.toBeNull();
+      expect(view.button('Stage hunk 1 in big.txt')).toBeNull();
+      expect(view.spacers()[0] + view.rows().reduce((sum, row) => sum + (row.classList.contains('hunk-header') ? DIFF_ROW_ESTIMATE.hunk : DIFF_ROW_ESTIMATE.unified), 0) + view.spacers()[1]).toBe(total);
+    } finally { await view.unmount(); }
+  });
+
+  it.each([false, true])('sends original line indices from rows deep in a virtualized diff in split=%s', async split => {
+    const onHunk = vi.fn();
+    const view = await mountDiff({ diff: big, split, hunkAction: 'stage_hunk', onHunk });
+    try {
+      const target = offsetOf(split, row => row.hunkIndex === 1 && (row.kind === 'line' ? row.item.index === 7050 : row.kind === 'split' && row.row.before?.index === 7050));
+      await view.scrollTo(target.offset - 200);
+      expect(view.rows().some(row => Number(row.dataset.row) === target.index)).toBe(true);
+      if (split) {
+        const row = view.host.querySelector(`[data-row="${target.index}"]`)!;
+        expect([...row.querySelectorAll('.split-code')].map(code => code.textContent)).toEqual(['removed 7050', 'added 7051']);
+        await click(view.button('Select line 107050 for staging (before)'));
+        await click(view.button('Select line 107051 for staging (after)'));
+      } else {
+        await click(view.button('Select line 107050 for staging'));
+        await view.scrollTo(target.offset - 200 + DIFF_ROW_ESTIMATE.unified);
+        await click(view.button('Select line 107051 for staging'));
+      }
+      expect(view.button(split ? 'Deselect line 107050 for staging (before)' : 'Deselect line 107050 for staging')?.getAttribute('aria-pressed')).toBe('true');
+      // Scroll back to the hunk header: selection survives its rows leaving the window.
+      await view.scrollTo(offsetOf(split, row => row.kind === 'hunk' && row.hunkIndex === 1).offset - 50);
+      await click(view.button('Stage selected lines 2 in big.txt'));
+      expect(onHunk).toHaveBeenCalledExactlyOnceWith({ kind: 'stage_hunk', path: 'big.txt', hunkIndex: 1, fingerprint: 'big-token', lineIndices: [7050, 7051] });
+    } finally { await view.unmount(); }
+  });
+
+  it('moves a roving active line with the arrow keys and toggles it with Space', async () => {
+    const onHunk = vi.fn();
+    const view = await mountDiff({ diff, split: false, hunkAction: 'stage_hunk', onHunk });
+    try {
+      const toggles = () => [...view.host.querySelectorAll<HTMLButtonElement>('.line-select-toggle')];
+      expect(view.surface.tabIndex).toBe(0);
+      expect(toggles().map(toggle => toggle.tabIndex)).toEqual([-1, -1]);
+      expect(view.surface.hasAttribute('aria-activedescendant')).toBe(false);
+      await view.key('ArrowDown');
+      expect(document.getElementById(view.surface.getAttribute('aria-activedescendant')!)).toBe(toggles()[0]);
+      expect(view.host.querySelector('.diff-active')?.textContent).toContain('changed');
+      await view.key('ArrowDown');
+      expect(document.getElementById(view.surface.getAttribute('aria-activedescendant')!)).toBe(toggles()[1]);
+      await view.key(' ');
+      expect(toggles().map(toggle => toggle.getAttribute('aria-pressed'))).toEqual(['false', 'true']);
+      await view.key('ArrowUp');
+      expect(document.getElementById(view.surface.getAttribute('aria-activedescendant')!)).toBe(toggles()[0]);
+      await view.key('Enter');
+      expect(toggles().map(toggle => toggle.getAttribute('aria-pressed'))).toEqual(['true', 'true']);
+      await click(view.button('Stage selected lines 2 in file.txt'));
+      expect(onHunk).toHaveBeenCalledExactlyOnceWith({ kind: 'stage_hunk', path: 'file.txt', hunkIndex: 1, fingerprint: 'backend-token', lineIndices: [0] });
+      // Space on a focused hunk button keeps its native meaning instead of toggling the active line.
+      await view.key(' ', view.button('Stage selected lines 1 in file.txt')!);
+      expect(toggles().map(toggle => toggle.getAttribute('aria-pressed'))).toEqual(['true', 'true']);
+    } finally { await view.unmount(); }
+  });
+
+  it('keeps keyboard selection off while writes are blocked', async () => {
+    const onToggleLine = vi.fn();
+    const view = await mountDiff({ diff, split: false, hunkAction: 'stage_hunk', busy: true, onToggleLine });
+    try {
+      await view.key('ArrowDown');
+      await view.key(' ');
+      expect(onToggleLine).not.toHaveBeenCalled();
+    } finally { await view.unmount(); }
+  });
+
+  it('reveals the active row when keyboard navigation jumps outside the rendered window', async () => {
+    const onToggleLine = vi.fn();
+    const view = await mountDiff({ diff: big, split: true, hunkAction: 'stage_hunk', onToggleLine, selectedLines: {} });
+    try {
+      const last = diffRows(big.hunks, true).length - 1;
+      await view.key('End');
+      expect(view.surface.scrollTop).toBeGreaterThan(0);
+      const active = view.host.querySelector<HTMLElement>('.diff-active')!;
+      expect(active.closest<HTMLElement>('[data-row]')?.dataset.row).toBe(String(last));
+      expect(view.rows().length).toBeLessThan(200);
+      expect(document.getElementById(view.surface.getAttribute('aria-activedescendant')!)).toBe(active);
+      // A paired replacement row: Left/Right choose the side, Space sends that side's original index.
+      const pair = offsetOf(true, row => row.hunkIndex === 1 && row.kind === 'split' && row.row.before?.index === 9950);
+      await view.key('Home');
+      await view.scrollTo(pair.offset - 300);
+      await view.key('ArrowDown');
+      let guard = 0;
+      while (view.host.querySelector<HTMLElement>('.diff-active')?.closest<HTMLElement>('[data-row]')?.dataset.row !== String(pair.index) && guard++ < 40) await view.key('ArrowDown');
+      await view.key('ArrowRight');
+      await view.key(' ');
+      await view.key('ArrowLeft');
+      await view.key(' ');
+      expect(onToggleLine.mock.calls).toEqual([[1, 9951], [1, 9950]]);
+    } finally { await view.unmount(); }
+  });
+
+  it('keeps the shared horizontal offset wired to the split scrollbar', async () => {
+    const view = await mountDiff({ diff: big, split: true });
+    try {
+      const scrollbar = view.host.querySelector<HTMLElement>('.split-horizontal-scroll')!;
+      Object.defineProperty(scrollbar, 'scrollLeft', { configurable: true, get: () => 120, set: () => {} });
+      await act(async () => { scrollbar.dispatchEvent(new Event('scroll', { bubbles: false })); });
+      expect(view.surface.style.getPropertyValue('--split-scroll-offset')).toBe('120px');
+      expect(view.host.querySelector('.split-content > .diff-virtual-spacer')).not.toBeNull();
+    } finally { await view.unmount(); }
   });
 });
