@@ -426,6 +426,17 @@ or browser preferences. WSL keeps its own distribution credential handling.
 `provider_pull_requests` and
 `provider_create_pull_request` call bounded, host-specific HTTPS provider APIs
 for a selected connected account. PR creation is explicit and does not push.
+The repository is derived from the remote's push URL, which may be
+`https://<host>/…`, scp-like `[user@]host:path` (no scheme) or
+`ssh://[user@]host[:22]/path`, where `host` must equal the provider's host exactly
+(`github.com`, `gitlab.com`, `bitbucket.org`; Azure DevOps SSH uses
+`ssh.dev.azure.com` with the `v3/{org}/{project}/{repo}` layout, mapped to
+`{org}/{project}/_git/{repo}`). A `.git` suffix is stripped and the result is the same
+repository the HTTPS form yields. Other SSH ports, host aliases from SSH
+configuration (for example `github-work`), self-hosted servers, SSH passwords,
+queries/fragments and extra path segments are rejected with `invalidRemote`
+("Only HTTPS or SSH remotes for <host> are supported…"). Tokens are only ever sent to
+the provider's HTTPS API, never to the remote host named in an SSH URL.
 `provider_pull_requests` requests one page of 50 open requests and returns
 `{ requests: ProviderPullRequest[], truncated: boolean }` (camelCase). The list
 envelope is provider-specific: GitHub/GitLab return a top-level array, Azure

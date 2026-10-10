@@ -39,40 +39,135 @@ pub struct CreatePullRequest {
     pub description: String,
 }
 
+#[derive(Debug)]
 struct ProviderRepository {
     provider: Provider,
     api: String,
     web: String,
 }
 
-fn repository_url(remote: &str, provider: Provider) -> Result<ProviderRepository> {
-    let url = url::Url::parse(remote)
-        .map_err(|_| Error::new("invalidRemote", "Use an HTTPS provider remote"))?;
-    if url.scheme() != "https"
-        || url.host_str() != Some(provider.host())
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.port().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(Error::new(
-            "invalidRemote",
-            "Account and remote hosts do not match",
-        ));
+/// Host of a provider's SSH endpoint: Azure DevOps clones over `ssh.dev.azure.com`,
+/// every other supported provider uses the host it serves its web UI from.
+fn ssh_host(provider: Provider) -> &'static str {
+    match provider {
+        Provider::AzureDevops => "ssh.dev.azure.com",
+        _ => provider.host(),
     }
-    let path = url
-        .path()
-        .trim_matches('/')
-        .strip_suffix(".git")
-        .unwrap_or_else(|| url.path().trim_matches('/'));
+}
+
+fn unsupported_remote(provider: Provider) -> Error {
+    Error::new(
+        "invalidRemote",
+        format!(
+            "Only HTTPS or SSH remotes for {} are supported. Host aliases and self-hosted servers are not.",
+            provider.host()
+        ),
+    )
+}
+
+/// Canonical repository path (without leading/trailing `/` or a `.git` suffix) of an
+/// SSH remote, in the layout the HTTPS form uses. Azure DevOps' SSH layout
+/// `v3/{org}/{project}/{repo}` maps to `{org}/{project}/_git/{repo}`.
+fn ssh_repository_path(raw: &str, provider: Provider) -> Result<String> {
+    let trimmed = raw.trim_matches('/');
+    let path = trimmed.strip_suffix(".git").unwrap_or(trimmed);
+    if provider != Provider::AzureDevops {
+        return Ok(path.to_string());
+    }
+    match path.split('/').collect::<Vec<_>>().as_slice() {
+        ["v3", org, project, repo] => Ok(format!("{org}/{project}/_git/{repo}")),
+        _ => Err(Error::new(
+            "invalidRemote",
+            "Unsupported provider repository URL",
+        )),
+    }
+}
+
+/// Parses `[user@]host:path` (scp-like, no scheme). `None` when the value is not
+/// scp-like at all (a local or Windows path, or it has a scheme).
+fn scp_like_remote(remote: &str) -> Option<(&str, &str)> {
+    if remote.contains("://") {
+        return None;
+    }
+    let (authority, path) = remote.split_once(':')?;
+    let host = match authority.split_once('@') {
+        Some((user, host)) if !user.is_empty() && !user.contains('@') => host,
+        Some(_) => return None,
+        None => authority,
+    };
+    if host.is_empty() || host.contains(['/', '\\', '[', ']', '@']) || authority.contains('/') {
+        return None;
+    }
+    Some((host, path))
+}
+
+fn repository_url(remote: &str, provider: Provider) -> Result<ProviderRepository> {
+    // `path` is the canonical repository path; `web_path` the browser path of the
+    // remote exactly as the HTTPS form has always derived it.
+    let (path, web_path): (String, String) = if remote.contains("://") {
+        let url = url::Url::parse(remote).map_err(|_| unsupported_remote(provider))?;
+        match url.scheme() {
+            "https" => {
+                if url.host_str() != Some(provider.host())
+                    || !url.username().is_empty()
+                    || url.password().is_some()
+                    || url.port().is_some()
+                    || url.query().is_some()
+                    || url.fragment().is_some()
+                {
+                    return Err(Error::new(
+                        "invalidRemote",
+                        "Account and remote hosts do not match",
+                    ));
+                }
+                let path = url
+                    .path()
+                    .trim_matches('/')
+                    .strip_suffix(".git")
+                    .unwrap_or_else(|| url.path().trim_matches('/'));
+                (
+                    path.to_string(),
+                    url.path().trim_end_matches('/').to_string(),
+                )
+            }
+            "ssh" => {
+                if !url
+                    .host_str()
+                    .is_some_and(|host| host.eq_ignore_ascii_case(ssh_host(provider)))
+                    || url.password().is_some()
+                    || url.query().is_some()
+                    || url.fragment().is_some()
+                {
+                    return Err(unsupported_remote(provider));
+                }
+                if !matches!(url.port(), None | Some(22)) {
+                    return Err(Error::new(
+                        "invalidRemote",
+                        "SSH remotes on a non-default port are not supported for pull requests",
+                    ));
+                }
+                let path = ssh_repository_path(url.path(), provider)?;
+                let web_path = format!("/{path}");
+                (path, web_path)
+            }
+            _ => return Err(unsupported_remote(provider)),
+        }
+    } else {
+        let (_, raw_path) = scp_like_remote(remote)
+            .filter(|(host, _)| host.eq_ignore_ascii_case(ssh_host(provider)))
+            .ok_or_else(|| unsupported_remote(provider))?;
+        let path = ssh_repository_path(raw_path, provider)?;
+        let web_path = format!("/{path}");
+        (path, web_path)
+    };
+    let path = path.as_str();
     let parts: Vec<_> = path.split('/').collect();
     if parts.iter().any(|part| {
         part.is_empty()
             || *part == "."
             || *part == ".."
-            || part.contains('%')
-            || part.contains('\\')
+            || part.contains(['%', '\\', '?', '#', ':'])
+            || part.chars().any(|c| c.is_whitespace() || c.is_control())
     }) {
         return Err(Error::new("invalidRemote", "Unsupported repository path"));
     }
@@ -101,11 +196,7 @@ fn repository_url(remote: &str, provider: Provider) -> Result<ProviderRepository
             ))
         }
     };
-    let web = format!(
-        "https://{}{}/",
-        provider.host(),
-        url.path().trim_end_matches('/')
-    );
+    let web = format!("https://{}{}/", provider.host(), web_path);
     Ok(ProviderRepository { provider, api, web })
 }
 
@@ -451,6 +542,112 @@ mod tests {
                 .api,
             "https://gitlab.com/api/v4/projects/team%2Fsub%2Fproject/merge_requests"
         );
+    }
+
+    #[test]
+    fn ssh_remotes_map_to_the_same_repositories_as_https() {
+        let github = repository_url("git@github.com:org/repo.git", Provider::Github).unwrap();
+        assert_eq!(github.api, "https://api.github.com/repos/org/repo/pulls");
+        assert_eq!(github.web, "https://github.com/org/repo/");
+        let no_user = repository_url("github.com:org/repo", Provider::Github).unwrap();
+        assert_eq!(no_user.api, github.api);
+        let gitlab =
+            repository_url("ssh://git@gitlab.com/group/sub/repo.git", Provider::Gitlab).unwrap();
+        assert_eq!(
+            gitlab.api,
+            "https://gitlab.com/api/v4/projects/group%2Fsub%2Frepo/merge_requests"
+        );
+        assert_eq!(gitlab.web, "https://gitlab.com/group/sub/repo/");
+        assert_eq!(
+            repository_url("ssh://git@gitlab.com:22/group/repo", Provider::Gitlab)
+                .unwrap()
+                .api,
+            "https://gitlab.com/api/v4/projects/group%2Frepo/merge_requests"
+        );
+        let azure = repository_url(
+            "git@ssh.dev.azure.com:v3/org/project/repo",
+            Provider::AzureDevops,
+        )
+        .unwrap();
+        assert_eq!(
+            azure.api,
+            "https://dev.azure.com/org/project/_apis/git/repositories/repo/pullrequests?api-version=7.1"
+        );
+        assert_eq!(azure.web, "https://dev.azure.com/org/project/_git/repo/");
+        assert_eq!(
+            repository_url(
+                "ssh://git@ssh.dev.azure.com/v3/org/project/repo",
+                Provider::AzureDevops
+            )
+            .unwrap()
+            .api,
+            azure.api
+        );
+        assert_eq!(
+            repository_url("git@bitbucket.org:team/repo.git", Provider::Bitbucket)
+                .unwrap()
+                .api,
+            "https://api.bitbucket.org/2.0/repositories/team/repo/pullrequests"
+        );
+        // HTTPS parsing is unchanged: `.git` stays in the browser path.
+        assert_eq!(
+            repository_url("https://github.com/org/repo.git", Provider::Github)
+                .unwrap()
+                .web,
+            "https://github.com/org/repo.git/"
+        );
+    }
+
+    #[test]
+    fn unsupported_ssh_remotes_are_rejected() {
+        let alias = repository_url("git@github-work:org/repo.git", Provider::Github).unwrap_err();
+        assert!(alias
+            .message
+            .contains("Only HTTPS or SSH remotes for github.com are supported"));
+        for (remote, provider) in [
+            ("git@github.com.evil.test:org/repo", Provider::Github),
+            ("git@gitlab.com:org/repo", Provider::Github),
+            ("ssh://git@github.com:2222/org/repo", Provider::Github),
+            ("ssh://git@github.com:22222/org/repo", Provider::Github),
+            ("ssh://git@github-work/org/repo", Provider::Github),
+            ("ssh://user:pw@github.com/org/repo", Provider::Github),
+            ("ssh://git@github.com/org/repo?x=1", Provider::Github),
+            ("git@github.com:org/repo/extra", Provider::Github),
+            ("git@github.com:org", Provider::Github),
+            ("git@github.com:org/../repo", Provider::Github),
+            ("git@github.com:org/re po", Provider::Github),
+            ("git@github.com:org/repo#frag", Provider::Github),
+            ("git@github.com:ssh://org/repo", Provider::Github),
+            ("git@github.com://org/repo", Provider::Github),
+            ("ssh://git@github.com:org/repo", Provider::Github),
+            ("git://github.com/org/repo", Provider::Github),
+            ("http://github.com/org/repo", Provider::Github),
+            ("@github.com:org/repo", Provider::Github),
+            ("/tmp/github.com:org/repo", Provider::Github),
+            ("C:\\repo", Provider::Github),
+            // Azure DevOps SSH needs the exact v3/{org}/{project}/{repo} layout.
+            (
+                "git@ssh.dev.azure.com:org/project/repo",
+                Provider::AzureDevops,
+            ),
+            ("git@ssh.dev.azure.com:v3/org/repo", Provider::AzureDevops),
+            (
+                "git@dev.azure.com:v3/org/project/repo",
+                Provider::AzureDevops,
+            ),
+            (
+                "git@vs-ssh.visualstudio.com:v3/org/project/repo",
+                Provider::AzureDevops,
+            ),
+        ] {
+            assert!(
+                repository_url(remote, provider).is_err(),
+                "{remote} must be rejected"
+            );
+        }
+        let port =
+            repository_url("ssh://git@github.com:2222/org/repo", Provider::Github).unwrap_err();
+        assert!(port.message.contains("non-default port"));
     }
 
     #[test]

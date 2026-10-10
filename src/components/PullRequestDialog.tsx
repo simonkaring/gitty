@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { RemoteInfo } from '../model/operations';
 import { native, errorMessage } from '../model/native';
-import { pullRequestUrl } from '../model/pullRequest';
+import { providerHostFromRemote, pullRequestUrl } from '../model/pullRequest';
 import { Dialog } from './ui';
 
 interface ProviderAccount { id: string; provider: 'github' | 'gitlab' | 'azureDevops' | 'bitbucket'; username: string }
@@ -38,7 +38,7 @@ export function PullRequestDialog({ handle, source, onClose }: { handle: string;
     return () => { live = false; };
   }, []);
   const selected = remotes.find(value => value.name === remote);
-  const host = (() => { try { return new URL(selected?.pushUrl || selected?.fetchUrl || '').hostname.toLowerCase(); } catch { return ''; } })();
+  const host = providerHostFromRemote(selected?.pushUrl || selected?.fetchUrl || '');
   const provider = host === 'github.com' ? 'github' : host === 'gitlab.com' ? 'gitlab' : host === 'dev.azure.com' ? 'azureDevops' : host === 'bitbucket.org' ? 'bitbucket' : null;
   const matchingAccounts = accounts.filter(account => account.provider === provider);
   const activeAccount = matchingAccounts.find(account => account.id === accountId) ?? (matchingAccounts.length === 1 ? matchingAccounts[0] : null);
