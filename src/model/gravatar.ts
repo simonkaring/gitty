@@ -1,5 +1,6 @@
 const MAX_CACHE_ENTRIES = 500;
-const FAILURE_TTL_MS = 2_000;
+// Remembers missing/failed avatars long enough that virtualized rows remounting while scrolling do not re-request the same 404.
+export const FAILURE_TTL_MS = 10 * 60_000;
 const cache = new Map<string, { promise: Promise<string | null>; failedAt?: number }>();
 const imageFailures = new Map<string, number>();
 

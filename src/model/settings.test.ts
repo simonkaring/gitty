@@ -44,17 +44,23 @@ describe('local preferences', () => {
     expect(settings.historyColumns).toEqual(DEFAULT_SETTINGS.historyColumns);
     expect(settings.commitProfiles).toEqual([]);
     expect(settings.repositoryCommitProfiles).toEqual({});
-    expect(settings.authorAvatarMode).toBe('gravatar');
+    expect(settings.authorAvatarMode).toBe('initials');
   });
   it('preserves saved preferences while migrating avatar mode and persists its selection', () => {
-    expect(readSettings(storage()).settings.authorAvatarMode).toBe('gravatar');
+    expect(DEFAULT_SETTINGS.authorAvatarMode).toBe('initials');
+    expect(readSettings(storage()).settings.authorAvatarMode).toBe('initials');
     const older = { ...DEFAULT_SETTINGS, themeId: 'dracula', diffWrap: true } as any;
     delete older.authorAvatarMode;
     const store = storage({ [SETTINGS_KEY]: JSON.stringify(older) });
     const migrated = readSettings(store).settings;
-    expect(migrated).toMatchObject({ themeId: 'dracula', diffWrap: true, authorAvatarMode: 'gravatar' });
-    expect(persistSettings(store, { ...migrated, authorAvatarMode: 'initials' })).toBeNull();
-    expect(readSettings(store).settings.authorAvatarMode).toBe('initials');
+    expect(migrated).toMatchObject({ themeId: 'dracula', diffWrap: true, authorAvatarMode: 'initials' });
+    expect(persistSettings(store, { ...migrated, authorAvatarMode: 'gravatar' })).toBeNull();
+    expect(readSettings(store).settings.authorAvatarMode).toBe('gravatar');
+  });
+  it('keeps an explicit stored Gravatar choice and defaults to initials for new installs', () => {
+    const store = storage({ [SETTINGS_KEY]: JSON.stringify({ ...DEFAULT_SETTINGS, authorAvatarMode: 'gravatar' }) });
+    expect(readSettings(store).settings.authorAvatarMode).toBe('gravatar');
+    expect(readSettings(storage({ 'gitty:theme': 'light' })).settings.authorAvatarMode).toBe('initials');
   });
   it('saves profiles and per-worktree selections without changing other settings', () => {
     const store = storage();

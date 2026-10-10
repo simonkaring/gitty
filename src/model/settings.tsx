@@ -39,7 +39,7 @@ export const DEFAULT_HISTORY_COLUMNS: HistoryColumnConfig[] = [
   { id: 'hash', visible: true },
   { id: 'date', visible: false },
 ];
-export const DEFAULT_SETTINGS: Settings = { version: 1, themeMode: 'fixed', themeId: 'gitty-dark', lightThemeId: 'gitty-light', darkThemeId: 'gitty-dark', customThemes: [], diffView: 'unified', diffWrap: false, fontSize: 13, monoFont: MONO_FONTS[0], paneWidths: { sidebar: 240, inspector: 400 }, historyColumns: DEFAULT_HISTORY_COLUMNS, commitProfiles: [], repositoryCommitProfiles: {}, authorAvatarMode: 'gravatar', graphAuthorAvatars: false };
+export const DEFAULT_SETTINGS: Settings = { version: 1, themeMode: 'fixed', themeId: 'gitty-dark', lightThemeId: 'gitty-light', darkThemeId: 'gitty-dark', customThemes: [], diffView: 'unified', diffWrap: false, fontSize: 13, monoFont: MONO_FONTS[0], paneWidths: { sidebar: 240, inspector: 400 }, historyColumns: DEFAULT_HISTORY_COLUMNS, commitProfiles: [], repositoryCommitProfiles: {}, authorAvatarMode: 'initials', graphAuthorAvatars: false };
 export function validateSettings(value: unknown): Settings {
   if (!value || typeof value !== 'object') throw new Error('Invalid settings.');
   const s = value as Settings;
@@ -73,6 +73,7 @@ export function readSettings(storage: PreferenceStorage): { settings: Settings; 
         if (!('historyColumns' in parsed)) parsed.historyColumns = DEFAULT_HISTORY_COLUMNS;
         if (!('commitProfiles' in parsed)) parsed.commitProfiles = [];
         if (!('repositoryCommitProfiles' in parsed)) parsed.repositoryCommitProfiles = {};
+        // Privacy default: a stored object without the key never opted in to Gravatar, so it gets the new initials default; an explicit stored 'gravatar' is preserved.
         if (!('authorAvatarMode' in parsed)) parsed.authorAvatarMode = DEFAULT_SETTINGS.authorAvatarMode;
         if (!('graphAuthorAvatars' in parsed)) parsed.graphAuthorAvatars = DEFAULT_SETTINGS.graphAuthorAvatars;
       }
