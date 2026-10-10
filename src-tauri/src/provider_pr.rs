@@ -200,7 +200,7 @@ fn repository_url(remote: &str, provider: Provider) -> Result<ProviderRepository
     Ok(ProviderRepository { provider, api, web })
 }
 
-fn client() -> Result<reqwest::blocking::Client> {
+pub(crate) fn client() -> Result<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(20))
         .redirect(reqwest::redirect::Policy::none())
@@ -250,7 +250,7 @@ pub(crate) fn verify_token(provider: Provider, username: &str, token: &str) -> R
     Ok(())
 }
 
-fn response_json(response: reqwest::blocking::Response) -> Result<Value> {
+pub(crate) fn response_json(response: reqwest::blocking::Response) -> Result<Value> {
     let status = response.status();
     if !status.is_success() {
         return Err(Error::new("providerApi", format!("Provider returned HTTP {status}. Check your account permissions and reconnect if its token expired.")));
@@ -320,7 +320,7 @@ fn parse_list(
     })
 }
 
-fn authorized(
+pub(crate) fn authorized(
     client: &reqwest::blocking::Client,
     method: reqwest::Method,
     api: &str,

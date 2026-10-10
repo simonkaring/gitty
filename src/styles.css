@@ -3375,6 +3375,14 @@ button[data-danger='true']:hover:not(:disabled) {
 }
 
 /* Repository picker and clone */
+.repository-browser { display: grid; gap: 12px; }
+.repository-browser-toolbar { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
+.repository-browser-toolbar > .field { flex: 1; min-width: 180px; }
+.repository-browser-toolbar > p { flex: 1; margin: 0; }
+.provider-repository-list { max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: var(--r-md); }
+.provider-repository-list:empty { display: none; }
+.provider-repository-list .start-item[aria-pressed='true'] { background: var(--selected); color: var(--accent-text); }
+.provider-repository-list .start-item strong { overflow-wrap: anywhere; }
 
 /* Operation, publish, stash, pull request dialogs */
 .graph-context-menu {

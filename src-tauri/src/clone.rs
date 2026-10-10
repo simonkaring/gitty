@@ -129,6 +129,7 @@ impl Service {
         self.clone_repository_with_askpass(operation_id, request, emit, None)
     }
 
+    #[cfg(test)]
     pub fn clone_repository_with_askpass(
         &self,
         operation_id: &str,
@@ -136,8 +137,25 @@ impl Service {
         emit: impl Fn(CloneProgress) + Send + Sync + 'static,
         askpass: Option<&crate::askpass::AskpassRegistry>,
     ) -> Result<RepositoryLocation> {
+        self.clone_repository_with_account(operation_id, request, emit, askpass, None)
+    }
+
+    pub fn clone_repository_with_account(
+        &self,
+        operation_id: &str,
+        request: CloneRequest,
+        emit: impl Fn(CloneProgress) + Send + Sync + 'static,
+        askpass: Option<&crate::askpass::AskpassRegistry>,
+        credential: Option<crate::provider_repositories::CloneCredential>,
+    ) -> Result<RepositoryLocation> {
         if uuid::Uuid::parse_str(operation_id).is_err() {
             return Err(Error::new("invalidRequest", "Invalid clone operation ID"));
+        }
+        if request.account_id.is_some() != credential.is_some() {
+            return Err(Error::new(
+                "invalidAccount",
+                "The selected clone account has no scoped credential",
+            ));
         }
         let control = Arc::new(CloneControl::new());
         {
@@ -156,7 +174,14 @@ impl Service {
             }
             operations.insert(operation_id.to_string(), control.clone());
         }
-        let result = clone_repository(request, operation_id, control, Arc::new(emit), askpass);
+        let result = clone_repository(
+            request,
+            operation_id,
+            control,
+            Arc::new(emit),
+            askpass,
+            credential,
+        );
         lock(&self.clone_operations)?.remove(operation_id);
         result
     }
@@ -229,6 +254,7 @@ fn clone_repository(
     control: Arc<CloneControl>,
     emit: Arc<dyn Fn(CloneProgress) + Send + Sync>,
     askpass: Option<&crate::askpass::AskpassRegistry>,
+    credential: Option<crate::provider_repositories::CloneCredential>,
 ) -> Result<RepositoryLocation> {
     validate_request(&request)?;
     let temporary_name = format!(".gitty-clone-{operation_id}");
@@ -271,15 +297,25 @@ fn clone_repository(
     ensure_absent(&request.parent, &destination)?;
 
     // The scoped token and its pending prompts live until the clone process ends.
-    let askpass_guard = match (&request.parent, askpass) {
+    let askpass_guard = match (&request.parent, askpass.filter(|_| credential.is_none())) {
         (RepositoryLocation::Native { .. }, Some(registry)) => Some(
             registry
                 .start_operation_with(crate::askpass::AskpassContext::new(&destination, "clone")),
         ),
         _ => None,
     };
-    let (mut args, env) = network_args(true, askpass_guard.as_ref());
-    crate::credentials::configure(&mut args, &request.parent, &request.source)?;
+    let (mut args, env) = network_args(credential.is_none(), askpass_guard.as_ref());
+    if credential.is_some() {
+        // Explicit account selection must never fall back to another cached user.
+        args.extend(process::args(&[
+            "-c",
+            "credential.helper=",
+            "-c",
+            "http.followRedirects=false",
+        ]));
+    } else {
+        crate::credentials::configure(&mut args, &request.parent, &request.source)?;
+    }
     args.extend(crate::process::args(&[
         "clone",
         "--progress",
@@ -293,13 +329,43 @@ fn clone_repository(
     for (key, value) in env {
         command.env(key, value);
     }
+    let credential = credential.map(Arc::new);
+    if let Some(credential) = &credential {
+        credential.configure(&mut command);
+    }
+    let emit: Arc<dyn Fn(CloneProgress) + Send + Sync> =
+        if let Some(credential) = credential.clone() {
+            Arc::new(move |mut progress| {
+                progress.message = credential.redact(&progress.message);
+                emit(progress);
+            })
+        } else {
+            emit
+        };
     create_owned_temporary(&request.parent, &temporary)?;
     emit(CloneProgress {
         phase: "starting".into(),
         percent: None,
         message: format!("Cloning into {}", request.directory_name),
     });
-    let result = run_clone(command, control.clone(), emit);
+    let result = run_clone(command, control.clone(), emit)
+        .map(|mut output| {
+            if let Some(credential) = &credential {
+                output.stderr = credential
+                    .redact(&String::from_utf8_lossy(&output.stderr))
+                    .into_bytes();
+                output.stdout = credential
+                    .redact(&String::from_utf8_lossy(&output.stdout))
+                    .into_bytes();
+            }
+            output
+        })
+        .map_err(|mut error| {
+            if let Some(credential) = &credential {
+                error.message = credential.redact(&error.message);
+            }
+            error
+        });
     match result {
         Ok(output) if output.success => {
             if let Err(error) =
@@ -810,6 +876,7 @@ mod tests {
                         path: parent.path().to_str().unwrap().into(),
                     },
                     directory_name: "cloned repo".into(),
+                    account_id: None,
                 },
                 move |event| captured.lock().unwrap().push(event),
             )
@@ -865,6 +932,7 @@ mod tests {
                 path: parent.path().to_str().unwrap().into(),
             },
             directory_name: name.into(),
+            account_id: None,
         };
         let first_id = uuid::Uuid::new_v4().to_string();
         assert_eq!(
@@ -908,6 +976,7 @@ mod tests {
                 source: source.into(),
                 parent: parent.clone(),
                 directory_name: directory_name.into(),
+                account_id: None,
             })
             .is_err());
         }

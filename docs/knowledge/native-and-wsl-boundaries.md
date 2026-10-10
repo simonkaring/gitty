@@ -8,6 +8,8 @@ sources:
     resource: ../../src-tauri/src/process.rs
   - id: remote
     resource: ../../src-tauri/src/remote.rs
+  - id: provider-repositories
+    resource: ../../src-tauri/src/provider_repositories.rs
   - id: askpass
     resource: ../../src-tauri/src/askpass.rs
   - id: bridge
@@ -59,7 +61,11 @@ extending platform support.[^contract] The WSL operation-metadata scan is one
 heavy Git-directory subtrees pruned, and exit 1 from entries vanishing under
 concurrent Git tolerated; it has no Windows/WSL runtime verification yet.[^contract]
 
-Git authentication and provider API accounts are separate. WSL retains its
+Git authentication and provider API accounts are separate except for explicitly
+selected account-based native HTTPS clones, which use operation-local, URL-scoped
+authorization without helper fallback. WSL account-based cloning is refused;
+URL clones and subsequent fetch/pull/push retain normal Git authentication.[^provider-repositories]
+WSL retains its
 distribution credential helpers; bundled native GCM is not injected there.
 Explicit WSL fetch/pull/push can configure a scoped askpass bridge when the
 Windows executable path translates for interop. If path translation fails or no
@@ -68,7 +74,7 @@ remains. Background fetch stays noninteractive. This is
 implemented capability, not a claim of successful Windows/WSL runtime
 verification.[^remote][^askpass][^readme]
 
-Native interactive actions (fetch/pull/push, origin branch deletion, clone) also
+Native interactive actions (fetch/pull/push, origin branch deletion, URL clone) also
 hold a per-operation scoped askpass token, not the app token, so prompts end with
 the operation. The loopback bridges bound pre-authentication input (256-byte
 token, 4 KiB prompt), an absolute 10 s handshake deadline, and 16 concurrent
@@ -98,6 +104,7 @@ The [backend contract](../../src-tauri/BACKEND.md#read-semantics) and
 
 [^process]: Transport selection and environment isolation.
 [^remote]: Explicit/background authentication branches and fallback handling.
+[^provider-repositories]: Cloud repository discovery and native-only account credential scope.
 [^askpass]: Executable translation and per-operation token lifecycle.
 [^bridge]: Connection cap, handshake deadline, bounded lines and stale-helper cleanup.
 [^bridge-test]: Construction-level WSL bridge regression.

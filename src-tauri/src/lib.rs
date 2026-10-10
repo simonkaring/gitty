@@ -22,6 +22,7 @@ mod process;
 mod provider_accounts;
 mod provider_oauth;
 mod provider_pr;
+mod provider_repositories;
 mod remote;
 mod remote_dto;
 mod repository;
@@ -126,22 +127,54 @@ async fn provider_create_pull_request(
     .await
 }
 #[tauri::command]
+async fn provider_repositories(
+    accounts: tauri::State<'_, Accounts>,
+    account_id: String,
+    organization: Option<String>,
+    cursor: Option<String>,
+) -> Result<provider_repositories::RepositoryPage> {
+    let accounts = accounts.inner().clone();
+    blocking(move || {
+        provider_repositories::repositories(
+            &accounts,
+            &account_id,
+            organization.as_deref(),
+            cursor.as_deref(),
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+async fn provider_organizations(
+    accounts: tauri::State<'_, Accounts>,
+    account_id: String,
+) -> Result<Vec<String>> {
+    let accounts = accounts.inner().clone();
+    blocking(move || provider_repositories::organizations(&accounts, &account_id)).await
+}
+
+#[tauri::command]
 async fn repository_clone(
     state: tauri::State<'_, Shared>,
     askpass: tauri::State<'_, Arc<askpass::AskpassRegistry>>,
+    accounts: tauri::State<'_, Accounts>,
     operation_id: String,
     request: CloneRequest,
     on_progress: tauri::ipc::Channel<CloneProgress>,
 ) -> Result<RepositoryLocation> {
     let askpass = askpass.inner().clone();
+    let accounts = accounts.inner().clone();
     with_service(state, move |service| {
-        service.clone_repository_with_askpass(
+        let credential = provider_repositories::clone_credential(&accounts, &request)?;
+        service.clone_repository_with_account(
             &operation_id,
             request,
             move |progress| {
                 let _ = on_progress.send(progress);
             },
             Some(&askpass),
+            credential,
         )
     })
     .await
@@ -651,6 +684,8 @@ pub fn run() {
             provider_disconnect,
             provider_pull_requests,
             provider_create_pull_request,
+            provider_repositories,
+            provider_organizations,
             repository_clone,
             repository_cancel_clone,
             repository_pick,

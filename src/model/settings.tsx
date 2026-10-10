@@ -94,7 +94,7 @@ export function resolveTheme(settings: Settings, dark: boolean): ThemeDefinition
 interface SettingsContextValue {
   settings: Settings; theme: ThemeDefinition; themes: ThemeDefinition[];
   updateSettings: (patch: Partial<Settings> | ((current: Settings) => Partial<Settings>)) => void;
-  openSettings: (section?: 'Commit profiles') => void; closeSettings: () => void; isSettingsOpen: boolean; settingsSection: 'Commit profiles' | null;
+  openSettings: (section?: 'Commit profiles' | 'Integrations') => void; closeSettings: () => void; isSettingsOpen: boolean; settingsSection: 'Commit profiles' | 'Integrations' | null;
   previewTheme: (theme: ThemeDefinition | null) => void;
   storageError: string | null; retryPersistence: () => void;
   resetWorkspace: () => void;
@@ -106,7 +106,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const current = useRef(settings);
   const [storageError, setStorageError] = useState(initial.error);
   const [isSettingsOpen, setOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState<'Commit profiles' | null>(null);
+  const [settingsSection, setSettingsSection] = useState<'Commit profiles' | 'Integrations' | null>(null);
   const [preview, previewTheme] = useState<ThemeDefinition | null>(null);
   const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches);
   const theme = preview ?? resolveTheme(settings, systemDark);

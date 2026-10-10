@@ -25,6 +25,8 @@ const QUIET_COMMANDS = new Set([
   'list_provider_accounts',
   'provider_oauth_poll',
   'provider_pull_requests',
+  'provider_repositories',
+  'provider_organizations',
   'repository_operation_state',
   'repository_snapshot',
   'repository_status',

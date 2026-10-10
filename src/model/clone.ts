@@ -1,6 +1,6 @@
 import type { RepositoryLocation } from './repository';
 
-export interface CloneRequest { source: string; parent: RepositoryLocation; directoryName: string }
+export interface CloneRequest { source: string; parent: RepositoryLocation; directoryName: string; accountId?: string }
 export interface CloneProgress { phase: string; percent: number | null; message: string }
 
 export type CloneOperation =

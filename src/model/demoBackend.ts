@@ -124,6 +124,7 @@ export async function demoInvoke(command: string, args: Record<string, unknown>)
     }
     case 'repository_pick': case 'repository_pick_clone_parent': return unsupported('opening folders');
     case 'repository_clone': return unsupported('cloning');
+    case 'provider_repositories': case 'provider_organizations': return unsupported('provider repository browsing');
     case 'repository_stage_hunk': case 'repository_unstage_hunk': return unsupported('hunk staging');
     case 'repository_amend_commit': return unsupported('amending');
     case 'repository_remote_action': {

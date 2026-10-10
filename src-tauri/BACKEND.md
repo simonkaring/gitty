@@ -383,8 +383,9 @@ contract is:
 - `repository_cancel_clone({operationId}) -> void`
 - `repository_pick_clone_parent() -> string | null`
 
-`request` contains a source, a native/WSL parent location, and one new directory
-name. `onProgress` is a bounded Tauri channel. At most four clones run at once;
+`request` contains a source, a native/WSL parent location, one new directory
+name, and an optional `accountId`. Omitted/null `accountId` retains ordinary Git
+authentication. `onProgress` is a bounded Tauri channel. At most four clones run at once;
 operation IDs are UUIDs, and closing the main window cancels registered clones.
 
 - Clone runs installed Git without a shell, outside repository context, with a
@@ -392,12 +393,24 @@ operation IDs are UUIDs, and closing the main window cancels registered clones.
   branch and passes `--no-recurse-submodules`; no partial filter is used. Local
   sources retain Git's local clone behavior but use `--no-hardlinks`, so object
   files are copied rather than sharing inodes with the source.
-- Credential helpers, system/global Git configuration, SSH agent/configuration,
-  and configured filters remain available. Prompts and external askpass remain
-  disabled except for a matching connected provider account on native HTTPS
-  clones. Recursive submodules and external transport helpers are disabled.
+- For URL clones without `accountId`, credential helpers, system/global Git
+  configuration, SSH agent/configuration, and configured filters remain available.
+  Native clones use per-operation Gitty askpass prompts and helper browser sign-in;
+  WSL clone retains its distribution helper behavior without the native askpass bridge.
+  Recursive submodules and external transport helpers are disabled.
   HTTP(S) URLs containing credentials
-  are rejected; Gitty does not retain credentials.
+   are rejected; clone URLs never retain credentials.
+- With `accountId`, Rust retrieves/refreshes the selected account's stored token
+  and requires a matching cloud-provider HTTPS URL and native destination. GitHub
+  and GitLab.com use Basic token authentication, Azure DevOps OAuth uses Bearer,
+  and Azure PATs use Basic. Authorization is URL-scoped in process-local
+  `GIT_CONFIG_COUNT` entries; configured headers are reset before adding the selected
+  header. Secrets never enter argv, remote URLs, repository config, or frontend IPC.
+  Credential helpers and interactive prompts are disabled for this operation, so
+  another cached account cannot silently replace the selected identity. Redirects
+  are refused, and raw/encoded tokens are redacted from progress and errors. WSL,
+  SSH, self-hosted servers, host aliases, and Bitbucket are unsupported for this
+  selected-account clone path; URL clones retain their existing transports.
 - The destination must not exist. Git clones into an operation-owned hidden sibling
   and publishes it with a no-replace rename only after success. Failure, timeout,
   and cancellation remove only that owned temporary directory; an existing or
@@ -426,12 +439,36 @@ embedded in the build. These IDs are public-client identifiers, not secrets. Onl
 verification URLs and timing information cross IPC. Device codes stay in Rust;
 tokens are saved only after account verification and refresh before API use.
 
-Provider accounts authorize provider APIs independently of Git operations. Native
-HTTPS clone/fetch/pull/push append bundled Git Credential Manager as a fallback
+Provider accounts authorize provider APIs and explicitly selected native HTTPS
+clones. They do not change authentication for later fetch/pull/push operations.
+URL clones without an account and native HTTPS fetch/pull/push append bundled Git Credential Manager as a fallback
 after existing helpers, unless GCM is already configured or helpers are explicitly
-disabled. Gitty does not modify global Git configuration, and provider tokens do
-not override existing helpers. Tokens never appear in Git arguments, remote URLs
+disabled. Gitty does not modify global Git configuration, and those ordinary Git
+operations do not inject connected-account tokens. Tokens never appear in Git arguments, remote URLs
 or browser preferences. WSL keeps its own distribution credential handling.
+
+Repository discovery uses these handle-less commands:
+
+- `provider_organizations({accountId}) -> string[]`: Azure DevOps profile lookup,
+  then accounts accessible to that profile. Discovery permission failures are
+  surfaced; the UI also allows explicit organization-name entry (useful for PATs).
+- `provider_repositories({accountId, organization?: string | null, cursor?: string | null}) -> {repositories, nextCursor}`.
+  A repository has `{id, name, namespace, cloneUrl, private, project: string | null}`.
+  GitHub lists user repositories with owner/collaborator/organization affiliation;
+  GitLab lists membership projects, including group namespaces. Both request 50
+  entries per page and expose numeric cursors derived from provider next-page
+  headers; returned pagination URLs are never followed. Azure requires an
+  organization name and uses the unpaged organization repository endpoint, with
+  projects derived from returned repository metadata. Disabled repositories are omitted.
+  GitHub, GitLab.com, and Azure DevOps Services are supported; Bitbucket/self-hosted
+  discovery is refused. Requests reuse the bounded, timeout-limited, no-redirect
+  provider HTTP client and OS credential store/refresh handling.
+
+The Clone screen filters loaded repository names/namespaces locally and exposes
+load-more pagination. Azure projects filter the loaded organization list. Changing
+accounts/organizations clears selection and ignores old requests. Browser demo
+mode has no connected accounts and does not simulate authenticated discovery or cloning.
+
 `provider_pull_requests` and
 `provider_create_pull_request` call bounded, host-specific HTTPS provider APIs
 for a selected connected account. PR creation is explicit and does not push.

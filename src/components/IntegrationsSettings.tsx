@@ -95,7 +95,7 @@ export function IntegrationsSettings() {
   }
   return <section aria-labelledby="integrations-heading"><h3 id="integrations-heading">Provider accounts</h3>
     <p>Clone, fetch, pull and push use your Git credential helper or SSH agent. Gitty includes Git Credential Manager for HTTPS sign-in when existing helpers cannot supply credentials.</p>
-    <p>Connect a provider account for pull requests and provider features. Credentials are stored in your system credential store.</p>
+    <p>Connect a provider account to browse and clone repositories or work with pull requests. Credentials are stored in your system credential store.</p>
     {accounts.map(account => <div className="commit-profile-row" key={account.id}><span><strong>{providers[account.provider]}</strong><small>{account.username}</small></span><button type="button" className="secondary-button" disabled={busy} onClick={() => void disconnect(account.id)}>Disconnect</button></div>)}
     {!accounts.length && <p>No provider accounts connected.</p>}
     {isTauri() ? <form onSubmit={event => void connect(event)}>

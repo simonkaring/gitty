@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { ArrowUp, Clock3, Download, Folder, FolderGit2, FolderOpen, Search, SquareTerminal } from 'lucide-react';
 import type { DirectoryEntry, RepositoryLocation, WslDistribution } from '../model/repository';
 import { errorMessage, native } from '../model/native';
 import { suggestedCloneName, type CloneRequest } from '../model/clone';
 import { locationForPickedFolder } from '../model/wslPath';
 import { Segmented } from './ui';
+import { RepositoryBrowser } from './RepositoryBrowser';
+import type { ProviderRepository } from '../model/providerRepositories';
 
 /** Lanes for the decorative background graph: [x, fromY, toY, color var]. */
 const LANES: [number, number, number, string][] = [[40, 0, 600, '--graph-lane1'], [80, 90, 420, '--graph-lane2'], [120, 200, 520, '--graph-lane3'], [160, 60, 260, '--graph-lane4']];
@@ -39,10 +41,15 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [cloneSource, setCloneSource] = useState('');
+  const [cloneMethod, setCloneMethod] = useState<'accounts' | 'url'>('accounts');
+  const [cloneAccountId, setCloneAccountId] = useState<string>();
   const [cloneName, setCloneName] = useState('');
   const [cloneKind, setCloneKind] = useState<'native' | 'wsl'>('native');
   const [nativeParent, setNativeParent] = useState('');
   const request = useRef(0);
+  const selectRepository = useCallback((repository: ProviderRepository | null, accountId?: string) => {
+    setCloneSource(repository?.cloneUrl ?? ''); setCloneName(repository?.name ?? ''); setCloneAccountId(repository ? accountId : undefined);
+  }, []);
   useEffect(() => {
     let live = true;
     native<RepositoryLocation[]>('repository_recent').then(v => { if (live) setRecent(Array.isArray(v) ? v : []); }).catch(e => { if (live) { setRecent([]); setError(errorMessage(e)); } });
@@ -70,7 +77,8 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
     const directoryName = cloneName.trim() || suggestedCloneName(source);
     const parent: RepositoryLocation | null = cloneKind === 'wsl' ? distribution ? { kind: 'wsl', distribution, path } : null : nativeParent ? locationForPickedFolder(nativeParent) : null;
     if (!source || !directoryName || !parent) { setError('Enter a repository URL, choose a destination folder, and name the new folder.'); return; }
-    onClone({ source, parent, directoryName });
+    if (cloneMethod === 'accounts' && (!cloneAccountId || parent.kind !== 'native')) { setError('Choose a repository and a native destination folder.'); return; }
+    onClone({ source, parent, directoryName, ...(cloneAccountId ? { accountId: cloneAccountId } : {}) });
   }
   const views: [View, string, typeof Clock3][] = [['recent', 'Recent', Clock3], ['clone', 'Clone', Download], ...(distributions.length ? [['wsl', 'Browse WSL', SquareTerminal] as [View, string, typeof Clock3]] : [])];
   function navKey(event: KeyboardEvent) {
@@ -114,20 +122,23 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
                 </button>
               </li>)}</ul>}
           </>}
-          {view === 'clone' && <form className="start-form" onSubmit={event => { event.preventDefault(); submitClone(); }}>
-            <label className="field">Repository URL<input autoFocus value={cloneSource} disabled={cloneBusy} onChange={event => setCloneSource(event.target.value)} onBlur={() => { if (!cloneName.trim()) setCloneName(suggestedCloneName(cloneSource)); }} placeholder="https://host/team/repository.git" /></label>
+          {view === 'clone' && <div className="start-form">
+            <Segmented label="Clone source" value={cloneMethod} options={[[ 'accounts', 'Connected accounts' ], [ 'url', 'Repository URL' ]]} onChange={value => { if (cloneBusy) return; setCloneMethod(value); selectRepository(null); if (value === 'accounts') setCloneKind('native'); }} />
+            {cloneMethod === 'accounts' && <RepositoryBrowser disabled={cloneBusy} onSelect={selectRepository} />}
+            <form className="start-form" onSubmit={event => { event.preventDefault(); submitClone(); }}>
+            <label className="field">Repository URL<input autoFocus={cloneMethod === 'url'} value={cloneSource} readOnly={cloneMethod === 'accounts'} disabled={cloneBusy} onChange={event => setCloneSource(event.target.value)} onBlur={() => { if (!cloneName.trim()) setCloneName(suggestedCloneName(cloneSource)); }} placeholder={cloneMethod === 'accounts' ? 'Select a repository above' : 'https://host/team/repository.git'} /></label>
             <div className="field">
               <span>Destination</span>
-              {!!distributions.length && <Segmented label="Destination type" value={cloneKind} options={[['native', 'This computer'], ['wsl', 'WSL']]} onChange={setCloneKind} />}
+              {!!distributions.length && cloneMethod === 'url' && <Segmented label="Destination type" value={cloneKind} options={[['native', 'This computer'], ['wsl', 'WSL']]} onChange={setCloneKind} />}
               {cloneKind === 'native'
                 ? <div className="path-picker"><code title={nativeParent}>{nativeParent || 'No folder chosen'}</code><button type="button" className="secondary-button compact" disabled={cloneBusy} onClick={() => void pick('repository_pick_clone_parent')}>Choose…</button></div>
                 : <div className="path-picker"><code>{distribution}:{path}</code><button type="button" className="secondary-button compact" onClick={() => show('wsl')}>Change…</button></div>}
             </div>
             <label className="field">Folder name<input value={cloneName} disabled={cloneBusy} onChange={event => setCloneName(event.target.value)} placeholder={suggestedCloneName(cloneSource) || 'repository'} /></label>
-            <p className="muted small">Clones the full repository without submodules, using your configured Git credentials or SSH agent.</p>
+            <p className="muted small">{cloneMethod === 'accounts' ? 'Clones using the selected connected account. Choose a folder on this computer; WSL cloning is available through Repository URL with WSL credentials.' : 'Clones the full repository without submodules, using your configured Git credentials or SSH agent.'}</p>
             {alert}
             <div className="start-actions"><button className="primary-button" disabled={cloneBusy || !cloneSource.trim() || !(cloneKind === 'wsl' ? distribution : nativeParent)}>{cloneBusy ? 'Cloning…' : 'Clone repository'}</button></div>
-          </form>}
+          </form></div>}
           {view === 'wsl' && <div className="start-form">
             <label className="field">Distribution<select value={distribution} onChange={e => { request.current++; setDistribution(e.target.value); setEntries([]); setPath('/'); setBusy(false); }}>{distributions.map(item => <option key={item.name}>{item.name}</option>)}</select></label>
             <form className="field" onSubmit={e => { e.preventDefault(); void browse(); }}>
@@ -140,7 +151,7 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
               {entries.map(entry => <li key={entry.path}><button className="start-item" disabled={busy} onClick={() => void browse(entry.path)}><Folder size={16} /><span><strong>{entry.name}</strong></span></button></li>)}
             </ul>
             <div className="start-actions">
-              <button className="secondary-button" onClick={() => { setCloneKind('wsl'); show('clone'); }}>Clone into this folder</button>
+              <button className="secondary-button" onClick={() => { setCloneMethod('url'); selectRepository(null); setCloneKind('wsl'); show('clone'); }}>Clone into this folder</button>
               <button className="primary-button" onClick={() => onOpen({ kind: 'wsl', distribution, path })}>Open this folder</button>
             </div>
           </div>}

@@ -7,6 +7,8 @@ pub struct CloneRequest {
     pub source: String,
     pub parent: RepositoryLocation,
     pub directory_name: String,
+    #[serde(default)]
+    pub account_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
