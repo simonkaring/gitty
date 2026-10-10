@@ -4815,3 +4815,25 @@ dialog[open]::backdrop {
   overflow-wrap: anywhere;
   user-select: text;
 }
+
+/* history listbox roving focus */
+.row-control-active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.commit-refs:has(.row-control-active) {
+  z-index: 4;
+}
+.commit-refs:has(.row-control-active) .ref-stack {
+  display: flex;
+}
+.commit-refs > .ref-pill.row-control-active {
+  flex-shrink: 0;
+  max-width: none;
+}
+.commit-refs > .ref-pill.row-control-active .ref-pill-name {
+  overflow: visible;
+}
+.graph-action-button.row-control-active {
+  opacity: 1;
+}

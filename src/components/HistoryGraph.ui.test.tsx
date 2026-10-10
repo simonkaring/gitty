@@ -295,3 +295,109 @@ it('gives every mounted history graph unique ids so hidden tabs sharing commits 
     canvas.mockRestore(); globalThis.ResizeObserver = originalObserver;
   }
 });
+
+async function mountRovingGraph() {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const originalObserver = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} unobserve() {} } as typeof ResizeObserver;
+  const canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(new Proxy({}, { get: () => () => {} }) as CanvasRenderingContext2D);
+  const host = document.createElement('div'); document.body.append(host);
+  const root = createRoot(host);
+  const commits = [
+    { id: 'tip', parents: ['base'], subject: 'Tip', body: '', author: 'A', email: '', timestamp: 2, branch: 'main', files: [] },
+    { id: 'base', parents: [], subject: 'Base', body: '', author: 'A', email: '', timestamp: 1, branch: 'main', files: [] },
+  ];
+  const refs = [{ name: 'main', fullName: 'refs/heads/main', kind: 'local' as const, commitId: 'tip' }, { name: 'dev', fullName: 'refs/heads/dev', kind: 'local' as const, commitId: 'tip' }, { name: 'v1', fullName: 'refs/tags/v1', kind: 'tag' as const, commitId: 'tip' }];
+  const handlers = { onSelect: vi.fn(), onActions: vi.fn(), onContextActions: vi.fn(), onTogglePick: vi.fn(), onOpenDetails: vi.fn() };
+  const render = (selectedId = 'tip') => act(async () => root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={refs} selectedId={selectedId} head="tip" headRef="refs/heads/main" loaded={commits.length} matches={null} onLoadMore={() => {}} theme={BUILTIN_THEMES[0]} pickOrder={[]} {...handlers} />));
+  await render();
+  const listbox = host.querySelector('[role="listbox"]') as HTMLElement;
+  const key = (init: KeyboardEventInit) => act(async () => { listbox.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })); });
+  const activeId = () => listbox.getAttribute('aria-activedescendant');
+  const cleanup = async () => { await act(async () => root.unmount()); host.remove(); canvas.mockRestore(); globalThis.ResizeObserver = originalObserver; };
+  return { host, listbox, key, activeId, handlers, render, cleanup };
+}
+
+it('keeps the history listbox the only tab stop: no element inside an option is focusable by Tab', async () => {
+  const { host, cleanup } = await mountRovingGraph();
+  try {
+    const listbox = host.querySelector('[role="listbox"]') as HTMLElement;
+    expect(listbox.tabIndex).toBe(0);
+    const inner = [...host.querySelectorAll('[role="option"] *')] as HTMLElement[];
+    expect(inner.some(element => element.matches('.ref-pill, .ref-more, .graph-pick, .graph-action-button'))).toBe(true);
+    expect(inner.filter(element => element.tabIndex >= 0)).toEqual([]);
+    // Controls stay clickable and labelled.
+    expect(host.querySelector('.graph-pick')?.getAttribute('aria-label')).toMatch(/^Cherry-pick/);
+    expect(host.querySelector('.graph-action-button')?.getAttribute('aria-label')).toMatch(/^Actions for/);
+    expect(host.querySelector('.ref-pill')?.getAttribute('aria-label')).toMatch(/^Select tip of/);
+  } finally { await cleanup(); }
+});
+
+it('moves an active control through the selected row with ArrowRight/ArrowLeft and activates it with Enter/Space', async () => {
+  const { host, listbox, key, activeId, handlers, cleanup } = await mountRovingGraph();
+  try {
+    const rowId = host.querySelector('[id$="-commit-tip"]')!.id;
+    expect(activeId()).toBe(rowId);
+    const controls = [...host.querySelectorAll('#' + CSS.escape(rowId) + ' [data-row-control]')] as HTMLElement[];
+    expect(controls.map(control => control.className.split(' ')[0])).toEqual(['ref-pill', 'ref-pill', 'ref-pill', 'graph-pick', 'icon-button']);
+    expect(controls.map(control => control.id)).toEqual([0, 1, 2, 3, 4].map(n => `${rowId}-ctl-${n}`));
+
+    await key({ key: 'ArrowRight' });
+    expect(activeId()).toBe(`${rowId}-ctl-0`);
+    expect(controls[0].classList.contains('row-control-active')).toBe(true);
+    expect(document.activeElement === listbox || document.activeElement === document.body).toBe(true);
+    await key({ key: 'Enter' });
+    expect(handlers.onSelect).toHaveBeenCalledWith('tip');
+    expect(handlers.onOpenDetails).not.toHaveBeenCalled();
+
+    await key({ key: 'ArrowRight' }); await key({ key: 'ArrowRight' }); await key({ key: 'ArrowRight' });
+    expect(activeId()).toBe(`${rowId}-ctl-3`);
+    expect(controls.filter(control => control.classList.contains('row-control-active'))).toEqual([controls[3]]);
+    await key({ key: ' ' });
+    expect(handlers.onTogglePick).toHaveBeenCalledWith('tip');
+
+    await key({ key: 'ArrowRight' });
+    expect(activeId()).toBe(`${rowId}-ctl-4`);
+    await key({ key: 'Enter' });
+    expect(handlers.onActions).toHaveBeenCalledWith({ oid: 'tip' });
+
+    // Wraps back to the row, and ArrowLeft goes the other way.
+    await key({ key: 'ArrowRight' });
+    expect(activeId()).toBe(rowId);
+    await key({ key: 'ArrowLeft' });
+    expect(activeId()).toBe(`${rowId}-ctl-4`);
+    await key({ key: 'Enter' });
+    expect(handlers.onActions).toHaveBeenCalledTimes(2);
+  } finally { await cleanup(); }
+});
+
+it('opens the branch menu for an active ref pill via Shift+F10 and resets the active control on Escape or vertical movement', async () => {
+  const { host, key, activeId, handlers, render, cleanup } = await mountRovingGraph();
+  try {
+    const rowId = host.querySelector('[id$="-commit-tip"]')!.id;
+    await key({ key: 'ArrowRight' }); await key({ key: 'ArrowRight' });
+    expect(activeId()).toBe(`${rowId}-ctl-1`);
+    await key({ key: 'F10', shiftKey: true });
+    expect(handlers.onContextActions).toHaveBeenCalledTimes(1);
+    expect(handlers.onContextActions.mock.calls[0].slice(0, 1)).toEqual([{ oid: 'tip', ref: 'refs/heads/dev' }]);
+    expect(handlers.onContextActions.mock.calls[0][3]).toBe(host.querySelector(`#${CSS.escape(rowId)}-ctl-1`));
+
+    await key({ key: 'Escape' });
+    expect(activeId()).toBe(rowId);
+    expect(host.querySelector('.row-control-active')).toBeNull();
+    // Without an active control, Shift+F10 still opens the commit menu.
+    await key({ key: 'F10', shiftKey: true });
+    expect(handlers.onContextActions).toHaveBeenLastCalledWith({ oid: 'tip' }, expect.any(Number), expect.any(Number), expect.anything());
+
+    await key({ key: 'ArrowRight' });
+    expect(activeId()).toBe(`${rowId}-ctl-0`);
+    await key({ key: 'ArrowDown' });
+    expect(handlers.onSelect).toHaveBeenLastCalledWith('base');
+    expect(activeId()).toBe(rowId);
+    // Selection changing (e.g. by mouse) also drops the active control.
+    await key({ key: 'ArrowRight' });
+    await render('base');
+    expect(host.querySelector('.row-control-active')).toBeNull();
+    expect(activeId()).toBe(host.querySelector('[id$="-commit-base"]')!.id);
+  } finally { await cleanup(); }
+});
