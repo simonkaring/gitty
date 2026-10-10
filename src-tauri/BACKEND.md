@@ -559,7 +559,10 @@ remain unverified and require refresh/review.
 - New actions require no in-progress operation. Branch creation and merges allow
   local changes that Git can safely preserve; other new actions require a clean
   worktree/index, including no untracked files (except carrying a branch switch,
-  described below). Bare repositories are rejected. Gitty never forces,
+  described below); tag creation is included although it does not touch the worktree,
+  and its `dirtyWorktree` refusal says so ("Creating a tag requires a clean working
+  tree in this version; commit or stash your changes first…") while other
+  refused actions keep the generic commit-or-stash wording. Bare repositories are rejected. Gitty never forces,
   stashes without an explicit request, removes locks or automatically retries writes. Branch
   deletion is the narrow exception to the no-force rule: local `-D` follows a
   separately confirmed, positively classified `-d` failure; origin deletion

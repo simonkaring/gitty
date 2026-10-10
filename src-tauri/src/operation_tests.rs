@@ -2592,3 +2592,27 @@ fn find_exit_one_with_output_is_tolerated_but_other_failures_are_not() {
     assert!(!find_outcome_acceptable(false, Some(127), b""));
     assert!(!find_outcome_acceptable(false, None, b"/r/.git/HEAD\0"));
 }
+
+#[test]
+fn creating_a_tag_with_a_dirty_worktree_gets_a_tag_specific_refusal() {
+    let f = Fixture::new();
+    f.write("untracked", "work in progress\n");
+    let tag = |name: &str| GitAction::CreateTag {
+        name: name.into(),
+        oid: "HEAD".into(),
+        message: None,
+    };
+    let error = f.run(tag("blocked")).unwrap_err();
+    assert_eq!(error.code, "dirtyWorktree");
+    assert_eq!(error.message, crate::operations::CREATE_TAG_DIRTY_MESSAGE);
+    assert!(error.message.starts_with("Creating a tag requires a clean"));
+    assert!(f.git(&["tag", "--list", "blocked"]).is_empty());
+    // Other refused actions keep the generic wording.
+    let error = f
+        .run(GitAction::Rebase {
+            onto: "main".into(),
+        })
+        .unwrap_err();
+    assert_eq!(error.code, "dirtyWorktree");
+    assert!(error.message.starts_with("Commit or explicitly stash"));
+}

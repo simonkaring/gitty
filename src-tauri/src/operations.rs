@@ -116,6 +116,9 @@ pub(crate) const OPERATION_METADATA_PATHS: [&str; 29] = [
     "BISECT_LOG",
 ];
 
+const DIRTY_WORKTREE_MESSAGE: &str = "Commit or explicitly stash all staged, unstaged and untracked changes first. Gitty never automatically stashes.";
+/// Tags do not touch the worktree, but this version still requires it to be clean.
+pub(crate) const CREATE_TAG_DIRTY_MESSAGE: &str = "Creating a tag requires a clean working tree in this version; commit or stash your changes first. Gitty never automatically stashes.";
 
 type OperationMetadata = Vec<(&'static str, Option<Vec<u8>>)>;
 
@@ -761,7 +764,12 @@ impl Repository {
                 }
         );
         if !control && !preserves_changes && !self.status_entries()?.entries.is_empty() {
-            return Err(Error::new("dirtyWorktree", "Commit or explicitly stash all staged, unstaged and untracked changes first. Gitty never automatically stashes."));
+            let message = if matches!(request.action, GitAction::CreateTag { .. }) {
+                CREATE_TAG_DIRTY_MESSAGE
+            } else {
+                DIRTY_WORKTREE_MESSAGE
+            };
+            return Err(Error::new("dirtyWorktree", message));
         }
         let mut input = Vec::new();
         let mut merge_message_file = None;
