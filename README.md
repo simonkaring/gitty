@@ -285,6 +285,7 @@ PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/gra
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/search.smoke.mjs
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/split-diff.smoke.mjs
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/working-files.smoke.mjs
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/integrations.smoke.mjs
 ```
 
 ### Historical: Milestone 3 verification

@@ -18,9 +18,27 @@ sources:
     resource: ../../src/components/RepositoryBrowser.test.tsx
   - id: contract
     resource: ../../src-tauri/BACKEND.md
+  - id: settings
+    resource: ../../src/components/IntegrationsSettings.tsx
+  - id: settings-tests
+    resource: ../../src/components/IntegrationsSettings.test.tsx
+  - id: settings-smoke
+    resource: ../../src/components/integrations.smoke.mjs
 ---
 
 # Repository cloning and accounts
+
+Integrations settings groups connected-account metadata separately from provider
+selection and setup. Changing providers clears unfinished token fields; provider
+selection is locked while connecting or disconnecting. Browser authorization shows
+the user code until approval or cancellation, with access-token fallback and
+Bitbucket's token-only setup. Failed account loading offers retry rather than an
+empty-account claim. Browser preview exposes provider choices but no connection
+controls or native account reads. Mocked component tests cover these UI paths,
+credential clearing, device polling/cancellation and disconnect failures; they do
+not exercise real OAuth or OS credential storage. The optional integration smoke
+checks light/dark and narrow browser layout with mocked Tauri IPC, including
+provider setup and device cancellation.[^settings][^settings-tests][^settings-smoke]
 
 The Clone screen defaults to connected-account browsing. GitHub.com and GitLab.com
 return pages of accessible repositories; the UI filters loaded names/namespaces
@@ -60,3 +78,6 @@ permissions, OAuth registrations, or Windows/WSL execution.[^browser][^ui-tests]
 [^entry]: Account/URL clone form and destination choice.
 [^ui-tests]: Mocked connected-account browser regressions.
 [^contract]: Detailed IPC and transport authentication contracts.
+[^settings]: Provider selection, connection setup and account metadata presentation.
+[^settings-tests]: Mocked integration settings interaction regressions.
+[^settings-smoke]: Optional browser rendering and mocked authorization smoke checks.

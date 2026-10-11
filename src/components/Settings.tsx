@@ -91,7 +91,7 @@ export function SettingsDialog({ demo = false, onToggleDemo, demoBusy = false }:
   }
   const choice = (label: string, value: string, onChange: (id: string) => void, mode?: 'light' | 'dark') => <label className="settings-field">{label}<select value={value} disabled={!!draft} onChange={e => onChange(e.target.value)}>{themes.filter(t => !mode || t.mode === mode).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>;
   if (!api.isSettingsOpen) return null;
-  return <Dialog title="Settings" size="lg" className="settings-dialog" onClose={requestClose}>
+  return <Dialog title="Settings" size="lg" className={`settings-dialog${section === 'Integrations' ? ' settings-integrations' : ''}`} onClose={requestClose}>
     {confirmClose && <div className="settings-notice" role="alert"><p>Discard your unsaved theme edits?</p><button className="secondary-button" onClick={() => setConfirmClose(false)} autoFocus>Keep editing</button> <button className="secondary-button" onClick={finish}>Discard and close</button></div>}
     {api.storageError && <div className="settings-notice" role="alert">{api.storageError} <button className="text-button" onClick={api.retryPersistence}>Retry saving</button></div>}
     <div className="settings-layout"><nav aria-label="Settings sections">{sections.map(s => <button key={s} aria-current={section === s ? 'page' : undefined} onClick={() => setSection(s)}>{s}</button>)}</nav>
