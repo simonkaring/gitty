@@ -5,11 +5,71 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { laneX, layoutHistory } from '../graph/layout';
 import { BUILTIN_THEMES } from '../model/themes';
 import { DEFAULT_HISTORY_COLUMNS } from '../model/settings';
-import { groupRefs, groupRefsByCommit, HistoryGraph, sortRefs } from './HistoryGraph';
+import { acceptsGraphDrop, COMMIT_DRAG_TYPE, graphDropAction, groupRefs, groupRefsByCommit, HistoryGraph, REF_DRAG_TYPE, sortRefs } from './HistoryGraph';
 import { WORKING_ID } from '../model/native';
 
 const preferences = vi.hoisted(() => ({ graphAuthorAvatars: false, authorAvatarMode: 'initials' as 'initials' | 'gravatar', graphOnly: false }));
 const avatarUrl = vi.hoisted(() => vi.fn(async () => 'https://gravatar.com/avatar/test?s=64&d=404'));
+const dropRefs = [
+  { name: 'main', fullName: 'refs/heads/main', kind: 'local' as const, commitId: 'main-tip' },
+  { name: 'topic', fullName: 'refs/heads/topic', kind: 'local' as const, commitId: 'topic-tip' },
+  { name: 'origin/topic', fullName: 'refs/remotes/origin/topic', kind: 'remote' as const, commitId: 'topic-tip' },
+  { name: 'v1', fullName: 'refs/tags/v1', kind: 'tag' as const, commitId: 'main-tip' },
+];
+function transfer(payload: Record<string, string>): DataTransfer {
+  return { types: Object.keys(payload), getData: (type: string) => payload[type] ?? '', dropEffect: 'none' } as unknown as DataTransfer;
+}
+
+it('merges the dragged branch into the receiving local branch, including a non-current destination', () => {
+  const data = transfer({ [REF_DRAG_TYPE]: 'refs/heads/main' });
+  expect(acceptsGraphDrop(data, dropRefs[1], 'refs/heads/main')).toBe(true);
+  expect(graphDropAction(data, 'refs/heads/topic', 'refs/heads/main', [], dropRefs)).toEqual({ oid: 'main-tip', ref: 'refs/heads/main', destination: 'refs/heads/topic', initial: 'merge' });
+  expect(graphDropAction(transfer({ [REF_DRAG_TYPE]: 'refs/remotes/origin/topic' }), 'refs/heads/main', 'refs/heads/main', [], dropRefs)).toEqual({ oid: 'topic-tip', ref: 'refs/remotes/origin/topic', destination: 'refs/heads/main', initial: 'merge' });
+});
+
+it('rejects invalid branch drops and only cherry-picks commits onto the current branch', () => {
+  const branch = transfer({ [REF_DRAG_TYPE]: 'refs/heads/main' });
+  for (const target of ['refs/heads/main', 'refs/remotes/origin/topic', 'refs/tags/v1', 'refs/heads/missing', undefined]) {
+    expect(graphDropAction(branch, target, 'refs/heads/main', [], dropRefs)).toBeNull();
+  }
+  for (const data of [transfer({ [REF_DRAG_TYPE]: 'refs/tags/v1' }), transfer({ [REF_DRAG_TYPE]: 'refs/heads/missing' }), transfer({ [REF_DRAG_TYPE]: 'refs/heads/main', [COMMIT_DRAG_TYPE]: 'main-tip' }), transfer({ 'text/plain': 'refs/heads/main' })]) {
+    expect(graphDropAction(data, 'refs/heads/topic', 'refs/heads/main', [], dropRefs)).toBeNull();
+  }
+  expect(graphDropAction(branch, 'refs/heads/topic', null, [], dropRefs)).toBeNull();
+  const commit = transfer({ [COMMIT_DRAG_TYPE]: 'topic-tip' }), commits = [{ id: 'topic-tip' }];
+  expect(acceptsGraphDrop(commit, dropRefs[1], 'refs/heads/main')).toBe(false);
+  expect(graphDropAction(commit, 'refs/heads/topic', 'refs/heads/main', commits, dropRefs)).toBeNull();
+  expect(graphDropAction(commit, 'refs/heads/main', 'refs/heads/main', commits, dropRefs)).toEqual({ oid: 'topic-tip', commits: ['topic-tip'], initial: 'cherryPick' });
+  expect(graphDropAction(commit, 'refs/heads/main', 'refs/heads/main', [], dropRefs)).toBeNull();
+  expect(graphDropAction(transfer({ [COMMIT_DRAG_TYPE]: WORKING_ID }), 'refs/heads/main', 'refs/heads/main', [{ id: WORKING_ID }], dropRefs)).toBeNull();
+});
+
+it('accepts a branch drop on a non-current graph pill and opens its merge review', async () => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const originalObserver = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} unobserve() {} } as typeof ResizeObserver;
+  vi.stubGlobal('cancelAnimationFrame', vi.fn());
+  const canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(new Proxy({}, { get: () => () => {} }) as CanvasRenderingContext2D);
+  const host = document.createElement('div'), root = createRoot(host), onActions = vi.fn();
+  const commits = dropRefs.slice(0, 2).map(ref => ({ id: ref.commitId, parents: [], subject: ref.name, body: '', author: 'A', email: '', timestamp: 1, branch: ref.name, files: [] }));
+  try {
+    await act(async () => root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={dropRefs} selectedId="main-tip" head="main-tip" headRef="refs/heads/main" loaded={2} matches={null} onSelect={() => {}} onActions={onActions} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />));
+    const pill = host.querySelector('[data-name="topic"]')!;
+    const data = transfer({ [REF_DRAG_TYPE]: 'refs/heads/main' });
+    const dragOver = new Event('dragover', { bubbles: true, cancelable: true });
+    Object.defineProperty(dragOver, 'dataTransfer', { value: data });
+    await act(async () => { pill.dispatchEvent(dragOver); });
+    expect(dragOver.defaultPrevented).toBe(true);
+    expect(data.dropEffect).toBe('copy');
+    const drop = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, 'dataTransfer', { value: data });
+    await act(async () => { pill.dispatchEvent(drop); });
+    expect(onActions).toHaveBeenCalledExactlyOnceWith({ oid: 'main-tip', ref: 'refs/heads/main', destination: 'refs/heads/topic', initial: 'merge' });
+  } finally {
+    await act(async () => root.unmount());
+    canvas.mockRestore(); globalThis.ResizeObserver = originalObserver; vi.unstubAllGlobals();
+  }
+});
 vi.mock('../model/gravatar', () => ({ gravatarUrl: avatarUrl, gravatarImageFailed: () => false, markGravatarImageFailed: vi.fn() }));
 afterEach(() => { preferences.graphAuthorAvatars = false; preferences.authorAvatarMode = 'initials'; preferences.graphOnly = false; avatarUrl.mockClear(); });
 vi.mock('../model/settings', async importOriginal => {

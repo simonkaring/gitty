@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { Check, ChevronRight, Folder, FolderOpen, FolderGit2, GitBranch, Globe2, Laptop, Tag } from 'lucide-react';
 import type { CommitSummary, RepositoryState } from '../model/repository';
-import { graphDropAction, REF_DRAG_TYPE, COMMIT_DRAG_TYPE } from './HistoryGraph';
+import { acceptsGraphDrop, graphDropAction, REF_DRAG_TYPE, COMMIT_DRAG_TYPE } from './HistoryGraph';
 import type { ActionContext } from './OperationDialog';
 
 interface NativeSidebarProps {
@@ -70,7 +70,7 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
         {[...node.refs].sort((a, b) => a.fullName < b.fullName ? -1 : a.fullName > b.fullName ? 1 : 0).map(ref => <div className={`ref-action-row${ref.fullName === session.headRef ? ' current' : ''}`} key={ref.fullName} onContextMenu={event => { event.preventDefault(); openMenu({ oid: ref.commitId, ref: ref.fullName }, event.clientX, event.clientY, event.currentTarget.querySelector('button')!); }}>
           <button className="ref-item" title={ref.fullName} aria-label={`${kind} ${ref.fullName}`} aria-current={ref.fullName === session.headRef ? 'true' : undefined} disabled={busy} draggable={ref.kind !== 'tag'}
             onDragStart={event => { event.stopPropagation(); if (ref.kind === 'tag') { event.preventDefault(); return; } event.dataTransfer.clearData(COMMIT_DRAG_TYPE); event.dataTransfer.setData(REF_DRAG_TYPE, ref.fullName); event.dataTransfer.effectAllowed = 'copy'; }}
-            onDragOver={event => { if (ref.fullName === session.headRef && [REF_DRAG_TYPE, COMMIT_DRAG_TYPE].some(type => event.dataTransfer.types.includes(type))) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
+            onDragOver={event => { if (!busy && acceptsGraphDrop(event.dataTransfer, ref, session.headRef)) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
             onDrop={event => { event.preventDefault(); event.stopPropagation(); const action = graphDropAction(event.dataTransfer, ref.fullName, session.headRef, commits, state.refs); if (action) onAction(action); }}
             onClick={() => reveal(ref.commitId)} onDoubleClick={() => { if (ref.kind === 'local' || (ref.kind === 'remote' && ref.fullName.startsWith('refs/remotes/origin/') && ref.fullName !== 'refs/remotes/origin/HEAD')) switchBranch(ref.fullName); }}
             onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openMenu({ oid: ref.commitId, ref: ref.fullName }, rect.left, rect.bottom, event.currentTarget); } }}>

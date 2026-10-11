@@ -32,6 +32,10 @@ sources:
     resource: ../../src/components/RemoteStashDialog.tsx
   - id: origin-reset-dialog
     resource: ../../src/components/OriginResetDialog.tsx
+  - id: graph-drops
+    resource: ../../src/components/HistoryGraph.tsx
+  - id: graph-drop-tests
+    resource: ../../src/components/HistoryGraph.ui.test.tsx
 ---
 
 # Git mutation safeguards
@@ -55,6 +59,12 @@ Discard deliberately destroys selected unstaged content; tracked files restore
 from the index. Message-only amend preserves the old tree; ordinary amend folds
 in staged content. Remote-tracking refs are local evidence, not proof of the
 remote's current state.[^contract][^hunk-tests]
+
+Branch drops in the graph/sidebar capture the dragged ref as merge source and
+the receiving local branch as explicit destination. Review precedes execution;
+the backend switches to the destination if needed. Self-drops, tag/remote
+destinations and mixed payloads are rejected; commit drops remain cherry-picks
+onto the current local branch only. A checked-out branch is required.[^graph-drops][^graph-drop-tests][^operations]
 
 Merge review includes a dedicated editable commit message and defaults to
 `--no-ff`, creating a merge commit even when fast-forward is possible. Users can
@@ -120,3 +130,5 @@ Related: [refresh coherence](snapshot-and-refresh-coherence.md) and
 [^stashes]: Unique merge-work stash identity, index restoration and OID-pinned apply/drop.
 [^stash-dialog]: Explicit staging restoration choice for manual recovery.
 [^origin-reset-dialog]: Captured origin reset review, destructive confirmation and no automatic retry.
+[^graph-drops]: Shared graph/sidebar drop eligibility and source/destination construction.
+[^graph-drop-tests]: Branch direction, destination eligibility and current-target cherry-pick regressions.

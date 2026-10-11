@@ -30,14 +30,19 @@ export interface GraphAnchor { id: string; offset: number }
 export interface GraphHandle { scrollTo: (row: number) => void; focus: () => void; anchor: () => GraphAnchor | null; restore: (anchor: GraphAnchor) => void }
 export const REF_DRAG_TYPE = 'application/x-gitty-ref';
 export const COMMIT_DRAG_TYPE = 'application/x-gitty-commit';
-export function graphDropAction(data: DataTransfer, targetRef: string | undefined, headRef: string | null | undefined, commits: readonly { id: string }[], refs: readonly (GitRef & { fullName?: string })[]): ActionContext | null {
-  if (!headRef || targetRef !== headRef || !refs.some(ref => ref.fullName === targetRef && ref.kind === 'local')) return null;
+export function acceptsGraphDrop(data: DataTransfer, target: GraphRef, headRef: string | null | undefined): boolean {
+  if (!headRef || !target.fullName || target.kind !== 'local') return false;
   const branchDrag = data.types.includes(REF_DRAG_TYPE), commitDrag = data.types.includes(COMMIT_DRAG_TYPE);
-  if (branchDrag === commitDrag) return null;
+  return branchDrag !== commitDrag && (branchDrag || target.fullName === headRef);
+}
+export function graphDropAction(data: DataTransfer, targetRef: string | undefined, headRef: string | null | undefined, commits: readonly { id: string }[], refs: readonly (GitRef & { fullName?: string })[]): ActionContext | null {
+  const target = refs.find(ref => ref.fullName === targetRef);
+  if (!target || !acceptsGraphDrop(data, target, headRef)) return null;
+  const branchDrag = data.types.includes(REF_DRAG_TYPE);
   if (branchDrag) {
     const source = data.getData(REF_DRAG_TYPE);
     const actual = refs.find(ref => ref.fullName === source && ref.kind !== 'tag');
-    return actual && source !== headRef ? { oid: actual.commitId, ref: source, initial: 'merge' } : null;
+    return actual && source !== targetRef ? { oid: actual.commitId, ref: source, destination: targetRef, initial: 'merge' } : null;
   }
   const oid = data.getData(COMMIT_DRAG_TYPE);
   return oid !== WORKING_ID && commits.some(commit => commit.id === oid) ? { oid, commits: [oid], initial: 'cherryPick' } : null;
@@ -164,7 +169,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                       onKeyDown={event => { if (!ref.fullName) return; if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && onContextActions) { event.preventDefault(); event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); onContextActions({ oid: commit.id, ref: ref.fullName }, rect.left, rect.bottom, scroller.current ?? event.currentTarget); } else if (onSelect && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.stopPropagation(); onSelect(commit.id); } }}
                       data-current={!!headRef && ref.fullName === headRef} draggable={!!onActions && !!ref.fullName && ref.kind !== 'tag'}
                       onDragStart={event => { event.stopPropagation(); if (onActions && ref.fullName && ref.kind !== 'tag') { event.dataTransfer.clearData(COMMIT_DRAG_TYPE); event.dataTransfer.setData(REF_DRAG_TYPE, ref.fullName); event.dataTransfer.effectAllowed = 'copy'; } else event.preventDefault(); }} onDragEnd={stopDrag}
-                      onDragOver={event => { if (ref.fullName === headRef && [REF_DRAG_TYPE, COMMIT_DRAG_TYPE].some(type => event.dataTransfer.types.includes(type))) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
+                       onDragOver={event => { if (onActions && acceptsGraphDrop(event.dataTransfer, ref, headRef)) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
                       onDrop={event => { event.preventDefault(); event.stopPropagation(); stopDrag(); const action = graphDropAction(event.dataTransfer, ref.fullName, headRef, commits.slice(0, loaded), refs); if (action) onActions?.(action); }}
                       onContextMenu={event => { if (onContextActions && ref.fullName) { event.preventDefault(); event.stopPropagation(); onContextActions({ oid: commit.id, ref: ref.fullName }, event.clientX, event.clientY, scroller.current ?? event.currentTarget); } }} onClick={event => { if (onSelect) { event.stopPropagation(); onSelect(commit.id); scroller.current?.focus(); } }}
                       onDoubleClick={event => { if (ref.fullName && (ref.kind === 'local' || (ref.kind === 'remote' && ref.fullName.startsWith('refs/remotes/origin/') && ref.fullName !== 'refs/remotes/origin/HEAD')) && onSwitchBranch) { event.stopPropagation(); if (badgeAction.current) clearTimeout(badgeAction.current); badgeAction.current = null; onSwitchBranch(ref.fullName); } }}>

@@ -72,8 +72,17 @@ try {
     await drop(main, invalid);
     assert.equal(await page.getByRole('dialog', { name: 'Git actions' }).count(), 0);
   }
-  await drop(topic, 'refs/heads/main');
-  assert.equal(await page.getByRole('dialog', { name: 'Git actions' }).count(), 0);
+  for (const target of [topic, page.locator('.ref-item[title="refs/heads/topic"]')]) {
+    await main.dragTo(target);
+    assert.equal(await page.locator('input[name="operation-action"]:checked').inputValue(), 'merge');
+    await page.getByRole('button', { name: 'Review operation', exact: true }).click();
+    const mergeSummary = page.getByRole('region', { name: 'Operation summary', exact: true });
+    await mergeSummary.getByText('Source: Local branch main', { exact: true }).waitFor();
+    await mergeSummary.getByText('Destination: Local branch topic', { exact: true }).waitFor();
+    await mergeSummary.getByText('Gitty will switch to the destination branch before merging.', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    assert.equal((await writes()).length, 0);
+  }
   assert.equal(await page.getByRole('button', { name: 'Select tip of refs/tags/v1; right-click or press Shift+F10 for actions', exact: true }).getAttribute('draggable'), 'false');
   await topic.dragTo(main);
   await page.getByRole('dialog', { name: 'Git actions' }).waitFor();
@@ -376,5 +385,5 @@ try {
   assert.deepEqual(await pseudoDrag.evaluate(data => [...data.types]), []);
   await pseudoDrag.dispose();
   assert.deepEqual(errors, []);
-  console.log('Operations smoke passed (mocked native IPC): branch/commit current-target graph/sidebar drops, invalid/pseudo-row payload rejection, cancel without writes, both drag autoscroll types, current-branch create default, readable source/destination/order/mainline/fast-forward reviews, right-click/keyboard parity, immutable stale review, duplicate-submit lock, uncertain write/refresh recovery, conflict reread/external dirty edits, CRLF, operation DTOs, provider restrictions/failure/retry.');
+  console.log('Operations smoke passed (mocked native IPC): branch-to-local-branch merge and commit current-target graph/sidebar drops, invalid/pseudo-row payload rejection, cancel without writes, both drag autoscroll types, current-branch create default, readable source/destination/order/mainline/fast-forward reviews, right-click/keyboard parity, immutable stale review, duplicate-submit lock, uncertain write/refresh recovery, conflict reread/external dirty edits, CRLF, operation DTOs, provider restrictions/failure/retry.');
 } finally { await browser.close(); await server.close(); }
