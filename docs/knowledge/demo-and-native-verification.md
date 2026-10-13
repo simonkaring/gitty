@@ -39,6 +39,16 @@ cannot establish native Git correctness.[^dispatch][^demo]
 Commands and test scope come from the package scripts, README, and Rust
 fixtures.[^scripts][^readme][^rust-tests][^wsl-tests] A host test pass does not
 establish Windows/WSL/Linux runtime support or signed-artifact readiness.
+For latency diagnostics, `GITTY_TRACE_PROCESS=1` prints captured subprocess spawn
+and total durations plus mutation-lock waits to the desktop terminal. It omits
+arguments, stdin and environment values. Run WSL timing tests serially with
+`--nocapture --test-threads=1`; elapsed times vary with machine load, while spawn
+counts provide deterministic regression limits.[^readme][^wsl-tests]
+The latency change was checked on Windows with real Ubuntu temporary
+repositories: open (including newline paths), status/content fingerprints,
+stage/commit, fetch/pull/push, metadata scan/snapshot, lock refusal, and reset
+freshness/untracked preservation passed. This does not cover live credentials,
+packaged GUI behavior, all WSL distributions, or metadata symlink/race cases.[^wsl-tests]
 
 For a docs-only patch, parse frontmatter, validate relative source/navigation
 links and reserved index structure, and check whitespace; application tests

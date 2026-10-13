@@ -264,6 +264,18 @@ fn remote_fetch_counts_fast_forward_pull_and_push() {
 }
 
 #[test]
+fn remote_fetch_skips_upstream_counts_and_branch_configuration() {
+    let f = Fixture::new();
+    let _bare = f.bare_remote();
+    f.publish();
+    let (result, spawns) = crate::process::count_spawns(|| f.remote(json!({"kind":"fetch"})));
+    result.unwrap();
+    // Native preflight + remote selection + the fetch; no upstream rev-list walk.
+    assert!(spawns <= 8, "fetch launched {spawns} processes");
+    assert_eq!(f.repo.sync_info().unwrap().ahead, Some(0));
+}
+
+#[test]
 fn background_fetch_updates_remote_history_without_local_refs_tags_or_worktree() {
     let f = Fixture::new();
     let bare = f.bare_remote();
@@ -302,6 +314,81 @@ fn background_fetch_updates_remote_history_without_local_refs_tags_or_worktree()
         .commits
         .iter()
         .any(|commit| commit.id == incoming));
+}
+
+#[test]
+fn remote_fetch_follows_rewritten_history_without_forcing_local_branches() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    let peer = f.peer(bare.path());
+    let base = peer.git(&["rev-parse", "HEAD"]);
+    peer.write("incoming", "original remote history\n");
+    let original = peer.commit("original");
+    peer.remote(json!({"kind":"push"})).unwrap();
+    f.remote(json!({"kind":"pull"})).unwrap();
+
+    peer.git(&["reset", "--hard", &base]);
+    peer.write("replacement", "rewritten remote history\n");
+    let replacement = peer.commit("replacement");
+    peer.git(&[
+        "push",
+        "--force",
+        "origin",
+        "refs/heads/main:refs/heads/main",
+    ]);
+
+    // Even a mirror mapping must not let a forced fetch move local heads/tags.
+    f.git(&["config", "remote.origin.fetch", "+refs/*:refs/*"]);
+    f.git(&["tag", "local-tag"]);
+    f.write("file", "staged\n");
+    f.git(&["add", "file"]);
+    f.write("file", "unstaged\n");
+    let index = f.git(&["ls-files", "--stage"]);
+    let status = f.git(&["status", "--porcelain"]);
+    let refs = f.git(&[
+        "for-each-ref",
+        "--format=%(refname) %(objectname)",
+        "refs/heads",
+        "refs/tags",
+    ]);
+
+    for action in [
+        json!({"kind":"fetch"}),
+        json!({"kind":"fetch", "branch":"main"}),
+        json!({"kind":"backgroundFetch"}),
+        json!({"kind":"pull"}),
+    ] {
+        f.git(&["update-ref", "refs/remotes/origin/main", &original]);
+        let result = f.remote(action.clone());
+        if action["kind"] == "pull" {
+            // Fetch succeeds, but default integration still refuses divergence.
+            assert_eq!(result.unwrap_err().code, "git");
+        } else {
+            result.unwrap();
+        }
+        assert_eq!(
+            f.git(&["rev-parse", "refs/remotes/origin/main"]),
+            replacement
+        );
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), original);
+        assert_eq!(
+            f.git(&[
+                "for-each-ref",
+                "--format=%(refname) %(objectname)",
+                "refs/heads",
+                "refs/tags"
+            ]),
+            refs
+        );
+        assert_eq!(f.git(&["ls-files", "--stage"]), index);
+        assert_eq!(f.git(&["status", "--porcelain"]), status);
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join("file")).unwrap(),
+            "unstaged\n"
+        );
+        assert_eq!(git(bare.path(), &["rev-parse", "main"]), replacement);
+    }
 }
 
 #[test]

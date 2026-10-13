@@ -16,6 +16,8 @@ sources:
     resource: ../../src-tauri/src/bridge.rs
   - id: bridge-test
     resource: ../../src-tauri/src/remote_tests.rs
+  - id: wsl-tests
+    resource: ../../src-tauri/src/wsl_tests.rs
   - id: contract
     resource: ../../src-tauri/BACKEND.md
   - id: readme
@@ -59,7 +61,9 @@ editing have explicit WSL limitations; consult the detailed contract before
 extending platform support.[^contract] The WSL operation-metadata scan is one
 `find` that must keep `test -e`/`cat` parity: symlinks followed, dangling links absent,
 heavy Git-directory subtrees pruned, and exit 1 from entries vanishing under
-concurrent Git tolerated; it has no Windows/WSL runtime verification yet.[^contract]
+concurrent Git tolerated. The basic empty/populated scan and snapshot were
+exercised with real Ubuntu temporary repositories; symlink/race parity and
+packaged GUI behavior still need runtime verification.[^contract][^wsl-tests]
 
 Git authentication and provider API accounts are separate except for explicitly
 selected account-based native HTTPS clones, which use operation-local, URL-scoped
@@ -86,6 +90,14 @@ the dialog shows provenance apart from Git's own, hook-influenceable prompt text
 Background fetch deliberately bypasses the Gitty mutation lock and read deadline:
 it moves only `refs/remotes/*` and must not block local writes behind the network.
 Explicit remote actions still use the lock.[^remote]
+Fetch (including background fetch and pull's fetch phase) force-updates only
+remote-tracking refs to follow rewritten remote history; it does not force local
+branches or pushes. WSL failure messages label credential advice as conditional,
+since a Git rejection is not necessarily an authentication failure.[^remote]
+Remote actions omit the display-only upstream count walk; fetch also skips
+branch-merge configuration. Repository opening batches fixed `rev-parse`
+discovery fields, and operation preflight reuses its state in the reviewed
+fingerprint rather than reading it again. No state is cached across requests.[^process][^remote][^contract]
 
 Inspect `command_inner`, `remote_action`, `wsl_executable_path`, and
 `network_args_wsl` when changing transport/authentication. The
@@ -108,6 +120,7 @@ The [backend contract](../../src-tauri/BACKEND.md#read-semantics) and
 [^askpass]: Executable translation and per-operation token lifecycle.
 [^bridge]: Connection cap, handshake deadline, bounded lines and stale-helper cleanup.
 [^bridge-test]: Construction-level WSL bridge regression.
+[^wsl-tests]: Real Ubuntu temporary-repository scan, snapshot and mutation checks.
 [^contract]: Filesystem, editor, and process-lifecycle platform limits.
 [^readme]: User-facing platform prerequisites and pending runtime checks.
 [^windows]: Window decoration setup and layout IPC.

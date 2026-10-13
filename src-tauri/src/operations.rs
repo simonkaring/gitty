@@ -412,11 +412,19 @@ impl Repository {
                 snapshot.err().map(|e| (e.code, e.message)),
             ));
         }
-        let index = self.check_text(&["ls-files", "--stage", "-z"])?;
-        let all_refs = self.check_text(&[
-            "for-each-ref",
-            "--format=%(refname)%00%(objectname)%00%(symref)",
-        ])?;
+        let [index, all_refs]: [Result<String>; 2] = process::parallel(vec![
+            Box::new(|| self.check_text(&["ls-files", "--stage", "-z"])),
+            Box::new(|| {
+                self.check_text(&[
+                    "for-each-ref",
+                    "--format=%(refname)%00%(objectname)%00%(symref)",
+                ])
+            }),
+        ])
+        .try_into()
+        .unwrap_or_else(|_| unreachable!());
+        let index = index?;
+        let all_refs = all_refs?;
         let incoming = match kind {
             OperationKind::Merge => merge.clone(),
             OperationKind::Rebase => rebase.clone().or_else(|| value("rebase-merge/onto")),
@@ -638,8 +646,9 @@ impl Repository {
         // Validate the captured review and every merge target before saving work.
         // The entire save/merge/restore sequence holds Service's mutation lock.
         self.operation_writable()?;
-        let before = self.operation_state()?;
         let state = self.state()?;
+        let status = self.status()?;
+        let before = self.operation_state_with(&state, Some(&status))?;
         if request.expected_operation != before.fingerprint
             || request.expected_head != state.session.head
             || request.expected_head_ref != state.session.head_ref
@@ -731,8 +740,9 @@ impl Repository {
         editor: Option<&crate::editor::EditorRegistry>,
     ) -> Result<OperationResult> {
         self.operation_writable()?;
-        let before = self.operation_state()?;
         let state = self.state()?;
+        let status = self.status()?;
+        let before = self.operation_state_with(&state, Some(&status))?;
         if request.expected_operation != before.fingerprint
             || request.expected_head != state.session.head
             || request.expected_head_ref != state.session.head_ref

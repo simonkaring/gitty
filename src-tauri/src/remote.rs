@@ -50,6 +50,10 @@ impl Repository {
     }
 
     pub fn sync_info(&self) -> Result<SyncInfo> {
+        self.sync_info_with_counts(true)
+    }
+
+    fn sync_info_with_counts(&self, counts: bool) -> Result<SyncInfo> {
         let branch = self.sync_branch()?;
         let remotes = crate::repository::string(self.location(), &["remote"])?
             .lines()
@@ -62,6 +66,10 @@ impl Repository {
             behind: None,
             remotes,
         };
+        // Remote actions need selection, not a walk of the upstream history.
+        if !counts {
+            return Ok(info);
+        }
         if let Some(branch) = &info.branch {
             let full = format!("refs/heads/{branch}");
             let refs = crate::repository::string(
@@ -191,19 +199,25 @@ impl Repository {
                 "Resolve existing conflicts before syncing.",
             ));
         }
-        let info = self.sync_info()?;
+        let info = self.sync_info_with_counts(false)?;
         let configured_remote = info
             .branch
             .as_ref()
             .map(|b| self.sync_config(&format!("branch.{b}.remote")))
             .transpose()?
             .flatten();
-        let configured_branch = info
-            .branch
-            .as_ref()
-            .map(|b| self.sync_config(&format!("branch.{b}.merge")))
-            .transpose()?
-            .flatten();
+        let configured_branch = if matches!(
+            action,
+            RemoteAction::Pull { .. } | RemoteAction::Push { .. }
+        ) {
+            info.branch
+                .as_ref()
+                .map(|b| self.sync_config(&format!("branch.{b}.merge")))
+                .transpose()?
+                .flatten()
+        } else {
+            None
+        };
         let (remote, branch) = match &action {
             RemoteAction::BackgroundFetch => (None, None),
             RemoteAction::Fetch { remote, branch }
@@ -285,10 +299,11 @@ impl Repository {
                     &remote,
                 ]));
                 // Ignore configured fetch refspecs (including mirror mappings
-                // into local heads). Only remote-tracking branches may move.
+                // into local heads). Only remote-tracking branches may move,
+                // including when the remote rewrites its history.
                 a.push(match branch {
-                    Some(branch) => format!("refs/heads/{branch}:refs/remotes/{remote}/{branch}"),
-                    None => format!("refs/heads/*:refs/remotes/{remote}/*"),
+                    Some(branch) => format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}"),
+                    None => format!("+refs/heads/*:refs/remotes/{remote}/*"),
                 });
                 let output = self.write(&a, &env, &[], 0)?;
                 network_result(output, wsl && interactive)
@@ -373,7 +388,7 @@ impl Repository {
                     "--refmap=",
                     "--",
                     &remote,
-                    &format!("refs/heads/{branch}:refs/remotes/{remote}/{branch}"),
+                    &format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}"),
                 ]));
                 let fetched =
                     network_result(self.write(&fetch, &env, &[], 0)?, wsl && interactive)?;
@@ -487,7 +502,7 @@ pub(crate) fn action_result(output: Output) -> Result<ActionOutput> {
 pub(crate) fn network_result(output: Output, wsl: bool) -> Result<ActionOutput> {
     action_result(output).map_err(|mut error| {
         if wsl {
-            error.message.push_str("\nGitty can prompt for WSL passwords only when Windows interop can run the Gitty executable, and it never prompts for SSH passphrases. A credential helper with its own sign-in window (such as Git Credential Manager) can still ask; otherwise configure a credential helper or SSH agent inside the distribution, then retry.");
+            error.message.push_str("\nIf this failure is authentication-related: Gitty can prompt for WSL passwords only when Windows interop can run the Gitty executable, and it never prompts for SSH passphrases. A credential helper with its own sign-in window (such as Git Credential Manager) can still ask; otherwise configure a credential helper or SSH agent inside the distribution, then retry.");
         }
         error
     })

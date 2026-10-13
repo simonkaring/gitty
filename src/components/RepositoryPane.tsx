@@ -193,7 +193,12 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     } catch (e) { if (opened) void close(opened.session.handle); if (token === epoch.current) { setError(errorMessage(e)); onIdentityRef.current(tabId, null, null); } }
     finally { if (token === epoch.current) { lock.current = false; setBusy(false); } }
   }, [location, tabId]);
-  useEffect(() => { void open(); }, [open]);
+  useEffect(() => {
+    // StrictMode replays effects before this microtask: don't launch an obsolete open.
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) void open(); });
+    return () => { cancelled = true; };
+  }, [open]);
   /** `replace` is a confirmed rewrite of the tip (an amend): the selection and scroll anchor that were on `from`
    * follow it to `to`, and the history walk looks for `to` rather than the now unreachable `from`. */
   const refresh = useCallback(async (force = false, replace?: { from: string; to: string }, excludeKeepVisible: string[] = []) => {

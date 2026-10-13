@@ -75,7 +75,7 @@ pub(crate) fn without_read_deadline<T>(f: impl FnOnce() -> Result<T>) -> Result<
 }
 
 /// Runs independent reads concurrently. Each costs a process launch — about
-/// 100 ms through `wsl.exe` — so sequential reads dominate WSL refreshes. The
+/// potentially seconds through `wsl.exe` under load — so sequential reads dominate WSL refreshes. The
 /// caller's request deadline is carried into every worker thread.
 pub(crate) fn parallel<T: Send>(jobs: Vec<Box<dyn FnOnce() -> T + Send + '_>>) -> Vec<T> {
     let deadline = REQUEST_DEADLINE.with(|d| d.get());
@@ -269,6 +269,8 @@ fn run_with_timeout(command: &mut Command, timeout: Duration) -> Result<Output> 
     run_with_stdin(command, timeout, Stdio::null())
 }
 fn run_with_stdin(command: &mut Command, timeout: Duration, stdin: Stdio) -> Result<Output> {
+    let trace = std::env::var_os("GITTY_TRACE_PROCESS").is_some();
+    let launched = Instant::now();
     command
         .stdin(stdin)
         .stdout(Stdio::piped())
@@ -286,6 +288,7 @@ fn run_with_stdin(command: &mut Command, timeout: Duration, stdin: Stdio) -> Res
     let mut child = command
         .spawn()
         .map_err(|e| Error::new("processStart", e.to_string()))?;
+    let spawn_time = launched.elapsed();
     note_spawn();
     #[cfg(windows)]
     let job = match ProcessJob::attach(&child) {
@@ -366,6 +369,16 @@ fn run_with_stdin(command: &mut Command, timeout: Duration, stdin: Stdio) -> Res
         return Err(Error::new("outputLimit", "Command output exceeded 32 MiB"));
     }
     let status = status?;
+    if trace {
+        // Program only: command arguments/environments may contain credentials.
+        eprintln!(
+            "Gitty process {:?}: spawn {:?}, total {:?}, exit {:?}",
+            command.get_program(),
+            spawn_time,
+            launched.elapsed(),
+            status.code()
+        );
+    }
     Ok(Output {
         stdout,
         stderr,

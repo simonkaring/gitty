@@ -4,6 +4,7 @@
 //! every test returns immediately so ordinary runs stay hermetic.
 use crate::{
     dto::{RepositoryLocation, Result},
+    operation_dto::{GitAction, OperationRequest},
     remote_dto::{ActionOutput, RemoteAction},
     repository::{Repository, Service},
 };
@@ -135,7 +136,7 @@ impl Fixture {
 fn wsl_open_state_status_and_commit() {
     let Some(d) = distro() else { return };
     let tree = Tree::new(&d);
-    let f = Fixture::new(&tree, "repo with spaces 工作");
+    let f = Fixture::new(&tree, "repo with spaces 工作\nnext");
     let state = f.repo.state().unwrap();
     assert_eq!(state.session.root, f.path);
     assert_eq!(state.session.head_ref.as_deref(), Some("refs/heads/main"));
@@ -190,7 +191,15 @@ fn wsl_background_fetch_pull_and_push() {
     peer.remote(json!({"kind":"push"})).unwrap();
 
     let head = f.git(&["rev-parse", "HEAD"]);
-    f.remote(json!({"kind":"backgroundFetch"})).unwrap();
+    let start = Instant::now();
+    let (result, spawns) =
+        crate::process::count_spawns(|| f.remote(json!({"kind":"backgroundFetch"})));
+    result.unwrap();
+    eprintln!(
+        "WSL background fetch: {:?}, {spawns} processes",
+        start.elapsed()
+    );
+    assert!(spawns <= 9, "fetch launched {spawns} processes");
     assert_eq!(f.tracking(), upstream);
     // Background fetch never integrates.
     assert_eq!(f.git(&["rev-parse", "HEAD"]), head);
@@ -206,6 +215,50 @@ fn wsl_background_fetch_pull_and_push() {
         wsl(&d, &["git", "-C", &bare, "rev-parse", "refs/heads/main"]),
         local
     );
+}
+
+#[test]
+fn wsl_reset_origin_rechecks_review_and_preserves_untracked_work() {
+    let Some(d) = distro() else { return };
+    let tree = Tree::new(&d);
+    let f = Fixture::new(&tree, "reset");
+    let origin = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["update-ref", "refs/remotes/origin/main", &origin]);
+    f.write("file", "local commit\n");
+    f.commit("local");
+    f.write("file", "staged\n");
+    f.git(&["add", "file"]);
+    f.write("file", "unstaged\n");
+    f.write("untracked", "keep\n");
+    let snapshot = f.repo.snapshot().unwrap();
+    let request = || OperationRequest {
+        action: GitAction::ResetToOrigin {
+            branch: "refs/remotes/origin/main".into(),
+            expected_origin_oid: origin.clone(),
+        },
+        expected_head: snapshot.state.session.head.clone(),
+        expected_head_ref: snapshot.state.session.head_ref.clone(),
+        expected_operation: snapshot.operation.fingerprint.clone(),
+    };
+    f.write("file", "changed after review\n");
+    assert_eq!(
+        f.service
+            .run_operation(&f.handle, request(), None)
+            .unwrap_err()
+            .code,
+        "staleOperation"
+    );
+    assert_ne!(f.git(&["rev-parse", "HEAD"]), origin);
+    f.write("file", "unstaged\n");
+    let start = Instant::now();
+    let (result, spawns) =
+        crate::process::count_spawns(|| f.service.run_operation(&f.handle, request(), None));
+    let result = result.unwrap();
+    eprintln!("WSL reset: {:?}, {spawns} processes", start.elapsed());
+    assert_eq!(result.head.as_deref(), Some(origin.as_str()));
+    assert_eq!(f.git(&["show", ":file"]), "base");
+    assert_eq!(wsl(&d, &["cat", &format!("{}/file", f.path)]), "base");
+    assert_eq!(wsl(&d, &["cat", &format!("{}/untracked", f.path)]), "keep");
 }
 
 #[test]
@@ -231,6 +284,17 @@ fn wsl_refresh_timing() {
     let Some(d) = distro() else { return };
     let tree = Tree::new(&d);
     let f = Fixture::new(&tree, "timing");
+    let start = Instant::now();
+    let (opened, spawns) = crate::process::count_spawns(|| {
+        f.service.open(RepositoryLocation::Wsl {
+            distribution: d.clone(),
+            path: f.path.clone(),
+        })
+    });
+    let opened = opened.unwrap();
+    eprintln!("WSL open: {:?}, {spawns} processes", start.elapsed());
+    assert!(spawns <= 8, "open launched {spawns} processes");
+    f.service.close(&opened.session.handle).unwrap();
     for i in 0..20 {
         f.write(&format!("untracked-{i}"), "x\n");
     }
@@ -242,6 +306,9 @@ fn wsl_refresh_timing() {
     f.repo.status().unwrap();
     let status = start.elapsed();
     eprintln!("WSL refresh: state {state:?}, status {status:?} (20 untracked files)");
+    let start = Instant::now();
+    let (_, spawns) = crate::process::count_spawns(|| f.repo.snapshot().unwrap());
+    eprintln!("WSL snapshot: {:?}, {spawns} processes", start.elapsed());
 }
 
 /// Operation metadata is one `find` for a clean repository (it used to be a

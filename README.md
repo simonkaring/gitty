@@ -52,7 +52,7 @@ Run `npm run desktop`, choose **Open repository**, then use the native folder pi
 - **Compare commits:** select a commit as base and another as target, then swap direction if needed. The heading explains how the base tree becomes the target tree.
 - **Search/filter:** messages, authors/emails, full/prefix hashes, and reference labels across reachable history; optional branch, date, and literal-path scope. A full-height results list shows subjects, authors, dates, SHAs, and references, with literal text highlights. Select a result to inspect it without paging history, or use **Show in graph** to locate it. **Results / Graph** switches between the list and highlighted matches with nonmatching ancestry retained. Arrow keys and Home/End navigate results. Results are capped at 500 and explicitly labeled when truncated. A newer search cancels the one in flight, and search re-runs only when history (refs/HEAD) changes, not on working-tree edits.
 - **Refresh:** every five seconds while visible, on window focus, or manually. Coherence checks reject mixed history snapshots; selection and the viewport's commit/pixel anchor are preserved where available. No filesystem watcher is installed yet.
-- **Background fetch:** approximately every five minutes while a tab is active and the app is visible. Fetch updates the selected remote's remote-tracking branches and graph; it does not move local branches, merge, pull, push, prune, or import tags. Fetches requiring new credentials fail without showing an unsolicited prompt.
+- **Background fetch:** approximately every five minutes while a tab is active and the app is visible. Fetch updates the selected remote's remote-tracking branches and graph, including rewritten remote history; it does not move local branches, merge, pull, push, prune, or import tags. Fetches requiring new credentials fail without showing an unsolicited prompt.
 
 ## Repository tabs and action toolbar
 
@@ -264,6 +264,13 @@ npm run check:rust              # Requires Rust/Cargo
 npm run test:rust               # Real temporary repository integration tests
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 ```
+
+For slow desktop operations, set `$env:GITTY_TRACE_PROCESS="1"` in PowerShell
+before `npm run desktop`. The terminal prints each captured process's launch and
+total time plus mutation-lock waits, without arguments, stdin, or environment
+values. Remove the variable to disable tracing. On Windows, real WSL timing and
+safety tests can be run against temporary repositories with
+`$env:GITTY_WSL_TEST_DISTRO="Ubuntu"; cargo test --manifest-path src-tauri/Cargo.toml wsl_tests -- --nocapture --test-threads=1`.
 
 Testing is local-only for now; pushes and pull requests do not trigger GitHub Actions checks. Run `npm run build` before the Rust checks so the frontend assets are available. For native compilation, run `npm run tauri -- build --no-bundle` on the target platform. Local checks validate the host platform; Windows and Linux runtime behavior require testing on those platforms. Automated cross-platform checks can be introduced in Azure DevOps when needed. The signed-release GitHub workflow has been removed while the app is validated locally.
 

@@ -28,6 +28,9 @@ sources:
 checks HEAD/ref agreement, and rechecks the state fingerprint. It retries up to
 three times before `unstable`. This is a best-effort read across external
 changes, not a transactional filesystem snapshot.[^snapshot][^contract]
+Operation preflight builds its reviewed fingerprint from the same request-local
+state used for HEAD/ref validation. Index and all-ref fingerprint reads run
+concurrently; neither is omitted, and post-write operation/HEAD reads remain.[^snapshot]
 
 History generations pin concrete commit IDs and stream a walk with a replay
 spool. A cursor belongs to that walk; its generation is opaque, not a state
@@ -41,13 +44,17 @@ so a newer `repository_search` (or closing the session, or `repository_cancel_se
 cancels the in-flight one with the silent `cancelled` code, and results are hydrated
 by batched `cat-file --batch` rather than a process per result.[^history][^contract]
 On WSL, the operation-metadata part of a snapshot uses one `find` existence scan
-instead of one launch per file; that path awaits Windows/WSL runtime validation.[^snapshot][^contract]
+instead of one launch per file; the basic scan/snapshot path was exercised in
+real Ubuntu temporary repositories, not through the packaged GUI.[^snapshot][^contract]
 
 Automatic keep-visible IDs are filtered to the previous loaded history. After a
 confirmed amend, the old HEAD can be remapped to the returned OID before paging,
 only while that OID is the refreshed HEAD. Otherwise an unreachable old tip or
 inspector-only orphan could cause a full-history scan. Session checks prevent
 superseded asynchronous reads from publishing.[^loader][^tests]
+The pane defers its initial open to a cancellable microtask, so development
+StrictMode's synchronous effect replay does not launch a discarded session.
+Closing a pane still invalidates in-flight reads and closes late-opened handles.[^pane]
 
 After a branch-deletion result, the pane removes deleted or unverified target OIDs from its
 automatic selection/anchor keep-visible candidates before refreshing. Returned

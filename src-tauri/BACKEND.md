@@ -137,7 +137,8 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   carry verbatim (newline, carriage return, leading quote) or a batch Git rejects
   fall back to one no-index patch per file. The tracked patch and untracked hash,
   and the independent state reads, run concurrently because each process launch
-  costs about 100 ms through `wsl.exe`. Repository state also fingerprints remotes and shallow boundaries
+  has substantial, load-dependent overhead through `wsl.exe`. Repository state
+  also fingerprints remotes and shallow boundaries
   so deepening without moving refs invalidates the walk. Reads are best-effort across
   concurrent external changes; nested repository contents are not recursively hashed.
 - `repository_snapshot` returns repository state, working status and operation state
@@ -496,8 +497,14 @@ exactly-full final page is reported truncated); Bitbucket when the envelope has 
 
 - The native pane schedules a fetch of the selected/configured remote about every
   five minutes while active and visible. The backend's `backgroundFetch` action
-  uses an explicit `refs/heads/*:refs/remotes/<remote>/*` refspec with `--no-tags`
+  uses an explicit `+refs/heads/*:refs/remotes/<remote>/*` refspec with `--no-tags`
   and no pruning; it never moves local heads, checks out, merges, or rebases.
+  Explicit fetch and pull's fetch phase likewise allow non-fast-forward updates
+  only to remote-tracking refs so they follow rewritten remote history; pull's
+  selected integration mode and push's no-force safeguards remain unchanged.
+  Remote actions select the branch/remotes without the display-only ahead/behind
+  walk; fetch does not read branch merge configuration. Existing conflict, lock,
+  operation and target validation still applies.
   It intentionally bypasses `Service::mutate` (no Gitty mutation lock and no
   read-deadline wrapper): it only moves `refs/remotes/*`, relies on Git's own ref
   locks, and must not block local writes behind a slow network. Explicit
@@ -527,7 +534,9 @@ exactly-full final page is reported truncated); Bitbucket when the envelope has 
   bridge inherits SSH `BatchMode=yes` even though it sets `SSH_ASKPASS`;
   interactive SSH passphrase support is not established. Without the bridge,
   askpass remains disabled. Background fetch remains fully noninteractive. Failed
-  explicit actions explain this. No user credential is embedded in a Git argument;
+  explicit actions include conditional authentication guidance, not a diagnosis
+  that every WSL network failure is a credential problem. No user credential is
+  embedded in a Git argument;
   ad-hoc prompt answers are not retained, while connected account tokens remain
   in the OS credential store until disconnected.
 - The askpass and editor loopback bridges bound unauthenticated input: the token
@@ -835,12 +844,13 @@ concurrently created destinations.
 Real WSL tests (`src/wsl_tests.rs`) run on Windows when `GITTY_WSL_TEST_DISTRO`
 names a distribution with Git (`$env:GITTY_WSL_TEST_DISTRO="Ubuntu"; cargo test
 wsl_tests`). They create temporary repositories under `/tmp` inside the
-distribution and cover opening a path with spaces/Unicode, state, status and
+distribution and cover opening a path with spaces/Unicode/newlines, state, status and
 untracked-content fingerprints, stage/commit, index-lock detection, background
-fetch, pull and push against a local bare remote, and report refresh timing.
+fetch, pull and push against a local bare remote, reset review freshness and
+untracked-work preservation, and report open/fetch/snapshot/reset timing.
 Without the variable they return immediately. A test-only, per-thread process-launch
 counter (`process::count_spawns`, propagated into `process::parallel` workers) lets
-tests assert launch counts for search hydration and the WSL metadata scan.
+tests assert launch counts for search hydration, WSL open/fetch and the metadata scan.
 
 Windows Job Objects and the graphical picker require platform/UI
 integration testing; they are not exercised by the macOS unit test suite. Killing

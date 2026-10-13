@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { createRoot, type Root } from 'react-dom/client';
-import { act } from 'react';
+import { act, StrictMode } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { BUILTIN_THEMES } from '../model/themes';
 import { RepositoryPane } from './RepositoryPane';
@@ -47,12 +47,15 @@ afterEach(() => { vi.clearAllMocks(); });
 
 const calls = (name: string) => mocks.invoke.mock.calls.filter(([command]) => command === name);
 const props = { tabId: 't', location: { kind: 'native', path: '/repo' } as const, active: true, sidebarOpen: false, inspectorOpen: false, inspectorWidth: 400, sidebarWidth: 240, setInspectorWidth() {}, setSidebarWidth() {}, setInspectorOpen() {}, onIdentity() {}, onBusyChange() {}, onMeta() {} };
-async function mount() {
+async function mount(strict = false) {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const host = document.createElement('div'); document.body.append(host);
   const toasts = document.createElement('div'); document.body.append(toasts);
   const root: Root = createRoot(host);
-  const render = (active: boolean) => root.render(<ToastProvider value={toasts}><RepositoryPane {...props} active={active} /></ToastProvider>);
+  const render = (active: boolean) => {
+    const pane = <ToastProvider value={toasts}><RepositoryPane {...props} active={active} /></ToastProvider>;
+    root.render(strict ? <StrictMode>{pane}</StrictMode> : pane);
+  };
   await act(async () => { render(true); });
   await vi.waitFor(() => expect(host.querySelector('input[aria-label="Search full history"]')).not.toBeNull());
   const input = host.querySelector<HTMLInputElement>('input[aria-label="Search full history"]')!;
@@ -67,6 +70,16 @@ async function mount() {
   const header = () => host.querySelector('.search-results-header small')?.textContent;
   return { host, type, focus, settle, resolveWith, reject, header, setActive: (value: boolean) => act(async () => { render(value); }), cleanup: async () => { await act(async () => { root.unmount(); }); host.remove(); toasts.remove(); } };
 }
+
+it('opens only once under StrictMode and closes the installed session on unmount', async () => {
+  const t = await mount(true);
+  try {
+    expect(calls('repository_open')).toHaveLength(1);
+    expect(calls('repository_close')).toHaveLength(0);
+    expect(calls('repository_snapshot')).toHaveLength(1);
+  } finally { await t.cleanup(); }
+  expect(calls('repository_close')).toEqual([['repository_close', { handle: 'real-1' }]]);
+});
 
 it('cancels the in-flight search when the query changes and ignores its cancelled rejection', async () => {
   const t = await mount();

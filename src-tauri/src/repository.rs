@@ -201,9 +201,39 @@ impl Service {
                 "Close a repository before opening more than 32 sessions",
             ));
         }
-        let bare = string(&location, &["rev-parse", "--is-bare-repository"])? == "true";
+        // These fixed outputs share one discovery launch, especially important on WSL.
+        let discovery = string(
+            &location,
+            &[
+                "rev-parse",
+                "--is-bare-repository",
+                "--absolute-git-dir",
+                "--path-format=absolute",
+                "--git-common-dir",
+            ],
+        )?;
+        let fields: Vec<_> = discovery.lines().collect();
+        if !matches!(fields.first(), Some(&"true" | &"false")) {
+            return Err(Error::new(
+                "gitParse",
+                "Malformed repository discovery response",
+            ));
+        }
+        let bare = fields[0] == "true";
+        let (git_dir, common_dir) = if fields.len() == 3 {
+            (fields[1].to_string(), fields[2].to_string())
+        } else {
+            // Linux paths may contain newlines, making the combined output ambiguous.
+            (
+                string(&location, &["rev-parse", "--absolute-git-dir"])?,
+                string(
+                    &location,
+                    &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+                )?,
+            )
+        };
         let root = if bare {
-            string(&location, &["rev-parse", "--absolute-git-dir"])?
+            git_dir.clone()
         } else {
             string(&location, &["rev-parse", "--show-toplevel"])?
         };
@@ -212,11 +242,6 @@ impl Service {
                 *path = root.clone()
             }
         }
-        let git_dir = string(&location, &["rev-parse", "--absolute-git-dir"])?;
-        let common_dir = string(
-            &location,
-            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-        )?;
         // Reject promisor repositories rather than letting older Git versions implicitly fetch missing objects.
         let partial = process::git(
             &location,
@@ -309,7 +334,11 @@ impl Service {
     ) -> Result<T> {
         let repo = self.repo(handle)?;
         let mutation = self.mutation_lock(&repo)?;
+        let waiting = std::time::Instant::now();
         let _guard = lock(&mutation)?;
+        if std::env::var_os("GITTY_TRACE_PROCESS").is_some() {
+            eprintln!("Gitty mutation lock wait: {:?}", waiting.elapsed());
+        }
         process::without_read_deadline(|| f(&repo))
     }
     pub fn stage(&self, handle: &str, paths: &[String]) -> Result<()> {
