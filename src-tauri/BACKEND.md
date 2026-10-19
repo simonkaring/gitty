@@ -1,6 +1,6 @@
 # Native repository service
 
-All commands in `src/model/repository.ts`, `src/model/clone.ts`, and `src/model/operations.ts` are registered by `src/lib.rs`. The
+The commands described by `src/model/repository.ts`, `src/model/clone.ts`, `src/model/operations.ts`, and `src/model/worktrees.ts` are registered by `src/lib.rs`. The
 Rust DTOs serialize the same camelCase fields and `{code, message}` errors.
 `backend_info` remains available and reports native capability.
 
@@ -194,6 +194,53 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
 - The folder picker uses `rfd`'s native asynchronous dialog. WSL discovery decodes
   UTF-16 output; browsing invokes Linux `find` directly, NUL-delimited, one directory
   level at a time. WSL requires Windows and Linux Git, `env`, and GNU `find`.
+
+## Worktree management
+
+- `repository_worktrees({handle}) -> Worktree[]`, with `{path, head, branch, bare, main, locked, prunable}`. `head`/`branch` are nullable; `locked` and `prunable` are nullable reason strings (an empty string still means locked/prunable). Reads use `git worktree list --porcelain -z --expire now`; native existing roots are canonicalized. Detached/unborn/bare entries remain representable.
+- `repository_worktree_review({handle, request}) -> {token, preview}`.
+- `repository_worktree_execute({handle, request, token}) -> void`.
+
+`request` has `{action, path, destination, branch, startPoint, reason, force}`;
+`action` is `create`, `move`, `remove`, `lock`, `unlock`, or `prune`. For create,
+`branch` is an optional new branch name, `startPoint` is a required existing
+branch/commit, and an omitted new branch delegates checkout/detachment to Git.
+Create/move require a new, absolute destination; fields are bounded at 4096 bytes
+and reject NUL. Native WSL UNC destinations are refused. WSL retains its original
+distribution and Linux paths; destination checks use shell-free Linux `test`.
+
+The review token pins the request and worktree list; create also pins the resolved
+starting commit, move/remove pin the target's content-aware status, removal also
+pins ignored-file hashes, and prune pins its exact dry-run output. Execution reconstructs this
+evidence under the common-directory mutation lock. This rejects already-visible
+external changes but is not an atomic transaction with external Git/filesystem
+actors. Destination and content checks fail closed on errors or process limits.
+
+Main/bare entries cannot be moved, removed, locked, or unlocked here. Locked
+targets must be explicitly unlocked before move/remove; force never bypasses a
+lock. Normal remove refuses dirty status; force uses one `--force` and leaves
+Git's additional protections (including unsupported submodule cases) intact.
+Removal also refuses untracked/ignored nested-repository directory entries whose
+contents cannot be represented by the status fingerprint.
+Both modes may delete ignored files and retain the branch. The UI separately
+acknowledges forced removal after capture; toggling force invalidates capture.
+
+Move/remove refuse any target with an open service session. Prune uses
+`--dry-run --verbose --expire now` for review, includes stdout and stderr, and
+refuses open prunable targets before execution. Locked registrations are retained
+by Git. Prune deletes registration metadata, not working folders or branches.
+Session publication now shares the repository mutation lock to avoid racing
+move/removal; a queued mutation rechecks that its handle remains open after
+acquiring that lock. Successful moves reconcile recent paths to the actual Git
+destination; removal/prune remove obsolete recents. There can be a post-write
+reconciliation failure: refresh and review, never automatically retry.
+
+The pane uses the existing single-attempt operation/refresh lifecycle. Sidebar
+lists refresh on pane revision/activation, focus, explicit refresh, and in-app
+worktree-change notifications. Opening reuses existing canonical tab identity.
+The demo lists only its synthetic main worktree and disables management. Host
+real-Git regressions are in `worktrees.rs`; dialog tests mock IPC. Windows/WSL
+runtime coverage is not implied by host tests.
 
 ## Write semantics
 

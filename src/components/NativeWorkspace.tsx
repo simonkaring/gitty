@@ -161,6 +161,7 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
           sidebarOpen={sidebarOpen} inspectorOpen={inspectorOpen} inspectorWidth={inspectorWidth} sidebarWidth={sidebarWidth}
           setInspectorWidth={setInspectorWidth} setSidebarWidth={setSidebarWidth} setInspectorOpen={setInspectorOpen}
           onIdentity={handleIdentity} onBusyChange={handleBusyChange} onMeta={handleMeta}
+          onOpenWorktree={openLocation}
           paletteOpen={paletteOpen} onOpenPalette={() => setPaletteOpen(true)} onClosePalette={() => setPaletteOpen(false)} workspaceCommands={workspaceCommands} />}</ErrorBoundary>
       </div>)}
     {!activeTab?.location && paletteOpen && <CommandPalette commands={workspaceCommands} onClose={() => setPaletteOpen(false)} />}

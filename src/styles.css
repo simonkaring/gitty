@@ -3906,6 +3906,15 @@ button[data-danger='true']:hover:not(:disabled) {
   }
 }
 
+.worktrees-section { padding: var(--sp-2) 0; border-bottom: 1px solid var(--border); }
+.worktrees-heading { display: flex; align-items: center; gap: 6px; padding: 0 var(--sp-3) var(--sp-2); font-size: var(--fs-xs); }
+.worktree-row .ref-item > span { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; }
+.worktree-name, .worktree-row small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.worktree-row small { color: var(--muted); font-size: var(--fs-2xs); }
+.worktree-prune { margin: 6px var(--sp-3) 0; font-size: var(--fs-2xs); }
+.worktree-path, .worktree-preview { overflow-wrap: anywhere; white-space: pre-wrap; }
+.worktree-preview { max-height: 240px; overflow: auto; font-size: var(--fs-xs); }
+
 /* Sidebar: groups animate open, rows slide on hover, current branch is highlighted. */
 .reference-group::details-content {
   block-size: 0;

@@ -15,6 +15,7 @@ interface NativeSidebarProps {
   onAction: (context: ActionContext) => void;
   folderOpen: Record<string, boolean>;
   onFolderOpen: (key: string, open: boolean) => void;
+  worktrees?: ReactNode;
 }
 
 const GROUPS = [
@@ -49,7 +50,7 @@ export function buildRefTree(refs: RepositoryState['refs'], prefix: string, remo
   return root;
 }
 
-export function NativeSidebar({ state, commits, filters, busy, reveal, switchBranch, openMenu, onAction, folderOpen, onFolderOpen }: NativeSidebarProps) {
+export function NativeSidebar({ state, commits, filters, busy, reveal, switchBranch, openMenu, onAction, folderOpen, onFolderOpen, worktrees }: NativeSidebarProps) {
   const { session } = state;
   return <aside className="sidebar native-sidebar" aria-label="Repository references">
     <div className="workspace-label"><FolderGit2 size={22} /><span>{session.name}<small title={session.root}>{session.root}</small></span></div>
@@ -62,6 +63,7 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
     </div>
     <div className="sidebar-divider" />
     {filters}
+    {worktrees}
     {GROUPS.map(({ kind, label, Icon }) => {
       const refs = state.refs.filter(ref => ref.kind === kind && !(kind === 'remote' && ref.fullName === 'refs/remotes/origin/HEAD'));
       const prefix = kind === 'local' ? 'refs/heads/' : kind === 'remote' ? 'refs/remotes/' : 'refs/tags/';

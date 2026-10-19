@@ -35,6 +35,7 @@ import type { BranchDeleteExecution, BranchDeleteRequest, BranchDeleteResult, Br
 import { BranchDeleteDialog } from './BranchDeleteDialog';
 import { SearchResults } from './SearchResults';
 import { OriginResetDialog } from './OriginResetDialog';
+import { Worktrees } from './Worktrees';
 
 const GROUP_TONE = { staged: 'green', unstaged: 'amber', untracked: 'accent', conflict: 'red' } as const;
 
@@ -67,9 +68,10 @@ export interface RepositoryPaneProps {
   onClosePalette?: () => void;
   onOpenPalette?: () => void;
   workspaceCommands?: PaletteCommand[];
+  onOpenWorktree?: (location: RepositoryLocation) => void;
 }
 
-export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, onClosePalette = () => {}, workspaceCommands = [], tabId, location, active, sidebarOpen, inspectorOpen, inspectorWidth, sidebarWidth, setInspectorWidth, setSidebarWidth, setInspectorOpen, onIdentity, onBusyChange, onMeta }: RepositoryPaneProps) {
+export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, onClosePalette = () => {}, workspaceCommands = [], onOpenWorktree = () => {}, tabId, location, active, sidebarOpen, inspectorOpen, inspectorWidth, sidebarWidth, setInspectorWidth, setSidebarWidth, setInspectorOpen, onIdentity, onBusyChange, onMeta }: RepositoryPaneProps) {
   const { theme, settings } = useSettings();
   const [scale, changeScale] = useScale();
   const stepScale = (dir: number) => changeScale(SCALES[Math.min(SCALES.length - 1, Math.max(0, SCALES.indexOf(scale as typeof SCALES[number]) + dir))]);
@@ -656,7 +658,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
         {!error && Array.from({ length: 12 }, (_, i) => <div key={i} className="skeleton-row" aria-hidden="true" style={{ animationDelay: `${i * 60}ms` }}><span className="skeleton-node" style={{ marginLeft: `${[0, 18, 0, 36, 18, 0][i % 6]}px` }} /><span className="skeleton" style={{ width: `${40 + ((i * 37) % 45)}%` }} /><span className="skeleton" style={{ width: 70 }} /></div>)}
       </div>
     </main> : <main className="workspace">
-        {sidebarOpen && <><NativeSidebar state={state} commits={commits} filters={filters} busy={busy} reveal={reveal} switchBranch={ref => void switchBranch(ref)} openMenu={openMenu} onAction={setActionContext} folderOpen={folderOpen} onFolderOpen={(key, open) => setFolderOpen(current => ({ ...current, [key]: open }))} /><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
+        {sidebarOpen && <><NativeSidebar state={state} commits={commits} filters={filters} busy={busy} reveal={reveal} switchBranch={ref => void switchBranch(ref)} openMenu={openMenu} onAction={setActionContext} folderOpen={folderOpen} onFolderOpen={(key, open) => setFolderOpen(current => ({ ...current, [key]: open }))} worktrees={<Worktrees session={state.session} revision={revision} active={active} busy={mutationBusy || mutationBlocked} onOpen={onOpenWorktree} onWrite={operationWrite} />} /><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
       <div className="workspace-main">
         {!sidebarOpen && filters}
         <div className="history-workspace">

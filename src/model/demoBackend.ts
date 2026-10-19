@@ -64,6 +64,8 @@ export async function demoInvoke(command: string, args: Record<string, unknown>)
       return state(load(match.name));
     }
     case 'repository_state': return state(r());
+    case 'repository_worktrees': { const session = state(r()).session; return [{ path: session.root, head: session.head, branch: session.headRef, bare: false, main: true, locked: null, prunable: null }]; }
+    case 'repository_worktree_review': case 'repository_worktree_execute': return unsupported('worktree management');
     case 'repository_operation_state': return demoOperation;
     case 'repository_snapshot': return { state: state(r()), status: demoStatus(r().files, r().head), operation: demoOperation };
     case 'repository_branch_relation': return [1, 0];

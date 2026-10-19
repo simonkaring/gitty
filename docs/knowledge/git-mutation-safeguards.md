@@ -116,6 +116,11 @@ an ambiguous commit.” These are source pointers, not a report of a test run.
 Related: [refresh coherence](snapshot-and-refresh-coherence.md) and
 [verification scope](demo-and-native-verification.md).
 
+[Worktree management](worktree-management.md) adds reviewed create/move/remove,
+lock/unlock, and prune. Move/remove refuse open targets and require explicit
+unlocking; forced removal has separate data-loss acknowledgement. Session
+publication shares the mutation lock, and queued writes recheck handle validity.
+
 [^contract]: Detailed backend semantics.
 [^locking]: `Service::mutation_lock` and `Service::mutate`.
 [^writes]: Ordinary mutation validation and outcome handling.

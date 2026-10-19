@@ -276,6 +276,9 @@ impl Service {
             history: Mutex::new(History::default()),
             search: Mutex::new(None),
         };
+        // Opening and publishing a session must not race worktree move/removal.
+        let mutation = self.mutation_lock(&repo)?;
+        let _mutation_guard = lock(&mutation)?;
         let state = repo.state()?;
         // Only recent-file updates serialize with one another; discovery and every
         // Git subprocess above run without holding the session registry lock.
@@ -308,8 +311,67 @@ impl Service {
             .cloned()
             .ok_or_else(|| Error::new("invalidHandle", "Repository session is closed or unknown"))
     }
-    /// Distinct repositories must not share a lock, and the same repository opened
-    /// twice — or through a linked worktree — must.
+    /// Refuse invalidating a worktree still owned by an open session.
+    pub(crate) fn require_closed_worktree(&self, repo: &Repository, path: &str) -> Result<()> {
+        let mut location = repo.session.location.clone();
+        match &mut location {
+            RepositoryLocation::Native { path: p } | RepositoryLocation::Wsl { path: p, .. } => {
+                *p = path.into()
+            }
+        }
+        let locations: Vec<_> = lock(&self.repositories)?
+            .values()
+            .map(|other| other.session.location.clone())
+            .collect();
+        if locations
+            .iter()
+            .any(|other| crate::worktrees::same_location(other, &location))
+        {
+            return Err(Error::new(
+                "worktreeOpen",
+                "Close this worktree’s tab before moving or removing it",
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn relocate_recent_worktree(
+        &self,
+        from: &RepositoryLocation,
+        to: Option<RepositoryLocation>,
+    ) -> Result<()> {
+        let _guard = lock(&self.recent_lock)?;
+        let mut recent = self.read_recent()?;
+        for entry in &mut recent {
+            if crate::worktrees::same_location(entry, from) {
+                if let Some(to) = &to {
+                    *entry = to.clone();
+                }
+            }
+        }
+        if to.is_none() {
+            recent.retain(|entry| !crate::worktrees::same_location(entry, from));
+        }
+        let mut seen = Vec::new();
+        recent.retain(|entry| {
+            if seen.contains(entry) {
+                false
+            } else {
+                seen.push(entry.clone());
+                true
+            }
+        });
+        std::fs::create_dir_all(self.recent_path.parent().unwrap())?;
+        let mut tmp = tempfile::NamedTempFile::new_in(self.recent_path.parent().unwrap())?;
+        tmp.write_all(
+            &serde_json::to_vec_pretty(&recent)
+                .map_err(|e| Error::new("recentData", e.to_string()))?,
+        )?;
+        tmp.as_file().sync_all()?;
+        tmp.persist(&self.recent_path)
+            .map_err(|e| Error::from(e.error))?;
+        Ok(())
+    }
+    /// Distinct repositories must not share a lock; linked worktrees must.
     fn mutation_lock(&self, repo: &Repository) -> Result<Arc<Mutex<()>>> {
         let key = match &repo.session.location {
             RepositoryLocation::Native { .. } => format!("native\0{}", repo.session.common_dir),
@@ -336,6 +398,7 @@ impl Service {
         let mutation = self.mutation_lock(&repo)?;
         let waiting = std::time::Instant::now();
         let _guard = lock(&mutation)?;
+        self.repo(handle)?;
         if std::env::var_os("GITTY_TRACE_PROCESS").is_some() {
             eprintln!("Gitty mutation lock wait: {:?}", waiting.elapsed());
         }
@@ -485,6 +548,22 @@ fn search_superseded() -> Error {
     Error::new("cancelled", "Search superseded")
 }
 impl Repository {
+    /// Unregistered read-only view for reviewing a sibling worktree's status.
+    pub(crate) fn worktree_view(&self, root: &str) -> Self {
+        let mut session = self.session.clone();
+        session.root = root.into();
+        session.bare = false;
+        match &mut session.location {
+            RepositoryLocation::Native { path } | RepositoryLocation::Wsl { path, .. } => {
+                *path = root.into()
+            }
+        }
+        Self {
+            session,
+            history: Mutex::new(History::default()),
+            search: Mutex::new(None),
+        }
+    }
     /// Cancels the in-flight search of this session, if any.
     pub fn cancel_search(&self) {
         let flag = self.search.lock().ok().and_then(|mut slot| slot.take());
@@ -744,7 +823,7 @@ impl Repository {
     /// whole set rather than a process per file. Names that the line protocol
     /// cannot carry verbatim, or a batch Git refuses (a dangling symlink, a file
     /// that vanished), fall back to one no-index patch per file.
-    fn untracked_content_hash(&self, paths: &[&str]) -> Result<u64> {
+    pub(crate) fn untracked_content_hash(&self, paths: &[&str]) -> Result<u64> {
         let mut hash = DefaultHasher::new();
         // Git reports untracked embedded repositories as a single directory even
         // with -uall; neither a blob hash nor a file patch can represent one.

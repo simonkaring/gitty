@@ -35,6 +35,7 @@ beforeEach(() => {
     if (command === 'repository_history') return { commits: ['local', 'origin'].map(id => ({ id, parents: [], subject: id, author: 'Ada', email: 'ada@example.com', timestamp: 1 })), cursor: null, generation: 'g', shallow: false };
     if (command === 'repository_commit') return { id: 'local', parents: [], subject: 'local', body: '', author: 'Ada', email: 'ada@example.com', timestamp: 1 };
     if (command === 'repository_diff_files') return [];
+    if (command === 'repository_worktrees') return [];
     if (command === 'repository_remote_action') return { output: '' };
     return undefined;
   });

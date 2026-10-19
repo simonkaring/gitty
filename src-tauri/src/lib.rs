@@ -29,6 +29,7 @@ mod repository;
 mod stash;
 mod stream;
 mod worktree_files;
+mod worktrees;
 mod wsl;
 
 use clone_dto::*;
@@ -41,6 +42,34 @@ use tauri::{Emitter, Manager};
 
 type Shared = Arc<Service>;
 type Accounts = Arc<provider_accounts::AccountStore>;
+
+#[tauri::command]
+async fn repository_worktrees(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+) -> Result<Vec<worktrees::Worktree>> {
+    with_service(state, move |s| s.repo(&handle)?.worktrees()).await
+}
+#[tauri::command]
+async fn repository_worktree_review(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    request: worktrees::WorktreeRequest,
+) -> Result<worktrees::WorktreeReview> {
+    with_service(state, move |s| s.repo(&handle)?.worktree_review(&request)).await
+}
+#[tauri::command]
+async fn repository_worktree_execute(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    request: worktrees::WorktreeRequest,
+    token: String,
+) -> Result<()> {
+    with_service(state, move |s| {
+        s.worktree_execute(&handle, &request, &token)
+    })
+    .await
+}
 
 #[tauri::command]
 async fn list_provider_accounts(
@@ -673,6 +702,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            repository_worktrees,
+            repository_worktree_review,
+            repository_worktree_execute,
             app_window_button_layout,
             app_start_dragging,
             backend_info,
