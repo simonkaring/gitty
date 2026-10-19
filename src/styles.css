@@ -1158,18 +1158,20 @@ button[data-danger='true']:hover:not(:disabled) {
   padding: 0 12px 12px;
 }
 .filter-primary {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 .filter-primary .search-field {
-  grid-column: 1 / -1;
+  flex: 1 1 100%;
 }
 .filter-primary select {
-  width: 100%;
+  flex: 1 1 130px;
+  width: auto;
   height: var(--h-control);
   font-size: var(--fs-sm);
-  padding-inline: 8px 20px;
+  padding: 0 20px 0 8px;
+  line-height: normal;
   text-overflow: ellipsis;
 }
 .filter-secondary {
