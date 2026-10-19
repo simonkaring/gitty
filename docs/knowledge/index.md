@@ -9,7 +9,7 @@ okf_version: "0.2"
 - [Native and WSL boundaries](native-and-wsl-boundaries.md) - Where Git and filesystem work execute and which platform capabilities differ.
 - [Repository cloning and accounts](repository-cloning-and-accounts.md) - Connected-account repository browsing, clone credential scope, and native/WSL limits.
 - [History avatar preferences](history-avatar-preferences.md) - Persisted author avatar choices and optional avatar nodes in the history graph.
-- [History column sizing](history-column-sizing.md) - History column resizing, initial message fill, and graph alignment after reordering.
+- [History column sizing](history-column-sizing.md) - History column resizing, initial message fill, graph alignment after reordering, and responsive pane stacking.
 - [Repository tab ordering](repository-tab-ordering.md) - Drag and keyboard tab reordering, active identity, and persisted repository order.
 - [Worktree management](worktree-management.md) - Sidebar discovery, reviewed worktree mutations, and open-session safeguards.
 - [Action notifications](action-notifications.md) - Remote and stash success summaries and merge-work recovery notices in the bottom-left toast region.

@@ -50,9 +50,20 @@ try {
   await screenshot(demo, 'gitty-history-dark');
   await demo.setViewportSize({ width: 390, height: 844 });
   await demo.getByRole('button', { name: 'Toggle references sidebar' }).click();
-  // At this width the working-changes inspector (still open) covers the history, so there is nothing to click first.
+  // Narrow windows stack open panes in normal flow: the working-changes inspector sits below the
+  // history instead of covering it, so both the graph and the composer stay reachable.
+  const narrow = await demo.evaluate(() => {
+    const rect = selector => document.querySelector(selector).getBoundingClientRect();
+    const visible = (a, b) => Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+    const workspace = rect('.workspace'), history = rect('.history-pane'), inspector = rect('.working-inspector-sidebar');
+    return { historyHeight: history.height, historyVisible: visible(history, workspace), separated: history.bottom <= inspector.top + 1 };
+  });
+  assert.ok(narrow.historyHeight >= 150 && narrow.historyVisible >= 120, `narrow layout keeps history visibly usable (${JSON.stringify(narrow)})`);
+  assert.equal(narrow.separated, true, 'narrow layout stacks the inspector below the history');
   await screenshot(demo, 'gitty-working-mobile');
   assert.equal(await demo.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  // The stacked composer must be reachable with a real click, not just scriptable fill.
+  await demo.getByRole('textbox', { name: /Summary/ }).click();
   await demo.getByRole('textbox', { name: /Summary/ }).fill('Mobile draft');
   await demo.close();
 

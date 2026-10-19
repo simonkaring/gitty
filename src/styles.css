@@ -503,6 +503,8 @@ button[data-danger='true']:hover:not(:disabled) {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* Container queries read the zoom-adjusted layout width, unlike media queries. */
+  container: app / inline-size;
 }
 .titlebar {
   height: 56px;
@@ -896,7 +898,8 @@ button[data-danger='true']:hover:not(:disabled) {
    Sidebar (native and demo)
    ========================================================================== */
 .sidebar {
-  width: var(--sidebar-width);
+  /* Keep at least 300px for history when an inspector is open, however wide the sidebar was saved. */
+  width: clamp(210px, calc(100vw / var(--zoom, 1) - 560px), var(--sidebar-width));
   flex-shrink: 0;
   background: var(--sidebar);
   display: flex;
@@ -2512,8 +2515,8 @@ button[data-danger='true']:hover:not(:disabled) {
    Working changes (sidebar inspector and full workspace)
    ========================================================================== */
 .native-shell {
-  /* Keep at least 480px for history and diffs beside the sidebar at intermediate window widths, however wide the inspector was dragged. */
-  --inspector-fit: min(var(--inspector-width), max(300px, calc(100vw / var(--zoom, 1) - var(--sidebar-space, 0px) - 480px)));
+  /* Keep at least 320px for history and diffs beside the sidebar, however wide the inspector was dragged. */
+  --inspector-fit: min(var(--inspector-width), max(260px, calc(100vw / var(--zoom, 1) - var(--sidebar-space, 0px) - 320px)));
 }
 .working-inspector-sidebar {
   width: var(--inspector-fit, var(--inspector-width));
@@ -4738,6 +4741,66 @@ dialog[open]::backdrop {
 /* ==========================================================================
    Responsive and accessibility overrides (keep last)
    ========================================================================== */
+/* Width decisions use a container query so zoomed-out/zoomed-in windows stack at
+   the same usable content width as a window of that physical size. */
+@container app (max-width: 820px) {
+  .workspace {
+    flex-direction: column;
+    /* Panes keep their own height and the whole workspace scrolls, so a short window
+       never crushes the history into a few pixels or nests a second scroller. */
+    overflow-y: auto;
+  }
+  .sidebar {
+    width: 100%;
+    flex: 0 0 auto;
+    /* Never eats more than 40% of the visible workspace; the sidebar scrolls itself. */
+    max-height: min(calc(32vh / var(--zoom, 1)), 300px, 40%);
+    border-right: 0;
+    border-bottom: 1px solid var(--border-strong);
+    box-shadow: none;
+  }
+  .pane-resizer {
+    display: none;
+  }
+  .workspace-main {
+    flex: 1 0 auto;
+    /* CSS-space floor: these boxes must fit their CSS-sized controls, so they do not scale with zoom. */
+    min-height: 240px;
+  }
+  .history-workspace {
+    flex: 0 0 auto;
+    flex-direction: column;
+    overflow: visible;
+  }
+  .history-workspace > .history-pane,
+  .history-workspace > .diff-view-pane {
+    flex: 0 0 auto;
+    height: 240px;
+    min-height: 240px;
+  }
+  /* A definite, bounded height makes the stacked inspector's internal scrollers
+     (file list, composer body) resolve against it instead of collapsing. The
+     viewport-relative cap follows zoom, but the minimum stays in CSS space so the
+     CSS-sized composer controls always fit. */
+  .inspector,
+  .native-inspector,
+  .working-inspector,
+  .working-inspector-sidebar {
+    position: static;
+    flex: 0 0 auto;
+    width: 100% !important;
+    height: min(calc(70vh / var(--zoom, 1)), 460px);
+    min-height: 320px;
+    max-height: none;
+    border-left: 0;
+    border-top: 1px solid var(--border-strong);
+    box-shadow: none;
+  }
+  /* Keep the composer's Summary field usable instead of collapsing to a few pixels. */
+  .commit-composer:not(.is-collapsed) {
+    min-height: 140px;
+  }
+}
 @media (max-height: 560px) {
   .working-files-list {
     min-height: 56px;
@@ -4749,24 +4812,6 @@ dialog[open]::backdrop {
   }
 }
 @media (max-width: 1100px) {
-  .sidebar {
-    position: absolute;
-    z-index: 10;
-    top: 0;
-    bottom: 0;
-    width: 260px;
-    box-shadow: var(--shadow);
-    border-right: 1px solid var(--border-strong);
-  }
-  .sidebar + .pane-resizer {
-    display: none;
-  }
-  .native-inspector,
-  .inspector,
-  .working-inspector,
-  .working-inspector-sidebar {
-    width: min(var(--inspector-width), 42vw) !important;
-  }
   .native-actions > .secondary-button {
     padding-inline: 12px;
   }
@@ -4789,22 +4834,6 @@ dialog[open]::backdrop {
   .toolbar-center {
     flex-wrap: wrap;
     order: -1;
-  }
-  .inspector,
-  .native-inspector,
-  .working-inspector,
-  .working-inspector-sidebar {
-    position: absolute;
-    right: 0;
-    top: 0;
-    bottom: 0;
-    z-index: 8;
-    width: min(480px, 100%) !important;
-    border-left: 1px solid var(--border-strong);
-    box-shadow: var(--shadow);
-  }
-  .pane-resizer {
-    display: none;
   }
   .titlebar {
     height: auto;
