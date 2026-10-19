@@ -34,11 +34,12 @@ describe('default remote selection', () => {
 
 describe('stash ordering', () => {
   it('sorts by the numeric stash index regardless of input order', () => {
-    const entries = [{ oid: 'b', selector: 'stash@{2}', message: 'two' }, { oid: 'a', selector: 'stash@{0}', message: 'zero' }, { oid: 'c', selector: 'stash@{1}', message: 'one' }];
+    const entry = (oid: string, selector: string, message: string) => ({ oid, selector, message, parents: [], author: '', email: '', timestamp: 0 });
+    const entries = [entry('b', 'stash@{2}', 'two'), entry('a', 'stash@{0}', 'zero'), entry('c', 'stash@{1}', 'one')];
     expect(sortStashes(entries).map(e => e.oid)).toEqual(['a', 'c', 'b']);
   });
   it('does not mutate the input array', () => {
-    const entries = [{ oid: 'b', selector: 'stash@{1}', message: '' }, { oid: 'a', selector: 'stash@{0}', message: '' }];
+    const entries = [{ oid: 'b', selector: 'stash@{1}', message: '', parents: [], author: '', email: '', timestamp: 0 }, { oid: 'a', selector: 'stash@{0}', message: '', parents: [], author: '', email: '', timestamp: 0 }];
     const copy = [...entries];
     sortStashes(entries);
     expect(entries).toEqual(copy);

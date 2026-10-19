@@ -66,6 +66,11 @@ commit/amend use full refresh. A failed post-write refresh blocks further
 mutations until recovery. Following an amended selection also checks that the
 user has not navigated since submission.[^pane]
 
+Stash display data is refreshed separately after every successful full refresh,
+even when history and status are unchanged. Stash-only changes from linked
+worktrees or external Git must not depend on the history fingerprint or trigger
+a history walk. See the [stash workflow](stash-workflow.md).[^pane]
+
 The working-changes sidebar reserves a single-line progress/success region so
 staging feedback does not displace its file list or composer. Staging and unstaging
 finish without success text, including hunk and line actions. A diff for the same

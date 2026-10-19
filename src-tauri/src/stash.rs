@@ -14,10 +14,24 @@ impl Service {
     }
 }
 
+/// Shared message rule for saving and editing: bounded and NUL-free so it can
+/// round-trip through the reflog and the IPC boundary.
+fn validate_stash_message(message: &str) -> Result<()> {
+    if message.len() > 4096 || message.contains('\0') {
+        return Err(Error::new(
+            "invalidRequest",
+            "Stash messages must be at most 4096 bytes without NUL.",
+        ));
+    }
+    Ok(())
+}
+
 impl Repository {
-    fn stash_selector(&self, oid: &str) -> Result<String> {
+    /// Resolve a stable object ID against the current stash reflog. Duplicate
+    /// entries (possible after external Git surgery) are ambiguous.
+    fn stash_entry(&self, oid: &str) -> Result<StashEntry> {
         let stashes = self.stashes()?;
-        let mut matching = stashes.iter().filter(|s| s.oid == oid);
+        let mut matching = stashes.into_iter().filter(|s| s.oid == oid);
         let entry = matching.next().ok_or_else(|| {
             Error::new(
                 "staleStash",
@@ -27,7 +41,11 @@ impl Repository {
         if matching.next().is_some() {
             return Err(Error::new("ambiguousStash", "This object occurs more than once in the stash list. Manage its duplicate entries in Git."));
         }
-        Ok(entry.selector.clone())
+        Ok(entry)
+    }
+
+    fn stash_selector(&self, oid: &str) -> Result<String> {
+        self.stash_entry(oid).map(|entry| entry.selector)
     }
 
     pub fn stashes(&self) -> Result<Vec<StashEntry>> {
@@ -40,7 +58,7 @@ impl Repository {
                 "--no-show-signature",
                 "--no-decorate",
                 "--no-color",
-                "--format=%H%x00%gd%x00%gs",
+                "--format=%H%x00%gd%x00%gs%x00%P%x00%an%x00%ae%x00%ct",
             ]),
         )?;
         let raw = process::text(bytes)?;
@@ -53,13 +71,43 @@ impl Repository {
             let message = fields
                 .next()
                 .ok_or_else(|| Error::new("gitParse", "Missing stash message"))?;
+            let parents = fields
+                .next()
+                .ok_or_else(|| Error::new("gitParse", "Missing stash parents"))?;
+            let author = fields
+                .next()
+                .ok_or_else(|| Error::new("gitParse", "Missing stash author"))?;
+            let email = fields
+                .next()
+                .ok_or_else(|| Error::new("gitParse", "Missing stash email"))?;
+            let timestamp = fields
+                .next()
+                .ok_or_else(|| Error::new("gitParse", "Missing stash timestamp"))?;
             if !matches!(oid.len(), 40 | 64) || !oid.bytes().all(|b| b.is_ascii_hexdigit()) {
                 return Err(Error::new("gitParse", "Invalid stash object ID"));
             }
+            let parents: Vec<String> = parents
+                .split(' ')
+                .filter(|p| !p.is_empty())
+                .map(String::from)
+                .collect();
+            if parents
+                .iter()
+                .any(|p| !matches!(p.len(), 40 | 64) || !p.bytes().all(|b| b.is_ascii_hexdigit()))
+            {
+                return Err(Error::new("gitParse", "Invalid stash parent object ID"));
+            }
+            let timestamp = timestamp
+                .parse::<i64>()
+                .map_err(|_| Error::new("gitParse", "Malformed stash timestamp"))?;
             entries.push(StashEntry {
                 oid: oid.into(),
                 selector: selector.into(),
                 message: message.into(),
+                parents,
+                author: author.into(),
+                email: email.into(),
+                timestamp,
             });
         }
         Ok(entries)
@@ -94,12 +142,7 @@ impl Repository {
                     a.push("--include-untracked".into());
                 }
                 if let Some(message) = message {
-                    if message.len() > 4096 || message.contains('\0') {
-                        return Err(Error::new(
-                            "invalidRequest",
-                            "Stash messages must be at most 4096 bytes without NUL.",
-                        ));
-                    }
+                    validate_stash_message(message)?;
                     a.extend(args(&["--message", message]));
                 }
                 a.push("--".into());
@@ -169,6 +212,85 @@ impl Repository {
                             .join("\n"),
                     });
                 }
+            }
+            StashAction::EditMessage { oid, message } => {
+                if !matches!(oid.len(), 40 | 64) || !oid.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(Error::new(
+                        "invalidStash",
+                        "Choose a stash by its full object ID.",
+                    ));
+                }
+                validate_stash_message(message)?;
+                let entry = self.stash_entry(oid)?;
+                if &entry.message == message {
+                    return Ok(ActionOutput {
+                        output: String::new(),
+                    });
+                }
+                // Pin the object before dropping its reflog entry: a crash or
+                // concurrent GC must not turn a message edit into lost work.
+                // Interrupted edits leave a discoverable recovery ref behind.
+                let recovery = format!("refs/gitty/stash-recovery/{}", crate::repository::token());
+                action_result(self.write(
+                    &args(&["update-ref", &recovery, oid, ""]),
+                    &[],
+                    &[],
+                    0,
+                )?)?;
+                let edited: Result<ActionOutput> = (|| {
+                    let dropped = action_result(self.write(
+                        &args(&["stash", "drop", "--", &entry.selector]),
+                        &[],
+                        &[],
+                        0,
+                    )?)?;
+                    let stored: Result<ActionOutput> = self
+                        .write(
+                            &args(&["stash", "store", "--message", message, oid]),
+                            &[],
+                            &[],
+                            0,
+                        )
+                        .and_then(action_result);
+                    match stored {
+                        Ok(stored) => Ok(ActionOutput {
+                            output: [dropped.output, stored.output]
+                                .into_iter()
+                                .filter(|s| !s.is_empty())
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                        }),
+                        Err(error) => {
+                            // The entry is already out of the reflog: put it back
+                            // under its original message so no work is lost.
+                            let restored: Result<ActionOutput> = self
+                                .write(
+                                    &args(&["stash", "store", "--message", &entry.message, oid]),
+                                    &[],
+                                    &[],
+                                    0,
+                                )
+                                .and_then(action_result);
+                            let detail = match restored {
+                            Ok(_) => format!("The stash message could not be changed, and the original stash entry was restored. {}", error.message),
+                            Err(_) => "The stash entry was removed from Stashes but could not be re-stored.".into(),
+                        };
+                            Err(Error::new("mutationUnverified", detail))
+                        }
+                    }
+                })();
+                let recovery_error = |error: Error| {
+                    Error::new("mutationUnverified", format!(
+                    "{} Saved work is protected by {recovery}. Inspect Stashes before restoring with: git stash store {recovery}. After verifying recovery, remove the backup with: git update-ref -d {recovery} {oid}", error.message
+                ))
+                };
+                let edited = edited.map_err(recovery_error)?;
+                action_result(
+                    self.write(&args(&["update-ref", "-d", &recovery, oid]), &[], &[], 0)
+                        .map_err(recovery_error)?,
+                )
+                .map_err(recovery_error)?;
+                return Ok(edited);
             }
         }
         action_result(self.write(&a, &[], &[], 0)?)

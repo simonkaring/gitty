@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { BUILTIN_THEMES } from '../model/themes';
 import { RepositoryPane } from './RepositoryPane';
 import { ToastProvider } from './ui';
+import type { StashEntry } from '../model/remote';
 
 // Real pane and model code; only the Tauri boundary is scripted. Covers the search lifecycle: a newer query cancels the
 // in-flight one (whose `cancelled` rejection is silent), and search re-runs only when history, not status, changes.
@@ -15,15 +16,15 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
 vi.mock('../model/settings', async importOriginal => ({ ...await importOriginal<typeof import('../model/settings')>(), useSettings: () => ({ theme: BUILTIN_THEMES[0], settings: { diffView: 'unified', commitProfiles: [], repositoryCommitProfiles: {} }, updateSettings: vi.fn(), openSettings: vi.fn() }) }));
 vi.mock('../graph/useGraphLayout', () => ({ useGraphLayout: (commits: unknown[]) => ({ layout: { nodes: [], edges: [], laneCount: 0, edgeMaxTo: new Int32Array() }, count: commits.length }) }));
-vi.mock('./RepositoryToolbar', () => ({ RepositoryToolbar: () => null }));
+vi.mock('./RepositoryToolbar', () => ({ RepositoryToolbar: ({ onRefresh }: { onRefresh: () => void }) => <button onClick={onRefresh}>Refresh</button> }));
 vi.mock('./NativeInspector', () => ({ NativeInspector: () => null }));
 vi.mock('./HistoryGraph', async () => {
   const { forwardRef, useImperativeHandle } = await import('react');
-  return { HistoryGraph: forwardRef((_props: unknown, ref) => { useImperativeHandle(ref, () => mocks.graph); return <div data-testid="graph" />; }) };
+  return { HistoryGraph: forwardRef(({ commits }: { commits: { id: string; stash?: boolean; subject: string }[] }, ref) => { useImperativeHandle(ref, () => mocks.graph); return <div data-testid="graph">{commits.filter(commit => commit.stash).map(commit => <span key={commit.id} data-stash={commit.id}>{commit.subject}</span>)}</div>; }) };
 });
 
 const none = { kind: 'none', label: '', current: null, incoming: null, step: null, total: null, conflicts: [], canContinue: false, canSkip: false, fingerprint: 'none' };
-const repo = { stateFingerprint: 'state-1', statusFingerprint: 'status-1' };
+const repo = { stateFingerprint: 'state-1', statusFingerprint: 'status-1', stashes: [] as StashEntry[] };
 const state = () => ({ session: { handle: 'real-1', location: { kind: 'native', path: '/repo' }, name: 'repo', root: '/repo', gitDir: '/repo/.git', commonDir: '/repo/.git', linkedWorktree: false, shallow: false, bare: false, head: 'h1', headRef: 'refs/heads/main' }, refs: [], remotes: [], fingerprint: repo.stateFingerprint });
 const status = () => ({ entries: [], head: 'h1', headRef: 'refs/heads/main', fingerprint: repo.statusFingerprint });
 const commit = { id: 'h1', parents: [], subject: 'Subject h1', author: 'Ada', email: 'ada@example.com', timestamp: 100 };
@@ -31,12 +32,13 @@ type Deferred = { query: { text: string }; resolve: (value: unknown) => void; re
 let searches: Deferred[] = [];
 
 beforeEach(() => {
-  repo.stateFingerprint = 'state-1'; repo.statusFingerprint = 'status-1'; searches = [];
+  repo.stateFingerprint = 'state-1'; repo.statusFingerprint = 'status-1'; repo.stashes = []; searches = [];
   mocks.invoke.mockImplementation((command, args = {}) => {
     switch (command) {
       case 'repository_open': case 'repository_state': return Promise.resolve(state());
       case 'repository_snapshot': return Promise.resolve({ state: state(), status: status(), operation: none });
       case 'repository_status': return Promise.resolve(status());
+      case 'repository_stashes': return Promise.resolve(repo.stashes);
       case 'repository_history': return Promise.resolve({ commits: [commit], cursor: null, generation: 'walk', shallow: false });
       case 'repository_search': return new Promise((resolve, reject) => { searches.push({ query: args.query as { text: string }, resolve, reject }); });
       default: return Promise.resolve(undefined);
@@ -79,6 +81,25 @@ it('opens only once under StrictMode and closes the installed session on unmount
     expect(calls('repository_snapshot')).toHaveLength(1);
   } finally { await t.cleanup(); }
   expect(calls('repository_close')).toEqual([['repository_close', { handle: 'real-1' }]]);
+});
+
+it('refreshes stash-only changes on manual refresh, focus, and tab activation without rewalking history', async () => {
+  const t = await mount();
+  const stash: StashEntry = { oid: 'a'.repeat(40), selector: 'stash@{0}', message: 'external stash', parents: ['h1'], author: 'Ada', email: 'ada@example.com', timestamp: 100 };
+  try {
+    const walks = calls('repository_history').length;
+    repo.stashes = [stash];
+    await act(async () => { [...t.host.querySelectorAll('button')].find(button => button.textContent === 'Refresh')!.click(); });
+    await vi.waitFor(() => expect(t.host.querySelector('[data-stash]')?.textContent).toBe('external stash'));
+    repo.stashes = [{ ...stash, message: 'external edit' }];
+    await t.focus();
+    await vi.waitFor(() => expect(t.host.querySelector('[data-stash]')?.textContent).toBe('external edit'));
+    await t.setActive(false);
+    repo.stashes = [];
+    await t.setActive(true);
+    await vi.waitFor(() => expect(t.host.querySelector('[data-stash]')).toBeNull());
+    expect(calls('repository_history')).toHaveLength(walks);
+  } finally { await t.cleanup(); }
 });
 
 it('cancels the in-flight search when the query changes and ignores its cancelled rejection', async () => {

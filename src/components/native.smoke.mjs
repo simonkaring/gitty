@@ -107,8 +107,9 @@ try {
   await page.getByRole('button', { name: /\/fixture$/ }).click();
   assert.equal(await page.locator('.repository-tab').count(), 1);
 
-  // Stash dialog reads the (empty) stash list without any network action.
-  await page.getByRole('button', { name: 'Stash…', exact: true }).click();
+  // The Stashes dialog is now reached through the command palette.
+  await page.getByRole('button', { name: 'Search commands', exact: true }).click();
+  await page.getByRole('option', { name: 'Manage stashes…', exact: true }).click();
   await page.getByText('No stashes.', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Close', exact: true }).click();
 

@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
-import { Check, ChevronRight, Folder, FolderOpen, FolderGit2, GitBranch, Globe2, Laptop, Tag } from 'lucide-react';
+import { Archive, Check, ChevronRight, Folder, FolderOpen, FolderGit2, GitBranch, Globe2, Laptop, Tag } from 'lucide-react';
 import type { CommitSummary, RepositoryState } from '../model/repository';
+import type { StashEntry } from '../model/remote';
 import { acceptsGraphDrop, graphDropAction, REF_DRAG_TYPE, COMMIT_DRAG_TYPE } from './HistoryGraph';
 import type { ActionContext } from './OperationDialog';
 
@@ -16,6 +17,8 @@ interface NativeSidebarProps {
   folderOpen: Record<string, boolean>;
   onFolderOpen: (key: string, open: boolean) => void;
   worktrees?: ReactNode;
+  stashes?: StashEntry[];
+  onStashMenu?: (stash: StashEntry, x: number, y: number, trigger: HTMLElement) => void;
 }
 
 const GROUPS = [
@@ -50,7 +53,7 @@ export function buildRefTree(refs: RepositoryState['refs'], prefix: string, remo
   return root;
 }
 
-export function NativeSidebar({ state, commits, filters, busy, reveal, switchBranch, openMenu, onAction, folderOpen, onFolderOpen, worktrees }: NativeSidebarProps) {
+export function NativeSidebar({ state, commits, filters, busy, reveal, switchBranch, openMenu, onAction, folderOpen, onFolderOpen, worktrees, stashes = [], onStashMenu }: NativeSidebarProps) {
   const { session } = state;
   return <aside className="sidebar native-sidebar" aria-label="Repository references">
     <div className="workspace-label"><FolderGit2 size={22} /><span>{session.name}<small title={session.root}>{session.root}</small></span></div>
@@ -64,6 +67,18 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
     <div className="sidebar-divider" />
     {filters}
     {worktrees}
+    <details className="reference-group" open>
+      <summary><Archive size={15} aria-hidden="true" />Stashes<span className="count">{stashes.length}</span></summary>
+      {stashes.length > 0 ? <div className="reference-tree">
+        {stashes.map(stash => <div className="ref-action-row" key={stash.oid} onContextMenu={event => { if (!onStashMenu) return; event.preventDefault(); onStashMenu(stash, event.clientX, event.clientY, event.currentTarget.querySelector('button')!); }}>
+          <button className="ref-item" title={`${stash.selector}: ${stash.message}`} aria-label={`Stash ${stash.selector}`} disabled={busy} onClick={() => reveal(stash.oid)}
+            onKeyDown={event => { if (onStashMenu && (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); onStashMenu(stash, rect.left, rect.bottom, event.currentTarget); } }}>
+            <Archive size={14} aria-hidden="true" /><span>{stash.message}</span>
+          </button>
+          {onStashMenu && <button className="icon-button sm" aria-label={`Actions for ${stash.selector}`} aria-haspopup="menu" onClick={event => { const rect = event.currentTarget.getBoundingClientRect(); onStashMenu(stash, rect.left, rect.bottom, event.currentTarget); }}>…</button>}
+        </div>)}
+      </div> : <p className="empty-category">No stashes</p>}
+    </details>
     {GROUPS.map(({ kind, label, Icon }) => {
       const refs = state.refs.filter(ref => ref.kind === kind && !(kind === 'remote' && ref.fullName === 'refs/remotes/origin/HEAD'));
       const prefix = kind === 'local' ? 'refs/heads/' : kind === 'remote' ? 'refs/remotes/' : 'refs/tags/';

@@ -16,7 +16,7 @@ beforeEach(async () => {
   document.body.append(host);
   root = createRoot(host);
   await act(async () => {
-    root.render(<RepositoryToolbar handle="repo" active revision={0} busy={false} pickCount={1} pickMode onCreateBranch={() => {}} onSwitchBranch={() => {}} onCherryPick={() => {}} onClearPick={() => {}} onStartPickMode={() => {}} onOpenStash={() => {}} onRefresh={() => {}} onWrite={async () => ''} notify={() => {}} />);
+    root.render(<RepositoryToolbar handle="repo" active revision={0} busy={false} pickCount={1} pickMode onCreateBranch={() => {}} onSwitchBranch={() => {}} onCherryPick={() => {}} onClearPick={() => {}} onStartPickMode={() => {}} onStashNow={() => {}} onPopStash={() => {}} canPopStash={false} dirty onRefresh={() => {}} onWrite={async () => ''} notify={() => {}} />);
   });
 });
 afterEach(async () => { await act(async () => { root.unmount(); }); host.remove(); });
@@ -56,4 +56,25 @@ it('skips disabled branch-menu items and closes on Escape returning focus to the
   expect(items().length).toBeGreaterThan(0);
   await key('Tab');
   expect(items()).toHaveLength(0);
+});
+
+it('stashes immediately and pops only an available stash', async () => {
+  const onStashNow = vi.fn(), onPopStash = vi.fn();
+  await act(async () => { root.unmount(); });
+  root = createRoot(host);
+  const render = (canPopStash: boolean, dirty: boolean) => <RepositoryToolbar handle="repo" active revision={0} busy={false} pickCount={0} pickMode={false} onCreateBranch={() => {}} onSwitchBranch={() => {}} onCherryPick={() => {}} onClearPick={() => {}} onStartPickMode={() => {}} onStashNow={onStashNow} onPopStash={onPopStash} canPopStash={canPopStash} dirty={dirty} onRefresh={() => {}} onWrite={async () => ''} notify={() => {}} />;
+  const button = (name: string) => [...host.querySelectorAll<HTMLButtonElement>('button')].find(value => value.textContent === name)!;
+  await act(async () => root.render(render(false, true)));
+  expect(button('Stash').disabled).toBe(false);
+  expect(button('Pop').disabled).toBe(true);
+  await act(async () => button('Stash').click());
+  expect(onStashNow).toHaveBeenCalledOnce();
+  await act(async () => root.render(render(true, false)));
+  expect(button('Stash').disabled).toBe(true);
+  expect(button('Pop').disabled).toBe(false);
+  await act(async () => button('Pop').click());
+  expect(onPopStash).toHaveBeenCalledOnce();
+  await act(async () => root.render(render(false, false)));
+  expect(button('Stash').disabled).toBe(true);
+  expect(button('Pop').disabled).toBe(true);
 });

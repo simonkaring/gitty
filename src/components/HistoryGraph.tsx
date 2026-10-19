@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Check, GitMerge, Globe2, Laptop, Settings as SettingsIcon, Tag } from 'lucide-react';
+import { Archive, Check, GitMerge, Globe2, Laptop, Settings as SettingsIcon, Tag } from 'lucide-react';
 import { indexEdges, laneX, LANE_WIDTH, ROW_HEIGHT, type GraphLayout } from '../graph/layout';
 import { assignBranchColors, branchName } from '../graph/branchColor';
 import { WORKING_ID } from '../model/native';
@@ -81,13 +81,14 @@ interface Props {
   headRef?: string | null;
   onActions?: (context: ActionContext) => void;
   onContextActions?: (context: ActionContext, x: number, y: number, trigger: HTMLElement) => void;
+  onStashActions?: (oid: string, x: number, y: number, trigger: HTMLElement) => void;
   onSwitchBranch?: (ref: string) => void;
   pickOrder?: string[];
   onTogglePick?: (oid: string) => void;
 }
 
 const MIN_GRAPH_WIDTH = laneX(2) + 14; // three lanes plus padding; also fits the "GRAPH" label
-export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, loaded, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onContextActions, onSwitchBranch, pickOrder, onTogglePick }, ref) {
+export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, loaded, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onContextActions, onStashActions, onSwitchBranch, pickOrder, onTogglePick }, ref) {
   const uid = useId();
   const { settings, updateSettings } = useSettings();
   const graphLaneWidth = settings.graphAuthorAvatars ? 30 : LANE_WIDTH;
@@ -241,6 +242,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     for (let row = start; row < Math.min(end, layout.nodes.length, commits.length); row++) {
       const node = layout.nodes[row];
       const commit = commits[row];
+      // Stash rows paint their Archive badge in the DOM instead.
+      if (commit.stash) continue;
       if (settings.graphAuthorAvatars && commit.id !== WORKING_ID) continue;
       const x = graphLaneX(node.lane), cy = y(row);
       const lane = palette[branchColors.rows[row] ?? node.lane % colors.length];
@@ -412,7 +415,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
             return;
           }
           if ((event.key === 'Enter' || event.key === ' ') && active) { event.preventDefault(); active.click(); return; }
-          if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && selectedId !== WORKING_ID && onContextActions) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); onContextActions({ oid: selectedId }, rect.left + 24, rect.top + 24, event.currentTarget); }
+          if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && commits[selectedIndex]?.stash && onStashActions) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); onStashActions(selectedId, rect.left + 24, rect.top + 24, event.currentTarget); }
+          else if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && selectedId !== WORKING_ID && onContextActions) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); onContextActions({ oid: selectedId }, rect.left + 24, rect.top + 24, event.currentTarget); }
           const moves: Record<string, number> = { ArrowDown: selectedIndex + 1, ArrowUp: selectedIndex - 1, Home: 0, End: loaded - 1, PageDown: selectedIndex + Math.floor(height / ROW_HEIGHT), PageUp: selectedIndex - Math.floor(height / ROW_HEIGHT) };
           if (event.key in moves) { event.preventDefault(); setActiveControl(null); navigate(moves[event.key]); }
           if (event.key === 'Enter') { event.preventDefault(); onOpenDetails(); }
@@ -428,14 +432,14 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
             const controls: RowControls = { n: 0 };
             return <div key={commit.id} id={`${uid}-commit-${commit.id}`} role="option" aria-selected={commit.id === selectedId}
               aria-posinset={row + 1} aria-setsize={commits.length}
-              aria-label={`${commit.subject}, ${commit.author}, ${commit.id.slice(0, 7)}${commit.parents.length > 1 ? ', merge commit' : ''}${commit.id === head ? ', HEAD' : ''}${badges.length ? `, ${badges.map(b => b.name).join(', ')}` : ''}`}
+              aria-label={`${commit.subject}, ${commit.author}, ${commit.id.slice(0, 7)}${commit.stash ? ', stash' : ''}${commit.parents.length > 1 ? ', merge commit' : ''}${commit.id === head ? ', HEAD' : ''}${badges.length ? `, ${badges.map(b => b.name).join(', ')}` : ''}`}
               className={`commit-row ${commit.id === selectedId ? 'selected' : ''} ${matches && !matches.has(commit.id) ? 'dimmed' : ''} ${freshIds.has(commit.id) ? 'fresh' : ''}`}
               style={{
                 top: row * ROW_HEIGHT,
                 height: ROW_HEIGHT,
                 gridTemplateColumns,
                 '--branch-color': branchColor,
-               } as React.CSSProperties} onContextMenu={event => { if (onContextActions && commit.id !== WORKING_ID) { event.preventDefault(); onContextActions({ oid: commit.id }, event.clientX, event.clientY, scroller.current ?? event.currentTarget); } }} onClick={() => { onSelect(commit.id); scroller.current?.focus(); }} onDoubleClick={onOpenDetails}>
+               } as React.CSSProperties} onContextMenu={event => { if (commit.stash) { if (onStashActions) { event.preventDefault(); event.stopPropagation(); onStashActions(commit.id, event.clientX, event.clientY, scroller.current ?? event.currentTarget); } } else if (onContextActions && commit.id !== WORKING_ID) { event.preventDefault(); onContextActions({ oid: commit.id }, event.clientX, event.clientY, scroller.current ?? event.currentTarget); } }} onClick={() => { onSelect(commit.id); scroller.current?.focus(); }} onDoubleClick={onOpenDetails}>
               {visibleColumns.map(col => {
                 if (col.id === 'refs') {
                   return <div key="refs" className="commit-refs">
@@ -446,18 +450,21 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                 }
                 if (col.id === 'graph') {
                   return <div key="graph" className="commit-graph-cell" aria-hidden="true">
-                    {settings.graphAuthorAvatars && node && commit.id !== WORKING_ID && <span className={`graph-avatar-node${commit.parents.length > 1 ? ' merge' : ''}`} style={{ left: graphLaneX(node.lane) - graphX }}>
+                    {commit.stash && node && <span className="graph-stash-node" title="Stash" style={{ left: graphLaneX(node.lane) - graphX }}>
+                      <Archive size={12} />
+                    </span>}
+                    {settings.graphAuthorAvatars && node && commit.id !== WORKING_ID && !commit.stash && <span className={`graph-avatar-node${commit.parents.length > 1 ? ' merge' : ''}`} style={{ left: graphLaneX(node.lane) - graphX }}>
                       <AuthorAvatar name={commit.author} email={commit.email} mode={settings.authorAvatarMode} tiny />
                     </span>}
                   </div>;
                 }
                 if (col.id === 'message') {
                   return <div key="message" className="commit-message">
-                    {onTogglePick && commit.id !== WORKING_ID && (() => { const control = rowControl(commit.id, controls); return <input id={control.id} data-row-control="" tabIndex={-1} className={`graph-pick${control.active ? ' row-control-active' : ''}`} type="checkbox" aria-label={`Cherry-pick ${commit.id.slice(0, 7)}`} checked={pickOrder?.includes(commit.id) ?? false} onClick={event => event.stopPropagation()} onChange={() => { onTogglePick(commit.id); scroller.current?.focus(); }} />; })()}
+                    {onTogglePick && commit.id !== WORKING_ID && !commit.stash && (() => { const control = rowControl(commit.id, controls); return <input id={control.id} data-row-control="" tabIndex={-1} className={`graph-pick${control.active ? ' row-control-active' : ''}`} type="checkbox" aria-label={`Cherry-pick ${commit.id.slice(0, 7)}`} checked={pickOrder?.includes(commit.id) ?? false} onClick={event => event.stopPropagation()} onChange={() => { onTogglePick(commit.id); scroller.current?.focus(); }} />; })()}
                     {commit.parents.length > 1 && <GitMerge size={13} className="merge-icon" />}
-                    <span className="subject" title={commit.subject} draggable={!!onActions && commit.id !== WORKING_ID}
-                      onDragStart={event => { event.stopPropagation(); if (!onActions || commit.id === WORKING_ID) { event.preventDefault(); return; } event.dataTransfer.clearData(REF_DRAG_TYPE); event.dataTransfer.setData(COMMIT_DRAG_TYPE, commit.id); event.dataTransfer.effectAllowed = 'copy'; }} onDragEnd={stopDrag}>{commit.subject}</span>
-                    {onActions && commit.id !== WORKING_ID && (() => { const control = rowControl(commit.id, controls); return <button id={control.id} data-row-control="" tabIndex={-1} className={`icon-button sm graph-action-button${control.active ? ' row-control-active' : ''}`} aria-label={`Actions for ${commit.id.slice(0, 7)}`} onClick={event => { event.stopPropagation(); scroller.current?.focus(); onActions({ oid: commit.id }); }}>…</button>; })()}
+                    <span className="subject" title={commit.subject} draggable={!!onActions && commit.id !== WORKING_ID && !commit.stash}
+                      onDragStart={event => { event.stopPropagation(); if (!onActions || commit.id === WORKING_ID || commit.stash) { event.preventDefault(); return; } event.dataTransfer.clearData(REF_DRAG_TYPE); event.dataTransfer.setData(COMMIT_DRAG_TYPE, commit.id); event.dataTransfer.effectAllowed = 'copy'; }} onDragEnd={stopDrag}>{commit.subject}</span>
+                    {onActions && commit.id !== WORKING_ID && !commit.stash && (() => { const control = rowControl(commit.id, controls); return <button id={control.id} data-row-control="" tabIndex={-1} className={`icon-button sm graph-action-button${control.active ? ' row-control-active' : ''}`} aria-label={`Actions for ${commit.id.slice(0, 7)}`} onClick={event => { event.stopPropagation(); scroller.current?.focus(); onActions({ oid: commit.id }); }}>…</button>; })()}
                     {hasMore !== undefined && commit.parents.some(parent => !loadedIds.has(parent)) && <span className="boundary-label">{hasMore ? 'unloaded parent' : shallow ? 'shallow boundary' : 'unavailable parent'}</span>}
                   </div>;
                 }
@@ -479,7 +486,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       {isGraphVisible && graphScrollMax > 0 && <div ref={graphScroller} className="graph-hscroll" aria-label="Scroll graph horizontally" style={{ width: graphWidth, left: graphOffset - scrollLeft, bottom: hbar }} onScroll={event => setGraphScroll(event.currentTarget.scrollLeft)}><div style={{ width: graphContent }} /></div>}
       {isGraphVisible && <canvas ref={canvas} className="graph-canvas" aria-hidden="true" style={{ width: graphWidth, height, left: graphOffset - scrollLeft }} />}
     </div>
-    <div className="history-bottom"><span><span className="live-dot" />{(loaded - (commits[0]?.id === WORKING_ID ? 1 : 0)).toLocaleString()} commits loaded{shallow ? ' · Shallow repository boundary' : ''}</span>
+    <div className="history-bottom"><span><span className="live-dot" />{commits.slice(0, loaded).filter(commit => commit.id !== WORKING_ID && !commit.stash).length.toLocaleString()} commits loaded{shallow ? ' · Shallow repository boundary' : ''}</span>
       {(hasMore ?? loaded < commits.length) ? <button className="text-button" disabled={paging} onClick={onLoadMore}>{paging ? 'Loading…' : 'Load older history ↓'}</button> : <span className="muted">{shallow ? 'Available history loaded' : 'All history loaded'}</span>}
     </div>
     <span id={`${uid}-help`} className="sr-only">Use Up and Down to select commits, Page Up and Page Down to move a page, Home and End to move to the loaded boundaries. Press Enter to open details. Press Right or Left Arrow to move through the selected commit’s branch badges and controls, Enter or Space to activate the highlighted control, and Escape to return to the commit.{onActions && ' Press Shift+F10 for commit actions, or on a highlighted branch badge for branch actions.'}{onSwitchBranch && ' Double-click a local or origin branch badge to switch branches, creating a local tracking branch if needed.'}</span>

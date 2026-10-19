@@ -192,7 +192,8 @@ try {
   assert.deepEqual(pushed.args, { handle: 'handle-b', action: { kind: 'push' } });
 
   // Closing a stash dialog while its action runs must not swallow its error.
-  await activePane().getByRole('button', { name: 'Stash…', exact: true }).click();
+  await activePane().getByRole('button', { name: 'Search commands', exact: true }).click();
+  await page.getByRole('option', { name: 'Manage stashes…', exact: true }).click();
   const stashDialog = page.getByRole('dialog', { name: 'Stashes', exact: true });
   await stashDialog.getByRole('button', { name: 'Save stash', exact: true }).click();
   await page.waitForFunction(() => window.fixture.stashWaiting);

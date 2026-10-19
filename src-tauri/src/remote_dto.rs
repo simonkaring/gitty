@@ -59,6 +59,11 @@ pub struct StashEntry {
     pub oid: String,
     pub selector: String,
     pub message: String,
+    /// Parents of the stash commit; the graph shows only the base commit (first).
+    pub parents: Vec<String>,
+    pub author: String,
+    pub email: String,
+    pub timestamp: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -86,5 +91,11 @@ pub enum StashAction {
     },
     Drop {
         oid: String,
+    },
+    /// Rewrite a stash's reflog message. Git has no in-place reflog edit, so the
+    /// entry is re-stored with the new message (moving it to the top of the list).
+    EditMessage {
+        oid: String,
+        message: String,
     },
 }

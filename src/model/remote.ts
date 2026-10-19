@@ -11,11 +11,21 @@ export type RemoteActionRequest =
   | { kind: 'pull'; remote?: string; branch?: string; pullMode?: PullMode }
   | { kind: 'push'; remote?: string; branch?: string; setUpstream?: boolean };
 export interface RemoteActionResult { output: string }
-export interface StashEntry { oid: string; selector: string; message: string }
+export interface StashEntry {
+  oid: string;
+  selector: string;
+  message: string;
+  /** Stash commit parents; the graph connects to the base commit (the first). */
+  parents: string[];
+  author: string;
+  email: string;
+  timestamp: number;
+}
 export type StashActionRequest =
   | { kind: 'save'; message?: string; includeUntracked?: boolean }
   | { kind: 'apply' | 'pop'; oid: string; restoreIndex?: boolean }
-  | { kind: 'drop'; oid: string };
+  | { kind: 'drop'; oid: string }
+  | { kind: 'editMessage'; oid: string; message: string };
 export interface StashActionResult { output: string }
 
 /* Tauri commands (camelCase arguments):
@@ -74,6 +84,7 @@ export function describeStashAction(action: StashActionRequest): string {
   if (action.kind === 'save') return 'Stash changes';
   if (action.kind === 'apply') return 'Apply stash';
   if (action.kind === 'pop') return 'Pop stash';
+  if (action.kind === 'editMessage') return 'Edit stash message';
   return 'Drop stash';
 }
 
@@ -103,5 +114,6 @@ export function stashSuccessMessage(action: StashActionRequest, output: string):
   }
   if (action.kind === 'apply') return 'Applied stash. The saved stash is still available.';
   if (action.kind === 'pop') return 'Applied stash and removed it from saved stashes.';
+  if (action.kind === 'editMessage') return 'Updated stash message.';
   return 'Deleted saved stash.';
 }

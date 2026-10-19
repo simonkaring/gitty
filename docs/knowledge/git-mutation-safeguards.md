@@ -75,6 +75,13 @@ merges create no commit. Git retains the chosen message for conflict continuatio
 and session restart. Omitted messages preserve Git's default, and hooks, cleanup,
 and signing still apply.[^operations][^operation-tests][^operation-dialog]
 
+The [stash workflow](stash-workflow.md) resolves mutations by full OID, not a stale
+numeric selector. Pop drops only after successful application. Message edits
+pin the object under `refs/gitty/stash-recovery/` before re-storing it at the top
+of the reflog. Restoration of the original message is attempted on failure;
+errors and interrupted edits retain the recovery ref to prevent garbage collection.
+Errors provide manual restore/cleanup guidance.[^stashes]
+
 An explicit merge `stashChanges` option saves staged, unstaged and untracked work
 before merging, then restores its index with the pinned stash OID after a clean
 merge. Failed or conflicted merges retain a uniquely labeled recovery stash;

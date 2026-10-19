@@ -468,3 +468,27 @@ it('opens the branch menu for an active ref pill via Shift+F10 and resets the ac
     expect(activeId()).toBe(host.querySelector('[id$="-commit-base"]')!.id);
   } finally { await cleanup(); }
 });
+
+it('renders stash rows with an archive badge and routes their context menu separately', async () => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const originalObserver = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} unobserve() {} } as typeof ResizeObserver;
+  vi.stubGlobal('cancelAnimationFrame', vi.fn());
+  const canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(new Proxy({}, { get: () => () => {} }) as CanvasRenderingContext2D);
+  const host = document.createElement('div'), root = createRoot(host);
+  const onContextActions = vi.fn(), onStashActions = vi.fn();
+  const commit = (id: string, parents: string[], stash = false) => ({ id, parents, subject: id, body: '', author: 'Ada', email: 'ada@example.com', timestamp: 1, branch: '', files: [], stash });
+  const commits = [commit('stash-oid', ['base'], true), commit('base', [])];
+  try {
+    await act(async () => root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={[]} selectedId="stash-oid" head="base" loaded={2} matches={null} onSelect={() => {}} onActions={() => {}} onContextActions={onContextActions} onStashActions={onStashActions} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />));
+    expect(host.querySelector('.graph-stash-node')).not.toBeNull();
+    expect(host.querySelector('[id$="-commit-stash-oid"] .graph-action-button')).toBeNull();
+    const row = host.querySelector('[id$="-commit-stash-oid"]')!;
+    await act(async () => { row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 12 })); });
+    expect(onStashActions).toHaveBeenCalledWith('stash-oid', 10, 12, expect.anything());
+    expect(onContextActions).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove(); canvas.mockRestore(); globalThis.ResizeObserver = originalObserver; vi.unstubAllGlobals();
+  }
+});

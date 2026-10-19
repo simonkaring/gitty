@@ -17,6 +17,8 @@ export interface Commit {
   timestamp: number;
   branch: string;
   files: ChangedFile[];
+  /** Synthetic row for a stash entry rather than a history commit. */
+  stash?: boolean;
 }
 
 export interface GitRef {

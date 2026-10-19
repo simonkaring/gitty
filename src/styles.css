@@ -1619,7 +1619,23 @@ button[data-danger='true']:hover:not(:disabled) {
 .graph-avatar-node.merge {
   border: 3px double var(--branch-color);
 }
-.commit-row.dimmed .graph-avatar-node {
+/* Stash rows replace the canvas dot/avatar with an Archive badge. */
+.graph-stash-node {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 3;
+  display: flex;
+  padding: 4px;
+  border: 1px solid var(--branch-color);
+  border-radius: 50%;
+  background: var(--bg);
+  box-shadow: 0 0 0 1px var(--bg);
+  color: var(--branch-color);
+  pointer-events: none;
+}
+.commit-row.dimmed .graph-avatar-node,
+.commit-row.dimmed .graph-stash-node {
   opacity: 0.3;
 }
 .commit-message {

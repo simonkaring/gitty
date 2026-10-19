@@ -15,7 +15,7 @@ export interface RepositorySession {
   headRef: string | null;
 }
 export interface RepositoryRef { name: string; fullName: string; commitId: string; kind: 'local' | 'remote' | 'tag' }
-export interface CommitSummary { id: string; parents: string[]; subject: string; author: string; email: string; timestamp: number }
+export interface CommitSummary { id: string; parents: string[]; subject: string; author: string; email: string; timestamp: number; /** Set on synthetic graph rows built from a stash entry. */ stash?: boolean }
 /** `canEditMessage` is a read-only eligibility verdict for in-place message editing: true only for the commit
  * HEAD points at, on a checked-out branch, with no operation or conflicts in progress and no known
  * remote-tracking ref containing it. When false, `editDisabledReason` is a readable explanation (including

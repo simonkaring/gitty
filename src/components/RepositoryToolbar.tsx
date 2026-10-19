@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useDismiss, useMenuKeyboard } from './ui';
-import { Archive, Check, ChevronDown, Download, GitBranch, RefreshCw, Upload, UserRound } from 'lucide-react';
+import { Archive, ArchiveRestore, Check, ChevronDown, Download, GitBranch, RefreshCw, Upload, UserRound } from 'lucide-react';
 import { native, errorMessage } from '../model/native';
 import { DEFAULT_PULL_MODE, PULL_MODE_LABELS, remoteSuccessMessage, needsPublish, syncSummary, type PullMode, type RemoteActionRequest, type SyncInfo } from '../model/remote';
 import { PublishDialog } from './PublishDialog';
@@ -20,7 +20,10 @@ export interface RepositoryToolbarProps {
   onCherryPick: () => void;
   onClearPick: () => void;
   onStartPickMode: () => void;
-  onOpenStash: () => void;
+  onStashNow: () => void;
+  onPopStash: () => void;
+  canPopStash: boolean;
+  dirty: boolean;
   onRefresh: () => void;
   onWrite: (command: string, args: Record<string, unknown>) => Promise<string>;
   notify: (message: string) => void;
@@ -32,7 +35,7 @@ const IDLE_FETCH: FetchStatus = { kind: 'idle' };
 /** Compact Pull / Push / Branch / Stash / Refresh toolbar. Sync info is a
  * passive, local-only read refetched when the active repository changes.
  * RepositoryPane separately schedules background fetches of remote refs. */
-export function RepositoryToolbar({ handle, active, revision, busy, pickCount, pickMode, onCreateBranch, onSwitchBranch, onCherryPick, onClearPick, onStartPickMode, onOpenStash, onRefresh, onWrite, notify, fetchStatus = IDLE_FETCH }: RepositoryToolbarProps) {
+export function RepositoryToolbar({ handle, active, revision, busy, pickCount, pickMode, onCreateBranch, onSwitchBranch, onCherryPick, onClearPick, onStartPickMode, onStashNow, onPopStash, canPopStash, dirty, onRefresh, onWrite, notify, fetchStatus = IDLE_FETCH }: RepositoryToolbarProps) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return;
@@ -124,7 +127,8 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
           </> : <button role="menuitem" onClick={() => branchAction(onStartPickMode)}>Start cherry-pick sequence…</button>}
         </div>}
       </div>
-      <button disabled={busy} onClick={onOpenStash}><Archive size={15} />Stash…</button>
+      <button disabled={busy || !dirty} title={!dirty ? 'No working changes to stash.' : 'Stash all working changes'} onClick={onStashNow}><Archive size={15} />Stash</button>
+      <button disabled={busy || !canPopStash || dirty} title={!canPopStash ? 'Select a stash in the graph or sidebar.' : dirty ? 'Commit or stash changes before popping.' : 'Pop the selected stash'} onClick={onPopStash}><ArchiveRestore size={15} />Pop</button>
     </div>
     <div className="toolbar-zone toolbar-end">
       <button className="icon-button" aria-label="Git identity…" title="Repository Git identity" disabled={disabled} onClick={() => setIdentityOpen(true)}><UserRound size={16} /></button>

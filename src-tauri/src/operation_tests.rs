@@ -775,6 +775,106 @@ fn operations_merge_explicit_stash_restores_partial_staging_untracked_and_prior_
         let stashes = f.repo.stashes().unwrap();
         assert_eq!(stashes.len(), 1);
         assert_eq!(stashes[0].oid, older);
+        // A stash with untracked files has a third parent for that commit.
+        assert!(stashes[0].parents.len() >= 2);
+        assert!(!stashes[0].author.is_empty());
+        assert!(stashes[0].timestamp > 0);
+    }
+}
+
+#[test]
+fn stash_edit_message_re_stores_the_same_object_under_the_new_message() {
+    let f = Fixture::new();
+    f.write("file", "first\n");
+    f.git(&["stash", "push", "-m", "first message"]);
+    let first = f.git(&["rev-parse", "refs/stash"]);
+    f.write("file", "second\n");
+    f.git(&["stash", "push", "-m", "second message"]);
+    let second = f.git(&["rev-parse", "refs/stash"]);
+    f.repo
+        .stash_action(crate::remote_dto::StashAction::EditMessage {
+            oid: first.clone(),
+            message: "edited first".into(),
+        })
+        .unwrap();
+    let stashes = f.repo.stashes().unwrap();
+    assert_eq!(stashes.len(), 2);
+    // Git cannot edit a reflog entry in place, so the re-stored entry moves to the top.
+    assert_eq!(stashes[0].oid, first);
+    assert_eq!(stashes[0].message, "edited first");
+    assert_eq!(stashes[1].oid, second);
+    assert!(f
+        .git(&["for-each-ref", "refs/gitty/stash-recovery/"])
+        .is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn stash_edit_message_protects_work_during_pruning_and_failed_recovery() {
+    use std::os::unix::fs::PermissionsExt;
+    for mode in ["prune", "once", "always"] {
+        let f = Fixture::new();
+        f.write("file", "saved work\n");
+        f.git(&["stash", "push", "-m", "original"]);
+        let entry = f.repo.stashes().unwrap().remove(0);
+        let hook = f.dir.path().join(".git/hooks/reference-transaction");
+        // Prune in the gap after drop, or reject one/both store attempts.
+        std::fs::write(&hook, format!(r#"#!/bin/sh
+while read old new ref; do
+  test "$ref" = refs/stash || continue
+  if test "$1" = committed && test "$new" = 0000000000000000000000000000000000000000; then
+    touch .git/stash-edit-dropped
+    git prune --expire=now || exit 1
+  fi
+  if test "$1" = prepared && test -f .git/stash-edit-dropped; then
+    if test '{mode}' = always || {{ test '{mode}' = once && test ! -f .git/stash-edit-rejected; }}; then
+      touch .git/stash-edit-rejected
+      exit 1
+    fi
+  fi
+done
+"#)).unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let result = f
+            .repo
+            .stash_action(crate::remote_dto::StashAction::EditMessage {
+                oid: entry.oid.clone(),
+                message: "edited".into(),
+            });
+        let backups = f.git(&[
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/gitty/stash-recovery/",
+        ]);
+        let stashes = f.repo.stashes().unwrap();
+        if mode == "prune" {
+            result.unwrap();
+            assert!(backups.is_empty());
+            assert_eq!(stashes[0].message, "edited");
+            assert_eq!(stashes[0].oid, entry.oid);
+        } else {
+            let error = result.unwrap_err();
+            assert_eq!(error.code, "mutationUnverified");
+            assert_eq!(backups.lines().count(), 1);
+            assert!(error
+                .message
+                .contains(&format!("git stash store {backups}")));
+            f.git(&["prune", "--expire=now"]);
+            assert_eq!(f.git(&["show", &format!("{backups}:file")]), "saved work");
+            if mode == "once" {
+                assert_eq!(stashes[0].message, entry.message);
+                assert_eq!(stashes[0].oid, entry.oid);
+            } else {
+                assert!(stashes.is_empty());
+            }
+            // The reported command works after the underlying failure is fixed.
+            std::fs::remove_file(hook).unwrap();
+            if mode == "always" {
+                f.git(&["stash", "store", &backups]);
+                assert_eq!(f.repo.stashes().unwrap()[0].oid, entry.oid);
+            }
+            f.git(&["update-ref", "-d", &backups, &entry.oid]);
+        }
     }
 }
 

@@ -614,6 +614,48 @@ exactly-full final page is reported truncated); Bitbucket when the envelope has 
   outcome, and conflicts between local commits and incoming commits leave the
   operation in progress for existing conflict controls.
 
+## Stashes
+
+The IPC contract is `src/model/remote.ts` / `src/remote_dto.rs`:
+
+- `repository_stashes({handle}) -> StashEntry[]` is local-only. Each entry has
+  `oid`, display `selector`, reflog `message`, all commit `parents`, `author`,
+  `email`, and commit-second `timestamp`. The graph connects only the first parent.
+- `repository_stash_action({handle, action}) -> {output}` accepts `save`
+  (`message?`, `includeUntracked?`, default false), `apply` / `pop` (`oid`,
+  `restoreIndex?`, default false), `drop` (`oid`), and `editMessage` (`oid`,
+  `message`). Messages are limited to 4096 bytes and cannot contain NUL.
+- Writes use the shared mutation lock, require a writable repository, and refuse
+  unresolved conflicts. Save requires an initial commit and protects untracked /
+  ignored obstructions before Git's internal reset. Apply/pop require no staged,
+  unstaged, or untracked changes and check obstructions before restoring.
+- OID-targeted actions require a full 40- or 64-character hexadecimal OID and
+  resolve it against the current stash reflog. Missing and duplicate matches fail
+  with `staleStash` and `ambiguousStash`; selectors are not mutation identities.
+- Pop applies the pinned OID (with `--index` when requested), then re-resolves
+  its selector to drop only after success. Conflicts retain the stash. Failure
+  to verify removal returns `mutationUnverified`; inspect before applying again.
+- `editMessage` is a no-op for an unchanged message. Otherwise it creates a unique
+  `refs/gitty/stash-recovery/<token>` ref (requiring the ref not to exist), drops
+  the old entry, and runs `stash store --message <message> <oid>`, preserving the object
+  and saved content but moving the entry to `stash@{0}`. If store fails, it tries
+  to re-store with the original reflog message. Successful edits remove the backup
+  with an expected-OID check. Errors retain it and report `git stash store <ref>`
+  and backup cleanup instructions. An interrupted process also leaves the backup
+  reachable, protecting saved work from garbage collection; discover these refs
+  with `git for-each-ref refs/gitty/stash-recovery/`. Inspect Stashes before
+  restoring, since the entry may already be present. This is not
+  an atomic in-place edit; the shared lock does not exclude external Git writers.
+
+The toolbar saves with `includeUntracked: true` and no custom message; selected
+stash Pop uses `restoreIndex: true`. Graph/sidebar menus add two-step deletion
+and message editing. The command palette's **Manage stashes…** retains the full
+dialog with optional message/untracked inclusion and a default-on staging restore
+choice. Callers use the remote write/refresh lifecycle on success and failure.
+The graph/sidebar stash list reloads after every successful full refresh, including
+unchanged snapshots, so external or linked-worktree stash changes appear without
+invalidating or rewalking history.
+
 ## Graph operations and full conflict editor
 
 The exact additional IPC contract is `src/model/operations.ts`. All nine commands

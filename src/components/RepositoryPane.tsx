@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus, GitCommitHorizontal, Globe2, Laptop, LocateFixed, RefreshCw, ScrollText, Search, Tag, Upload, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { Archive, ArchiveRestore, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus, GitCommitHorizontal, Globe2, Laptop, LocateFixed, RefreshCw, ScrollText, Search, Tag, Upload, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { CommandPalette, type PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
 import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
@@ -21,6 +21,8 @@ import { PullRequestDialog } from './PullRequestDialog';
 import { RepositoryToolbar } from './RepositoryToolbar';
 import { PublishDialog } from './PublishDialog';
 import { RemoteStashDialog } from './RemoteStashDialog';
+import { StashContextMenu, type StashMenuTarget } from './StashContextMenu';
+import { StashMessageDialog } from './StashMessageDialog';
 import { toggleCommit } from '../model/operationUi';
 import { captureOperation, operationAndRefresh, operationContent } from '../model/operationFlow';
 import { SwitchBlockedDialog } from './SwitchBlockedDialog';
@@ -29,7 +31,7 @@ import { locationLabel, sessionKey } from '../model/tabs';
 import { useSettings } from '../model/settings';
 import { SCALES, useScale } from '../model/scale';
 import { AUTO_FETCH_CHECK, autoFetchDue, isFetchingAction, type FetchStatus } from '../model/autoFetch';
-import { DEFAULT_PULL_MODE, remoteSuccessMessage, needsPublish, type RemoteActionRequest, type SyncInfo } from '../model/remote';
+import { DEFAULT_PULL_MODE, remoteSuccessMessage, needsPublish, sortStashes, stashSuccessMessage, type RemoteActionRequest, type StashActionRequest, type StashEntry, type SyncInfo } from '../model/remote';
 import { branchDeleteTargets, branchDeleteMessage, type BranchDeleteScope } from '../model/branchDelete';
 import type { BranchDeleteExecution, BranchDeleteRequest, BranchDeleteResult, BranchDeleteTargetResult } from '../model/operations';
 import { BranchDeleteDialog } from './BranchDeleteDialog';
@@ -114,6 +116,10 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   const [pickOrder, setPickOrder] = useState<string[]>([]);
   const [pickMode, setPickMode] = useState(false);
   const [stashOpen, setStashOpen] = useState(false);
+  const [stashes, setStashes] = useState<StashEntry[]>([]);
+  const [stashRefresh, setStashRefresh] = useState(0);
+  const [stashMenu, setStashMenu] = useState<StashMenuTarget | null>(null);
+  const [editStash, setEditStash] = useState<StashEntry | null>(null);
   const [activityLogOpen, setActivityLogOpen] = useState(false);
   const [mutationBlocked, setMutationBlocked] = useState(false);
   const blockedRef = useRef(false);
@@ -162,6 +168,17 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   onMetaRef.current = onMeta;
   useEffect(() => { onBusyChangeRef.current(tabId, mutationBusy); }, [tabId, mutationBusy]);
   useEffect(() => { onMetaRef.current(tabId, state?.session.headRef?.replace(/^refs\/heads\//, '') ?? null, !!status?.entries.length); }, [tabId, state?.session.headRef, status?.entries.length]);
+  // Stashes are display data for the graph and sidebar. Local-only read,
+  // Refreshed even when only another worktree's stash reflog changed.
+  useEffect(() => {
+    const handle = state?.session.handle;
+    if (!handle) { setStashes([]); return; }
+    let live = true;
+    native<StashEntry[]>('repository_stashes', { handle })
+      .then(values => { if (live) setStashes(sortStashes(values ?? [])); })
+      .catch(e => { if (live) setActionError(errorMessage(e)); });
+    return () => { live = false; };
+  }, [state?.session.handle, revision, stashRefresh]);
   useEffect(() => { revealToken.current++; }, [selected]);
   // Tabs are never unmounted while closed via the strip (that only happens on
   // deliberate tab close), but a hidden pane's own dialogs are: switching away
@@ -170,7 +187,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   // dialog-open state so the two can't drift apart. Any in-flight write
   // (operationWrite/remoteWrite) is owned by this component, not by the
   // dialog, so it keeps running and its result still lands on this tab.
-  useEffect(() => { if (!active) { setActionContext(null); setMenuTarget(null); setPublishInfo(null); setDeleteBranch(null); setBlockedSwitch(null); setOriginReset(null); setConflictPath(null); setPrSource(null); setStashOpen(false); } }, [active]);
+  useEffect(() => { if (!active) { setActionContext(null); setMenuTarget(null); setPublishInfo(null); setDeleteBranch(null); setBlockedSwitch(null); setOriginReset(null); setConflictPath(null); setPrSource(null); setStashOpen(false); setStashMenu(null); setEditStash(null); } }, [active]);
   const close = (handle: string) => native('repository_close', { handle }).catch(() => {});
   useEffect(() => () => { epoch.current++; revealToken.current++; if (session.current) void close(session.current.session.handle); session.current = null; }, []);
   function installHistory(items: CommitSummary[], next: string | null) { history.current = items; nextCursor.current = next; setCommits(items); setCursor(next); }
@@ -178,7 +195,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     if (mutationLock.current) return;
     const token = ++epoch.current; revealToken.current++; setBusy(true); setError(''); lock.current = true;
     const old = session.current; session.current = null; setState(null); setStatus(null); installHistory([], null); setBase(''); setTarget(''); setSelected(''); setActiveDiff(null); setFolderOpen({});
-    setOperation(null); setActionContext(null); setMenuTarget(null); setPublishInfo(null); setDeleteBranch(null); setOriginReset(null); setConflictPath(null); setPrSource(null); setPickOrder([]); blockedRef.current = false; setMutationBlocked(false);
+    setOperation(null); setActionContext(null); setMenuTarget(null); setPublishInfo(null); setDeleteBranch(null); setOriginReset(null); setConflictPath(null); setPrSource(null); setPickOrder([]); setStashes([]); setStashMenu(null); setEditStash(null); setStashOpen(false); blockedRef.current = false; setMutationBlocked(false);
     if (old) void close(old.session.handle);
     let opened: RepositoryState | null = null;
     try {
@@ -246,6 +263,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       fingerprint.current = working.fingerprint;
       if (changed) setStateRevision(value => value + 1);
       if (changed || workingChanged || operationChanged || force) setRevision(value => value + 1);
+      setStashRefresh(value => value + 1);
       setError('');
       blockedRef.current = false; setMutationBlocked(false);
     } catch (e) { if (token === epoch.current) setError(errorMessage(e)); if (force) throw e; }
@@ -409,6 +427,44 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       throw e;
     } finally { if (holdsLock && isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
   }
+  /** Stash actions share the remote write+refresh lifecycle. Errors are owned
+   * by remoteWrite's banner; dialogs re-throw them into their own alert. */
+  async function runStashAction(action: StashActionRequest): Promise<string> {
+    const output = await remoteWrite('repository_stash_action', { action });
+    setNotice(stashSuccessMessage(action, output));
+    return output;
+  }
+  async function stashNow() {
+    if (mutationBusy || mutationBlocked) return;
+    // "All working changes": staged, unstaged and untracked. Ignored files stay.
+    try { await runStashAction({ kind: 'save', includeUntracked: true }); }
+    catch { /* remoteWrite owns the dismissible error banner. */ }
+  }
+  async function popStash(stash: StashEntry) {
+    try {
+      await runStashAction({ kind: 'pop', oid: stash.oid, restoreIndex: true });
+      if (selectedRef.current === stash.oid) setSelected(session.current?.session.head ?? '');
+    } catch { /* remoteWrite owns the error banner. */ }
+  }
+  async function dropStash(stash: StashEntry) {
+    try {
+      await runStashAction({ kind: 'drop', oid: stash.oid });
+      if (selectedRef.current === stash.oid) setSelected(session.current?.session.head ?? '');
+    } catch { /* remoteWrite owns the error banner. */ }
+  }
+  function openStashMenu(stash: StashEntry, x: number, y: number, trigger: HTMLElement) {
+    setStashMenu({ stash, x, y, trigger });
+  }
+  function openStashMenuById(oid: string, x: number, y: number, trigger: HTMLElement) {
+    const stash = stashes.find(value => value.oid === oid);
+    if (stash) openStashMenu(stash, x, y, trigger);
+  }
+  async function saveStashMessage(message: string) {
+    const stash = editStash;
+    if (!stash) throw new Error('The stash selection changed. Reopen the stash message editor.');
+    // Re-thrown into the dialog so it stays open with its own error.
+    await runStashAction({ kind: 'editMessage', oid: stash.oid, message });
+  }
   const remoteWriteRef = useRef(remoteWrite);
   remoteWriteRef.current = remoteWrite;
   /** Fetches the focused tab's remote when due. Never runs for a hidden tab or
@@ -464,6 +520,13 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       setInspectorOpen(true);
       return;
     }
+    if (stashes.some(stash => stash.oid === id)) {
+      // Stash rows are not part of the paged history walk.
+      setSelected(id);
+      jumpTo.current = id;
+      setCommits(items => [...items]);
+      return;
+    }
     if (history.current.some(commit => commit.id === id)) {
       setSelected(id);
       jumpTo.current = id;
@@ -477,12 +540,36 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     if (!handle) return;
     setWorkingDisclosure(current => ({ handle, value: update(current?.handle === handle ? current.value : DEFAULT_WORKING_DISCLOSURE) }));
   }
+  const stashRows = useMemo(() => {
+    // The layout rejects duplicate IDs. A stash commit can become reachable
+    // from a branch, and external `git stash store` can duplicate an entry;
+    // the history row wins in the first case and the newest entry in the second.
+    const historyIds = new Set(commits.map(commit => commit.id));
+    const seen = new Set<string>();
+    return stashes.filter(stash => {
+      if (historyIds.has(stash.oid) || seen.has(stash.oid)) return false;
+      seen.add(stash.oid);
+      return true;
+    }).map(stash => graphCommit({
+      id: stash.oid,
+      parents: stash.parents.slice(0, 1),
+      subject: stash.message,
+      author: stash.author,
+      email: stash.email,
+      timestamp: stash.timestamp,
+      stash: true,
+    }));
+  }, [stashes, commits]);
   const graphCommits = useMemo(() => {
     const list = commits.map(graphCommit);
     // Never attach live working status to a different pinned HEAD.
-    if (status?.entries.length && status.head === state?.session.head && status.headRef === state?.session.headRef) list.unshift(graphCommit({ id: WORKING_ID, parents: status.head ? [status.head] : [], subject: `Working changes · ${status.entries.length} paths`, author: 'Working tree', email: '', timestamp: 0 }));
+    const working = !!status?.entries.length && status.head === state?.session.head && status.headRef === state?.session.headRef;
+    if (working) list.unshift(graphCommit({ id: WORKING_ID, parents: status!.head ? [status!.head] : [], subject: `Working changes · ${status!.entries.length} paths`, author: 'Working tree', email: '', timestamp: 0 }));
+    // Stashes sit between working changes and history, newest first.
+    if (stashRows.length) list.splice(working ? 1 : 0, 0, ...stashRows);
     return list;
-  }, [commits, status, state?.session.head, state?.session.headRef]);
+  }, [commits, status, state?.session.head, state?.session.headRef, stashRows]);
+  const selectedStash = useMemo(() => stashes.find(stash => stash.oid === selected) ?? null, [stashes, selected]);
   const { layout, count: layoutCount, error: layoutError } = useGraphLayout(graphCommits);
   useLayoutEffect(() => { if (anchor.current && graphCommits.slice(0, layoutCount).some(commit => commit.id === anchor.current?.id)) { graph.current?.restore(anchor.current); anchor.current = null; } if (jumpTo.current) { const row = graphCommits.slice(0, layoutCount).findIndex(commit => commit.id === jumpTo.current); if (row >= 0) { graph.current?.scrollTo(row); jumpTo.current = null; } } }, [graphCommits, layoutCount]);
   const filtering = !!(text || branch || since || until || path);
@@ -618,7 +705,8 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       { id: 'push', group: 'Repository', label: 'Push', icon: <Upload size={15} />, disabled: writeBlocked || !headRef, run: () => { if (headRef) void pushFromMenu(headRef); } },
       { id: 'new-branch', group: 'Repository', label: 'New branch…', icon: <GitBranchPlus size={15} />, disabled: writeBlocked, run: () => setActionContext({ oid: head ?? '', ref: headRef ?? undefined, initial: 'createBranch' }) },
       { id: 'switch-branch', group: 'Repository', label: 'Switch branch…', icon: <GitBranch size={15} />, disabled: writeBlocked, run: () => setActionContext({ oid: head ?? '', initial: 'switchBranch' }) },
-      { id: 'stash', group: 'Repository', label: 'Stash…', icon: <Archive size={15} />, disabled: writeBlocked, run: () => setStashOpen(true) },
+      { id: 'stash', group: 'Repository', label: 'Stash all changes', icon: <Archive size={15} />, disabled: writeBlocked || !status?.entries.length, run: () => void stashNow() },
+      { id: 'manage-stashes', group: 'Repository', label: 'Manage stashes…', icon: <ArchiveRestore size={15} />, disabled: writeBlocked, run: () => setStashOpen(true) },
       { id: 'working', group: 'Repository', label: 'Show working changes', icon: <FileDiff size={15} />, disabled: !status?.entries.length, run: () => reveal(WORKING_ID) },
       { id: 'search', group: 'Repository', label: 'Search history', hint: '/', icon: <Search size={15} />, run: () => requestAnimationFrame(() => search.current?.focus()) },
       { id: 'refresh', group: 'Repository', label: 'Refresh', icon: <RefreshCw size={15} />, disabled: busy, run: () => void refresh() },
@@ -636,7 +724,10 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       onCherryPick={() => setActionContext({ oid: pickOrder[0], commits: pickOrder, initial: 'cherryPick' })}
       onClearPick={() => { setPickMode(false); setPickOrder([]); }}
       onStartPickMode={() => setPickMode(true)}
-      onOpenStash={() => setStashOpen(true)}
+      onStashNow={() => void stashNow()}
+      onPopStash={() => { if (selectedStash) void popStash(selectedStash); }}
+      canPopStash={!!selectedStash}
+      dirty={!!status?.entries.length}
       onRefresh={() => void refresh()}
       onWrite={remoteWrite}
       fetchStatus={fetchStatus}
@@ -647,7 +738,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       {busy && !state && <Toast tone="progress">Opening {locationLabel(location)}…{location.kind === 'wsl' && ' A stopped WSL distribution can take a few seconds to start.'}</Toast>}
       {notice && <Toast onDismiss={() => setNotice('')}>{notice}</Toast>}
       {layoutError && <Toast tone="error">Graph layout is unavailable: {layoutError}. Rows remain navigable.</Toast>}
-      {state && selected && selected !== WORKING_ID && !result?.commits.some(commit => commit.id === selected) && !commits.some(commit => commit.id === selected) && <Toast action={cursor && <button className="secondary-button" disabled={busy} onClick={() => reveal(selected)}>Reveal</button>}>Selected commit {selected.slice(0, 12)} is {cursor ? 'outside the loaded history' : 'no longer reachable from the current references'}. Its inspector remains open by object ID.</Toast>}
+      {state && selected && selected !== WORKING_ID && !selectedStash && !result?.commits.some(commit => commit.id === selected) && !commits.some(commit => commit.id === selected) && <Toast action={cursor && <button className="secondary-button" disabled={busy} onClick={() => reveal(selected)}>Reveal</button>}>Selected commit {selected.slice(0, 12)} is {cursor ? 'outside the loaded history' : 'no longer reachable from the current references'}. Its inspector remains open by object ID.</Toast>}
     </>}
     {mutationBlocked && <div className="operation-banner" role="alert">Refresh failed after a write. Further writes are blocked until a successful refresh.<button className="secondary-button compact" onClick={() => void refresh()}>Refresh now</button></div>}
     {state && operation && (operation.kind !== 'none' || !!operation.conflicts.length) && <div className="operation-banner" role="status"><strong>{operation.label || operation.kind}</strong><span>{operation.current} {operation.incoming && `← ${operation.incoming}`}{operation.step !== null && ` · Step ${operation.step}${operation.total !== null ? ` / ${operation.total}` : ''}`}</span>{(['continue', 'skip', 'abort'] as const).map(kind => <button key={kind} className="secondary-button compact" disabled={mutationBusy || mutationBlocked || operation.kind === 'unsupported' || (kind === 'continue' && !operation.canContinue) || (kind === 'skip' && !operation.canSkip)} onClick={() => setActionContext({ oid: state.session.head ?? '', initial: kind })}>{kind === 'continue' ? 'Continue' : kind === 'skip' ? 'Skip' : 'Abort'}</button>)}{operation.conflicts.map(path => <button key={path} className="secondary-button compact" onClick={() => setConflictPath(path)}>Resolve {path}</button>)}</div>}
@@ -658,7 +749,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
         {!error && Array.from({ length: 12 }, (_, i) => <div key={i} className="skeleton-row" aria-hidden="true" style={{ animationDelay: `${i * 60}ms` }}><span className="skeleton-node" style={{ marginLeft: `${[0, 18, 0, 36, 18, 0][i % 6]}px` }} /><span className="skeleton" style={{ width: `${40 + ((i * 37) % 45)}%` }} /><span className="skeleton" style={{ width: 70 }} /></div>)}
       </div>
     </main> : <main className="workspace">
-        {sidebarOpen && <><NativeSidebar state={state} commits={commits} filters={filters} busy={busy} reveal={reveal} switchBranch={ref => void switchBranch(ref)} openMenu={openMenu} onAction={setActionContext} folderOpen={folderOpen} onFolderOpen={(key, open) => setFolderOpen(current => ({ ...current, [key]: open }))} worktrees={<Worktrees session={state.session} revision={revision} active={active} busy={mutationBusy || mutationBlocked} onOpen={onOpenWorktree} onWrite={operationWrite} />} /><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
+        {sidebarOpen && <><NativeSidebar state={state} commits={commits} filters={filters} busy={busy} reveal={reveal} switchBranch={ref => void switchBranch(ref)} openMenu={openMenu} onAction={setActionContext} folderOpen={folderOpen} onFolderOpen={(key, open) => setFolderOpen(current => ({ ...current, [key]: open }))} stashes={stashes} onStashMenu={openStashMenu} worktrees={<Worktrees session={state.session} revision={revision} active={active} busy={mutationBusy || mutationBlocked} onOpen={onOpenWorktree} onWrite={operationWrite} />} /><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
       <div className="workspace-main">
         {!sidebarOpen && filters}
         <div className="history-workspace">
@@ -702,7 +793,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
                 <div className="search-results-container" hidden={searchView !== 'results'}><SearchResults result={result} loading={searchBusy} error={searchError} query={text} refs={state.refs} selected={selected} onSelect={id => { navigation.current++; setSelected(id); setActiveDiff(null); setInspectorOpen(true); }} onReveal={id => { setSearchView('graph'); requestAnimationFrame(() => reveal(id)); }} onRetry={() => setSearchRetry(value => value + 1)} onClear={clearFilters} /></div></>}
               <div className="search-history-container" hidden={filtering && searchView === 'results'}>
               {!graphCommits.length && <div className="empty-state"><GitCommitHorizontal size={28} /><h2>No commits yet</h2><p>This repository has no commits or working changes. Add files, stage them, and make your first commit.</p></div>}
-                <HistoryGraph ref={graph} commits={graphCommits} layout={layout} refs={state.refs} selectedId={selected} head={state.session.head ?? ''} headRef={state.session.headRef} onActions={context => setActionContext(context)} onContextActions={openMenu} onSwitchBranch={ref => void switchBranch(ref)} pickOrder={pickOrder} onTogglePick={pickMode ? id => setPickOrder(order => toggleCommit(order, id)) : undefined} loaded={graphCommits.length} matches={matches} onSelect={id => reveal(id)} onLoadMore={() => void load()} onOpenDetails={() => setInspectorOpen(true)} theme={theme} hasMore={!!cursor} paging={busy} shallow={state.session.shallow} />
+                <HistoryGraph ref={graph} commits={graphCommits} layout={layout} refs={state.refs} selectedId={selected} head={state.session.head ?? ''} headRef={state.session.headRef} onActions={context => setActionContext(context)} onContextActions={openMenu} onStashActions={openStashMenuById} onSwitchBranch={ref => void switchBranch(ref)} pickOrder={pickOrder} onTogglePick={pickMode ? id => setPickOrder(order => toggleCommit(order, id)) : undefined} loaded={graphCommits.length} matches={matches} onSelect={id => reveal(id)} onLoadMore={() => void load()} onOpenDetails={() => setInspectorOpen(true)} theme={theme} hasMore={!!cursor} paging={busy} shallow={state.session.shallow} />
               </div>
             </section>
           )}
@@ -764,5 +855,11 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     {state && conflictPath && <ConflictEditor key={`${state.session.handle}:${conflictPath}`} handle={state.session.handle} path={conflictPath} revision={revision} busy={mutationBusy || mutationBlocked} onWrite={operationWrite} onClose={() => setConflictPath(null)} />}
     {state && prSource && <PullRequestDialog key={state.session.handle} handle={state.session.handle} source={prSource} onClose={() => setPrSource(null)} />}
     {state && stashOpen && <RemoteStashDialog key={`${state.session.handle}:stash`} handle={state.session.handle} onWrite={remoteWrite} onClose={() => setStashOpen(false)} notify={setNotice} />}
+    {state && stashMenu && <StashContextMenu key={`${stashMenu.stash.oid}:${stashMenu.x}:${stashMenu.y}`} target={stashMenu} busy={mutationBusy || mutationBlocked} canPop={!status?.entries.length}
+      onPop={stash => { setStashMenu(null); void popStash(stash); }}
+      onDrop={stash => { setStashMenu(null); void dropStash(stash); }}
+      onEditMessage={stash => { setStashMenu(null); setEditStash(stash); }}
+      onClose={() => setStashMenu(null)} />}
+    {state && editStash && <StashMessageDialog key={editStash.oid} stash={editStash} onSave={saveStashMessage} onClose={() => setEditStash(null)} />}
   </>;
 }
