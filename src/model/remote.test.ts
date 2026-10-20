@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defaultRemote, describeRemoteAction, describeStashAction, needsPublish, remoteSuccessMessage, sortStashes, stashSuccessMessage, syncSummary } from './remote';
+import { branchPushRequest, defaultRemote, describeRemoteAction, describeStashAction, needsPublish, remoteSuccessMessage, sortStashes, stashSuccessMessage, syncSummary, type SyncInfo } from './remote';
 
 describe('sync summary', () => {
   it('is empty without sync info', () => { expect(syncSummary(null)).toBe(''); });
@@ -21,6 +21,21 @@ describe('publish requirement', () => {
     expect(needsPublish({ branch: null, upstream: null, ahead: null, behind: null, remotes: [] })).toBe(false);
     expect(needsPublish({ branch: 'main', upstream: null, ahead: null, behind: null, remotes: [] })).toBe(true);
     expect(needsPublish({ branch: 'main', upstream: 'origin/main', ahead: 0, behind: 0, remotes: [] })).toBe(false);
+  });
+});
+
+describe('branch push request', () => {
+  const sync = (overrides: Partial<SyncInfo> = {}): SyncInfo => ({ branch: 'topic', upstream: 'origin/topic', ahead: 2, behind: 0, remotes: ['origin'], ...overrides });
+  it('pins a non-current branch as both source and destination', () => {
+    expect(branchPushRequest('topic', sync())).toEqual({ kind: 'push', remote: 'origin', branch: 'topic', source: 'topic' });
+  });
+  it('requires commits ahead of the same-name origin upstream', () => {
+    expect(branchPushRequest('topic', sync({ ahead: 0 }))).toBeNull();
+    expect(branchPushRequest('topic', sync({ ahead: null }))).toBeNull();
+    expect(branchPushRequest('topic', sync({ upstream: 'origin/other' }))).toBeNull();
+    expect(branchPushRequest('topic', sync({ upstream: 'team/topic', remotes: ['team'] }))).toBeNull();
+    expect(branchPushRequest('topic', sync({ branch: 'main' }))).toBeNull();
+    expect(branchPushRequest('topic', null)).toBeNull();
   });
 });
 

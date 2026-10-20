@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { isDemoHandle, native } from '../model/native';
 import type { RepositoryState } from '../model/repository';
-import { DEFAULT_PULL_MODE, PULL_MODE_LABELS, type PullMode, type RemoteActionRequest } from '../model/remote';
+import { DEFAULT_PULL_MODE, PULL_MODE_LABELS, branchPushRequest, type PullMode, type RemoteActionRequest, type SyncInfo } from '../model/remote';
 import type { ActionContext } from './OperationDialog';
 import { useContextMenu } from './useContextMenu';
 import type { BranchDeleteScope } from '../model/branchDelete';
@@ -13,7 +13,7 @@ export function GraphContextMenu({ target, state, busy, hasTrackedChanges = fals
   hasTrackedChanges?: boolean;
   onOperation: (context: ActionContext) => void; onSwitchBranch: (ref: string) => void; onShowDetails: (oid: string) => void;
   onSetBase: (oid: string) => void; onSetTarget: (oid: string) => void; onCompare: (oid: string) => void;
-  onPullRequest: (ref: string) => void; onRemoteAction: (action: RemoteActionRequest) => void; onPush: () => void;
+  onPullRequest: (ref: string) => void; onRemoteAction: (action: RemoteActionRequest) => void; onPush: (ref: string) => void;
   onCopy: (value: string, label: string) => void; onClose: () => void;
   onDeleteBranch: (fullName: string, scope: BranchDeleteScope) => void;
 }) {
@@ -28,6 +28,15 @@ export function GraphContextMenu({ target, state, busy, hasTrackedChanges = fals
   const context = target.context;
   const ref = state.refs.find(value => value.fullName === context.ref);
   const current = context.ref === state.session.headRef;
+  const [branchSync, setBranchSync] = useState<SyncInfo | null>(null);
+  useEffect(() => {
+    setBranchSync(null);
+    if (ref?.kind !== 'local' || current) return;
+    let live = true;
+    void native<SyncInfo>('repository_sync_info', { handle: state.session.handle, branch: ref.name }).then(value => { if (live) setBranchSync(value); }).catch(() => { if (live) setBranchSync(null); });
+    return () => { live = false; };
+  }, [current, ref?.kind, ref?.name, state.session.handle]);
+  const branchPush = ref?.kind === 'local' && !current ? branchPushRequest(ref.name, branchSync) : null;
   const hasOriginCounterpart = ref?.kind === 'local' && state.refs.some(value => value.fullName === `refs/remotes/origin/${ref.name}`);
   const hasLocalCounterpart = ref?.kind === 'remote' && state.refs.some(value => value.fullName === `refs/heads/${ref.fullName.slice('refs/remotes/origin/'.length)}`);
   const originRef = ref?.kind === 'local' ? `refs/remotes/origin/${ref.name}` : ref?.fullName;
@@ -41,11 +50,12 @@ export function GraphContextMenu({ target, state, busy, hasTrackedChanges = fals
     {current && ref?.kind === 'local' && !!state.remotes.length && <>
       <button role="menuitem" disabled={busy} onClick={() => onRemoteAction({ kind: 'fetch' })}>Fetch</button>
       {(Object.keys(PULL_MODE_LABELS) as PullMode[]).map(mode => <button key={mode} role="menuitem" disabled={busy} onClick={() => onRemoteAction({ kind: 'pull', pullMode: mode })}>{PULL_MODE_LABELS[mode]}{mode === DEFAULT_PULL_MODE && ' (default)'}</button>)}
-      <button role="menuitem" disabled={busy} onClick={onPush}>Push / Publish…</button>
+      <button role="menuitem" disabled={busy} onClick={() => onPush(ref.fullName)}>Push / Publish…</button>
       <div className="menu-divider" role="separator" />
     </>}
     {tracking && <><button role="menuitem" disabled={busy} onClick={() => onRemoteAction({ kind: 'fetch', remote: tracking, branch: ref!.fullName.slice(`refs/remotes/${tracking}/`.length) })}>Fetch this remote branch</button><div className="menu-divider" role="separator" /></>}
     {ref?.kind === 'local' && !current && <button role="menuitem" disabled={busy} onClick={() => onSwitchBranch(ref.fullName)}>Switch to {ref.name}</button>}
+    {branchPush && ref && <><button role="menuitem" disabled={busy} onClick={() => onPush(ref.fullName)}>Push {ref.name} to origin</button><div className="menu-divider" role="separator" /></>}
     {!current && (ref?.kind === 'local' || context.oid !== state.session.head) && <>{ref?.kind === 'local' && state.session.headRef && relation && <>{relation[0] > 0 ? <button role="menuitem" onClick={() => operation('merge', state.session.headRef!, ref.fullName)}>Merge {ref.name} into {state.session.headRef.replace(/^refs\/heads\//, '')}… · {relation[0]} commit{relation[0] === 1 ? '' : 's'} to bring in</button> : <button role="menuitem" disabled>{ref.name} already includes {state.session.headRef.replace(/^refs\/heads\//, '')}</button>}{relation[1] > 0 ? <button role="menuitem" onClick={() => operation('merge', ref.fullName, state.session.headRef!)}>Merge {state.session.headRef.replace(/^refs\/heads\//, '')} into {ref.name}… · {relation[1]} commit{relation[1] === 1 ? '' : 's'} to bring in</button> : <button role="menuitem" disabled>{state.session.headRef.replace(/^refs\/heads\//, '')} already includes {ref.name}</button>}</>}<button role="menuitem" onClick={() => operation('rebase')}>Rebase current onto this…</button><button role="menuitem" onClick={() => operation('cherryPick')}>Cherry-pick {ref ? 'tip commit' : 'commit'}…</button></>}
     <button role="menuitem" onClick={() => operation('createBranch')}>Create branch here…</button>
     <button role="menuitem" onClick={() => operation('createTag')}>Create tag here…</button>

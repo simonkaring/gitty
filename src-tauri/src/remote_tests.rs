@@ -490,6 +490,67 @@ fn remote_publication_is_single_branch_and_never_mirror_or_configured_force() {
 }
 
 #[test]
+fn remote_push_can_name_a_non_current_source_branch_without_switching() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    f.git(&["checkout", "-b", "topic"]);
+    f.write("topic", "one");
+    let first = f.commit("topic one");
+    f.remote(json!({"kind":"push", "branch":"topic", "setUpstream":true}))
+        .unwrap();
+    f.git(&["checkout", "main"]);
+    f.write("main", "main moved");
+    let main_tip = f.commit("main moved");
+    f.remote(json!({"kind":"push"})).unwrap();
+    f.git(&["checkout", "topic"]);
+    f.write("topic", "two");
+    let topic_tip = f.commit("topic two");
+    f.git(&["checkout", "main"]);
+
+    let info = f.repo.sync_info_for("topic").unwrap();
+    assert_eq!(info.branch.as_deref(), Some("topic"));
+    assert_eq!(info.upstream.as_deref(), Some("origin/topic"));
+    assert_eq!(info.ahead, Some(1));
+    let main_info = f.repo.sync_info_for("main").unwrap();
+    assert_eq!((main_info.ahead, main_info.behind), (Some(0), Some(0)));
+    assert_eq!(f.repo.sync_info_for("missing").unwrap_err().code, "git");
+    assert_eq!(
+        f.repo.sync_info_for("-topic").unwrap_err().code,
+        "invalidBranch"
+    );
+
+    let origin_main = git(bare.path(), &["rev-parse", "main"]);
+    assert_eq!(git(bare.path(), &["rev-parse", "topic"]), first);
+    // Without an explicit destination, use topic's upstream, never main's.
+    f.remote(json!({"kind":"push", "source":"topic"})).unwrap();
+    assert_eq!(git(bare.path(), &["rev-parse", "topic"]), topic_tip);
+    f.remote(json!({
+        "kind":"push", "remote":"origin", "branch":"topic", "source":"topic"
+    }))
+    .unwrap();
+    assert_eq!(git(bare.path(), &["rev-parse", "topic"]), topic_tip);
+    assert_eq!(git(bare.path(), &["rev-parse", "main"]), origin_main);
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), main_tip);
+    assert_eq!(f.git(&["symbolic-ref", "--short", "HEAD"]), "main");
+    assert_eq!(f.git(&["config", "branch.topic.merge"]), "refs/heads/topic");
+    assert_eq!(f.git(&["config", "branch.main.merge"]), "refs/heads/main");
+
+    assert_eq!(
+        f.remote(json!({"kind":"push", "source":"missing", "branch":"missing"}))
+            .unwrap_err()
+            .code,
+        "git"
+    );
+    assert_eq!(
+        f.remote(json!({"kind":"push", "source":"-topic"}))
+            .unwrap_err()
+            .code,
+        "invalidBranch"
+    );
+}
+
+#[test]
 fn remote_inputs_dirty_worktrees_and_in_progress_are_guarded() {
     let f = Fixture::new();
     let _bare = f.bare_remote();

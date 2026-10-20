@@ -552,11 +552,22 @@ exactly-full final page is reported truncated); Bitbucket when the envelope has 
   Remote actions select the branch/remotes without the display-only ahead/behind
   walk; fetch does not read branch merge configuration. Existing conflict, lock,
   operation and target validation still applies.
-  It intentionally bypasses `Service::mutate` (no Gitty mutation lock and no
-  read-deadline wrapper): it only moves `refs/remotes/*`, relies on Git's own ref
-  locks, and must not block local writes behind a slow network. Explicit
-  fetch/pull/push still take the mutation lock, and the caller refreshes after
-  any action result, including failure.
+  Background fetch intentionally bypasses `Service::mutate` (no Gitty mutation
+  lock and no read-deadline wrapper): it only moves `refs/remotes/*`, relies on
+  Git's own ref locks, and must not block local writes behind a slow network.
+  Explicit fetch/pull/push still take the mutation lock, and the caller refreshes
+  after any action result, including failure.
+- `repository_sync_info({handle, branch?})` reads the same offline metadata for
+  an optional existing local `branch` without checking it out; omitting it keeps
+  the checked-out branch. The explicit target must pass the normal branch-name
+  checks, and counts compare that branch (not HEAD) against its configured
+  upstream. `RemoteAction::Push` accepts optional `source`: it defaults to the
+  checked-out branch, must resolve as `refs/heads/<source>`, and drives upstream
+  configuration and `--set-upstream`. The write remains one explicit
+  `<source>:<destination>` refspec with `--no-force`, mirror and single-push-URL
+  checks. The branch menu only offers a non-current push after an offline read
+  shows the same-name `origin/<branch>` upstream and local commits ahead; it then
+  pins both source and destination. No checkout or current-branch push occurs.
 - Background fetch remains noninteractive (`credential.interactive=false` plus
   `GCM_INTERACTIVE=false`) and can use existing credentials and SSH agents.
   Explicit clone/fetch/pull/push (and origin branch deletion) allow helper

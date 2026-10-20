@@ -36,6 +36,18 @@ sources:
     resource: ../../src/components/HistoryGraph.tsx
   - id: graph-drop-tests
     resource: ../../src/components/HistoryGraph.ui.test.tsx
+  - id: remote-writes
+    resource: ../../src-tauri/src/remote.rs
+  - id: remote-dto
+    resource: ../../src-tauri/src/remote_dto.rs
+  - id: remote-tests
+    resource: ../../src-tauri/src/remote_tests.rs
+  - id: remote-model
+    resource: ../../src/model/remote.ts
+  - id: branch-menu
+    resource: ../../src/components/GraphContextMenu.tsx
+  - id: branch-push-tests
+    resource: ../../src/components/RepositoryPane.push.test.tsx
 ---
 
 # Git mutation safeguards
@@ -65,6 +77,15 @@ the receiving local branch as explicit destination. Review precedes execution;
 the backend switches to the destination if needed. Self-drops, tag/remote
 destinations and mixed payloads are rejected; commit drops remain cherry-picks
 onto the current local branch only. A checked-out branch is required.[^graph-drops][^graph-drop-tests][^operations]
+
+Branch-menu push reuses the ordinary single-branch, no-force remote write. A
+non-current local branch is eligible only after an offline per-branch read shows
+its same-name `origin/<branch>` upstream and commits ahead; the request pins that
+branch as both source and destination, while the backend re-resolves the named
+source and reads its upstream configuration instead of the checked-out branch's.
+Explicit per-branch metadata reads reject missing or invalid local branches.
+The checked-out branch keeps the existing push/publish flow. Local ahead metadata
+is a review signal, not proof of the remote's current state.[^remote-writes][^remote-dto][^remote-model][^branch-menu][^branch-push-tests][^remote-tests]
 
 Merge review includes a dedicated editable commit message and defaults to
 `--no-ff`, creating a merge commit even when fast-forward is possible. Users can
@@ -137,3 +158,9 @@ publication shares the mutation lock, and queued writes recheck handle validity.
 [^origin-reset-dialog]: Captured origin reset review, destructive confirmation and no automatic retry.
 [^graph-drops]: Shared graph/sidebar drop eligibility and source/destination construction.
 [^graph-drop-tests]: Branch direction, destination eligibility and current-target cherry-pick regressions.
+[^remote-writes]: Explicit push source/destination resolution and existing no-force preflight.
+[^remote-dto]: Push source contract and optional per-branch sync metadata.
+[^remote-model]: Branch push eligibility helper and pinned request shape.
+[^branch-menu]: Branch-menu push entry and offline eligibility read.
+[^branch-push-tests]: Non-current branch payload and menu eligibility regressions.
+[^remote-tests]: Real-Git source push and per-branch sync metadata regressions.

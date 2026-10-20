@@ -9,7 +9,7 @@ export type RemoteActionRequest =
   | { kind: 'fetch'; remote?: string; branch?: string }
   | { kind: 'backgroundFetch'; remote?: string }
   | { kind: 'pull'; remote?: string; branch?: string; pullMode?: PullMode }
-  | { kind: 'push'; remote?: string; branch?: string; setUpstream?: boolean };
+  | { kind: 'push'; remote?: string; branch?: string; source?: string; setUpstream?: boolean };
 export interface RemoteActionResult { output: string }
 export interface StashEntry { oid: string; selector: string; message: string }
 export type StashActionRequest =
@@ -19,7 +19,7 @@ export type StashActionRequest =
 export interface StashActionResult { output: string }
 
 /* Tauri commands (camelCase arguments):
- * repository_sync_info({handle}) -> SyncInfo
+ * repository_sync_info({handle, branch?}) -> SyncInfo (offline; branch defaults to the checked-out branch)
  * repository_remote_action({handle, action: RemoteActionRequest}) -> RemoteActionResult
  * repository_stashes({handle}) -> StashEntry[]
  * repository_stash_action({handle, action: StashActionRequest}) -> StashActionResult
@@ -30,6 +30,15 @@ export const DEFAULT_PULL_MODE: PullMode = 'ffOnly';
 
 export function needsPublish(sync: SyncInfo | null): boolean {
   return !!sync?.branch && !sync.upstream;
+}
+
+/** A menu push may name a non-current local branch. Require its exact
+ * same-name origin upstream and known local commits, then pin both the source
+ * and destination so the backend cannot fall back to the checked-out branch. */
+export function branchPushRequest(branch: string, sync: SyncInfo | null): Extract<RemoteActionRequest, { kind: 'push' }> | null {
+  if (!sync || sync.branch !== branch || !sync.remotes.includes('origin')) return null;
+  if (sync.upstream !== `origin/${branch}` || sync.ahead === null || sync.ahead <= 0) return null;
+  return { kind: 'push', remote: 'origin', branch, source: branch };
 }
 
 /** A short, human-readable summary for the toolbar's branch/sync badge. */

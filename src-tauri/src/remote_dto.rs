@@ -42,6 +42,8 @@ pub enum RemoteAction {
     Push {
         remote: Option<String>,
         branch: Option<String>,
+        /// Local branch to push. Omit to push the checked-out branch.
+        source: Option<String>,
         #[serde(default)]
         set_upstream: bool,
     },

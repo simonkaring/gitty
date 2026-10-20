@@ -53,14 +53,26 @@ impl Repository {
         self.sync_info_with_counts(true)
     }
 
+    /// Offline sync metadata for one local branch, without checking it out.
+    /// Remote actions use `sync_info_with_counts` for the checked-out branch.
+    pub fn sync_info_for(&self, branch: &str) -> Result<SyncInfo> {
+        self.remote_branch_name(branch)?;
+        resolve(self.location(), &format!("refs/heads/{branch}"))?;
+        self.sync_info_for_branch(Some(branch), true)
+    }
+
     fn sync_info_with_counts(&self, counts: bool) -> Result<SyncInfo> {
         let branch = self.sync_branch()?;
+        self.sync_info_for_branch(branch.as_deref(), counts)
+    }
+
+    fn sync_info_for_branch(&self, branch: Option<&str>, counts: bool) -> Result<SyncInfo> {
         let remotes = crate::repository::string(self.location(), &["remote"])?
             .lines()
             .map(String::from)
             .collect();
         let mut info = SyncInfo {
-            branch,
+            branch: branch.map(String::from),
             upstream: None,
             ahead: None,
             behind: None,
@@ -110,7 +122,7 @@ impl Repository {
                         "rev-list",
                         "--left-right",
                         "--count",
-                        &format!("HEAD...{}", fields[2]),
+                        &format!("{full}...{}", fields[2]),
                         "--",
                     ],
                 )?;
@@ -200,9 +212,13 @@ impl Repository {
             ));
         }
         let info = self.sync_info_with_counts(false)?;
-        let configured_remote = info
-            .branch
-            .as_ref()
+        // A named push source supplies its own upstream configuration; every
+        // other action follows the checked-out branch.
+        let source_branch = match &action {
+            RemoteAction::Push { source, .. } => source.as_deref().or(info.branch.as_deref()),
+            _ => info.branch.as_deref(),
+        };
+        let configured_remote = source_branch
             .map(|b| self.sync_config(&format!("branch.{b}.remote")))
             .transpose()?
             .flatten();
@@ -210,8 +226,7 @@ impl Repository {
             action,
             RemoteAction::Pull { .. } | RemoteAction::Push { .. }
         ) {
-            info.branch
-                .as_ref()
+            source_branch
                 .map(|b| self.sync_config(&format!("branch.{b}.merge")))
                 .transpose()?
                 .flatten()
@@ -308,19 +323,26 @@ impl Repository {
                 let output = self.write(&a, &env, &[], 0)?;
                 network_result(output, wsl && interactive)
             }
-            RemoteAction::Push { set_upstream, .. } => {
-                let current = info.branch.as_deref().ok_or_else(|| {
-                    Error::new("detachedHead", "Switch to a local branch before pushing.")
-                })?;
-                self.remote_branch_name(current)?;
-                resolve(self.location(), &format!("refs/heads/{current}"))?;
+            RemoteAction::Push {
+                source,
+                set_upstream,
+                ..
+            } => {
+                let source = source
+                    .as_deref()
+                    .or(info.branch.as_deref())
+                    .ok_or_else(|| {
+                        Error::new("detachedHead", "Switch to a local branch before pushing.")
+                    })?;
+                self.remote_branch_name(source)?;
+                resolve(self.location(), &format!("refs/heads/{source}"))?;
                 if tracking_branch.is_none() && !set_upstream {
                     return Err(Error::new(
                         "noUpstream",
                         "Publish this branch with setUpstream enabled for its first push.",
                     ));
                 }
-                let destination = branch.or(tracking_branch).unwrap_or(current);
+                let destination = branch.or(tracking_branch).unwrap_or(source);
                 self.remote_branch_name(destination)?;
                 // Even an explicit refspec does not neutralize remote.*.mirror.
                 let mirror = self.check(&[
@@ -360,7 +382,7 @@ impl Repository {
                 a.extend(args(&[
                     "--",
                     &remote,
-                    &format!("refs/heads/{current}:refs/heads/{destination}"),
+                    &format!("refs/heads/{source}:refs/heads/{destination}"),
                 ]));
                 network_result(self.write(&a, &env, &[], 0)?, wsl && interactive)
             }

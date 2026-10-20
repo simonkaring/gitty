@@ -216,8 +216,19 @@ async fn repository_cancel_clone(
     with_service(state, move |service| service.cancel_clone(&operation_id)).await
 }
 #[tauri::command]
-async fn repository_sync_info(state: tauri::State<'_, Shared>, handle: String) -> Result<SyncInfo> {
-    with_service(state, move |s| s.repo(&handle)?.sync_info()).await
+async fn repository_sync_info(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    branch: Option<String>,
+) -> Result<SyncInfo> {
+    with_service(state, move |s| {
+        let repo = s.repo(&handle)?;
+        match branch {
+            Some(branch) => repo.sync_info_for(&branch),
+            None => repo.sync_info(),
+        }
+    })
+    .await
 }
 #[tauri::command]
 async fn repository_remote_action(
