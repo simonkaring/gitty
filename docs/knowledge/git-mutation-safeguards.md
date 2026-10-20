@@ -46,6 +46,12 @@ sources:
     resource: ../../src/model/remote.ts
   - id: branch-menu
     resource: ../../src/components/GraphContextMenu.tsx
+  - id: merge-menu-tests
+    resource: ../../src/components/GraphContextMenu.merge.test.tsx
+  - id: operation-ui
+    resource: ../../src/model/operationUi.ts
+  - id: operation-smoke
+    resource: ../../src/components/operations.smoke.mjs
   - id: branch-push-tests
     resource: ../../src/components/RepositoryPane.push.test.tsx
 ---
@@ -73,10 +79,25 @@ in staged content. Remote-tracking refs are local evidence, not proof of the
 remote's current state.[^contract][^hunk-tests]
 
 Branch drops in the graph/sidebar capture the dragged ref as merge source and
-the receiving local branch as explicit destination. Review precedes execution;
-the backend switches to the destination if needed. Self-drops, tag/remote
+the receiving local branch as explicit destination. Local and remote-tracking
+branch sources share this flow; full `refs/remotes/<remote>/<branch>` refs keep
+same-named remotes distinct. Review precedes execution; the backend switches to
+the destination if needed and never moves the source ref. Self-drops, tag/remote
 destinations and mixed payloads are rejected; commit drops remain cherry-picks
 onto the current local branch only. A checked-out branch is required.[^graph-drops][^graph-drop-tests][^operations]
+
+Branch context actions (including right-click and Shift+F10) merge a local or
+remote-tracking source into the current local branch. They never offer a remote
+destination, and review rejects non-local destination refs. The same captured
+operation request, freshness checks and merge-message/stash handling apply as
+for local-source menus.[^branch-menu][^merge-menu-tests][^operation-ui]
+
+Relation reads ignore responses for a superseded menu target. Focused Chromium
+coverage (`GITTY_REMOTE_MERGE_SMOKE=1` with the operations smoke script) exercises
+actual graph/sidebar remote drag starts, local destinations and right-click /
+Shift+F10 review entry; its IPC is mocked, not native Git. Real-Git regressions
+cover full-ref disambiguation, changed remote-tip review refusal and invalid
+destinations before stashing.[^merge-menu-tests][^operation-smoke][^operation-tests]
 
 Branch-menu push reuses the ordinary single-branch, no-force remote write. A
 non-current local branch is eligible only after an offline per-branch read shows
@@ -161,6 +182,9 @@ publication shares the mutation lock, and queued writes recheck handle validity.
 [^remote-writes]: Explicit push source/destination resolution and existing no-force preflight.
 [^remote-dto]: Push source contract and optional per-branch sync metadata.
 [^remote-model]: Branch push eligibility helper and pinned request shape.
-[^branch-menu]: Branch-menu push entry and offline eligibility read.
+[^branch-menu]: Branch-menu push and local/remote merge entry construction.
+[^merge-menu-tests]: Remote-tracking source merge and non-local destination regressions.
+[^operation-ui]: Reviewed merge source/destination eligibility, including local-only destinations.
+[^operation-smoke]: Focused real-browser remote-source drag and context-menu review checks with mocked IPC.
 [^branch-push-tests]: Non-current branch payload and menu eligibility regressions.
 [^remote-tests]: Real-Git source push and per-branch sync metadata regressions.

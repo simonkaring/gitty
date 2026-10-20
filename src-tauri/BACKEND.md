@@ -711,7 +711,10 @@ remain unverified and require refresh/review.
   `OperationResult` with `operation.conflicts` for the conflict editor (this can
   restage merged paths). Untracked/ignored obstructions are still refused by Git. Merges target the
   current local branch (or switch to an explicit local `destination` first) with
-  explicit `--ff` or `--no-ff`, and `--no-edit`. An optional merge `message` is
+  explicit `--ff` or `--no-ff`, and `--no-edit`. `source` may be any resolvable
+  revision, including a full remote-tracking ref such as
+  `refs/remotes/origin/topic`; non-local `destination` refs are rejected with
+  `invalidReference`. Merging reads the source ref and never moves it. An optional merge `message` is
   validated before any destination switch: nonblank, at most 64 KiB of UTF-8,
   and no NUL. Native Git reads an operation-owned temporary file; WSL Git reads
   the message from stdin via `--file=/dev/stdin`. Absent messages retain

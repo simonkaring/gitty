@@ -22,6 +22,7 @@ export function actionReason(action: GitAction, session: RepositorySession, oper
     if (operation.conflicts.length) return 'Resolve existing conflicts before resetting the branch.';
     return action.branch.startsWith('refs/remotes/origin/') && action.branch !== 'refs/remotes/origin/HEAD' && action.branch.replace(/^refs\/remotes\/origin\//, 'refs/heads/') === session.headRef && !!action.expectedOriginOid ? '' : 'Reset requires the checked-out same-named local branch and an origin tip.';
   }
+  if (action.kind === 'merge' && action.destination?.startsWith('refs/') && !action.destination.startsWith('refs/heads/')) return 'Merges must target a local branch.';
   if (action.kind === 'merge' && action.message !== undefined) {
     if (!action.message.trim()) return 'Enter a merge commit message.';
     if (action.message.includes('\0')) return 'Commit messages cannot contain NUL bytes.';

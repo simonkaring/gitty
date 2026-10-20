@@ -1,4 +1,5 @@
 // PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/operations.smoke.mjs
+// Set GITTY_REMOTE_MERGE_SMOKE=1 for focused remote-source graph/sidebar coverage.
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
@@ -15,10 +16,15 @@ try {
     const commit = (id, parents) => ({ id, parents, subject: `Commit ${id}`, author: 'Test Author', email: 'test@example.test', timestamp: 1700000000, body: '' });
     const commits = Array.from({ length: 180 }, (_, i) => commit(`c${i}`, i === 179 ? [] : [`c${i + 1}`]));
     commits[2].parents = ['c3', 'c4'];
-    const state = () => ({ session: { handle: 's', name: 'Operations fixture', root: '/fixture', gitDir: '/fixture/.git', commonDir: '/fixture/.git', location: { kind: 'native', path: '/fixture' }, head: f.head, headRef: 'refs/heads/main', bare: false, shallow: false, linkedWorktree: false }, refs: [{ name: 'main', fullName: 'refs/heads/main', commitId: f.head, kind: 'local' }, { name: 'topic', fullName: 'refs/heads/topic', commitId: 'c2', kind: 'local' }, { name: 'origin/topic', fullName: 'refs/remotes/origin/topic', commitId: 'c2', kind: 'remote' }, { name: 'v1', fullName: 'refs/tags/v1', commitId: 'c3', kind: 'tag' }], remotes: ['origin'], fingerprint: String(f.version) });
+    const state = () => ({ session: { handle: 's', name: 'Operations fixture', root: '/fixture', gitDir: '/fixture/.git', commonDir: '/fixture/.git', location: { kind: 'native', path: '/fixture' }, head: f.head, headRef: 'refs/heads/main', bare: false, shallow: false, linkedWorktree: false }, refs: [{ name: 'main', fullName: 'refs/heads/main', commitId: f.head, kind: 'local' }, { name: 'topic', fullName: 'refs/heads/topic', commitId: 'c2', kind: 'local' }, { name: 'origin/topic', fullName: 'refs/remotes/origin/topic', commitId: 'c2', kind: 'remote' }, { name: 'upstream/topic', fullName: 'refs/remotes/upstream/topic', commitId: 'c1', kind: 'remote' }, { name: 'v1', fullName: 'refs/tags/v1', commitId: 'c3', kind: 'tag' }], remotes: ['origin', 'upstream'], fingerprint: String(f.version) });
     const operation = () => ({ kind: f.kind, label: f.kind === 'merge' ? 'Merge in progress' : '', current: 'main', incoming: f.kind === 'none' ? null : 'topic', conflicts: f.conflict ? ['file.txt'] : [], canContinue: f.kind !== 'none' && !f.conflict, canSkip: f.kind === 'rebase', step: null, total: null, fingerprint: String(f.version) });
-    window.__TAURI_INTERNALS__ = { invoke: async (command, args) => {
+    let callbackId = 0;
+    window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+    window.__TAURI_INTERNALS__ = { metadata: { currentWindow: { label: 'main' }, currentWebview: { windowLabel: 'main', label: 'main' } }, transformCallback: () => ++callbackId, unregisterCallback: () => {}, invoke: async (command, args) => {
       f.calls.push({ command, args });
+      if (command === 'plugin:event|listen') return 1;
+      if (command === 'plugin:event|unlisten') return;
+      if (command.startsWith('plugin:webview|') || command.startsWith('plugin:window|')) return;
       if (command === 'repository_snapshot') { const [state, status, operation] = await Promise.all(['repository_state', 'repository_status', 'repository_operation_state'].map(name => window.__TAURI_INTERNALS__.invoke(name, args))); return { state, status, operation }; }
       if (command === 'repository_recent') return [{ kind: 'native', path: '/fixture' }];
       if (command === 'wsl_distributions') return [];
@@ -26,6 +32,7 @@ try {
       if (command === 'repository_open') return state();
       if (command === 'repository_state') { if (f.failRefresh) throw new Error('Refresh failed fixture'); return state(); }
       if (command === 'repository_operation_state') return operation();
+      if (command === 'repository_branch_relation') return [2, 1];
       if (command === 'repository_status') return { head: f.head, headRef: 'refs/heads/main', fingerprint: String(f.version), entries: f.conflict ? [{ path: 'file.txt', indexStatus: 'U', worktreeStatus: 'U', oldPath: null, conflicted: true, untracked: false }] : f.showWorking ? [{ path: 'file.txt', indexStatus: '.', worktreeStatus: 'M', oldPath: null, conflicted: false, untracked: false }] : [] };
       if (command === 'repository_history') return { commits, cursor: null, generation: String(f.version), shallow: false };
       if (command === 'repository_commit') return commits.find(commit => commit.id === args.oid);
@@ -57,8 +64,7 @@ try {
     } };
   });
   await page.goto(server.resolvedUrls.local[0]);
-  await page.getByRole('button', { name: 'Open repository', exact: true }).click();
-  await page.getByRole('button', { name: 'Native /fixture' }).click();
+  await page.getByRole('button', { name: /\/fixture$/ }).click();
   await page.getByRole('option', { name: /^Commit c0,/ }).waitFor();
   const writes = () => page.evaluate(() => window.fixture.calls.filter(call => ['repository_run_operation', 'repository_resolve_conflict'].includes(call.command)));
 
@@ -94,6 +100,40 @@ try {
 
   const summary = page.getByRole('region', { name: 'Operation summary', exact: true });
   const sidebarMain = page.locator('.ref-item[title="refs/heads/main"]');
+  // Keep the shared local/origin badge fixture and exercise an ungrouped remote
+  // pill plus its sidebar entry. Use actual dragstart, not injected drops.
+  const remotePill = page.getByRole('button', { name: 'Select tip of refs/remotes/upstream/topic; right-click or press Shift+F10 for actions', exact: true });
+  const sidebarRemote = page.locator('.ref-item[title="refs/remotes/upstream/topic"]');
+  // Open the remote reference tree, including its remote-name folders.
+  await page.locator('.reference-group').filter({ has: page.locator('summary', { hasText: /^Remote branches/ }) }).locator(':scope > summary').click();
+  await page.locator('.reference-folder > summary').filter({ hasText: /^upstream$/ }).click();
+  for (const source of [remotePill, sidebarRemote]) {
+    for (const target of [main, sidebarMain, topic]) {
+      await source.dragTo(target);
+      assert.equal(await page.getByRole('combobox', { name: 'Source / starting revision', exact: true }).inputValue(), 'refs/remotes/upstream/topic');
+      await page.getByRole('button', { name: 'Review operation', exact: true }).click();
+      await summary.getByText('Source: Remote branch upstream/topic', { exact: true }).waitFor();
+      await summary.getByText(`Destination: Local branch ${target === topic ? 'topic' : 'main'}`, { exact: true }).waitFor();
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+      assert.equal((await writes()).length, 0);
+    }
+    for (const gesture of ['rightclick', 'Shift+F10']) {
+      if (gesture === 'rightclick') await source.click({ button: 'right' });
+      else { await source.focus(); await source.press(gesture); }
+      const menu = page.getByRole('menu', { name: 'Actions for upstream/topic', exact: true });
+      await menu.getByRole('menuitem', { name: /^Merge upstream\/topic into main/ }).click();
+      assert.equal(await page.getByRole('combobox', { name: 'Source / starting revision', exact: true }).inputValue(), 'refs/remotes/upstream/topic');
+      await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    }
+  }
+  await main.dragTo(remotePill);
+  assert.equal(await page.getByRole('dialog', { name: 'Git actions' }).count(), 0);
+  await main.dragTo(sidebarRemote);
+  assert.equal(await page.getByRole('dialog', { name: 'Git actions' }).count(), 0);
+  if (process.env.GITTY_REMOTE_MERGE_SMOKE) {
+    assert.deepEqual(errors, []);
+    console.log('Remote merge smoke passed (Chromium, mocked native IPC): graph/sidebar dragstart and drops onto current/non-current local branches, full remote refs in review, right-click/Shift+F10, remote destination rejection, cancellation without writes.');
+  } else {
   const commitSubject = page.getByRole('option', { name: /^Commit c1,/ }).locator('.subject');
   // Real commit subject drags retain the oid and only offer a reviewed cherry-pick.
   for (const target of [main, sidebarMain]) {
@@ -386,4 +426,5 @@ try {
   await pseudoDrag.dispose();
   assert.deepEqual(errors, []);
   console.log('Operations smoke passed (mocked native IPC): branch-to-local-branch merge and commit current-target graph/sidebar drops, invalid/pseudo-row payload rejection, cancel without writes, both drag autoscroll types, current-branch create default, readable source/destination/order/mainline/fast-forward reviews, right-click/keyboard parity, immutable stale review, duplicate-submit lock, uncertain write/refresh recovery, conflict reread/external dirty edits, CRLF, operation DTOs, provider restrictions/failure/retry.');
+  }
 } finally { await browser.close(); await server.close(); }

@@ -673,6 +673,12 @@ impl Repository {
         let source_oid = resolve(self.location(), source)?;
         let source = source.clone();
         let destination_target = if let Some(destination) = destination {
+            if destination.starts_with("refs/") && !destination.starts_with("refs/heads/") {
+                return Err(Error::new(
+                    "invalidReference",
+                    "Merge destinations must be local branches.",
+                ));
+            }
             let branch = destination
                 .strip_prefix("refs/heads/")
                 .unwrap_or(destination);
@@ -952,6 +958,12 @@ impl Repository {
                     ));
                 }
                 if let Some(destination) = destination {
+                    if destination.starts_with("refs/") && !destination.starts_with("refs/heads/") {
+                        return Err(Error::new(
+                            "invalidReference",
+                            "Merge destinations must be local branches.",
+                        ));
+                    }
                     let branch = destination
                         .strip_prefix("refs/heads/")
                         .unwrap_or(&destination);

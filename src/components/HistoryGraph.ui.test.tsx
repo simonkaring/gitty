@@ -44,6 +44,50 @@ it('rejects invalid branch drops and only cherry-picks commits onto the current 
   expect(graphDropAction(transfer({ [COMMIT_DRAG_TYPE]: WORKING_ID }), 'refs/heads/main', 'refs/heads/main', [{ id: WORKING_ID }], dropRefs)).toBeNull();
 });
 
+it('accepts a remote-tracking branch drop on a local graph pill and rejects a remote destination', async () => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const originalObserver = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} unobserve() {} } as typeof ResizeObserver;
+  vi.stubGlobal('cancelAnimationFrame', vi.fn());
+  const canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(new Proxy({}, { get: () => () => {} }) as CanvasRenderingContext2D);
+  const host = document.createElement('div'), root = createRoot(host), onActions = vi.fn();
+  const refs = [
+    { name: 'main', fullName: 'refs/heads/main', kind: 'local' as const, commitId: 'main-tip' },
+    { name: 'origin/feature/topic', fullName: 'refs/remotes/origin/feature/topic', kind: 'remote' as const, commitId: 'remote-tip' },
+  ];
+  const commits = [
+    { id: 'main-tip', parents: ['remote-tip'], subject: 'Main', body: '', author: 'A', email: '', timestamp: 2, branch: 'main', files: [] },
+    { id: 'remote-tip', parents: [], subject: 'Remote', body: '', author: 'A', email: '', timestamp: 1, branch: 'origin/feature/topic', files: [] },
+  ];
+  try {
+    await act(async () => root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={refs} selectedId="main-tip" head="main-tip" headRef="refs/heads/main" loaded={2} matches={null} onSelect={() => {}} onActions={onActions} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />));
+    const source = host.querySelector('[data-name="origin/feature/topic"]') as HTMLElement | null;
+    const target = host.querySelector('[data-name="main"]') as HTMLElement | null;
+    const data = transfer({ [REF_DRAG_TYPE]: 'refs/remotes/origin/feature/topic' });
+    expect(source?.draggable).toBe(true);
+    const dragOver = new Event('dragover', { bubbles: true, cancelable: true });
+    Object.defineProperty(dragOver, 'dataTransfer', { value: data });
+    await act(async () => { target!.dispatchEvent(dragOver); });
+    expect(dragOver.defaultPrevented).toBe(true);
+    const drop = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, 'dataTransfer', { value: data });
+    await act(async () => { target!.dispatchEvent(drop); });
+    expect(onActions).toHaveBeenCalledExactlyOnceWith({ oid: 'remote-tip', ref: 'refs/remotes/origin/feature/topic', destination: 'refs/heads/main', initial: 'merge' });
+
+    const remoteOver = new Event('dragover', { bubbles: true, cancelable: true });
+    Object.defineProperty(remoteOver, 'dataTransfer', { value: data });
+    await act(async () => { source!.dispatchEvent(remoteOver); });
+    expect(remoteOver.defaultPrevented).toBe(false);
+    const remoteDrop = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(remoteDrop, 'dataTransfer', { value: data });
+    await act(async () => { source!.dispatchEvent(remoteDrop); });
+    expect(onActions).toHaveBeenCalledTimes(1);
+  } finally {
+    await act(async () => root.unmount());
+    canvas.mockRestore(); globalThis.ResizeObserver = originalObserver; vi.unstubAllGlobals();
+  }
+});
+
 it('accepts a branch drop on a non-current graph pill and opens its merge review', async () => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const originalObserver = globalThis.ResizeObserver;

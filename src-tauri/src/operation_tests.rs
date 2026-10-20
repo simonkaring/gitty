@@ -691,6 +691,114 @@ fn operations_merge_into_another_branch_carries_unrelated_changes() {
 }
 
 #[test]
+fn operations_merge_full_remote_tracking_ref_does_not_move_remote_ref() {
+    let f = Fixture::new();
+    f.git(&["switch", "-c", "side"]);
+    f.write("incoming", "incoming\n");
+    let side = f.commit("side");
+    f.git(&["switch", "main"]);
+    f.git(&["update-ref", "refs/remotes/upstream/topic", &side]);
+    let result = f.merge("refs/remotes/upstream/topic", true).unwrap();
+    let merge = f.git(&["rev-parse", "HEAD"]);
+    assert_eq!(result.head, Some(merge.clone()));
+    assert_ne!(merge, side);
+    assert_eq!(f.git(&["symbolic-ref", "--short", "HEAD"]), "main");
+    assert_eq!(f.git(&["rev-parse", "refs/remotes/upstream/topic"]), side);
+    assert_eq!(f.git(&["rev-parse", "HEAD^2"]), side);
+    assert_eq!(
+        std::fs::read(f.dir.path().join("incoming")).unwrap(),
+        b"incoming\n"
+    );
+    let error = f
+        .run(GitAction::Merge {
+            source: "main".into(),
+            destination: Some("refs/remotes/upstream/topic".into()),
+            no_fast_forward: false,
+            message: None,
+            stash_changes: false,
+        })
+        .unwrap_err();
+    assert_eq!(error.code, "invalidReference");
+    assert_eq!(f.git(&["rev-parse", "refs/remotes/upstream/topic"]), side);
+}
+
+#[test]
+fn operations_remote_merge_disambiguates_refs_and_rejects_changed_remote_review() {
+    let f = Fixture::new();
+    let base = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["branch", "destination"]);
+    f.git(&["branch", "topic"]);
+    f.git(&["update-ref", "refs/remotes/origin/topic", &base]);
+    f.git(&["switch", "-c", "incoming"]);
+    f.write("incoming", "remote work\n");
+    let incoming = f.commit("remote work");
+    f.git(&["switch", "main"]);
+    f.git(&["update-ref", "refs/remotes/upstream/topic", &incoming]);
+    let action = || GitAction::Merge {
+        source: "refs/remotes/upstream/topic".into(),
+        destination: Some("refs/heads/destination".into()),
+        no_fast_forward: false,
+        message: None,
+        stash_changes: false,
+    };
+    let reviewed = f.request(action());
+    f.git(&["update-ref", "refs/remotes/upstream/topic", &base]);
+    assert_eq!(
+        f.service
+            .run_operation(&f.handle, reviewed, None)
+            .unwrap_err()
+            .code,
+        "staleOperation"
+    );
+    assert_eq!(f.git(&["symbolic-ref", "--short", "HEAD"]), "main");
+    assert_eq!(f.git(&["rev-parse", "destination"]), base);
+    f.git(&["update-ref", "refs/remotes/upstream/topic", &incoming]);
+    f.run(action()).unwrap();
+    assert_eq!(f.git(&["symbolic-ref", "--short", "HEAD"]), "destination");
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), incoming);
+    for reference in [
+        "refs/heads/main",
+        "refs/heads/topic",
+        "refs/remotes/origin/topic",
+    ] {
+        assert_eq!(f.git(&["rev-parse", reference]), base);
+    }
+    assert_eq!(
+        f.git(&["rev-parse", "refs/remotes/upstream/topic"]),
+        incoming
+    );
+}
+
+#[test]
+fn operations_nonlocal_merge_destination_is_rejected_before_stashing() {
+    for stash_changes in [false, true] {
+        let f = Fixture::new();
+        let head = f.git(&["rev-parse", "HEAD"]);
+        // Even if this unusual local name exists, a full remote ref must not be
+        // reinterpreted as refs/heads/refs/remotes/upstream/topic.
+        f.git(&["branch", "refs/remotes/upstream/topic"]);
+        f.write("file", "local work\n");
+        let error = f
+            .run(GitAction::Merge {
+                source: "main".into(),
+                destination: Some("refs/remotes/upstream/topic".into()),
+                no_fast_forward: false,
+                message: None,
+                stash_changes,
+            })
+            .unwrap_err();
+        assert_eq!(error.code, "invalidReference");
+        assert_eq!(f.git(&["symbolic-ref", "--short", "HEAD"]), "main");
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), head);
+        assert_eq!(f.git(&["stash", "list"]), "");
+        assert_eq!(
+            std::fs::read(f.dir.path().join("file")).unwrap(),
+            b"local work\n"
+        );
+    }
+}
+
+#[test]
 fn operations_merge_preserves_staged_changes_only_when_fast_forwarding() {
     for no_fast_forward in [false, true] {
         let f = Fixture::new();

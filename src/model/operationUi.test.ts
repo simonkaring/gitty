@@ -25,6 +25,9 @@ describe('operation eligibility and ordered selection', () => {
   it('blocks detached merges, same-branch actions, unknown state and active operations', () => {
     const merge = { kind: 'merge' as const, source: 'refs/heads/topic', noFastForward: false };
     expect(actionReason(merge, session, idle)).toBe('');
+    expect(actionReason({ ...merge, source: 'refs/remotes/origin/topic' }, session, idle)).toBe('');
+    expect(actionReason({ ...merge, destination: 'refs/remotes/origin/topic' }, session, idle)).toMatch(/local branch/);
+    expect(actionReason({ ...merge, destination: 'refs/tags/v1' }, session, idle)).toMatch(/local branch/);
     expect(actionReason(merge, { ...session, headRef: null }, idle)).toMatch(/Check out/);
     expect(actionReason({ ...merge, source: session.headRef! }, session, idle)).toMatch(/different/);
     expect(actionReason(merge, session, null)).toMatch(/unavailable/);
