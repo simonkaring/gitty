@@ -195,12 +195,48 @@ impl Repository {
                 }
                 self.wsl_cat(distribution, &path).map(Some)
             }
+            RepositoryLocation::Ssh { .. } => {
+                let test = process::ssh_exec(self.location(), &[], &args(&["test", "-e", &path]))?;
+                let output = process::run(test)?;
+                if output.code == Some(1) {
+                    return Ok(None);
+                }
+                if !output.success {
+                    return Err(self.failed(&output));
+                }
+                self.remote_cat(&path).map(Some)
+            }
         }
     }
     fn wsl_cat(&self, distribution: &str, path: &str) -> Result<Vec<u8>> {
         let mut cat = Command::new("wsl.exe");
         cat.args(["--distribution", distribution, "--exec", "cat", "--", path]);
         let output = process::run(cat)?;
+        if !output.success {
+            return Err(self.failed(&output));
+        }
+        Ok(output.stdout)
+    }
+    /// Reads one backend-constant metadata file on the host that owns it.
+    fn remote_cat(&self, path: &str) -> Result<Vec<u8>> {
+        let command = match self.location() {
+            RepositoryLocation::Wsl { distribution, .. } => {
+                process::validate_distribution(distribution)?;
+                let mut cat = Command::new("wsl.exe");
+                cat.args(["--distribution", distribution, "--exec", "cat", "--", path]);
+                cat
+            }
+            RepositoryLocation::Ssh { .. } => {
+                process::ssh_exec(self.location(), &[], &args(&["cat", "--", path]))?
+            }
+            RepositoryLocation::Native { .. } => {
+                return Err(Error::new(
+                    "internalLocation",
+                    "Native metadata is read from disk, not through a remote command.",
+                ))
+            }
+        };
+        let output = process::run_for(command, process::CHECK_TIMEOUT)?;
         if !output.success {
             return Err(self.failed(&output));
         }
@@ -216,6 +252,17 @@ impl Repository {
         let mut find = Command::new("wsl.exe");
         find.args(["--distribution", distribution, "--exec"])
             .args(metadata_scan_args(&self.session.git_dir));
+        let output = process::run_for(find, process::CHECK_TIMEOUT)?;
+        if !find_outcome_acceptable(output.success, output.code, &output.stdout) {
+            return Err(self.failed(&output));
+        }
+        Ok(find_listing_paths(&self.session.git_dir, &output.stdout))
+    }
+    /// The same single-scan shape over SSH: one connection channel lists every
+    /// candidate, and only names that exist are read.
+    fn ssh_existing_metadata(&self) -> Result<HashSet<String>> {
+        let words: Vec<String> = metadata_scan_args(&self.session.git_dir);
+        let find = process::ssh_exec(self.location(), &[], &words)?;
         let output = process::run_for(find, process::CHECK_TIMEOUT)?;
         if !find_outcome_acceptable(output.success, output.code, &output.stdout) {
             return Err(self.failed(&output));
@@ -279,17 +326,16 @@ impl Repository {
         // fails there exactly as it did after `test -e`.
         let existing = match self.location() {
             RepositoryLocation::Wsl { distribution, .. } => {
-                Some((distribution, self.wsl_existing_metadata(distribution)?))
+                Some(self.wsl_existing_metadata(distribution)?)
             }
+            RepositoryLocation::Ssh { .. } => Some(self.ssh_existing_metadata()?),
             RepositoryLocation::Native { .. } => None,
         };
         for path in OPERATION_METADATA_PATHS {
             let value = match &existing {
                 None => self.metadata(path)?,
-                Some((_, present)) if !present.contains(path) => None,
-                Some((distribution, _)) => {
-                    Some(self.wsl_cat(distribution, &format!("{}/{path}", self.session.git_dir))?)
-                }
+                Some(present) if !present.contains(path) => None,
+                Some(_) => Some(self.remote_cat(&format!("{}/{path}", self.session.git_dir))?),
             };
             metadata.push((path, value));
         }
@@ -948,7 +994,11 @@ impl Repository {
                             merge_message_file = Some(file);
                             path
                         }
-                        RepositoryLocation::Wsl { .. } => "/dev/stdin".into(),
+                        // Linux stdin is a real file for the remote process too;
+                        // both transports read the supplied message from it.
+                        RepositoryLocation::Wsl { .. } | RepositoryLocation::Ssh { .. } => {
+                            "/dev/stdin".into()
+                        }
                     });
                 }
                 if state.session.head_ref.is_none() {
@@ -1225,10 +1275,15 @@ impl Repository {
                         let text = process::text(done)?;
                         interactive |= Self::validate_rebase_todo_lines(text.lines())?;
                     }
-                    if matches!(self.location(), RepositoryLocation::Wsl { .. }) && interactive {
+                    if interactive
+                        && matches!(
+                            self.location(),
+                            RepositoryLocation::Wsl { .. } | RepositoryLocation::Ssh { .. }
+                        )
+                    {
                         return Err(Error::new(
                             "unsupportedOperation",
-                            "Interactive rebase continuation is currently not supported for WSL repositories. Finish this action in Git.",
+                            "Interactive rebase continuation is not supported for WSL or SSH repositories yet. Finish this action in Git.",
                         ));
                     }
                     if interactive && editor.is_none() {

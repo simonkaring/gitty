@@ -304,6 +304,9 @@ impl Repository {
                 let current = current_preflight.tracking_oid;
                 let url = current_preflight.push_url;
                 let wsl = matches!(self.location(), RepositoryLocation::Wsl { .. });
+                // An SSH repository pushes from its own host with its own keys;
+                // there is no local askpass bridge to lend it.
+                let ssh = matches!(self.location(), RepositoryLocation::Ssh { .. });
                 let mut a = Vec::new();
                 crate::credentials::configure(&mut a, self.location(), &url)?;
                 let prompt_context = || {
@@ -325,7 +328,7 @@ impl Repository {
                     };
                 #[cfg(not(windows))]
                 let wsl_bridge: Option<(String, crate::askpass::AskpassGuard<'_>)> = None;
-                let native_bridge = match (wsl, askpass) {
+                let native_bridge = match (wsl || ssh, askpass) {
                     (false, Some(registry)) => {
                         Some(registry.start_operation_with(prompt_context()))
                     }
@@ -547,6 +550,31 @@ impl Repository {
                         "WSL ref-lock checks require Windows.",
                     ))
                 }
+            }
+            // A destructive delete is worth a few round trips; the control
+            // connection makes them cheap after the first one.
+            RepositoryLocation::Ssh { .. } => {
+                for path in locks {
+                    for flag in ["-e", "-L"] {
+                        let command = process::ssh_exec(
+                            self.location(),
+                            &[],
+                            &["test".to_string(), flag.into(), path.clone()],
+                        )?;
+                        let out = process::run(command)?;
+                        match out.code {
+                            Some(0) => return Ok(true),
+                            Some(1) => {}
+                            _ => {
+                                return Err(Error::new(
+                                    "ssh",
+                                    "Unable to verify Git ref-lock state on the remote host.",
+                                ))
+                            }
+                        }
+                    }
+                }
+                Ok(false)
             }
         }
     }

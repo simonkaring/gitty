@@ -1436,7 +1436,10 @@ fn operations_unsupported_state_bare_and_signing_errors() {
     f.git(&["config", "gpg.program", "gitty-nonexistent-signing-program"]);
     let before = f.git(&["rev-parse", "HEAD"]);
     let error = f.run(GitAction::Continue).unwrap_err();
-    assert!(error.message.contains("gitty-nonexistent-signing-program"));
+    assert!(
+        error.message.contains("gitty-nonexistent-signing-program"),
+        "{error:?}"
+    );
     assert_eq!(f.git(&["rev-parse", "HEAD"]), before);
 
     let bare = tempfile::tempdir().unwrap();

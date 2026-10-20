@@ -1,6 +1,11 @@
 /** Shared contract for the native repository service. IDs and cursors are opaque. */
 import type { OperationState } from './operations';
-export type RepositoryLocation = { kind: 'native'; path: string } | { kind: 'wsl'; distribution: string; path: string };
+/** A repository is always addressed by where its working tree lives: on this machine,
+ * inside a WSL distribution, or on another host reached with the user's SSH config. */
+export type RepositoryLocation =
+  | { kind: 'native'; path: string }
+  | { kind: 'wsl'; distribution: string; path: string }
+  | { kind: 'ssh'; host: string; port?: number; user?: string; path: string };
 export interface RepositorySession {
   handle: string;
   location: RepositoryLocation;
@@ -104,5 +109,7 @@ export type RepositoryMutation =
   * repository_set_git_identity({handle, identity: CommitIdentity, expectedLocal: GitIdentityValues}) -> RepositoryGitIdentity
  * wsl_distributions() -> WslDistribution[]
  * wsl_directories({distribution, path}) -> DirectoryEntry[]
+ * ssh_test({target: {host, port?, user?, path?}}) -> SshProbe ({gitVersion, name})
+ * Proves the destination works before a tab exists; never stores anything.
  * Errors: {code: string, message: string}
  */

@@ -1,4 +1,5 @@
 import { errorMessage, native, statusGroups } from './native';
+import { locationIdentity } from './ssh';
 import type { CreateCommitResult, RepositoryMutation, RepositorySession, StatusEntry } from './repository';
 
 export interface MutationOutcome { oid?: string; error?: string; refreshError?: string; superseded?: boolean }
@@ -72,8 +73,9 @@ export function discardableEntries(entries: StatusEntry[]): StatusEntry[] {
 export interface CommitDraft { subject: string; body: string }
 const memory = new Map<string, CommitDraft>();
 export function draftKey(session: RepositorySession): string {
-  // Handles expire. Include WSL distribution and worktree root, not just repo name.
-  return `gitty:commit-draft:${JSON.stringify([session.location.kind, session.location.kind === 'wsl' ? session.location.distribution : '', session.root])}`;
+  // Handles expire. Include the transport destination and worktree root, not just
+  // the repository name, so the same path on two hosts keeps separate drafts.
+  return `gitty:commit-draft:${JSON.stringify([locationIdentity(session.location), session.root])}`;
 }
 export function readDraft(key: string): CommitDraft {
   if (memory.has(key)) return memory.get(key)!;

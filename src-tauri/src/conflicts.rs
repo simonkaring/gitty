@@ -32,9 +32,10 @@ fn saved_but_unstaged(error: Error) -> Error {
 }
 
 // Fixed program, no interpolated code or shell. WSL filesystem operations must
-// execute inside Linux, rather than follow Windows UNC/reparse-point semantics.
-// All ancestors and the final file are opened relative to pinned directory fds.
-const WSL_FILE: &str = r#"
+// execute inside Linux, rather than follow Windows UNC/reparse-point semantics,
+// and an SSH repository's files exist only on the remote host. All ancestors and
+// the final file are opened relative to pinned directory fds there too.
+const REMOTE_FILE: &str = r#"
 import os, sys, json, stat
 r = json.loads(sys.stdin.buffer.readline())
 root, path, action = r['root'], r['path'], r['action']
@@ -110,7 +111,7 @@ impl Repository {
         }
         Ok(())
     }
-    fn wsl_file(
+    fn remote_file(
         &self,
         path: &str,
         action: &str,
@@ -118,23 +119,38 @@ impl Repository {
         bytes: &[u8],
         executable: bool,
     ) -> Result<Vec<u8>> {
-        let RepositoryLocation::Wsl { distribution, .. } = self.location() else {
-            unreachable!()
-        };
         let request = serde_json::json!({"root": self.session.root, "path": path, "action": action, "expected": expected, "executable": executable});
         let mut input =
             serde_json::to_vec(&request).map_err(|e| Error::new("encoding", e.to_string()))?;
         input.push(b'\n');
         input.extend_from_slice(bytes);
-        let mut command = std::process::Command::new("wsl.exe");
-        command.args([
-            "--distribution",
-            distribution,
-            "--exec",
-            "python3",
-            "-c",
-            WSL_FILE,
-        ]);
+        let command = match self.location() {
+            RepositoryLocation::Wsl { distribution, .. } => {
+                let mut command = std::process::Command::new("wsl.exe");
+                command.args([
+                    "--distribution",
+                    distribution,
+                    "--exec",
+                    "python3",
+                    "-c",
+                    REMOTE_FILE,
+                ]);
+                command
+            }
+            // python3 is the helper's only runtime; a host without it keeps the
+            // repository readable but disables conflict editing.
+            RepositoryLocation::Ssh { .. } => process::ssh_exec(
+                self.location(),
+                &[],
+                &process::args(&["python3", "-c", REMOTE_FILE]),
+            )?,
+            RepositoryLocation::Native { .. } => {
+                return Err(Error::new(
+                    "internalLocation",
+                    "Native conflict files are read through capability handles.",
+                ))
+            }
+        };
         let output =
             process::run_with_input_for(command, &input, process::CHECK_TIMEOUT, LIMIT * 6 + 8192)
                 .map_err(|e| {
@@ -152,7 +168,8 @@ impl Repository {
                 })?;
         if !output.success {
             return Err(unsupported(&format!(
-                "WSL conflict filesystem access requires python3 and a supported path: {}",
+                "{} conflict filesystem access requires python3 on that host and a supported path: {}",
+                if matches!(self.location(), RepositoryLocation::Wsl { .. }) { "WSL" } else { "SSH" },
                 crate::mutate::report(&output)
             )));
         }
@@ -244,12 +261,12 @@ impl Repository {
                 let (dir, name) = self.conflict_directory(path)?;
                 Self::native_snapshot(&dir, &name)
             }
-            RepositoryLocation::Wsl { .. } => {
-                let output = self.wsl_file(path, "read", None, &[], false)?;
+            RepositoryLocation::Wsl { .. } | RepositoryLocation::Ssh { .. } => {
+                let output = self.remote_file(path, "read", None, &[], false)?;
                 let separator = output
                     .iter()
                     .position(|b| *b == 0)
-                    .ok_or_else(|| unsupported("Invalid WSL file response"))?;
+                    .ok_or_else(|| unsupported("Invalid remote file response"))?;
                 Ok(WorkingSnapshot {
                     kind: process::text(output[..separator].to_vec())?,
                     bytes: output[separator + 1..].to_vec(),
@@ -268,8 +285,11 @@ impl Repository {
         if bytes.is_some_and(|b| b.len() > LIMIT) {
             return Err(unsupported("Resolution exceeds 16 MiB"));
         }
-        if matches!(self.location(), RepositoryLocation::Wsl { .. }) {
-            self.wsl_file(
+        if matches!(
+            self.location(),
+            RepositoryLocation::Wsl { .. } | RepositoryLocation::Ssh { .. }
+        ) {
+            self.remote_file(
                 path,
                 if bytes.is_none() {
                     "delete"
@@ -621,7 +641,7 @@ impl Repository {
 
 #[cfg(all(test, unix))]
 mod helper_tests {
-    use super::WSL_FILE;
+    use super::REMOTE_FILE;
     use std::{
         io::Write,
         os::unix::fs::symlink,
@@ -631,7 +651,7 @@ mod helper_tests {
     fn python(request: serde_json::Value, bytes: &[u8]) -> std::process::Output {
         let mut child = Command::new("python3")
             .arg("-c")
-            .arg(WSL_FILE)
+            .arg(REMOTE_FILE)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

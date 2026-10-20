@@ -2,10 +2,11 @@
 use crate::dto::{Error, RepositoryLocation, Result};
 use std::{
     io::{Read, Seek, SeekFrom, Write},
+    path::PathBuf,
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, OnceLock,
     },
     thread,
     time::{Duration, Instant},
@@ -100,6 +101,136 @@ pub(crate) fn parallel<T: Send>(jobs: Vec<Box<dyn FnOnce() -> T + Send + '_>>) -
             .map(|h| h.join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
             .collect()
     })
+}
+
+/// Where multiplexed SSH control sockets live. Set once at startup from app data
+/// so every connection to the same destination reuses one authenticated session
+/// instead of paying TCP + key exchange for each Git launch.
+static SSH_CONTROL_DIR: OnceLock<PathBuf> = OnceLock::new();
+pub fn set_ssh_control_dir(path: PathBuf) {
+    let _ = SSH_CONTROL_DIR.set(path);
+}
+fn ssh_control_dir() -> PathBuf {
+    let dir = SSH_CONTROL_DIR
+        .get()
+        .cloned()
+        .unwrap_or_else(|| std::env::temp_dir().join(format!("gitty-ssh-{}", std::process::id())));
+    if !dir.exists() {
+        let _ = std::fs::create_dir_all(&dir);
+        // Sockets here grant access to the user's authenticated sessions.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+    dir
+}
+/// The local OpenSSH client. Tests replace it with a shim that runs the remote
+/// command locally, so quoting and stdin framing are exercised end to end.
+fn ssh_program() -> String {
+    #[cfg(test)]
+    if let Some(program) = std::env::var_os("GITTY_SSH_EXECUTABLE") {
+        return program.to_string_lossy().into_owned();
+    }
+    "ssh".into()
+}
+fn valid_env_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+/// The one string the remote login shell parses. Every word is single-quoted and
+/// environment is passed as `env` assignments, because SSH forwards neither the
+/// local environment nor a pre-split argv.
+fn ssh_script(env: &[(String, String)], words: &[String]) -> Result<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if !env.is_empty() {
+        parts.push("env".into());
+        for (key, value) in env {
+            if !valid_env_key(key) {
+                return Err(Error::new(
+                    "internalEnv",
+                    "Gitty tried to pass an invalid environment name to the remote host.",
+                ));
+            }
+            parts.push(crate::askpass::shell_quote(&format!("{key}={value}")));
+        }
+    }
+    parts.extend(words.iter().map(|word| crate::askpass::shell_quote(word)));
+    Ok(parts.join(" "))
+}
+/// `ssh` with a fixed, non-interactive security posture. Host keys must already be
+/// trusted and authentication must already work: Gitty never answers a prompt, never
+/// writes `known_hosts`, and never weakens the user's `~/.ssh/config`.
+pub(crate) fn ssh_command(location: &RepositoryLocation) -> Result<Command> {
+    let RepositoryLocation::Ssh {
+        host, port, user, ..
+    } = location
+    else {
+        return Err(Error::new(
+            "internalLocation",
+            "SSH transport requires an SSH repository location.",
+        ));
+    };
+    crate::dto::validate_ssh_destination(host, user.as_deref(), *port)?;
+    let mut cmd = Command::new(ssh_program());
+    cmd.args([
+        "-T",
+        "-x",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=3",
+    ]);
+    // Win32 OpenSSH does not implement connection multiplexing; omitting the
+    // options there keeps the transport working with one connection per command.
+    #[cfg(unix)]
+    {
+        let control = ssh_control_dir().join("%C");
+        if let Some(control) = control.to_str() {
+            cmd.args([
+                "-o",
+                "ControlMaster=auto",
+                "-o",
+                &format!("ControlPath={control}"),
+                "-o",
+                "ControlPersist=60",
+            ]);
+        }
+    }
+    if let Some(port) = port {
+        cmd.args(["-p", &port.to_string()]);
+    }
+    let destination = match user {
+        Some(user) => format!("{user}@{host}"),
+        None => host.clone(),
+    };
+    // `--` ends option parsing locally, so a validated destination can never be
+    // reinterpreted as an option.
+    cmd.arg("--").arg(destination);
+    Ok(cmd)
+}
+/// Runs a word list on the remote host through `sh -c`, so fish/csh startup files
+/// cannot reinterpret Git's arguments. Only validated values and Git arguments
+/// reach this function.
+pub(crate) fn ssh_exec(
+    location: &RepositoryLocation,
+    env: &[(String, String)],
+    words: &[String],
+) -> Result<Command> {
+    let script = ssh_script(env, words)?;
+    let mut cmd = ssh_command(location)?;
+    cmd.args(["sh", "-c", &script]);
+    Ok(cmd)
 }
 
 #[cfg(windows)]
@@ -414,22 +545,43 @@ pub(crate) enum Contract {
     Mutation,
 }
 pub(crate) fn git_command(location: &RepositoryLocation, args: &[String]) -> Result<Command> {
-    command(location, args, Contract::Read)
+    command(location, args, Contract::Read, &[])
 }
 pub(crate) fn git_mutation_command(
     location: &RepositoryLocation,
     args: &[String],
 ) -> Result<Command> {
-    command(location, args, Contract::Mutation)
+    command(location, args, Contract::Mutation, &[])
 }
-/// Per-command identity overrides are passed to the Linux `env` executable for
-/// WSL, rather than relying on host environment forwarding through wsl.exe.
+/// The same, with extra environment for the Git process. For an SSH location these
+/// become `env` assignments inside the remote command; for native and WSL they are
+/// handed to the child process.
+pub(crate) fn git_mutation_command_with_env(
+    location: &RepositoryLocation,
+    args: &[String],
+    env: &[(String, String)],
+) -> Result<Command> {
+    command(location, args, Contract::Mutation, env)
+}
+/// Per-command identity overrides are passed as `env` assignments for WSL and SSH,
+/// rather than relying on host environment forwarding through wsl.exe or ssh.
 pub(crate) fn git_commit_command(
     location: &RepositoryLocation,
     args: &[String],
     identity: &[(&str, &str)],
 ) -> Result<Command> {
-    command_inner(location, args, Contract::Mutation, true, identity)
+    command_inner(location, args, Contract::Mutation, true, identity, &[])
+}
+/// A repository-independent probe (`git --version`) for a connection test.
+pub(crate) fn git_probe_command(location: &RepositoryLocation) -> Result<Command> {
+    command_inner(
+        location,
+        &args(&["--version"]),
+        Contract::Read,
+        false,
+        &[],
+        &[],
+    )
 }
 /// Runs Git using the selected native/WSL transport without requiring an
 /// existing repository. Clone uses this with the mutation environment because
@@ -439,95 +591,52 @@ pub(crate) fn git_external_mutation_command(
     location: &RepositoryLocation,
     args: &[String],
 ) -> Result<Command> {
-    command_inner(location, args, Contract::Mutation, false, &[])
+    if matches!(location, RepositoryLocation::Ssh { .. }) {
+        return Err(Error::new(
+            "unsupportedLocation",
+            "Cloning into an SSH destination is not supported; clone on the remote host or open an existing repository.",
+        ));
+    }
+    command_inner(location, args, Contract::Mutation, false, &[], &[])
 }
-fn command(location: &RepositoryLocation, args: &[String], contract: Contract) -> Result<Command> {
-    command_inner(location, args, contract, true, &[])
+fn command(
+    location: &RepositoryLocation,
+    values: &[String],
+    contract: Contract,
+    extra_env: &[(String, String)],
+) -> Result<Command> {
+    command_inner(location, values, contract, true, &[], extra_env)
 }
 fn command_inner(
     location: &RepositoryLocation,
-    args: &[String],
+    values: &[String],
     contract: Contract,
     repository_context: bool,
     identity: &[(&str, &str)],
+    extra_env: &[(String, String)],
 ) -> Result<Command> {
     let read = contract == Contract::Read;
-    let mut cmd = match location {
-        RepositoryLocation::Native { path } => {
-            if path.to_ascii_lowercase().starts_with("\\\\wsl") {
-                return Err(Error::new(
-                    "wslLocationRequired",
-                    "Open WSL repositories through their distribution, not Windows Git on UNC",
-                ));
-            }
-            let mut c = Command::new("git");
-            if repository_context {
-                c.arg("-C").arg(path);
-            }
-            c
-        }
-        RepositoryLocation::Wsl { distribution, path } => {
-            if !cfg!(windows) {
-                return Err(Error::new(
-                    "unsupportedPlatform",
-                    "WSL is available only on Windows",
-                ));
-            }
-            validate_distribution(distribution)?;
-            let mut c = Command::new("wsl.exe");
-            c.args(["--distribution", distribution, "--exec", "env"]);
-            if read {
-                // A write needs the index lock, and hooks deserve the user's locale.
-                c.args(["GIT_OPTIONAL_LOCKS=0", "LC_ALL=C"]);
-            }
-            c.args([
-                "GIT_NO_LAZY_FETCH=1",
-                "GIT_TERMINAL_PROMPT=0",
-                "GIT_NO_REPLACE_OBJECTS=1",
-                "GIT_LITERAL_PATHSPECS=1",
-                "GIT_PAGER=cat",
-            ]);
-            for (key, value) in identity {
-                c.arg(format!("{key}={value}"));
-            }
-            c.arg("git");
-            if repository_context {
-                c.args(["-C", path]);
-            }
-            c
-        }
-    };
-    // Repository/index/object-store overrides must not redirect this session. Honor
-    // native configuration-file selectors, including administrators' system config.
-    for (key, _) in std::env::vars_os() {
-        let name = key.to_string_lossy();
-        let config_selector = matches!(location, RepositoryLocation::Native { .. })
-            && matches!(
-                name.as_ref(),
-                "GIT_CONFIG_GLOBAL" | "GIT_CONFIG_SYSTEM" | "GIT_CONFIG_NOSYSTEM"
-            );
-        if name.starts_with("GIT_") && !config_selector {
-            cmd.env_remove(key);
+    if let RepositoryLocation::Native { path } = location {
+        if path.to_ascii_lowercase().starts_with("\\\\wsl") {
+            return Err(Error::new(
+                "wslLocationRequired",
+                "Open WSL repositories through their distribution, not Windows Git on UNC",
+            ));
         }
     }
-    cmd.env("GIT_NO_LAZY_FETCH", "1")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_NO_REPLACE_OBJECTS", "1")
-        // Literal pathspecs are the reason explicit file arguments cannot become
-        // magic (`:(exclude)…`, globs) in either contract.
-        .env("GIT_LITERAL_PATHSPECS", "1");
-    if matches!(location, RepositoryLocation::Native { .. }) {
-        for (key, value) in identity {
-            cmd.env(key, value);
+    // Git arguments shared by every transport, in the same order: repository
+    // selector, then output/automation suppressions, then the caller's command.
+    let mut git_args: Vec<String> = Vec::new();
+    if repository_context {
+        match location {
+            RepositoryLocation::Native { path }
+            | RepositoryLocation::Wsl { path, .. }
+            | RepositoryLocation::Ssh { path, .. } => {
+                git_args.extend(["-C".to_string(), path.clone()])
+            }
         }
     }
-    if read {
-        cmd.env("GIT_OPTIONAL_LOCKS", "0").env("LC_ALL", "C");
-    } else {
-        // Hooks inherit this environment; leave the locale as the user configured it.
-        cmd.env_remove("GIT_OPTIONAL_LOCKS");
-    }
-    cmd.args([
+    git_args.extend(args(&[
         "--no-pager",
         "-c",
         "core.fsmonitor=false",
@@ -541,20 +650,104 @@ fn command_inner(
         "core.pager=cat",
         "-c",
         "protocol.allow=never",
-    ]);
+    ]));
     if read {
         // Display-only suppressions. A mutation must not impose them on hooks,
         // which inherit these overrides through GIT_CONFIG_PARAMETERS.
-        cmd.args([
+        git_args.extend(args(&[
             "-c",
             "diff.external=",
             "-c",
             "core.quotePath=true",
             "-c",
             "diff.submodule=short",
-        ]);
+        ]));
     }
-    cmd.args(args);
+    git_args.extend(values.iter().cloned());
+    // Contract environment. For SSH this travels inside the remote command, since
+    // SSH forwards no local environment to the host running Git.
+    let mut vars: Vec<(String, String)> = Vec::new();
+    if read {
+        vars.push(("GIT_OPTIONAL_LOCKS".into(), "0".into()));
+        vars.push(("LC_ALL".into(), "C".into()));
+    }
+    for (key, value) in [
+        ("GIT_NO_LAZY_FETCH", "1"),
+        ("GIT_TERMINAL_PROMPT", "0"),
+        ("GIT_NO_REPLACE_OBJECTS", "1"),
+        // Literal pathspecs are the reason explicit file arguments cannot become
+        // magic (`:(exclude)…`, globs) in either contract.
+        ("GIT_LITERAL_PATHSPECS", "1"),
+    ] {
+        vars.push((key.into(), value.into()));
+    }
+    if matches!(
+        location,
+        RepositoryLocation::Wsl { .. } | RepositoryLocation::Ssh { .. }
+    ) {
+        vars.push(("GIT_PAGER".into(), "cat".into()));
+    }
+    if !read {
+        // Hooks inherit this environment; leave the locale as the user configured it.
+        vars.retain(|(key, _)| key != "GIT_OPTIONAL_LOCKS");
+    }
+    vars.extend(
+        identity
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
+    );
+    vars.extend(extra_env.iter().cloned());
+    let cmd = match location {
+        RepositoryLocation::Native { .. } => {
+            let mut c = Command::new("git");
+            c.args(&git_args);
+            // Repository/index/object-store overrides must not redirect this
+            // session. Honor native configuration-file selectors, including
+            // administrators' system config.
+            for (key, _) in std::env::vars_os() {
+                let name = key.to_string_lossy();
+                let config_selector = matches!(
+                    name.as_ref(),
+                    "GIT_CONFIG_GLOBAL" | "GIT_CONFIG_SYSTEM" | "GIT_CONFIG_NOSYSTEM"
+                );
+                if name.starts_with("GIT_") && !config_selector {
+                    c.env_remove(key);
+                }
+            }
+            if !read {
+                c.env_remove("GIT_OPTIONAL_LOCKS");
+            }
+            c.envs(vars.iter().map(|(key, value)| (key, value)));
+            c
+        }
+        RepositoryLocation::Wsl { distribution, .. } => {
+            if !cfg!(windows) {
+                return Err(Error::new(
+                    "unsupportedPlatform",
+                    "WSL is available only on Windows",
+                ));
+            }
+            validate_distribution(distribution)?;
+            let mut c = Command::new("wsl.exe");
+            c.args(["--distribution", distribution, "--exec", "env"]);
+            for (key, value) in &vars {
+                c.arg(format!("{key}={value}"));
+            }
+            c.arg("git").args(&git_args);
+            for (key, _) in std::env::vars_os() {
+                if key.to_string_lossy().starts_with("GIT_") {
+                    c.env_remove(key);
+                }
+            }
+            c
+        }
+        RepositoryLocation::Ssh { path, .. } => {
+            crate::dto::validate_ssh_path(path)?;
+            let mut words = vec!["git".to_string()];
+            words.extend(git_args);
+            ssh_exec(location, &vars, &words)?
+        }
+    };
     Ok(cmd)
 }
 pub fn checked(location: &RepositoryLocation, args: &[String]) -> Result<Vec<u8>> {
@@ -704,6 +897,83 @@ mod tests {
         let ((), none) = count_spawns(|| ());
         assert_eq!(none, 0);
     }
+    #[test]
+    #[cfg(unix)]
+    fn ssh_scripts_quote_every_remote_word_and_never_expand_it() {
+        let env = vec![
+            ("GIT_AUTHOR_NAME".to_string(), "O'Brien $(id)".to_string()),
+            ("LC_ALL".to_string(), "C".to_string()),
+        ];
+        let words = vec![
+            "git".to_string(),
+            "-C".to_string(),
+            "/tmp/sp ace's".to_string(),
+            "status".to_string(),
+        ];
+        let script = ssh_script(&env, &words).unwrap();
+        assert_eq!(
+            script,
+            "env 'GIT_AUTHOR_NAME=O'\\''Brien $(id)' 'LC_ALL=C' 'git' '-C' '/tmp/sp ace'\\''s' 'status'"
+        );
+        // The shell that runs it receives the literal words, not a substitution or
+        // a word split: this is the property every remote Git argument depends on.
+        let echoed = ssh_script(
+            &[("A".into(), "$(id)".into())],
+            &args(&["printf", "[%s]", "a b", "$(id)", "'quoted'"]),
+        )
+        .unwrap();
+        let output = Command::new("sh").arg("-c").arg(&echoed).output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "[a b][$(id)]['quoted']"
+        );
+    }
+
+    #[test]
+    fn ssh_scripts_refuse_an_environment_name_that_is_not_an_identifier() {
+        let error = ssh_script(&[("A B".into(), "1".into())], &["git".to_string()]).unwrap_err();
+        assert_eq!(error.code, "internalEnv");
+        assert!(ssh_script(&[], &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn ssh_destinations_cannot_become_options() {
+        let location = RepositoryLocation::Ssh {
+            host: "-oProxyCommand=touch /tmp/pwned".into(),
+            port: None,
+            user: None,
+            path: "/tmp".into(),
+        };
+        assert_eq!(ssh_command(&location).unwrap_err().code, "invalidHost");
+        for (user, port, code) in [
+            (Some("-lroot".to_string()), None, "invalidUser"),
+            (None, Some(0), "invalidPort"),
+        ] {
+            let location = RepositoryLocation::Ssh {
+                host: "home".into(),
+                port,
+                user,
+                path: "/tmp".into(),
+            };
+            assert_eq!(ssh_command(&location).unwrap_err().code, code);
+        }
+    }
+
+    #[test]
+    fn ssh_paths_must_be_absolute_posix_and_reach_no_shell_metacharacter() {
+        for path in ["relative", "", "/tmp/../etc", "/tmp/a\nb", "/tmp/\0x"] {
+            assert_eq!(
+                crate::dto::validate_ssh_path(path).unwrap_err().code,
+                "invalidPath",
+                "{path}"
+            );
+        }
+        for path in ["/", "/home/you/code/thing", "/tmp/a b's (1)"] {
+            assert!(crate::dto::validate_ssh_path(path).is_ok(), "{path}");
+        }
+    }
+
     #[test]
     #[cfg(unix)]
     fn deadline_kills_process() {

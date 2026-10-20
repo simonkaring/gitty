@@ -52,8 +52,10 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
 ## Read semantics
 
 - Git is the installed executable, launched with explicit arguments and no shell.
-  Native paths use `git -C`; WSL uses `wsl.exe --distribution … --exec env … git -C …`.
-  Native WSL UNC locations are rejected.
+  Native paths use `git -C`; WSL uses `wsl.exe --distribution … --exec env … git -C …`;
+  SSH locations run `ssh … -- <user@>host sh -c '<quoted script>'` so Git executes on
+  the remote host (see [SSH repositories](#ssh-repositories)). Native WSL UNC
+  locations are rejected.
 - Git reads disable optional locks, fsmonitor, automatic maintenance, replacement
   objects, external diff, textconv, implicit object fetching, and transport protocols.
   System/global/repository Git configuration and attributes are honored, including
@@ -194,6 +196,61 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
 - The folder picker uses `rfd`'s native asynchronous dialog. WSL discovery decodes
   UTF-16 output; browsing invokes Linux `find` directly, NUL-delimited, one directory
   level at a time. WSL requires Windows and Linux Git, `env`, and GNU `find`.
+
+## SSH repositories
+
+A repository may live on another machine. `RepositoryLocation` then serializes as
+`{kind: "ssh", host: string, port?: number, user?: string, path: string}`, and
+`repository_open` accepts it exactly like a native location. Git never runs locally
+for such a session: every command is one `ssh` invocation that executes Git next to
+the working tree, so all read and write semantics above carry over unchanged.
+
+Transport policy (fixed in `process.rs`, not configurable from the frontend):
+
+- `ssh -T -x -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10
+  -o ServerAliveInterval=15 -o ServerAliveCountMax=3 [ControlMaster/ControlPath/
+  ControlPersist] [-p port] -- destination sh -c '<script>'`. Multiplexing is Unix-only
+  because Win32 OpenSSH does not implement `ControlMaster`; its control sockets live in
+  `<app data>/ssh` with mode 0700.
+- The script is `env <assignments> git [-C <path>] --no-pager -c … <args>`. Every word
+  is single-quoted; SSH forwards no local environment, so the read/mutation contract
+  variables (`GIT_OPTIONAL_LOCKS`, `LC_ALL`, `GIT_NO_LAZY_FETCH`, `GIT_TERMINAL_PROMPT`,
+  `GIT_NO_REPLACE_OBJECTS`, `GIT_LITERAL_PATHSPECS`, `GIT_PAGER`, identity overrides)
+  travel as remote `env` assignments. `-c` overrides stay argv.
+- `~/.ssh/config`, the SSH agent and the remote host's own credentials remain
+  authoritative. Gitty adds no identity, proxy or host-key options, never writes
+  `known_hosts`, and never falls back to weaker checks. It cannot forward the local
+  askpass or editor bridges, so remote fetch/push authenticate on that host, and a write
+  that would need `GITTY_*`/`GIT_ASKPASS`/`SSH_ASKPASS` returns `unsupportedOperation`.
+- `host`, `user`, `port` and `path` are validated on every use, not only at open:
+  host/user are `[A-Za-z0-9._-]+` without a leading `-`; the port is 1–65535; the path
+  is absolute POSIX with no control characters and no `..` segment. The remote's own
+  `rev-parse --show-toplevel` answer is validated the same way before it is reused.
+
+Capabilities that need the remote filesystem beyond Git use a remote command instead of
+a local path: the operation-metadata scan is one `sh -c 'find …'` plus `cat` per existing
+name, `git_dir_entries` is one `find`, and conflict read/write reuses the WSL Python
+helper (`python3 -c …`) with the same JSON+bytes stdin protocol. A host without
+`python3` still opens and reads; conflict editing then returns `unsupportedConflict`.
+
+Refused over SSH with a normal `{code, message}` error (never a UI-only disable):
+`repository_open_path` and `repository_reveal_path` (`unsupportedLocation`),
+`repository_ignore_path` (`unsupportedLocation`), worktree move/remove
+(`unsupportedLocation`), cloning into an SSH destination (`unsupportedLocation`), and
+interactive rebase/reword (`unsupportedOperation`). Worktree create/lock/unlock/prune,
+untracked discard, stash, merge/rebase/cherry-pick/reset, tags and branch deletion
+remain available because they only need Git.
+
+`ssh_test({target: {host, port?, user?, path?}}) -> {gitVersion, name}` runs the same
+transport without a session: `git --version` always, and `rev-parse --show-toplevel`
+plus the directory name when a path is given. It stores nothing. Failures map to
+`invalidHost`, `invalidUser`, `invalidPort`, `invalidPath`, `hostKeyUnknown`,
+`authRequired`, `hostUnknown`, `connectFailed`, `notARepository`, `gitMissing`,
+`timeout`, `ssh` or `git`, with the original stderr and a suggested fix.
+
+Fingerprints and mutation locks stay per session; the lock key includes the SSH
+destination (`user@host:port`) as well as the common Git directory, so identical paths
+on two hosts are never serialized against each other.
 
 ## Worktree management
 
@@ -869,6 +926,15 @@ IDs cached after the first three-commit page, cursor replay after moving refs,
 stream cancellation/reaping, driver suppression and unchanged index bytes/mtime, timeout and
 output limits, persistence, and invalid handles/cursors. The non-UTF-8 filename
 integration test is Linux-only (APFS rejects those filenames).
+
+SSH transport tests (`src-tauri/src/ssh_tests.rs`, Unix only) replace the `ssh` client
+with a shell double that consumes the options and runs the quoted remote command
+locally. They cover open/state/status/history/diff, staging, commit and amend, a merge
+conflict resolved through the remote Python helper, fetch and push against a local bare
+remote, the refusal codes, destination/path validation, `ssh_test`, and the argv shape
+that keeps the remote script a single argument. They do not exercise authentication,
+host keys, a real network or a Windows client; `ssh_test` against a real host is the
+manual check, and its result is platform-scoped evidence rather than general coverage.
 
 Write tests also use real repositories: staging, unstaging and the initial commit
 on an unborn branch with spaces, tabs, Unicode, a leading dash and pathspec

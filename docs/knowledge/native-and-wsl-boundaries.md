@@ -48,17 +48,22 @@ Wayland/X11 GUI behavior requires separate runtime verification.[^windows][^linu
 
 Rust owns repository Git and filesystem work. Native Git uses explicit arguments
 with `git -C`; WSL locations use `wsl.exe --distribution … --exec env … git -C …`
-on Windows. Native locations on `\\wsl…` UNC paths are refused by the process layer; the UI
+on Windows; SSH locations run the same quoted script through `ssh … sh -c …` on the
+remote host (see [SSH repository transport](ssh-remote-repositories.md)). Native
+locations on `\\wsl…` UNC paths are refused by the process layer; the UI
 must represent them as a distribution plus Linux path. Read and mutation
 environments are distinct: preserve their targeted configuration and lock
-policies rather than replacing them with a generic runner.[^process]
+policies rather than replacing them with a generic runner. Only the local
+askpass and editor bridges are transport-specific: they exist for native and,
+through WSL interop, for WSL, and are refused for SSH rather than forwarded.[^process][^contract]
 
 WSL is a separate execution environment, not a Windows path alias. Distribution
 browsing and operation detection require Linux tools; conflict filesystem access
-uses a fixed Python 3 helper with pinned directory descriptors. Native conflict
-access uses capability-rooted handles. Ignore/open/reveal and interactive rebase
-editing have explicit WSL limitations; consult the detailed contract before
-extending platform support.[^contract] The WSL operation-metadata scan is one
+uses a fixed Python 3 helper with pinned directory descriptors, shared with SSH
+sessions. Native conflict access uses capability-rooted handles. Ignore/open/reveal
+and interactive rebase editing have explicit WSL limitations — and are refused
+outright over SSH, together with worktree move/remove — so consult the detailed
+contract before extending platform support.[^contract] The WSL operation-metadata scan is one
 `find` that must keep `test -e`/`cat` parity: symlinks followed, dangling links absent,
 heavy Git-directory subtrees pruned, and exit 1 from entries vanishing under
 concurrent Git tolerated. The basic empty/populated scan and snapshot were

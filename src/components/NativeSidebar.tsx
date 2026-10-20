@@ -57,6 +57,7 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
     <div className="native-sidebar-meta">
       <span className="badge" data-tone="accent"><Laptop size={14} />{session.headRef?.replace('refs/heads/', '') ?? 'Detached / unborn HEAD'}</span>
       {session.location.kind === 'wsl' && <span>WSL · {session.location.distribution}</span>}
+      {session.location.kind === 'ssh' && <span>SSH · {session.location.host}{session.location.user ? ` (${session.location.user})` : ''}</span>}
       {session.linkedWorktree && <span>Linked worktree</span>}
       {session.bare && <span>Bare repository</span>}
       {session.shallow && <span>Shallow clone</span>}

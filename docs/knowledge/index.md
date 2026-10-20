@@ -7,6 +7,7 @@ okf_version: "0.2"
 - [Git mutation safeguards](git-mutation-safeguards.md) - Explicit write scope, stale-review checks, and reconciliation after uncertain outcomes.
 - [Snapshot and refresh coherence](snapshot-and-refresh-coherence.md) - How repository snapshots, pinned history, and session-aware refresh fit together.
 - [Native and WSL boundaries](native-and-wsl-boundaries.md) - Where Git and filesystem work execute and which platform capabilities differ.
+- [SSH repository transport](ssh-remote-repositories.md) - How a repository on another machine is opened, which actions run remotely, and what stays refused.
 - [Repository cloning and accounts](repository-cloning-and-accounts.md) - Connected-account repository browsing, clone credential scope, and native/WSL limits.
 - [History avatar preferences](history-avatar-preferences.md) - Persisted author avatar choices and optional avatar nodes in the history graph.
 - [History column sizing](history-column-sizing.md) - History column resizing, initial message fill, graph alignment after reordering, and narrow-pane layout.

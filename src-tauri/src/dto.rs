@@ -23,8 +23,78 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum RepositoryLocation {
-    Native { path: String },
-    Wsl { distribution: String, path: String },
+    Native {
+        path: String,
+    },
+    Wsl {
+        distribution: String,
+        path: String,
+    },
+    /// A working tree on another machine, reached with the user's own `ssh`
+    /// configuration. Git runs on that host; only its output crosses the socket.
+    Ssh {
+        host: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user: Option<String>,
+        path: String,
+    },
+}
+
+/// Characters allowed in a host alias, hostname or SSH user. Anything else could
+/// change how `ssh` parses the destination (options, `@`, path separators).
+pub fn valid_ssh_word(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 253
+        && !value.starts_with('-')
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// The remote destination is interpolated into argv and therefore validated for
+/// every call, not only when a session is opened.
+pub fn validate_ssh_destination(host: &str, user: Option<&str>, port: Option<u16>) -> Result<()> {
+    if !valid_ssh_word(host) {
+        return Err(Error::new(
+            "invalidHost",
+            "Enter an SSH host alias or hostname using letters, digits, dots, dashes or underscores.",
+        ));
+    }
+    if let Some(user) = user {
+        if !valid_ssh_word(user) {
+            return Err(Error::new(
+                "invalidUser",
+                "Enter an SSH user name using letters, digits, dots, dashes or underscores.",
+            ));
+        }
+    }
+    if port == Some(0) {
+        return Err(Error::new(
+            "invalidPort",
+            "SSH ports must be between 1 and 65535.",
+        ));
+    }
+    Ok(())
+}
+
+/// Remote paths are absolute POSIX paths. Control characters are refused even
+/// though they would be safely single-quoted, because no Git directory is named
+/// with one and a rejected value is easier to explain than a mangled argv.
+pub fn validate_ssh_path(path: &str) -> Result<()> {
+    let invalid = path.is_empty()
+        || path.len() > 4096
+        || !path.starts_with('/')
+        || path.chars().any(char::is_control)
+        || path.split('/').any(|part| part == "..");
+    if invalid {
+        return Err(Error::new(
+            "invalidPath",
+            "Remote repository paths must be absolute POSIX paths without control characters or '..' segments.",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -190,6 +260,26 @@ pub struct RepositoryState {
     pub remotes: Vec<String>,
     pub fingerprint: String,
 }
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshTarget {
+    pub host: String,
+    #[serde(default)]
+    pub port: Option<u16>,
+    #[serde(default)]
+    pub user: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+}
+/// What a connection test learned: the remote Git version, and the repository
+/// name when a path was supplied and resolved.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshProbe {
+    pub git_version: String,
+    pub name: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct WslDistribution {
     pub name: String,

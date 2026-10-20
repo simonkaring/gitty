@@ -1,4 +1,5 @@
 import type { RepositoryLocation } from './repository';
+import { locationIdentity, sshDestination } from './ssh';
 
 /** Repository tab persistence and canonical identity.
  * A tab is created from a raw `RepositoryLocation` (what the user picked).
@@ -23,32 +24,34 @@ function isRepositoryLocation(value: unknown): value is RepositoryLocation {
   if (typeof location.path !== 'string') return false;
   if (location.kind === 'native') return true;
   if (location.kind === 'wsl') return typeof location.distribution === 'string';
+  if (location.kind === 'ssh') return typeof location.host === 'string' && (location.user == null || typeof location.user === 'string') && (location.port == null || typeof location.port === 'number');
   return false;
 }
 
 /** Identity of the raw, user-supplied location (before opening). Used to avoid
  * creating an obviously-duplicate tab without waiting on an IPC round trip. */
 export function locationKey(location: RepositoryLocation): string {
-  return location.kind === 'wsl' ? `wsl:${location.distribution}:${location.path}` : `native:${location.path}`;
+  return `${locationIdentity(location)}:${location.path}`;
 }
 export function sameLocation(a: RepositoryLocation, b: RepositoryLocation): boolean {
   return locationKey(a) === locationKey(b);
 }
 
 /** Canonical identity of a *resolved* session: distinguishes native from WSL
- * (and between WSL distributions), and ties worktrees of the same repository
- * together only when both the worktree root and the common (shared) git dir
- * match. Two different linked worktrees of one repository have different
- * roots and are therefore kept as separate tabs. */
+ * (and between WSL distributions) and from a separate host reached over SSH, and
+ * ties worktrees of the same repository together only when both the worktree root
+ * and the common (shared) git dir match. Two different linked worktrees of one
+ * repository have different roots and are therefore kept as separate tabs. */
 export function sessionKey(location: RepositoryLocation, session: { root: string; commonDir: string }): string {
-  const origin = location.kind === 'wsl' ? `wsl:${location.distribution}` : 'native';
-  return `${origin}|${session.root}|${session.commonDir}`;
+  return `${locationIdentity(location)}|${session.root}|${session.commonDir}`;
 }
 
 export function locationLabel(location: RepositoryLocation): string {
   const segments = location.path.split(/[\\/]/).filter(Boolean);
   const base = segments.at(-1) ?? location.path;
-  return location.kind === 'wsl' ? `${base} (WSL: ${location.distribution})` : base;
+  if (location.kind === 'wsl') return `${base} (WSL: ${location.distribution})`;
+  if (location.kind === 'ssh') return `${base} (SSH: ${sshDestination(location)})`;
+  return base;
 }
 
 export function createTabId(): string {

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { ArrowUp, Clock3, Download, Folder, FolderGit2, FolderOpen, Search, SquareTerminal } from 'lucide-react';
+import { ArrowUp, Clock3, Download, Folder, FolderGit2, FolderOpen, Search, Server, SquareTerminal } from 'lucide-react';
 import type { DirectoryEntry, RepositoryLocation, WslDistribution } from '../model/repository';
 import { errorMessage, native } from '../model/native';
 import { suggestedCloneName, type CloneRequest } from '../model/clone';
 import { locationForPickedFolder } from '../model/wslPath';
 import { Segmented } from './ui';
+import { sshDestination, sshFailureHint, sshLocationFromForm, type SshLocation, type SshProbe } from '../model/ssh';
 import { RepositoryBrowser } from './RepositoryBrowser';
 import type { ProviderRepository } from '../model/providerRepositories';
 
@@ -22,7 +23,7 @@ function GraphArt() {
   </svg>;
 }
 
-type View = 'recent' | 'clone' | 'wsl';
+type View = 'recent' | 'clone' | 'wsl' | 'ssh';
 const baseName = (path: string) => path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
 const parentPath = (path: string) => path.replace(/\/?[^/]+\/?$/, '') || '/';
 
@@ -46,6 +47,12 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
   const [cloneName, setCloneName] = useState('');
   const [cloneKind, setCloneKind] = useState<'native' | 'wsl'>('native');
   const [nativeParent, setNativeParent] = useState('');
+  const [sshHost, setSshHost] = useState('');
+  const [sshUser, setSshUser] = useState('');
+  const [sshPort, setSshPort] = useState('');
+  const [sshPath, setSshPath] = useState('');
+  const [sshProbe, setSshProbe] = useState<SshProbe | null>(null);
+  const [sshBusy, setSshBusy] = useState(false);
   const request = useRef(0);
   const selectRepository = useCallback((repository: ProviderRepository | null, accountId?: string) => {
     setCloneSource(repository?.cloneUrl ?? ''); setCloneName(repository?.name ?? ''); setCloneAccountId(repository ? accountId : undefined);
@@ -80,7 +87,27 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
     if (cloneMethod === 'accounts' && (!cloneAccountId || parent.kind !== 'native')) { setError('Choose a repository and a native destination folder.'); return; }
     onClone({ source, parent, directoryName, ...(cloneAccountId ? { accountId: cloneAccountId } : {}) });
   }
-  const views: [View, string, typeof Clock3][] = [['recent', 'Recent', Clock3], ['clone', 'Clone', Download], ...(distributions.length ? [['wsl', 'Browse WSL', SquareTerminal] as [View, string, typeof Clock3]] : [])];
+  function sshLocation(): SshLocation | null {
+    const result = sshLocationFromForm({ host: sshHost, user: sshUser, port: sshPort, path: sshPath });
+    if (typeof result === 'string') { setError(result); return null; }
+    setError('');
+    return result;
+  }
+  async function testSsh() {
+    const location = sshLocation();
+    if (!location) return;
+    const token = ++request.current; setSshBusy(true); setSshProbe(null);
+    try {
+      const probe = await native<SshProbe>('ssh_test', { target: { host: location.host, user: location.user, port: location.port, path: location.path } });
+      if (token === request.current) setSshProbe(probe);
+    } catch (e) {
+      if (token !== request.current) return;
+      const code = typeof e === 'object' && e !== null && 'code' in e ? String(e.code) : '';
+      const hint = sshFailureHint(code);
+      setError(hint ? `${errorMessage(e)} ${hint}` : errorMessage(e));
+    } finally { if (token === request.current) setSshBusy(false); }
+  }
+  const views: [View, string, typeof Clock3][] = [['recent', 'Recent', Clock3], ['clone', 'Clone', Download], ['ssh', 'Open over SSH', Server], ...(distributions.length ? [['wsl', 'Browse WSL', SquareTerminal] as [View, string, typeof Clock3]] : [])];
   function navKey(event: KeyboardEvent) {
     const index = views.findIndex(([id]) => id === view);
     const next = event.key === 'ArrowDown' ? index + 1 : event.key === 'ArrowUp' ? index - 1 : null;
@@ -90,7 +117,7 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
     show(id); requestAnimationFrame(() => document.getElementById(`start-${id}`)?.focus());
   }
   const query = filter.trim().toLowerCase();
-  const shown = (recent ?? []).filter(location => !query || `${location.path} ${location.kind === 'wsl' ? location.distribution : ''}`.toLowerCase().includes(query));
+  const shown = (recent ?? []).filter(location => !query || `${location.path} ${location.kind === 'wsl' ? location.distribution : location.kind === 'ssh' ? sshDestination(location) : ''}`.toLowerCase().includes(query));
   const alert = error && <p className="alert" role="alert">{error}</p>;
 
   return <main className="start-page">
@@ -119,6 +146,7 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
                   <FolderGit2 size={16} />
                   <span><strong>{baseName(location.path)}</strong><small>{location.path}</small></span>
                   {location.kind === 'wsl' && <span className="badge">WSL · {location.distribution}</span>}
+                  {location.kind === 'ssh' && <span className="badge">SSH · {sshDestination(location)}</span>}
                 </button>
               </li>)}</ul>}
           </>}
@@ -139,6 +167,23 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
             {alert}
             <div className="start-actions"><button className="primary-button" disabled={cloneBusy || !cloneSource.trim() || !(cloneKind === 'wsl' ? distribution : nativeParent)}>{cloneBusy ? 'Cloning…' : 'Clone repository'}</button></div>
           </form></div>}
+          {view === 'ssh' && <div className="start-form">
+            <form className="start-form" onSubmit={event => { event.preventDefault(); void testSsh(); }}>
+              <label className="field">Host<input autoFocus value={sshHost} disabled={sshBusy} onChange={event => { setSshHost(event.target.value); setSshProbe(null); }} placeholder="home, or home.tailnet.ts.net" /></label>
+              <div className="field-row">
+                <label className="field">User (optional)<input value={sshUser} disabled={sshBusy} onChange={event => { setSshUser(event.target.value); setSshProbe(null); }} placeholder="uses ~/.ssh/config" /></label>
+                <label className="field">Port (optional)<input inputMode="numeric" value={sshPort} disabled={sshBusy} onChange={event => { setSshPort(event.target.value); setSshProbe(null); }} placeholder="22" /></label>
+              </div>
+              <label className="field">Repository path<input className="mono" value={sshPath} disabled={sshBusy} onChange={event => { setSshPath(event.target.value); setSshProbe(null); }} placeholder="/home/you/code/thing" /></label>
+              {alert}
+              {sshProbe && <p className="muted small" role="status">Connected · {sshProbe.gitVersion}{sshProbe.name ? ` · ${sshProbe.name} is a Git repository.` : ''}</p>}
+              <div className="start-actions">
+                <button type="submit" className="secondary-button" disabled={sshBusy}>{sshBusy ? 'Testing…' : 'Test connection'}</button>
+                <button type="button" className="primary-button" disabled={sshBusy} onClick={() => { const location = sshLocation(); if (location) onOpen(location); }}>Open repository</button>
+              </div>
+            </form>
+            <p className="muted small">Uses your own SSH configuration and keys, so nothing new is trusted or stored here. The remote host needs Git; editing conflict files there also needs python3. Cloning and opening files are not available over SSH.</p>
+          </div>}
           {view === 'wsl' && <div className="start-form">
             <label className="field">Distribution<select value={distribution} onChange={e => { request.current++; setDistribution(e.target.value); setEntries([]); setPath('/'); setBusy(false); }}>{distributions.map(item => <option key={item.name}>{item.name}</option>)}</select></label>
             <form className="field" onSubmit={e => { e.preventDefault(); void browse(); }}>

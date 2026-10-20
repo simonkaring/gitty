@@ -158,9 +158,26 @@ pub(crate) fn report(output: &Output) -> String {
 /// exists cannot have changed anything and keep their own code.
 fn unverified(e: Error) -> Error {
     match e.code.as_str() {
-        "processStart" | "wslLocationRequired" | "unsupportedPlatform" | "invalidDistribution" => e,
+        "processStart"
+        | "wslLocationRequired"
+        | "unsupportedPlatform"
+        | "invalidDistribution"
+        | "invalidHost"
+        | "invalidUser"
+        | "invalidPort"
+        | "invalidPath"
+        | "internalLocation"
+        | "internalEnv" => e,
         _ => Error::new("mutationUnverified", format!("{} {UNVERIFIED}", e.message)),
     }
+}
+
+fn git_dir_names(stdout: &[u8]) -> Result<HashSet<String>> {
+    Ok(process::text(stdout.to_vec())?
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(|p| p.rsplit('/').next().unwrap_or(p).to_string())
+        .collect())
 }
 
 impl Repository {
@@ -210,11 +227,29 @@ impl Repository {
                 if !crate::operations::find_outcome_acceptable(o.success, o.code, &o.stdout) {
                     return Err(Error::new("git", report(&o)));
                 }
-                Ok(process::text(o.stdout)?
-                    .split('\0')
-                    .filter(|s| !s.is_empty())
-                    .map(|p| p.rsplit('/').next().unwrap_or(p).to_string())
-                    .collect())
+                git_dir_names(&o.stdout)
+            }
+            RepositoryLocation::Ssh { .. } => {
+                // One listing over the channel: a `test -e` per name would be a
+                // round trip per file. Entries vanishing mid-scan are tolerated.
+                let command = process::ssh_exec(
+                    self.location(),
+                    &[],
+                    &args(&[
+                        "find",
+                        &self.session.git_dir,
+                        "-mindepth",
+                        "1",
+                        "-maxdepth",
+                        "1",
+                        "-print0",
+                    ]),
+                )?;
+                let o = process::run_for(command, CHECK_TIMEOUT)?;
+                if !crate::operations::find_outcome_acceptable(o.success, o.code, &o.stdout) {
+                    return Err(Error::new("git", report(&o)));
+                }
+                git_dir_names(&o.stdout)
             }
         }
     }
@@ -387,18 +422,30 @@ impl Repository {
         input: &[u8],
         max_input: usize,
     ) -> Result<Output> {
-        let mut command = process::git_mutation_command(self.location(), a)?;
-        for (k, v) in env {
-            command.env(k, v);
-        }
+        let mut vars = env.to_vec();
         if matches!(self.location(), RepositoryLocation::Wsl { .. })
-            && env.iter().any(|(k, _)| k == "GITTY_ASKPASS_TOKEN")
+            && vars.iter().any(|(k, _)| k == "GITTY_ASKPASS_TOKEN")
         {
-            command.env(
-                "WSLENV",
+            vars.push((
+                "WSLENV".into(),
                 crate::askpass::wsl_env_mapping(std::env::var("WSLENV").ok().as_deref()),
-            );
+            ));
         }
+        if matches!(self.location(), RepositoryLocation::Ssh { .. })
+            && vars.iter().any(|(key, _)| {
+                key.starts_with("GITTY_")
+                    || matches!(
+                        key.as_str(),
+                        "GIT_ASKPASS" | "SSH_ASKPASS" | "SSH_ASKPASS_REQUIRE"
+                    )
+            })
+        {
+            return Err(Error::new(
+                "unsupportedOperation",
+                "Credential and editor prompts cannot be forwarded over SSH. Configure the prompt on the remote host, or use a key there.",
+            ));
+        }
+        let command = process::git_mutation_command_with_env(self.location(), a, &vars)?;
         process::logged(a, input, || {
             process::run_with_input_for(command, input, MUTATION_TIMEOUT, max_input)
         })

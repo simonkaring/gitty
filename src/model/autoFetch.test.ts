@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AUTO_FETCH_INTERVAL, autoFetchDue, describeFetchStatus, isFetchingAction, relativeTime } from './autoFetch';
+import { AUTO_FETCH_INTERVAL, SSH_REFRESH_INTERVAL, autoFetchDue, backgroundFetchAllowed, describeFetchStatus, isFetchingAction, relativeTime, routineRefreshInterval } from './autoFetch';
 
 describe('auto-fetch scheduling', () => {
   it('fetches immediately on first check, then once per interval', () => {
@@ -24,5 +24,19 @@ describe('auto-fetch scheduling', () => {
     expect(describeFetchStatus({ kind: 'fetching', since: now }, now)).toBe('Fetching…');
     expect(describeFetchStatus({ kind: 'fetched', at: now - 120000 }, now)).toBe('Fetched 2 min ago');
     expect(describeFetchStatus({ kind: 'failed', at: now, message: 'auth' }, now)).toBe('Fetch failed just now');
+  });
+});
+
+describe('SSH cadence', () => {
+  it('polls a remote host less often than a local repository', () => {
+    expect(routineRefreshInterval('native')).toBe(5000);
+    expect(routineRefreshInterval('wsl')).toBe(5000);
+    expect(routineRefreshInterval('ssh')).toBe(SSH_REFRESH_INTERVAL);
+    expect(SSH_REFRESH_INTERVAL).toBeGreaterThan(5000);
+  });
+  it('does not background-fetch a remote host on a timer', () => {
+    expect(backgroundFetchAllowed('native')).toBe(true);
+    expect(backgroundFetchAllowed('wsl')).toBe(true);
+    expect(backgroundFetchAllowed('ssh')).toBe(false);
   });
 });

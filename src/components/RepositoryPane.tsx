@@ -28,7 +28,7 @@ import { Segmented, Toast } from './ui';
 import { locationLabel, sessionKey } from '../model/tabs';
 import { useSettings } from '../model/settings';
 import { SCALES, useScale } from '../model/scale';
-import { AUTO_FETCH_CHECK, autoFetchDue, isFetchingAction, type FetchStatus } from '../model/autoFetch';
+import { AUTO_FETCH_CHECK, autoFetchDue, backgroundFetchAllowed, isFetchingAction, routineRefreshInterval, type FetchStatus } from '../model/autoFetch';
 import { DEFAULT_PULL_MODE, branchPushRequest, remoteSuccessMessage, needsPublish, type RemoteActionRequest, type SyncInfo } from '../model/remote';
 import { branchDeleteTargets, branchDeleteMessage, type BranchDeleteScope } from '../model/branchDelete';
 import type { BranchDeleteExecution, BranchDeleteRequest, BranchDeleteResult, BranchDeleteTargetResult } from '../model/operations';
@@ -191,7 +191,9 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       session.current = snapshot.state; setState(snapshot.state); setStatus(snapshot.status); fingerprint.current = snapshot.status.fingerprint; generation.current = snapshot.generation;
       setOperation(activeOperation); operationSig.current = operationContent(activeOperation);
       installHistory(snapshot.commits, snapshot.cursor); setSelected(snapshot.state.session.head ?? snapshot.commits[0]?.id ?? ''); if (!snapshot.state.session.head && snapshot.status.entries.length) { setSelected(WORKING_ID); setInspectorOpen(true); } setRevision(value => value + 1); setStateRevision(value => value + 1);
-      onIdentityRef.current(tabId, sessionKey(location, snapshot.state.session), snapshot.state.session.name);
+      // A remote host must stay visible in the tab title: two tabs can show the same
+      // repository name from different machines.
+      onIdentityRef.current(tabId, sessionKey(location, snapshot.state.session), location.kind === 'ssh' ? locationLabel(location) : snapshot.state.session.name);
     } catch (e) { if (opened) void close(opened.session.handle); if (token === epoch.current) { setError(errorMessage(e)); onIdentityRef.current(tabId, null, null); } }
     finally { if (token === epoch.current) { lock.current = false; setBusy(false); } }
   }, [location, tabId]);
@@ -409,6 +411,8 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       throw e;
     } finally { if (holdsLock && isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
   }
+  /** The last routine refresh, so an SSH session polls on its own slower cadence. */
+  const lastRefresh = useRef(0);
   const remoteWriteRef = useRef(remoteWrite);
   remoteWriteRef.current = remoteWrite;
   /** Fetches the focused tab's remote when due. Never runs for a hidden tab or
@@ -416,6 +420,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
    * the periodic check retries shortly afterwards. */
   const autoFetch = useCallback(() => {
     if (document.hidden || !activeRef.current || !session.current?.remotes.length) return;
+    if (!backgroundFetchAllowed(session.current.session.location.kind)) return;
     if (lock.current || mutationLock.current || blockedRef.current) return;
     if (!autoFetchDue(lastFetchAttempt.current, Date.now())) return;
     void remoteWriteRef.current('repository_remote_action', { action: { kind: 'backgroundFetch' } }, { quiet: true }).catch(() => {});
@@ -423,11 +428,17 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   autoFetchRef.current = autoFetch;
   const handle = state?.session.handle;
   useEffect(() => {
-    lastFetchAttempt.current = null; setFetchStatus({ kind: 'idle' });
+    lastFetchAttempt.current = null; lastRefresh.current = 0; setFetchStatus({ kind: 'idle' });
     if (handle) autoFetch();
   }, [handle, autoFetch]);
   useEffect(() => {
-    const timer = setInterval(() => { if (!document.hidden && activeRef.current) void refresh(); }, 5000);
+    const timer = setInterval(() => {
+      if (document.hidden || !activeRef.current) return;
+      const elapsed = Date.now() - lastRefresh.current;
+      if (elapsed < routineRefreshInterval(session.current?.session.location.kind ?? 'native')) return;
+      lastRefresh.current = Date.now();
+      void refresh();
+    }, 5000);
     const fetchTimer = setInterval(autoFetch, AUTO_FETCH_CHECK);
     const focus = () => { if (activeRef.current) void refresh().then(autoFetch); };
     window.addEventListener('focus', focus);
@@ -653,7 +664,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     {active && <>
       {actionError && <Toast tone="error" onDismiss={() => setActionError('')}>{actionError}</Toast>}
       {error && <Toast tone="error" action={<button className="secondary-button" disabled={busy} onClick={() => state ? void refresh() : void open()}>Retry</button>}>{error}</Toast>}
-      {busy && !state && <Toast tone="progress">Opening {locationLabel(location)}…{location.kind === 'wsl' && ' A stopped WSL distribution can take a few seconds to start.'}</Toast>}
+      {busy && !state && <Toast tone="progress">Opening {locationLabel(location)}…{location.kind === 'wsl' && ' A stopped WSL distribution can take a few seconds to start.'}{location.kind === 'ssh' && ' Connecting over SSH; a sleeping host can take a few seconds.'}</Toast>}
       {notice && <Toast onDismiss={() => setNotice('')}>{notice}</Toast>}
       {layoutError && <Toast tone="error">Graph layout is unavailable: {layoutError}. Rows remain navigable.</Toast>}
       {state && selected && selected !== WORKING_ID && !result?.commits.some(commit => commit.id === selected) && !commits.some(commit => commit.id === selected) && <Toast action={cursor && <button className="secondary-button" disabled={busy} onClick={() => reveal(selected)}>Reveal</button>}>Selected commit {selected.slice(0, 12)} is {cursor ? 'outside the loaded history' : 'no longer reachable from the current references'}. Its inspector remains open by object ID.</Toast>}

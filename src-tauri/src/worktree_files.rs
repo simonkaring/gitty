@@ -26,13 +26,17 @@ const LAUNCHERS: [&str; 39] = [
 ];
 
 fn unsupported_location(repo: &Repository) -> Result<()> {
-    if matches!(repo.location(), RepositoryLocation::Wsl { .. }) {
-        return Err(Error::new(
+    match repo.location() {
+        RepositoryLocation::Wsl { .. } => Err(Error::new(
             "unsupported",
             "This action is not available for repositories inside WSL.",
-        ));
+        )),
+        RepositoryLocation::Ssh { .. } => Err(Error::new(
+            "unsupportedLocation",
+            "Opening, revealing and ignoring files is not available for a repository on another computer. Inspect the file in your SSH session instead.",
+        )),
+        RepositoryLocation::Native { .. } => Ok(()),
     }
-    Ok(())
 }
 
 /// The canonical path of `path` inside `root`, or an error if it is missing or, once

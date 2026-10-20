@@ -26,6 +26,7 @@ mod provider_repositories;
 mod remote;
 mod remote_dto;
 mod repository;
+mod ssh;
 mod stash;
 mod stream;
 mod worktree_files;
@@ -616,6 +617,13 @@ async fn repository_search(
 async fn repository_cancel_search(state: tauri::State<'_, Shared>, handle: String) -> Result<()> {
     with_service(state, move |s| s.cancel_search(&handle)).await
 }
+/// Checks that a host is reachable with the user's SSH configuration and has Git.
+/// Never opens a session and never stores anything: it exists so the connect form
+/// can explain a failure before a tab exists.
+#[tauri::command]
+async fn ssh_test(target: SshTarget) -> Result<SshProbe> {
+    blocking(move || ssh::test(target)).await
+}
 #[tauri::command]
 async fn wsl_distributions() -> Result<Vec<WslDistribution>> {
     blocking(wsl::distributions).await
@@ -683,7 +691,9 @@ pub fn run() {
             app.manage(Arc::new(provider_accounts::AccountStore::new(
                 app.path().app_data_dir()?.join("provider-accounts.json"),
             )));
-            app.manage(Arc::new(Service::new(app.path().app_data_dir()?)));
+            let data_dir = app.path().app_data_dir()?;
+            process::set_ssh_control_dir(data_dir.join("ssh"));
+            app.manage(Arc::new(Service::new(data_dir)));
             let handle = app.handle().clone();
             process::set_git_log(move |log| {
                 let _ = handle.emit("git_command", log);
@@ -769,6 +779,7 @@ pub fn run() {
             repository_stashes,
             repository_stash_action,
             open_external_url,
+            ssh_test,
             askpass::repository_provide_password,
             editor::editor_reply,
             wsl_distributions,
@@ -786,6 +797,8 @@ mod hunk_tests;
 mod operation_tests;
 #[cfg(test)]
 mod remote_tests;
+#[cfg(all(test, unix))]
+mod ssh_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(all(test, windows))]

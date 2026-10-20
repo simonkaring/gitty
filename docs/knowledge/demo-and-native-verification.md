@@ -16,6 +16,8 @@ sources:
     resource: ../../src-tauri/src/tests.rs
   - id: wsl-tests
     resource: ../../src-tauri/src/wsl_tests.rs
+  - id: ssh-tests
+    resource: ../../src-tauri/src/ssh_tests.rs
 ---
 
 # Demo and native verification
@@ -34,10 +36,11 @@ cannot establish native Git correctness.[^dispatch][^demo]
 | Native Git or IPC | Build frontend first, then `npm run check:rust`, `npm run test:rust`; Rust edits also need `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | Host compilation and Rust tests, including real temporary repositories; platform gates still apply. |
 | Browser smoke | `src/components/*.smoke.mjs`, using the README's separate Playwright/Chromium setup | Mocked Tauri interactions; historical scripts may need current-UI updates. |
 | Windows/WSL | On Windows, set `GITTY_WSL_TEST_DISTRO` and run `cargo test --manifest-path src-tauri/Cargo.toml wsl_tests` | Real distribution tests only when enabled; without the variable they return immediately. |
+| SSH transport | `npm run test:rust` on Unix runs `ssh_tests`, which substitute a shell double for the `ssh` client | Quoting, remote environment and stdin framing through a real shell; no authentication, host keys, network, Windows client or real remote host. Use the connect form's **Test connection** (`ssh_test`) for a real host and record its scope. |
 | Packaged desktop | Build and exercise on the target platform using README procedures | Native GUI, authentication, process cleanup, and installation require their own observations. |
 
 Commands and test scope come from the package scripts, README, and Rust
-fixtures.[^scripts][^readme][^rust-tests][^wsl-tests] A host test pass does not
+fixtures.[^scripts][^readme][^rust-tests][^wsl-tests][^ssh-tests] A host test pass does not
 establish Windows/WSL/Linux runtime support or signed-artifact readiness.
 For latency diagnostics, `GITTY_TRACE_PROCESS=1` prints captured subprocess spawn
 and total durations plus mutation-lock waits to the desktop terminal. It omits
@@ -68,3 +71,4 @@ Related: [platform boundaries](native-and-wsl-boundaries.md) and
 [^readme]: Setup, checks, smoke prerequisites, and runtime gaps.
 [^rust-tests]: Real Git repository fixtures and platform-specific tests.
 [^wsl-tests]: Conditional real-WSL test setup.
+[^ssh-tests]: SSH shell-double suite and what it deliberately does not exercise.

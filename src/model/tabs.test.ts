@@ -249,3 +249,33 @@ describe('start tab', () => {
     expect(opened.activeId).toBe(withRepo.activeId);
   });
 });
+
+describe('SSH locations', () => {
+  const ssh: RepositoryLocation = { kind: 'ssh', host: 'home', user: 'me', port: 2222, path: '/repo' };
+  it('distinguishes the same path on different hosts and ports', () => {
+    const otherHost: RepositoryLocation = { ...ssh, host: 'work' };
+    const otherPort: RepositoryLocation = { ...ssh, port: 22 };
+    const noUser: RepositoryLocation = { ...ssh, user: undefined };
+    expect(sameLocation(ssh, otherHost)).toBe(false);
+    expect(sameLocation(ssh, otherPort)).toBe(false);
+    expect(sameLocation(ssh, noUser)).toBe(false);
+    expect(sessionKey(ssh, { root: '/repo', commonDir: '/repo/.git' })).not.toBe(sessionKey(otherHost, { root: '/repo', commonDir: '/repo/.git' }));
+  });
+  it('never collides with a native path that happens to read the same', () => {
+    expect(locationKey(ssh)).not.toBe(locationKey({ kind: 'native', path: '/repo' }));
+    expect(locationKey({ ...ssh, port: undefined })).not.toBe(locationKey({ ...ssh, port: 22 }));
+  });
+  it('labels the tab with the destination, and persists the whole location', () => {
+    expect(locationLabel(ssh)).toBe('repo (SSH: me@home:2222)');
+    const storage = memoryStorage();
+    const state = { tabs: [{ id: 't1', location: ssh }], activeId: 't1' };
+    expect(savePersistedTabs(storage, state)).toBe(true);
+    expect(loadPersistedTabs(storage).tabs[0].location).toEqual(ssh);
+  });
+  it('keeps an SSH tab open as a duplicate of the same destination only', () => {
+    const state = tabsReducer({ tabs: [], activeId: null, notice: null }, { type: 'open', location: ssh });
+    const duplicate = tabsReducer(state, { type: 'open', location: { ...ssh } });
+    expect(duplicate.tabs).toHaveLength(1);
+    expect(tabsReducer(state, { type: 'open', location: { ...ssh, host: 'work' } }).tabs).toHaveLength(2);
+  });
+});

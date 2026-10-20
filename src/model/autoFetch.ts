@@ -3,6 +3,19 @@
  * and on a short timer while it stays focused. */
 export const AUTO_FETCH_INTERVAL = 5 * 60 * 1000;
 export const AUTO_FETCH_CHECK = 30 * 1000;
+/** A remote host pays a round trip for every Git launch, so routine polling is
+ * slower there instead of continuously spawning processes over the network. */
+export const SSH_REFRESH_INTERVAL = 30 * 1000;
+
+export function routineRefreshInterval(locationKind: string): number {
+  return locationKind === 'ssh' ? SSH_REFRESH_INTERVAL : 5000;
+}
+
+/** Background fetch stays off for SSH: an explicit fetch, pull or push, or opening
+ * the tab, still syncs, but a sleeping host is not probed on a timer. */
+export function backgroundFetchAllowed(locationKind: string): boolean {
+  return locationKind !== 'ssh';
+}
 
 export type FetchStatus =
   | { kind: 'idle' }

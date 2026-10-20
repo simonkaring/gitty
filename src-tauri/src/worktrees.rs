@@ -33,6 +33,14 @@ fn location_at(origin: &RepositoryLocation, root: &str) -> RepositoryLocation {
             distribution: distribution.clone(),
             path: root.into(),
         },
+        RepositoryLocation::Ssh {
+            host, port, user, ..
+        } => RepositoryLocation::Ssh {
+            host: host.clone(),
+            port: *port,
+            user: user.clone(),
+            path: root.into(),
+        },
     }
 }
 
@@ -64,6 +72,31 @@ fn require_new_destination(location: &RepositoryLocation, path: &str) -> Result<
                 Some(0) => true,
                 Some(1) => false,
                 _ => return Err(Error::new("io", "Cannot check the WSL destination")),
+            }
+        }
+        RepositoryLocation::Ssh { .. } => {
+            let command = process::ssh_exec(
+                location,
+                &[],
+                &[
+                    "test".to_string(),
+                    "-e".into(),
+                    path.into(),
+                    "-o".into(),
+                    "-L".into(),
+                    path.into(),
+                ],
+            )?;
+            let output = process::run_for(command, std::time::Duration::from_secs(30))?;
+            match output.code {
+                Some(0) => true,
+                Some(1) => false,
+                _ => {
+                    return Err(Error::new(
+                        "io",
+                        "Cannot check the destination on the remote host",
+                    ))
+                }
             }
         }
     };
@@ -191,6 +224,14 @@ impl Repository {
                 ));
             }
         }
+        if matches!(self.session.location, RepositoryLocation::Ssh { .. })
+            && matches!(request.action.as_str(), "move" | "remove")
+        {
+            return Err(Error::new(
+                "unsupportedLocation",
+                "Moving or removing a worktree is not available over SSH yet; do it in a terminal on that host.",
+            ));
+        }
         if matches!(request.action.as_str(), "create" | "move") {
             if matches!(self.session.location, RepositoryLocation::Native { .. })
                 && request
@@ -207,7 +248,9 @@ impl Repository {
                 RepositoryLocation::Native { .. } => {
                     std::path::Path::new(&request.destination).is_absolute()
                 }
-                RepositoryLocation::Wsl { .. } => request.destination.starts_with('/'),
+                RepositoryLocation::Wsl { .. } | RepositoryLocation::Ssh { .. } => {
+                    request.destination.starts_with('/')
+                }
             };
             if !absolute {
                 return Err(Error::new(

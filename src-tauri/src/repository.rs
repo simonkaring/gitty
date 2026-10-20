@@ -183,6 +183,16 @@ impl Service {
                 ));
             }
         }
+        if let RepositoryLocation::Ssh {
+            host,
+            port,
+            user,
+            path,
+        } = &location
+        {
+            validate_ssh_destination(host, user.as_deref(), *port)?;
+            validate_ssh_path(path)?;
+        }
         if let RepositoryLocation::Native { path } = &mut location {
             if path.to_ascii_lowercase().starts_with("\\\\wsl") {
                 return Err(Error::new(
@@ -237,10 +247,15 @@ impl Service {
         } else {
             string(&location, &["rev-parse", "--show-toplevel"])?
         };
+        // The remote's own answer becomes a later `-C` argument, so it is subject
+        // to the same validation as a path the user typed.
+        if matches!(location, RepositoryLocation::Ssh { .. }) {
+            validate_ssh_path(&root)?;
+        }
         match &mut location {
-            RepositoryLocation::Native { path } | RepositoryLocation::Wsl { path, .. } => {
-                *path = root.clone()
-            }
+            RepositoryLocation::Native { path }
+            | RepositoryLocation::Wsl { path, .. }
+            | RepositoryLocation::Ssh { path, .. } => *path = root.clone(),
         }
         // Reject promisor repositories rather than letting older Git versions implicitly fetch missing objects.
         let partial = process::git(
@@ -315,9 +330,9 @@ impl Service {
     pub(crate) fn require_closed_worktree(&self, repo: &Repository, path: &str) -> Result<()> {
         let mut location = repo.session.location.clone();
         match &mut location {
-            RepositoryLocation::Native { path: p } | RepositoryLocation::Wsl { path: p, .. } => {
-                *p = path.into()
-            }
+            RepositoryLocation::Native { path: p }
+            | RepositoryLocation::Wsl { path: p, .. }
+            | RepositoryLocation::Ssh { path: p, .. } => *p = path.into(),
         }
         let locations: Vec<_> = lock(&self.repositories)?
             .values()
@@ -378,6 +393,16 @@ impl Service {
             RepositoryLocation::Wsl { distribution, .. } => {
                 format!("wsl\0{distribution}\0{}", repo.session.common_dir)
             }
+            // The same path on two hosts is two repositories, even when the
+            // common Git dir happens to read identically.
+            RepositoryLocation::Ssh {
+                host, port, user, ..
+            } => format!(
+                "ssh\0{}@{host}:{}\0{}",
+                user.as_deref().unwrap_or(""),
+                port.map(|p| p.to_string()).unwrap_or_default(),
+                repo.session.common_dir
+            ),
         };
         let mut locks = lock(&self.mutation_locks)?;
         if locks.len() > 64 {
@@ -554,9 +579,9 @@ impl Repository {
         session.root = root.into();
         session.bare = false;
         match &mut session.location {
-            RepositoryLocation::Native { path } | RepositoryLocation::Wsl { path, .. } => {
-                *path = root.into()
-            }
+            RepositoryLocation::Native { path }
+            | RepositoryLocation::Wsl { path, .. }
+            | RepositoryLocation::Ssh { path, .. } => *path = root.into(),
         }
         Self {
             session,

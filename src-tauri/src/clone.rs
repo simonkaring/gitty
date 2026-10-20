@@ -257,6 +257,12 @@ fn clone_repository(
     credential: Option<crate::provider_repositories::CloneCredential>,
 ) -> Result<RepositoryLocation> {
     validate_request(&request)?;
+    if matches!(request.parent, RepositoryLocation::Ssh { .. }) {
+        return Err(Error::new(
+            "unsupportedLocation",
+            "Cloning into an SSH destination is not supported. Clone on that host and open it over SSH.",
+        ));
+    }
     let temporary_name = format!(".gitty-clone-{operation_id}");
     let (temporary, destination) = match &mut request.parent {
         RepositoryLocation::Native { path } => {
@@ -292,6 +298,12 @@ fn clone_repository(
                 format!("{parent}/{temporary_name}"),
                 format!("{parent}/{}", request.directory_name),
             )
+        }
+        RepositoryLocation::Ssh { .. } => {
+            return Err(Error::new(
+                "unsupportedLocation",
+                "Cloning into an SSH destination is not supported.",
+            ))
         }
     };
     ensure_absent(&request.parent, &destination)?;
@@ -382,6 +394,10 @@ fn clone_repository(
                     distribution,
                     path: destination,
                 }),
+                RepositoryLocation::Ssh { .. } => Err(Error::new(
+                    "unsupportedLocation",
+                    "Cloning into an SSH destination is not supported.",
+                )),
             }
         }
         Ok(output) => {
@@ -446,6 +462,10 @@ fn create_owned_temporary(location: &RepositoryLocation, path: &str) -> Result<(
                 Err(Error::new("io", report(&output)))
             }
         }
+        RepositoryLocation::Ssh { .. } => Err(Error::new(
+            "unsupportedLocation",
+            "Cloning into an SSH destination is not supported.",
+        )),
     }
 }
 
@@ -477,6 +497,12 @@ fn ensure_absent(location: &RepositoryLocation, path: &str) -> Result<()> {
                 _ => return Err(Error::new("io", report(&output))),
             }
         }
+        RepositoryLocation::Ssh { .. } => {
+            return Err(Error::new(
+                "unsupportedLocation",
+                "Cloning into an SSH destination is not supported.",
+            ))
+        }
     };
     if exists {
         Err(Error::new(
@@ -503,6 +529,8 @@ fn cleanup_owned(location: &RepositoryLocation, path: &str) {
                 let _ = process::run_for(command, Duration::from_secs(30));
             }
         }
+        // SSH cloning is refused before this point; nothing was created remotely.
+        RepositoryLocation::Ssh { .. } => {}
     }
 }
 
@@ -537,6 +565,10 @@ fn publish_clone(location: &RepositoryLocation, temporary: &str, destination: &s
             }
             Ok(())
         }
+        RepositoryLocation::Ssh { .. } => Err(Error::new(
+            "unsupportedLocation",
+            "Cloning into an SSH destination is not supported.",
+        )),
     }
 }
 

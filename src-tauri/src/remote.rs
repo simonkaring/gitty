@@ -204,6 +204,9 @@ impl Repository {
         askpass: Option<&crate::askpass::AskpassRegistry>,
     ) -> Result<ActionOutput> {
         let wsl = matches!(self.location(), RepositoryLocation::Wsl { .. });
+        // Network authentication happens on the remote host: Gitty must not try to
+        // answer prompts with a local helper the remote cannot reach.
+        let ssh = matches!(self.location(), RepositoryLocation::Ssh { .. });
         self.require_writable()?;
         if !self.unmerged()?.is_empty() {
             return Err(Error::new(
@@ -281,7 +284,7 @@ impl Repository {
         #[cfg(not(windows))]
         let wsl_bridge: Option<(String, crate::askpass::AskpassGuard<'_>)> = None;
         // Native prompts use a token scoped to this action, so any prompt dies with it.
-        let native_bridge = match (interactive, wsl, askpass) {
+        let native_bridge = match (interactive, wsl || ssh, askpass) {
             (true, false, Some(registry)) => Some(registry.start_operation_with(prompt_context())),
             _ => None,
         };
