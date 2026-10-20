@@ -462,6 +462,8 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     if (id === WORKING_ID) {
       setSelected(WORKING_ID);
       setInspectorOpen(true);
+      // Row 0 can be above a scrolled list; revealing it must show it.
+      graph.current?.scrollTo(0);
       return;
     }
     if (history.current.some(commit => commit.id === id)) {
@@ -767,7 +769,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
      {state && originReset && <OriginResetDialog key={`${state.session.handle}:${originReset}`} handle={state.session.handle} branch={originReset} busy={mutationBusy || mutationBlocked} onWrite={operationWrite} onClose={() => setOriginReset(null)} onComplete={() => { setOriginReset(null); setNotice(`Reset ${originReset.replace(/^refs\/remotes\/origin\//, '')} to ${originReset.replace(/^refs\/remotes\//, '')}.`); }} />}
     {state && publishInfo && <PublishDialog remotes={publishInfo.remotes} branch={publishInfo.branch ?? ''} onPublish={async (remote, branch) => { const action: RemoteActionRequest = { kind: 'push', remote, branch, ...(publishInfo.branch ? { source: publishInfo.branch } : {}), setUpstream: true }; const output = await remoteWrite('repository_remote_action', { action }); setNotice(remoteSuccessMessage(action, output)); }} onClose={() => setPublishInfo(null)} />}
     {state && actionContext && <OperationDialog key={state.session.handle} state={state} operation={operation} context={actionContext} commits={commits} busy={mutationBusy || mutationBlocked} onWrite={operationWrite} onClose={() => setActionContext(null)} onCompare={compareWithCurrent} onPullRequest={source => { setPrSource(source); setActionContext(null); }} />}
-    {state && blockedSwitch && <SwitchBlockedDialog branch={blockedSwitch.branch} reason={blockedSwitch.reason} hasChanges={!!status?.entries.length} onReview={() => { navigation.current++; setSelected(WORKING_ID); setInspectorOpen(true); setBlockedSwitch(null); }} onOperations={() => { setActionContext({ oid: blockedSwitch.oid, ref: blockedSwitch.ref, initial: 'switchBranch' }); setBlockedSwitch(null); }} onClose={() => setBlockedSwitch(null)} />}
+    {state && blockedSwitch && <SwitchBlockedDialog branch={blockedSwitch.branch} reason={blockedSwitch.reason} hasChanges={!!status?.entries.length} onReview={() => { reveal(WORKING_ID); setBlockedSwitch(null); }} onOperations={() => { setActionContext({ oid: blockedSwitch.oid, ref: blockedSwitch.ref, initial: 'switchBranch' }); setBlockedSwitch(null); }} onClose={() => setBlockedSwitch(null)} />}
     {state && conflictPath && <ConflictEditor key={`${state.session.handle}:${conflictPath}`} handle={state.session.handle} path={conflictPath} revision={revision} busy={mutationBusy || mutationBlocked} onWrite={operationWrite} onClose={() => setConflictPath(null)} />}
     {state && prSource && <PullRequestDialog key={state.session.handle} handle={state.session.handle} source={prSource} onClose={() => setPrSource(null)} />}
     {state && stashOpen && <RemoteStashDialog key={`${state.session.handle}:stash`} handle={state.session.handle} onWrite={remoteWrite} onClose={() => setStashOpen(false)} notify={setNotice} />}

@@ -17,6 +17,7 @@ import { DEMO_REPOS, demoLocation } from '../model/demoBackend';
 import { cloneReducer, type CloneProgress, type CloneRequest } from '../model/clone';
 import { ErrorBoundary } from './ErrorBoundary';
 import { DEFAULT_BUTTON_LAYOUT, parseWindowButtonLayout, WindowControls, WindowResizeHandles } from './WindowControls';
+import { NARROW_PANE_MAX_WIDTH, setPaneOpen, settleSidePanes, type SidePane } from '../model/paneLayout';
 
 function initialTabsState(demo: boolean): TabsState {
   const persisted = demo ? { tabs: [{ id: 'demo', location: demoLocation(DEMO_REPOS[0].name) }], activeId: 'demo' } : loadPersistedTabs(window.localStorage);
@@ -39,6 +40,25 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
   const [{ tabs, activeId, notice: pendingNotice }, dispatch] = useReducer(tabsReducer, demo, initialTabsState);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 1000);
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 900);
+  // Below this width both side panes would squeeze the history past its branch and
+  // graph columns, so opening one closes the other and a resize settles on one.
+  const [narrowPanes, setNarrowPanes] = useState(() => window.innerWidth <= NARROW_PANE_MAX_WIDTH);
+  useEffect(() => {
+    const update = () => setNarrowPanes(window.innerWidth <= NARROW_PANE_MAX_WIDTH);
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
+  useEffect(() => {
+    const next = settleSidePanes({ sidebar: sidebarOpen, inspector: inspectorOpen }, narrowPanes);
+    if (next.sidebar !== sidebarOpen) setSidebarOpen(next.sidebar);
+    if (next.inspector !== inspectorOpen) setInspectorOpen(next.inspector);
+  }, [narrowPanes, sidebarOpen, inspectorOpen]);
+  const setPane = useCallback((pane: SidePane, open: boolean) => {
+    const next = setPaneOpen({ sidebar: sidebarOpen, inspector: inspectorOpen }, pane, open, narrowPanes);
+    if (next.sidebar !== sidebarOpen) setSidebarOpen(next.sidebar);
+    if (next.inspector !== inspectorOpen) setInspectorOpen(next.inspector);
+  }, [sidebarOpen, inspectorOpen, narrowPanes]);
+  const setInspectorPane = useCallback((open: boolean) => setPane('inspector', open), [setPane]);
   const [inspectorWidth, setInspectorWidth] = usePaneWidth('inspector', 400, INSPECTOR_MIN_WIDTH, INSPECTOR_MAX_WIDTH);
   const [sidebarWidth, setSidebarWidth] = usePaneWidth('sidebar', 240, 210, 340);
   const [notice, setNotice] = useState('');
@@ -124,8 +144,8 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
 
   const workspaceCommands: PaletteCommand[] = [
     { id: 'open', group: 'Workspace', label: 'Open repository…', icon: <FolderOpen size={15} />, run: () => dispatch({ type: 'start' }) },
-    { id: 'sidebar', group: 'Workspace', label: `${sidebarOpen ? 'Hide' : 'Show'} references sidebar`, icon: <PanelLeft size={15} />, run: () => setSidebarOpen(!sidebarOpen) },
-    { id: 'inspector', group: 'Workspace', label: `${inspectorOpen ? 'Hide' : 'Show'} inspector`, icon: <PanelRight size={15} />, run: () => setInspectorOpen(!inspectorOpen) },
+    { id: 'sidebar', group: 'Workspace', label: `${sidebarOpen ? 'Hide' : 'Show'} references sidebar`, icon: <PanelLeft size={15} />, run: () => setPane('sidebar', !sidebarOpen) },
+    { id: 'inspector', group: 'Workspace', label: `${inspectorOpen ? 'Hide' : 'Show'} inspector`, icon: <PanelRight size={15} />, run: () => setPane('inspector', !inspectorOpen) },
     { id: 'settings', group: 'Workspace', label: 'Open settings', icon: <SettingsIcon size={15} />, run: () => openSettings() },
     ...(onToggleDemo ? [{ id: 'demo', group: 'Workspace', label: demo ? 'Exit demo workspace' : 'Explore demo workspace', icon: <Sparkles size={15} />, disabled: anyBusy, run: requestDemo }] : []),
     ...themes.filter(t => t.id !== theme.id).map(t => ({ id: `theme:${t.id}`, group: 'Theme', label: `Theme: ${t.name}`, hint: t.mode, icon: <Palette size={15} />, run: () => updateSettings({ themeMode: 'fixed', themeId: t.id }) })),
@@ -143,8 +163,8 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
       <RepositoryTabs tabs={tabSummaries} activeId={activeId} onSelect={selectTab} onClose={closeTab} onMove={(tabId, targetId) => dispatch({ type: 'move', tabId, targetId })} onNew={() => dispatch({ type: 'start' })} />
       <div className="native-actions">
         <SettingsButton />
-        <button className="icon-button" aria-label="Toggle references sidebar" aria-pressed={sidebarOpen} onClick={() => setSidebarOpen(!sidebarOpen)}><PanelLeft size={18} /></button>
-        <button className="icon-button" aria-label="Toggle working changes and inspector" aria-pressed={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)}><PanelRight size={18} /></button>
+        <button className="icon-button" aria-label="Toggle references sidebar" aria-pressed={sidebarOpen} onClick={() => setPane('sidebar', !sidebarOpen)}><PanelLeft size={18} /></button>
+        <button className="icon-button" aria-label="Toggle working changes and inspector" aria-pressed={inspectorOpen} onClick={() => setPane('inspector', !inspectorOpen)}><PanelRight size={18} /></button>
       </div>
       {customWindowControls && (!isLinux || rightButtons.length > 0) && <WindowControls buttons={isLinux ? rightButtons : undefined} onError={notify} />}
     </header>
@@ -159,7 +179,7 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
       : tabs.map(tab => <div key={tab.id} id={`tabpanel-${tab.id}`} role="tabpanel" aria-labelledby={`tab-${tab.id}`} hidden={tab.id !== activeId} className="tab-pane-host">
         <ErrorBoundary label="This repository view hit an error">{!tab.location ? startPage(tab.id) : <RepositoryPane tabId={tab.id} location={tab.location} active={tab.id === activeId}
           sidebarOpen={sidebarOpen} inspectorOpen={inspectorOpen} inspectorWidth={inspectorWidth} sidebarWidth={sidebarWidth}
-          setInspectorWidth={setInspectorWidth} setSidebarWidth={setSidebarWidth} setInspectorOpen={setInspectorOpen}
+          setInspectorWidth={setInspectorWidth} setSidebarWidth={setSidebarWidth} setInspectorOpen={setInspectorPane}
           onIdentity={handleIdentity} onBusyChange={handleBusyChange} onMeta={handleMeta}
           onOpenWorktree={openLocation}
           paletteOpen={paletteOpen} onOpenPalette={() => setPaletteOpen(true)} onClosePalette={() => setPaletteOpen(false)} workspaceCommands={workspaceCommands} />}</ErrorBoundary>

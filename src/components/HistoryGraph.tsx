@@ -266,6 +266,24 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     else if (x > graphX + graphWidth - 12) el.scrollLeft = x - graphWidth + 24;
   }, [selectedIndex, layout.nodes, graphLaneX]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Working changes are synthetic row 0, so a refresh that surfaces them above a
+  // scrolled list would otherwise leave them out of view behind the preserved
+  // scroll anchor. Reveal the row once when it appears, not on every refresh.
+  const hasWorkingRow = commits[0]?.id === WORKING_ID;
+  const hadWorkingRow = useRef(hasWorkingRow);
+  const revealWorking = useRef(false);
+  useEffect(() => {
+    if (hasWorkingRow && !hadWorkingRow.current) revealWorking.current = true;
+    hadWorkingRow.current = hasWorkingRow;
+    // Wait for the layout to include row 0: the parent re-anchors the list when a
+    // new layout lands, so revealing on the same commit would be overwritten.
+    if (revealWorking.current && layout.nodes[0]?.id === WORKING_ID && scroller.current) {
+      scroller.current.scrollTop = 0;
+      setScrollTop(0);
+      revealWorking.current = false;
+    }
+  }, [commits, hasWorkingRow, layout]);
+
   // Commits prepended by a refresh (new commit, fetch) slide in once.
   const seenIds = useRef<Set<string> | null>(null);
   const [freshIds, setFreshIds] = useState<Set<string>>(() => new Set());

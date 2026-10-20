@@ -7,6 +7,7 @@ import { BUILTIN_THEMES } from '../model/themes';
 import { DEFAULT_HISTORY_COLUMNS } from '../model/settings';
 import { acceptsGraphDrop, COMMIT_DRAG_TYPE, graphDropAction, groupRefs, groupRefsByCommit, HistoryGraph, REF_DRAG_TYPE, sortRefs } from './HistoryGraph';
 import { WORKING_ID } from '../model/native';
+import type { Commit } from '../model/types';
 
 const preferences = vi.hoisted(() => ({ graphAuthorAvatars: false, authorAvatarMode: 'initials' as 'initials' | 'gravatar', graphOnly: false }));
 const avatarUrl = vi.hoisted(() => vi.fn(async () => 'https://gravatar.com/avatar/test?s=64&d=404'));
@@ -218,6 +219,37 @@ it('groupRefsByCommit groups badges per commit and drops remote */HEAD aliases',
   expect(r('feature/HEAD', 'local', 'd')).toEqual(groupRefsByCommit([r('feature/HEAD', 'local', 'd')]).get('d')?.[0]);
   expect(grouped.get('missing')).toBeUndefined();
   expect(groupRefsByCommit([]).size).toBe(0);
+});
+
+it('reveals the working-changes row when it first appears above a scrolled list', async () => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const originalObserver = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} unobserve() {} } as typeof ResizeObserver;
+  const canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(new Proxy({}, { get: () => () => {} }) as CanvasRenderingContext2D);
+  const host = document.createElement('div'), root = createRoot(host);
+  const base: Commit = { id: 'base', parents: [], subject: 'Base', body: '', author: 'A', email: '', timestamp: 1, branch: 'main', files: [] };
+  const working: Commit = { id: WORKING_ID, parents: ['base'], subject: 'Working changes · 1 path', body: '', author: 'Working tree', email: '', timestamp: 0, branch: 'main', files: [] };
+  const render = (items: Commit[]) => act(async () => root.render(<HistoryGraph commits={items} layout={layoutHistory(items)} refs={[]} selectedId="base" head="base" loaded={items.length} matches={null} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />));
+  const scrollTo = async (top: number, scroller: HTMLElement) => { scroller.scrollTop = top; await act(async () => { scroller.dispatchEvent(new Event('scroll', { bubbles: true })); }); };
+  try {
+    await render([base]);
+    const scroller = host.querySelector('.history-scroll') as HTMLElement;
+    await scrollTo(144, scroller);
+    expect(scroller.scrollTop).toBe(144);
+
+    // Working changes surface above the pinned scroll position: show row 0 once.
+    await render([working, base]);
+    expect(scroller.scrollTop).toBe(0);
+    expect(host.querySelector(`[id$="-commit-${WORKING_ID}"]`)).not.toBeNull();
+
+    // A later working-tree-only refresh keeps the reader's position.
+    await scrollTo(72, scroller);
+    await render([{ ...working, subject: 'Working changes · 2 paths' }, base]);
+    expect(scroller.scrollTop).toBe(72);
+  } finally {
+    await act(async () => root.unmount());
+    canvas.mockRestore(); globalThis.ResizeObserver = originalObserver;
+  }
 });
 
 it('only reallocates the graph canvas backing store when its pixel size changes', async () => {

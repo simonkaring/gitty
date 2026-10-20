@@ -1,11 +1,13 @@
 ---
 type: UI Behavior
 title: History search and workspace entry points
-description: Search result inspection, graph reveal, footer commands, and settings-based demo switching.
+description: Search result inspection, graph and working-row reveal, footer commands, and settings-based demo switching.
 status: draft
 sources:
   - id: pane
     resource: ../../src/components/RepositoryPane.tsx
+  - id: graph
+    resource: ../../src/components/HistoryGraph.tsx
   - id: results
     resource: ../../src/components/SearchResults.tsx
   - id: workspace
@@ -18,6 +20,10 @@ sources:
     resource: ../../src/components/search.smoke.mjs
   - id: flow
     resource: ../../src/components/RepositoryPane.search.test.tsx
+  - id: reveal-tests
+    resource: ../../src/components/RepositoryPane.workingReveal.test.tsx
+  - id: reveal-palette
+    resource: ../../src/components/RepositoryPane.workingRow.test.tsx
 ---
 
 # History search and workspace entry points
@@ -35,6 +41,13 @@ change, cleared filters, or unmount cancels an in-flight native search through
 superseded queries are ignored. Hidden tabs start no searches. Arrow keys and
 Home/End move focus between result buttons.[^pane][^results][^flow]
 
+Working changes are the other workspace entry point. The synthetic
+`Working changes` row is row 0, so when a refresh first turns an empty working
+tree into one with entries, the graph scrolls that row into view once; later
+working-tree-only refreshes keep the reader's position. `reveal(WORKING_ID)`
+from the command palette, blocked-branch review, or a graph row selects it and
+scrolls the graph to the top.[^pane][^graph][^reveal-tests][^reveal-palette]
+
 Native search semantics and the 500-match limit remain defined by the backend;
 demo search uses simplified synthetic matches, not native Git coverage.[^backend]
 
@@ -48,6 +61,9 @@ scrolling, narrow layouts, and footer commands. It does not exercise native Git
 or desktop mode switching.[^tests]
 
 [^pane]: RepositoryPane search effect, direct result selection, and graph reveal.
+[^graph]: HistoryGraph working-row transition reveal.
+[^reveal-tests]: First-appearance reveal and later working-tree refresh scroll position.
+[^reveal-palette]: Explicit working-row reveal scrolls the graph to the top.
 [^results]: SearchResults rendering and keyboard focus movement.
 [^workspace]: NativeWorkspace requestDemo and footer wiring.
 [^settings]: SettingsDialog demo entry point and disabled states.
