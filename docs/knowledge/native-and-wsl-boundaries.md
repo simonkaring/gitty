@@ -48,8 +48,9 @@ Wayland/X11 GUI behavior requires separate runtime verification.[^windows][^linu
 
 Rust owns repository Git and filesystem work. Native Git uses explicit arguments
 with `git -C`; WSL locations use `wsl.exe --distribution … --exec env … git -C …`
-on Windows; SSH locations run the same quoted script through `ssh … sh -c …` on the
-remote host (see [SSH repository transport](ssh-remote-repositories.md)). Native
+on Windows; SSH locations send the same script as one quoted `sh -c '…'` remote
+argument, because OpenSSH joins remote arguments before the login shell parses them
+(see [SSH repository transport](ssh-remote-repositories.md)). Native
 locations on `\\wsl…` UNC paths are refused by the process layer; the UI
 must represent them as a distribution plus Linux path. Read and mutation
 environments are distinct: preserve their targeted configuration and lock

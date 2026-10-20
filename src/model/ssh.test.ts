@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { locationIdentity, sshDestination, sshDisplayPath, sshFailureHint, sshLocationFromForm, validSshPath, validSshWord } from './ssh';
+import { locationIdentity, repositoryStorageKey, sshDestination, sshDisplayPath, sshFailureHint, sshLocationFromForm, validSshPath, validSshWord } from './ssh';
 
 const form = { host: ' home ', user: '', port: '', path: '/home/me/code/thing' };
 
@@ -40,10 +40,18 @@ describe('SSH destinations', () => {
     expect(locationIdentity({ kind: 'ssh', host: 'home', user: 'me', path: '/a' })).toBe(locationIdentity({ kind: 'ssh', host: 'home', user: 'me', path: '/b' }));
     expect(locationIdentity({ kind: 'ssh', host: 'home', path: '/a' })).not.toBe(locationIdentity({ kind: 'native', path: '/a' }));
   });
+  it('keeps the stored-identity payload earlier releases wrote for native and WSL', () => {
+    expect(repositoryStorageKey({ kind: 'native', path: '/repo' }, '/repo')).toBe('["native","","/repo"]');
+    expect(repositoryStorageKey({ kind: 'wsl', distribution: 'Ubuntu', path: '/repo' }, '/repo')).toBe('["wsl","Ubuntu","/repo"]');
+    const ssh = repositoryStorageKey({ kind: 'ssh', host: 'home', user: 'me', port: 2222, path: '/repo' }, '/repo');
+    expect(ssh).toBe('["ssh:me@home:2222","/repo"]');
+    expect(ssh).not.toBe(repositoryStorageKey({ kind: 'ssh', host: 'other', user: 'me', path: '/repo' }, '/repo'));
+  });
   it('explains each connection failure with a fix', () => {
     expect(sshFailureHint('hostKeyUnknown')).toContain('host key');
     expect(sshFailureHint('authRequired')).toContain('password');
-    expect(sshFailureHint('connectFailed')).toContain('Tailscale');
+    expect(sshFailureHint('connectFailed')).toContain('SSH server');
+    expect(sshFailureHint('posixShellRequired')).toContain('WSL');
     expect(sshFailureHint('notARepository')).toContain('Git repository');
     expect(sshFailureHint('whatever')).toBe('');
   });

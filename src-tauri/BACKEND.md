@@ -53,8 +53,9 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
 
 - Git is the installed executable, launched with explicit arguments and no shell.
   Native paths use `git -C`; WSL uses `wsl.exe --distribution … --exec env … git -C …`;
-  SSH locations run `ssh … -- <user@>host sh -c '<quoted script>'` so Git executes on
-  the remote host (see [SSH repositories](#ssh-repositories)). Native WSL UNC
+  SSH locations run `ssh … -- <user@>host "sh -c '<quoted script>'"` (one remote
+  argument) so Git executes on the remote host (see
+  [SSH repositories](#ssh-repositories)). Native WSL UNC
   locations are rejected.
 - Git reads disable optional locks, fsmonitor, automatic maintenance, replacement
   objects, external diff, textconv, implicit object fetching, and transport protocols.
@@ -209,9 +210,17 @@ Transport policy (fixed in `process.rs`, not configurable from the frontend):
 
 - `ssh -T -x -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10
   -o ServerAliveInterval=15 -o ServerAliveCountMax=3 [ControlMaster/ControlPath/
-  ControlPersist] [-p port] -- destination sh -c '<script>'`. Multiplexing is Unix-only
-  because Win32 OpenSSH does not implement `ControlMaster`; its control sockets live in
-  `<app data>/ssh` with mode 0700.
+  ControlPersist] [-p port] -- destination "sh -c '<script>'"`. OpenSSH joins the
+  remote arguments with spaces and lets the login shell split them, so `sh -c` and its
+  script are **one** argument, itself quoted for that parse; as separate arguments the
+  host would receive `sh -c env …` and run only `env`. Multiplexing is Unix-only
+  because Win32 OpenSSH does not implement `ControlMaster`. Its control sockets live in
+  `<app data>/ssh` with mode 0700, one 16-hex name per destination, or in a per-process
+  temp directory when that path is too long for a Unix socket. The `ControlPath` value
+  is double-quoted for OpenSSH's `-o` parser, which splits unquoted values on spaces,
+  and stays within 88 bytes so OpenSSH's `.XXXXXXXXXX` listener suffix fits
+  `sun_path`. Both candidate directories are measured; if neither fits (a long
+  `TMPDIR` too), that command runs without multiplexing instead of failing.
 - The script is `env <assignments> git [-C <path>] --no-pager -c … <args>`. Every word
   is single-quoted; SSH forwards no local environment, so the read/mutation contract
   variables (`GIT_OPTIONAL_LOCKS`, `LC_ALL`, `GIT_NO_LAZY_FETCH`, `GIT_TERMINAL_PROMPT`,
@@ -245,8 +254,18 @@ remain available because they only need Git.
 transport without a session: `git --version` always, and `rev-parse --show-toplevel`
 plus the directory name when a path is given. It stores nothing. Failures map to
 `invalidHost`, `invalidUser`, `invalidPort`, `invalidPath`, `hostKeyUnknown`,
-`authRequired`, `hostUnknown`, `connectFailed`, `notARepository`, `gitMissing`,
-`timeout`, `ssh` or `git`, with the original stderr and a suggested fix.
+`authRequired`, `hostUnknown`, `connectFailed`, `posixShellRequired`, `notARepository`,
+`gitMissing`, `timeout`, `ssh` or `git`, with the original stderr and a suggested fix.
+`posixShellRequired` is the Windows-OpenSSH case: `cmd.exe`/PowerShell cannot run
+`env`, `sh` or `find`, so Windows remotes are refused rather than half-supported.
+
+`ssh_directories({target: {host, port?, user?, path}}) -> [{name, path}]` lists the
+immediate subdirectories of one remote directory for the connect form's **Browse…**,
+so an exact path is not required. It is one `find <path> -mindepth 1 -maxdepth 1 -type d
+-print0` (NUL-delimited, UTF-8 required, sorted by name), needs no `python3`, and reads
+nothing else. The path gets the same validation as a repository path; a missing
+directory returns `notFound`, an unreadable one `permissionDenied`, a failed remote
+command `listFailed`, and a dead connection keeps the SSH transport codes.
 
 Fingerprints and mutation locks stay per session; the lock key includes the SSH
 destination (`user@host:port`) as well as the common Git directory, so identical paths
@@ -928,11 +947,15 @@ output limits, persistence, and invalid handles/cursors. The non-UTF-8 filename
 integration test is Linux-only (APFS rejects those filenames).
 
 SSH transport tests (`src-tauri/src/ssh_tests.rs`, Unix only) replace the `ssh` client
-with a shell double that consumes the options and runs the quoted remote command
-locally. They cover open/state/status/history/diff, staging, commit and amend, a merge
+with a shell double that consumes the options, joins the remaining remote arguments
+with spaces as OpenSSH does, and runs the result through a real shell, so quoting
+regressions at either layer fail. They cover open/state/status/history/diff, staging, commit and amend, a merge
 conflict resolved through the remote Python helper, fetch and push against a local bare
 remote, the refusal codes, destination/path validation, `ssh_test`, and the argv shape
-that keeps the remote script a single argument. They do not exercise authentication,
+that keeps the remote script a single argument, including spaces, apostrophes, shell
+syntax, newlines and stdin through that join. Unit tests cover the hashed, length-bounded
+control path, and `ssh -G` proves OpenSSH accepts the quoted `ControlPath` value without
+connecting. They do not exercise authentication,
 host keys, a real network or a Windows client; `ssh_test` against a real host is the
 manual check, and its result is platform-scoped evidence rather than general coverage.
 

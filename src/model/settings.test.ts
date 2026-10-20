@@ -72,6 +72,25 @@ describe('local preferences', () => {
     expect(persistSettings(store, { ...DEFAULT_SETTINGS, commitProfiles: [profile], repositoryCommitProfiles: { [key]: profile.id } })).toBeNull();
     expect(readSettings(store).settings).toMatchObject({ commitProfiles: [profile], repositoryCommitProfiles: { [key]: profile.id } });
   });
+  it('keeps commit-profile selections stored under the pre-SSH key payload', () => {
+    const session = { root: '/repo', location: { kind: 'native', path: '/repo' } } as RepositorySession;
+    const wsl = { ...session, location: { kind: 'wsl', distribution: 'Ubuntu', path: '/repo' } } as RepositorySession;
+    const profile = { id: 'profile-legacy', name: 'Legacy', email: 'legacy@example.org' };
+    const nativeKey = '["native","","/repo"]';
+    const wslKey = '["wsl","Ubuntu","/repo"]';
+    expect(commitProfileRepositoryKey(session)).toBe(nativeKey);
+    expect(commitProfileRepositoryKey(wsl)).toBe(wslKey);
+    const store = storage({
+      [SETTINGS_KEY]: JSON.stringify({
+        ...DEFAULT_SETTINGS,
+        commitProfiles: [profile],
+        repositoryCommitProfiles: { [nativeKey]: profile.id, [wslKey]: profile.id },
+      }),
+    });
+    expect(readSettings(store).settings.repositoryCommitProfiles).toEqual({ [nativeKey]: profile.id, [wslKey]: profile.id });
+    const ssh = { ...session, location: { kind: 'ssh', host: 'home', user: 'me', path: '/repo' } } as RepositorySession;
+    expect(commitProfileRepositoryKey(ssh)).not.toBe(nativeKey);
+  });
   it('migrates graph avatar nodes to off and persists the toggle independently of avatar mode', () => {
     const older = { ...DEFAULT_SETTINGS, themeId: 'dracula', authorAvatarMode: 'initials' } as any;
     delete older.graphAuthorAvatars;

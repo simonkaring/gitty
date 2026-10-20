@@ -260,7 +260,7 @@ pub struct RepositoryState {
     pub remotes: Vec<String>,
     pub fingerprint: String,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshTarget {
     pub host: String,

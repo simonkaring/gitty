@@ -12,7 +12,8 @@ is the contract for the IPC surface.
 
 - `RepositoryLocation::Ssh { host, port?, user?, path }` with target and path validation
   on every use, not only at open (`src-tauri/src/dto.rs`).
-- The transport arm in `process::command_inner`, `ssh_test`, and the connect form.
+- The transport arm in `process::command_inner`, `ssh_test`, and the connect form with
+  remote folder browsing (`ssh_directories`, one `find` per listing).
 - Reads, staging, hunk/line staging, commit/amend, branches, merge/rebase/cherry-pick,
   tags, stashes, fetch/pull/push, and the operation-metadata scans.
 - Conflict read/write through the existing Python helper over SSH.
@@ -92,9 +93,10 @@ arm next to `Native` and `Wsl`:
 ```
 ssh [-T] [-x] [-o BatchMode=yes] [-o StrictHostKeyChecking=yes]
     [-o ConnectTimeout=10] [-o ServerAliveInterval=15] [-o ServerAliveCountMax=3]
-    [-o ControlMaster=auto] [-o ControlPath=<app-data>/ssh-%C] [-o ControlPersist=60]
+    [-o ControlMaster=auto] [-o 'ControlPath="<app-data>/ssh/<16-hex>"']
+    [-o ControlPersist=60]
     [-p <port>] [--] [<user>@]<host>
-    sh -c '<remote script>'
+    "sh -c '<remote script>'"
 ```
 
 `<remote script>` is generated locally and is the **only** string the remote shell
@@ -106,11 +108,13 @@ env GIT_...=... LC_ALL=C git -C <quoted path> --no-pager -c ... <quoted args...>
 
 Rules that follow from that:
 
-- **Quoting is mandatory.** The local `Command` never uses a shell, but SSH always
-  re-parses the remote command with the login shell. Every remote word is single-quoted
-  with the existing `askpass::shell_quote` escaping, and the whole script is one argv
-  element. An argument that begins with `-` stays an argument because it is quoted and
-  preceded by an explicit `--` where Git accepts one.
+- **Quoting is mandatory, twice.** The local `Command` never uses a shell, but OpenSSH
+  joins every remote argument with spaces and lets the login shell split the result.
+  So `sh -c` and the script are **one** argument, quoted again with
+  `askpass::shell_quote` for that join; passing them as separate argv elements would
+  make the host run `sh -c env …`, i.e. only `env`. Inside the script every remote word
+  is single-quoted with the same escaping. An argument that begins with `-` stays an
+  argument because it is quoted and preceded by an explicit `--` where Git accepts one.
 - **Prefer `sh -c`.** Wrapping the script in `sh -c '<script>'` means the login shell
   only has to parse `sh -c '…'`, so fish/csh/`zsh` startup files cannot reinterpret our
   Git arguments.
@@ -127,8 +131,15 @@ Rules that follow from that:
 - **Connection reuse is not optional.** A refresh is roughly ten sequential Git
   launches; today WSL shows that process launch dominates. `ControlMaster` +
   `ControlPersist` turns all of them into channels on one connection. The control
-  socket lives under app data with user-only permissions; `%C` keeps the path short
-  and unique per destination.
+  socket lives under app data with user-only permissions, one 16-hex name hashed from
+  the destination. Two details are load-bearing: the value is double-quoted for
+  OpenSSH's `-o` parser (macOS app-data paths contain a space, and an unquoted value
+  fails with `keyword controlpath extra arguments at end of line`), and the path stays
+  within 88 bytes so OpenSSH's `.XXXXXXXXXX` listener suffix still fits `sun_path`
+  (104 bytes on macOS); an over-long home directory falls back to a short per-process
+  temp directory, that fallback is measured too, and when neither fits the command
+  runs without multiplexing instead of failing. `ssh -G -F /dev/null` validates the
+  option without connecting or reading the developer's own SSH configuration.
 - **`BatchMode=yes` and `StrictHostKeyChecking=yes` are fixed.** Gitty never writes a
   trust decision. If the host key is unknown or authentication is non-interactive
   impossible, the command fails and the connect dialog explains it ("run `ssh <host>`
@@ -267,8 +278,10 @@ The new capability is "run Git on a host the user configured". Keep it that narr
 
 ## Frontend
 
-- `Welcome.tsx` gains **Open over SSH**: host, optional user/port, remote path, and a
-  **Test connection** action.
+- `Welcome.tsx` gains **Open over SSH**: host, optional user/port, remote path, a
+  **Test connection** action, and **Browse…** (`ssh_directories`) so an exact path is not
+  required. Browsing starts at `/` or the current absolute path, lists immediate
+  subfolders, and writes the chosen folder into the path field.
 - New command `ssh_test({host, port, user, path?}) -> {gitVersion, name?}` runs
   `env git --version` and, when a path is supplied, the same discovery `repository_open`
   uses (returning the repository name). Errors stay specific: `hostKeyUnknown`,
@@ -285,11 +298,13 @@ No new Tauri capabilities are needed: the command set is unchanged apart from
 
 ## Testing
 
-Implemented today: unit tests in `process.rs` for quoting, environment-name validation
-and destination/path rejection; `src-tauri/src/ssh_tests.rs` with the shim below
+Implemented today: unit tests in `process.rs` for quoting, environment-name validation,
+destination/path rejection, the hashed and length-bounded control path, and `ssh -G`
+option parsing; `src-tauri/src/ssh_tests.rs` with the shim below, which joins remote
+arguments the way OpenSSH does before running them through a shell
 (open/read/diff, stage and commit, amend, merge conflict resolved through the helper,
 fetch and push against a local bare remote, refusals, validation, `ssh_test` argv
-shape). The real-host suite in the last bullet is **not** written yet; `ssh_test` is the
+shape, and literal spaces/apostrophes/metacharacters/newlines/stdin across the join). The real-host suite in the last bullet is **not** written yet; `ssh_test` is the
 manual path for verifying a real tailnet host, and its outcome must be recorded as
 platform-scoped evidence rather than general coverage.
 
@@ -299,7 +314,8 @@ platform-scoped evidence rather than general coverage.
   argv assembly assertions that the remote script is a single argument and that no
   user value lands in an option position.
 - **Shim integration (the important one).** A POSIX `ssh` double: a script that strips
-  the options Gitty adds and executes the final command locally with `sh -c`. Exposed
+  the options Gitty adds, joins the remaining remote arguments with spaces the way
+  OpenSSH does, and hands that string to `sh -c`. Exposed
   through a test-only override (`GITTY_SSH_EXECUTABLE`, compiled under `cfg(test)`),
   it lets the existing real-temporary-repository tests — staging, hunk selection,
   commit/amend freshness, merges, conflicts, stash, fetch/pull/push against a local
@@ -354,7 +370,9 @@ four call sites; phase 4 is the riskiest per line of code.
   phase 3 must grow a POSIX helper, which reopens the byte-safe transport question
   (`base64 -d` vs `-D`).
 - **Windows remotes** are refused. Supporting them means a different exec model
-  (`cmd.exe`, no `env`), and it is out of scope until someone needs it.
+  (`cmd.exe`, no `env`), and it is out of scope until someone needs it. A connected
+  Windows OpenSSH host is detected and reported as `posixShellRequired`, which points
+  at WSL; a host with no SSH server reachable at all is `connectFailed`.
 - **Concurrent writers.** The remote may hold an agent process writing the same
   working tree. Git's index locks and Gitty's stale-fingerprint checks already cover
   this; the UI should say so rather than implying the view is authoritative.

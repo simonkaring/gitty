@@ -38,16 +38,23 @@ sources:
 
 An SSH location (`{kind: "ssh", host, port?, user?, path}`) is a session whose Git runs
 on another machine. Only `process.rs` knows this: it wraps every command as
-`ssh … -- destination sh -c '<script>'`, where the script is `env … git [-C path] …` with
-each word single-quoted. The read and mutation contracts therefore travel as remote
-`env` assignments rather than local child environment, and `-c` overrides remain argv.
-Host, user, port and path are validated wherever they are used, because `ssh` re-parses
-the remote command with the login shell.[^dto][^process][^contract]
+`ssh … -- destination "sh -c '<script>'"`, one argument, where the script is
+`env … git [-C path] …` with each word single-quoted. OpenSSH joins remote arguments
+with spaces before the login shell splits them, so `sh -c` and its script have to be
+quoted into a single word; separate arguments would run only `env`. The read and
+mutation contracts therefore travel as remote `env` assignments rather than local child
+environment, and `-c` overrides remain argv. Host, user, port and path are validated
+wherever they are used, because `ssh` re-parses the remote command with the login
+shell.[^dto][^process][^contract]
 
 Policy is fixed, not user-tunable: `BatchMode=yes` and `StrictHostKeyChecking=yes`, no
 identity, proxy or host-key options, no `known_hosts` writes, and the user's
 `~/.ssh/config` authoritative for everything else. Multiplexing lives only on Unix
-clients because Win32 OpenSSH lacks `ControlMaster`. The local askpass and editor
+clients because Win32 OpenSSH lacks `ControlMaster`; its `ControlPath` is a quoted,
+length-bounded hashed name per destination, because OpenSSH's `-o` parser splits an
+unquoted value on spaces and a Unix socket path cannot hold OpenSSH's listener suffix.
+Both the app-data directory and the temp fallback are measured, and multiplexing is
+skipped when neither fits rather than handing OpenSSH an unusable path. The local askpass and editor
 bridges cannot be forwarded, so remote fetch/push authenticate on that host and a write
 needing a local prompt is refused instead of silently losing the prompt.[^process][^contract]
 
@@ -63,14 +70,20 @@ identical paths on two hosts are independent sessions.[^repository][^operations]
 
 `ssh_test` runs `git --version` and, with a path, the same discovery `repository_open`
 uses, mapping host-key, authentication, resolution, connection, missing-Git and
-not-a-repository failures to distinct codes before a tab exists. The connect form
-mirrors the target validation only for feedback; the backend re-validates.[^ssh][^frontend][^welcome]
+not-a-repository failures to distinct codes before a tab exists. `ssh_directories`
+lists immediate subfolders with one `find` per directory (no `python3`), so the connect
+form can browse instead of demanding an exact path; both run without a session and
+store nothing. The connect form mirrors the target validation only for feedback; the
+backend re-validates.[^ssh][^frontend][^welcome]
 
 Verification is split: `ssh_tests.rs` runs the real workspace through a shell double of
-`ssh` on Unix (quoting, remote environment, stdin framing, conflict helper, fetch/push
-against a local bare remote, refusals, argv shape), while authentication, host keys, real
-networks and Windows clients are untested there and need a manual `ssh_test` against a
-real host recorded as platform-scoped evidence.[^ssh-tests][^welcome-tests][^readme][^plan]
+`ssh` on Unix that joins remote arguments as OpenSSH does before a shell parses them
+(quoting, remote environment, stdin framing, conflict helper, fetch/push against a local
+bare remote, refusals, argv shape); `process.rs` unit tests cover the control path and
+validate it with `ssh -G -F /dev/null`, which parses options without connecting or
+reading the developer's SSH configuration (a malformed option fails the test). Authentication, host
+keys, real networks and Windows clients are untested there and need a manual `ssh_test`
+against a real host recorded as platform-scoped evidence.[^ssh-tests][^welcome-tests][^readme][^plan]
 
 [^dto]: Location shape and target/path validation.
 [^process]: Transport options, remote script construction, quoting, control socket.

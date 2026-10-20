@@ -111,5 +111,7 @@ export type RepositoryMutation =
  * wsl_directories({distribution, path}) -> DirectoryEntry[]
  * ssh_test({target: {host, port?, user?, path?}}) -> SshProbe ({gitVersion, name})
  * Proves the destination works before a tab exists; never stores anything.
+ * ssh_directories({target: {host, port?, user?, path}}) -> DirectoryEntry[]
+ * Lists immediate remote subdirectories so the connect form can browse.
  * Errors: {code: string, message: string}
  */

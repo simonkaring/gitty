@@ -624,6 +624,12 @@ async fn repository_cancel_search(state: tauri::State<'_, Shared>, handle: Strin
 async fn ssh_test(target: SshTarget) -> Result<SshProbe> {
     blocking(move || ssh::test(target)).await
 }
+/// Lists the immediate subdirectories of a remote directory for the connect form.
+/// Read-only and sessionless, like `ssh_test`.
+#[tauri::command]
+async fn ssh_directories(target: SshTarget) -> Result<Vec<DirectoryEntry>> {
+    blocking(move || ssh::directories(target)).await
+}
 #[tauri::command]
 async fn wsl_distributions() -> Result<Vec<WslDistribution>> {
     blocking(wsl::distributions).await
@@ -780,6 +786,7 @@ pub fn run() {
             repository_stash_action,
             open_external_url,
             ssh_test,
+            ssh_directories,
             askpass::repository_provide_password,
             editor::editor_reply,
             wsl_distributions,

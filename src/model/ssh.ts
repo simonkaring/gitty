@@ -27,6 +27,17 @@ export function locationIdentity(location: RepositoryLocation): string {
   return 'native';
 }
 
+/** Persisted per-repository identity for commit drafts and commit-profile
+ * selections. Native and WSL keep the pre-SSH payload (`[kind, distribution or
+ * "", root]`), so storage written before SSH support stays readable without a
+ * migration; SSH adds its destination so the same path on two machines never
+ * shares a draft or a profile choice. */
+export function repositoryStorageKey(location: RepositoryLocation, root: string): string {
+  if (location.kind === 'wsl') return JSON.stringify(['wsl', location.distribution, root]);
+  if (location.kind === 'ssh') return JSON.stringify([locationIdentity(location), root]);
+  return JSON.stringify(['native', '', root]);
+}
+
 export interface SshProbe { gitVersion: string; name: string | null }
 
 /** Mirrors the backend's accepted host and user characters. */
@@ -40,17 +51,26 @@ export function validSshPath(path: string): boolean {
   return path.length > 0 && path.length <= 4096 && path.startsWith('/') && !/[\x00-\x1f\x7f]/.test(path) && !path.split('/').includes('..');
 }
 
-/** Validates the connect form and returns the location to open, or a readable reason. */
-export function sshLocationFromForm(form: { host: string; user: string; port: string; path: string }): SshLocation | string {
+export interface SshTargetInput { host: string; port?: number; user?: string }
+
+/** Validates just the destination, which browsing needs before a path exists. */
+export function sshTargetFromForm(form: { host: string; user: string; port: string }): SshTargetInput | string {
   const host = form.host.trim();
   const user = form.user.trim();
-  const path = form.path.trim();
   const port = form.port.trim();
   if (!validSshWord(host)) return 'Enter an SSH host alias or hostname (letters, digits, dots, dashes or underscores).';
   if (user && !validSshWord(user)) return 'Enter an SSH user name using letters, digits, dots, dashes or underscores.';
   if (port && (!/^[0-9]{1,5}$/.test(port) || Number(port) < 1 || Number(port) > 65535)) return 'Enter a port between 1 and 65535, or leave it empty.';
+  return { host, user: user || undefined, port: port ? Number(port) : undefined };
+}
+
+/** Validates the connect form and returns the location to open, or a readable reason. */
+export function sshLocationFromForm(form: { host: string; user: string; port: string; path: string }): SshLocation | string {
+  const target = sshTargetFromForm(form);
+  if (typeof target === 'string') return target;
+  const path = form.path.trim();
   if (!validSshPath(path)) return 'Enter the absolute path of the repository on that machine, for example /home/you/code/thing.';
-  return { kind: 'ssh', host, user: user || undefined, port: port ? Number(port) : undefined, path };
+  return { kind: 'ssh', ...target, path };
 }
 
 /** Human-readable explanation for a failed connection test. The backend already
@@ -59,9 +79,10 @@ export function sshFailureHint(code: string): string {
   switch (code) {
     case 'hostKeyUnknown': return 'Connect once from a terminal so its host key is trusted; Gitty never accepts a key for you.';
     case 'authRequired': return 'Set up key-based authentication or ~/.ssh/config for this host; Gitty cannot answer a password prompt.';
-    case 'connectFailed': return 'Check that the host is awake and reachable, for example over Tailscale.';
+    case 'connectFailed': return 'Check that the host is awake, reachable (for example over Tailscale), and running an SSH server on that port.';
     case 'notARepository': return 'That path is missing or is not a Git repository.';
     case 'gitMissing': return 'Install Git on that machine and check that ssh runs with it on PATH.';
+    case 'posixShellRequired': return 'Windows OpenSSH is not supported: run an SSH server inside WSL, or use a Linux or macOS host.';
     default: return '';
   }
 }

@@ -160,6 +160,22 @@ describe('draft durability', () => {
     expect(draftKey(session)).not.toBe(draftKey({ ...session, root: '/worktree' }));
     expect(draftKey(session)).not.toBe(draftKey({ ...session, location: { kind: 'wsl', distribution: 'Ubuntu', path: '/repo' } }));
   });
+  it('reads drafts that earlier releases stored under the native and WSL keys', () => {
+    const wsl = { ...session, location: { kind: 'wsl', distribution: 'Ubuntu', path: '/repo' } } as RepositorySession;
+    const ssh = { ...session, location: { kind: 'ssh', host: 'home', user: 'me', path: '/repo' } } as RepositorySession;
+    const stored: Record<string, string> = {
+      // The exact keys the pre-SSH payload produced.
+      'gitty:commit-draft:["native","","/repo"]': JSON.stringify({ subject: 'native draft', body: '' }),
+      'gitty:commit-draft:["wsl","Ubuntu","/repo"]': JSON.stringify({ subject: 'wsl draft', body: '' }),
+    };
+    vi.stubGlobal('localStorage', { getItem: (key: string) => stored[key] ?? null, setItem: vi.fn() });
+    expect(draftKey(session)).toBe('gitty:commit-draft:["native","","/repo"]');
+    expect(readDraft(draftKey(session)).subject).toBe('native draft');
+    expect(readDraft(draftKey(wsl)).subject).toBe('wsl draft');
+    // SSH keys are new and cannot collide with a local path of the same name.
+    expect(draftKey(ssh)).not.toBe(draftKey(session));
+    expect(readDraft(draftKey(ssh))).toEqual({ subject: '', body: '' });
+  });
   it('persists subject and body immediately and keeps an in-memory fallback', () => {
     const setItem = vi.fn(); vi.stubGlobal('localStorage', { setItem });
     const draft = { subject: 'feat: readable history', body: 'Preserve the graph.' };

@@ -1,8 +1,9 @@
 //! End-to-end tests for the SSH transport.
 //!
 //! There is no second machine here. A POSIX `ssh` double strips the client options
-//! Gitty adds and runs the final `sh -c` command locally, so every test below goes
-//! through a real shell, real quoting and real stdin: what is faked is only the
+//! Gitty adds, joins the remaining remote arguments with spaces as OpenSSH does, and
+//! hands that one string to a shell, so every test below goes through realistic
+//! remote-shell parsing, real quoting and real stdin: what is faked is only the
 //! socket. That covers the parts a mocked `Command` cannot (remote environment,
 //! argument splitting, patch and message framing) while leaving SSH's own
 //! authentication and host-key handling to `ssh_test` against a real host.
@@ -20,12 +21,16 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     sync::OnceLock,
+    time::Duration,
 };
 use tempfile::TempDir;
 
 const SHIM: &str = r#"#!/bin/sh
-# Test double for the OpenSSH client: consume the options Gitty adds, then run the
-# remote command locally the way a POSIX sshd would.
+# Test double for the OpenSSH client: consume the options Gitty adds, then hand the
+# remote command to a shell the way a POSIX sshd would. OpenSSH joins the remote
+# arguments with single spaces before the login shell parses them, so this double
+# must join them too: preserving the argv boundary would hide a missing layer of
+# quoting.
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --) shift; break ;;
@@ -35,11 +40,11 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 [ "$#" -gt 0 ] && shift
-if [ "$#" -ge 2 ] && [ "$1" = "sh" ] && [ "$2" = "-c" ]; then
-  shift 2
-  exec sh -c "$1"
-fi
-exec "$@"
+remote=""
+for arg in "$@"; do
+  remote="$remote $arg"
+done
+exec sh -c "$remote"
 "#;
 
 /// The shim is installed once per test process; all SSH tests share it, which is
@@ -388,8 +393,60 @@ fn ssh_probe_reports_git_and_the_repository_name() {
 }
 
 #[test]
+fn ssh_directory_listing_returns_only_immediate_subdirectories() {
+    let f = Fixture::new();
+    let root = f.dir.path();
+    for directory in ["alpha", "beta", "alpha/nested", "zeta"] {
+        std::fs::create_dir_all(root.join(directory)).unwrap();
+    }
+    std::fs::write(root.join("file.txt"), "x").unwrap();
+    let target = SshTarget {
+        host: "test-host".into(),
+        port: None,
+        user: Some("tester".into()),
+        path: Some(root.to_str().unwrap().into()),
+    };
+    let entries = crate::ssh::directories(target.clone()).unwrap();
+    let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
+    for expected in ["alpha", "beta", "zeta"] {
+        assert!(names.contains(&expected), "{names:?}");
+    }
+    assert!(
+        !names.contains(&"nested"),
+        "only immediate children: {names:?}"
+    );
+    assert!(
+        !names.contains(&"file.txt"),
+        "files are not folders: {names:?}"
+    );
+    assert!(
+        names.windows(2).all(|pair| pair[0] <= pair[1]),
+        "sorted: {names:?}"
+    );
+    assert_eq!(
+        entries[0].path,
+        root.join(entries[0].name.as_str()).to_str().unwrap()
+    );
+
+    let missing = crate::ssh::directories(SshTarget {
+        path: Some(root.join("absent").to_str().unwrap().into()),
+        ..target.clone()
+    })
+    .unwrap_err();
+    assert_eq!(missing.code, "notFound", "{}", missing.message);
+    let escape = crate::ssh::directories(SshTarget {
+        path: Some("/tmp/../etc".into()),
+        ..target
+    })
+    .unwrap_err();
+    assert_eq!(escape.code, "invalidPath");
+}
+
+#[test]
 fn ssh_commands_never_interpolate_a_value_into_an_option_position() {
-    // The local argv must end with exactly one script argument, whatever the path.
+    // The local argv must end with exactly one remote-command argument, whatever the
+    // path: OpenSSH joins the remote arguments with spaces before the login shell
+    // parses them, so a separate `sh`, `-c` and script would run only `env`.
     let location = RepositoryLocation::Ssh {
         host: "test-host".into(),
         port: Some(2222),
@@ -402,9 +459,50 @@ fn ssh_commands_never_interpolate_a_value_into_an_option_position() {
         .map(|arg| arg.to_string_lossy().into_owned())
         .collect();
     let script = argv.last().unwrap();
-    assert_eq!(argv[argv.len() - 3], "sh");
-    assert_eq!(argv[argv.len() - 2], "-c");
-    assert!(argv[..argv.len() - 3].ends_with(&["--".to_string(), "tester@test-host".to_string()]));
-    assert_eq!(script.matches("'/tmp/a b'\\''s'").count(), 1);
-    assert!(script.contains("'status'"));
+    assert!(argv[..argv.len() - 1].ends_with(&["--".to_string(), "tester@test-host".to_string()]));
+    assert!(script.starts_with("sh -c '"), "{script}");
+    assert!(
+        !argv.iter().any(|arg| arg == "sh" || arg == "-c"),
+        "{argv:?}"
+    );
+    // The path and the subcommand each appear exactly once, quoted; the dedicated
+    // test above proves the shell hands them to Git as literal words.
+    assert_eq!(script.matches("a b").count(), 1, "{script}");
+    assert_eq!(script.matches("status").count(), 1, "{script}");
+}
+
+#[test]
+fn ssh_remote_words_survive_the_command_join_openssh_performs() {
+    install_shim();
+    let location = RepositoryLocation::Ssh {
+        host: "test-host".into(),
+        port: None,
+        user: Some("tester".into()),
+        path: "/tmp".into(),
+    };
+    // Spaces, apostrophes, substitution syntax and a newline each have to arrive as
+    // one literal word after the join, along with a remote environment assignment.
+    let command = process::ssh_exec(
+        &location,
+        &[("GREETING".into(), "O'Brien $(id)".into())],
+        &args(&["printf", "[%s]", "a b", "it's", "$(id)", "line\nbreak"]),
+    )
+    .unwrap();
+    let output = process::run_for(command, process::CHECK_TIMEOUT).unwrap();
+    assert!(
+        output.success,
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        process::text(output.stdout).unwrap(),
+        "[a b][it's][$(id)][line\nbreak]"
+    );
+
+    // SSH forwards stdin to the remote process, so a joined command must still read it.
+    let command = process::ssh_exec(&location, &[], &args(&["cat"])).unwrap();
+    let echoed =
+        process::run_with_input_for(command, b"piped\nbody\n", Duration::from_secs(10), 1024)
+            .unwrap();
+    assert_eq!(process::text(echoed.stdout).unwrap(), "piped\nbody\n");
 }

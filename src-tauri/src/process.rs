@@ -114,17 +114,75 @@ fn ssh_control_dir() -> PathBuf {
     let dir = SSH_CONTROL_DIR
         .get()
         .cloned()
-        .unwrap_or_else(|| std::env::temp_dir().join(format!("gitty-ssh-{}", std::process::id())));
-    if !dir.exists() {
-        let _ = std::fs::create_dir_all(&dir);
-        // Sockets here grant access to the user's authenticated sessions.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
-        }
-    }
+        .unwrap_or_else(temp_control_dir);
+    private_dir(&dir);
     dir
+}
+/// The per-process directory used when no app-data directory is configured or when
+/// that directory is too long for a socket path.
+fn temp_control_dir() -> PathBuf {
+    std::env::temp_dir().join(format!("gitty-ssh-{}", std::process::id()))
+}
+/// Creates `dir` if needed and keeps it user-only: sockets here grant access to the
+/// user's authenticated sessions.
+fn private_dir(dir: &std::path::Path) {
+    if dir.exists() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(dir);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+}
+/// The kernel rejects a Unix socket path past `sun_path` (104 bytes on macOS, 108
+/// on Linux), and OpenSSH also appends `.XXXXXXXXXX` while it creates the listening
+/// socket of a master. Staying under 88 bytes leaves room for both.
+#[cfg(unix)]
+const MAX_CONTROL_PATH: usize = 88;
+/// A short, stable name per destination. `%C` would encode the same destination in
+/// 40 characters; sixteen are enough to keep hosts apart and leave room for the
+/// directory name.
+#[cfg(unix)]
+fn control_name(destination: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in destination.bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+/// Chooses where this destination's control socket lives. A long home directory
+/// (or spaces in an app-data path) must not push the socket past the kernel limit,
+/// so an over-long candidate falls back to the per-process directory in the temp
+/// directory, which is created with user-only permissions. Both candidates are
+/// measured: a long `TMPDIR` can exceed the limit too, and then multiplexing is
+/// disabled for this command instead of every SSH launch failing.
+#[cfg(unix)]
+fn control_path_in(
+    preferred: &std::path::Path,
+    fallback: &std::path::Path,
+    destination: &str,
+) -> Option<PathBuf> {
+    let name = control_name(destination);
+    let candidate = preferred.join(&name);
+    if candidate.as_os_str().len() <= MAX_CONTROL_PATH {
+        return Some(candidate);
+    }
+    let candidate = fallback.join(name);
+    if candidate.as_os_str().len() > MAX_CONTROL_PATH {
+        return None;
+    }
+    private_dir(fallback);
+    Some(candidate)
+}
+/// One `-o` value. OpenSSH parses each `-o` as a configuration line and splits it
+/// on whitespace, so a value that contains a space (macOS app-data paths do) must be
+/// quoted for that parser, not merely for argv.
+#[cfg(unix)]
+fn ssh_option_value(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 /// The local OpenSSH client. Tests replace it with a shim that runs the remote
 /// command locally, so quoting and stdin framing are exercised end to end.
@@ -176,6 +234,10 @@ pub(crate) fn ssh_command(location: &RepositoryLocation) -> Result<Command> {
         ));
     };
     crate::dto::validate_ssh_destination(host, user.as_deref(), *port)?;
+    let destination = match user {
+        Some(user) => format!("{user}@{host}"),
+        None => host.clone(),
+    };
     let mut cmd = Command::new(ssh_program());
     cmd.args([
         "-T",
@@ -195,13 +257,19 @@ pub(crate) fn ssh_command(location: &RepositoryLocation) -> Result<Command> {
     // options there keeps the transport working with one connection per command.
     #[cfg(unix)]
     {
-        let control = ssh_control_dir().join("%C");
-        if let Some(control) = control.to_str() {
+        let mut key = destination.clone();
+        if let Some(port) = port {
+            key = format!("{key}:{port}");
+        }
+        // Neither directory fits a Unix socket path: run without multiplexing
+        // rather than hand OpenSSH a path it must reject.
+        let control = control_path_in(&ssh_control_dir(), &temp_control_dir(), &key);
+        if let Some(control) = control.as_deref().and_then(std::path::Path::to_str) {
             cmd.args([
                 "-o",
                 "ControlMaster=auto",
                 "-o",
-                &format!("ControlPath={control}"),
+                &format!("ControlPath={}", ssh_option_value(control)),
                 "-o",
                 "ControlPersist=60",
             ]);
@@ -210,10 +278,6 @@ pub(crate) fn ssh_command(location: &RepositoryLocation) -> Result<Command> {
     if let Some(port) = port {
         cmd.args(["-p", &port.to_string()]);
     }
-    let destination = match user {
-        Some(user) => format!("{user}@{host}"),
-        None => host.clone(),
-    };
     // `--` ends option parsing locally, so a validated destination can never be
     // reinterpreted as an option.
     cmd.arg("--").arg(destination);
@@ -229,7 +293,11 @@ pub(crate) fn ssh_exec(
 ) -> Result<Command> {
     let script = ssh_script(env, words)?;
     let mut cmd = ssh_command(location)?;
-    cmd.args(["sh", "-c", &script]);
+    // OpenSSH joins the remote argv with spaces and lets the login shell split it,
+    // so `sh -c` and the script must be one word. As separate arguments they would
+    // arrive as `sh -c env 'A=B' 'git' …`, and that inner shell would run only `env`.
+    // Quoting the script again keeps every remote word literal through that join.
+    cmd.arg(format!("sh -c {}", crate::askpass::shell_quote(&script)));
     Ok(cmd)
 }
 
@@ -958,6 +1026,87 @@ mod tests {
             };
             assert_eq!(ssh_command(&location).unwrap_err().code, code);
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ssh_control_paths_fit_the_socket_limit_and_stay_per_destination() {
+        let long = std::path::Path::new(
+            "/home/someone/with/a/very/long/home/directory/Library/Application Support/app.gitty.desktop/ssh",
+        );
+        let short = tempfile::tempdir().unwrap();
+        let fits = |path: &std::path::Path| path.as_os_str().len() <= MAX_CONTROL_PATH;
+
+        // A directory that fits is preferred over the temp-directory fallback.
+        let preferred = control_path_in(short.path(), long, "me@home:22").unwrap();
+        assert!(preferred.starts_with(short.path()), "{preferred:?}");
+
+        // An over-long preferred directory moves to a fallback that fits.
+        let first = control_path_in(long, short.path(), "me@home:22").unwrap();
+        let second = control_path_in(long, short.path(), "me@home:2222").unwrap();
+        assert_ne!(first, second, "each destination keeps its own session");
+        assert_eq!(
+            first,
+            control_path_in(long, short.path(), "me@home:22").unwrap()
+        );
+        for path in [&first, &second] {
+            assert!(fits(path), "{} bytes: {path:?}", path.as_os_str().len());
+            assert!(path.starts_with(short.path()), "{path:?}");
+        }
+
+        // A long TMPDIR is measured too: without a fitting directory, multiplexing is
+        // skipped rather than handing OpenSSH an unusable socket path.
+        assert_eq!(control_path_in(long, long, "me@home:22"), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ssh_control_option_survives_openssh_config_parsing() {
+        // macOS app-data paths contain a space, which OpenSSH's `-o` parser splits on
+        // unless the value is quoted for it. `ssh -G` parses options without connecting.
+        let dir = tempfile::tempdir().unwrap();
+        set_ssh_control_dir(dir.path().join("gitty support").join("ssh"));
+        let location = RepositoryLocation::Ssh {
+            host: "example.invalid".into(),
+            port: None,
+            user: None,
+            path: "/srv/repo".into(),
+        };
+        let command = ssh_command(&location).unwrap();
+        let argv: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let option = argv
+            .iter()
+            .find(|arg| arg.starts_with("ControlPath="))
+            .expect("multiplexing is configured on Unix");
+        let value = option.strip_prefix("ControlPath=").unwrap();
+        assert!(value.starts_with('"') && value.ends_with('"'), "{option}");
+        let path = value.trim_matches('"');
+        assert!(path.as_bytes().len() <= MAX_CONTROL_PATH, "{path}");
+        // `-F /dev/null` isolates the parse from the developer's ~/.ssh/config, so a
+        // malformed option cannot be excused by an unrelated configuration failure.
+        let Ok(output) = Command::new("ssh")
+            .args(["-G", "-F", "/dev/null", "-o"])
+            .arg(option)
+            .arg("example.invalid")
+            .output()
+        else {
+            return; // No OpenSSH client on this host.
+        };
+        assert!(
+            output.status.success(),
+            "ssh -G rejected our control path: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let parsed = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            parsed
+                .lines()
+                .any(|line| line == format!("controlpath {path}")),
+            "ssh did not parse our control path: {parsed}"
+        );
     }
 
     #[test]

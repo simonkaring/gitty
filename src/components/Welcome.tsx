@@ -5,7 +5,7 @@ import { errorMessage, native } from '../model/native';
 import { suggestedCloneName, type CloneRequest } from '../model/clone';
 import { locationForPickedFolder } from '../model/wslPath';
 import { Segmented } from './ui';
-import { sshDestination, sshFailureHint, sshLocationFromForm, type SshLocation, type SshProbe } from '../model/ssh';
+import { sshDestination, sshFailureHint, sshLocationFromForm, sshTargetFromForm, type SshLocation, type SshProbe } from '../model/ssh';
 import { RepositoryBrowser } from './RepositoryBrowser';
 import type { ProviderRepository } from '../model/providerRepositories';
 
@@ -53,7 +53,15 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
   const [sshPath, setSshPath] = useState('');
   const [sshProbe, setSshProbe] = useState<SshProbe | null>(null);
   const [sshBusy, setSshBusy] = useState(false);
+  const [sshFolders, setSshFolders] = useState<DirectoryEntry[]>([]);
+  const [sshBrowsing, setSshBrowsing] = useState(false);
+  const [sshBrowseBusy, setSshBrowseBusy] = useState(false);
+  // One owner per request kind: a connection test must not take over a pending
+  // folder listing's busy flag (or the other way round). WSL browsing and the
+  // folder pickers keep their own shared counter.
   const request = useRef(0);
+  const sshProbeRequest = useRef(0);
+  const sshBrowseRequest = useRef(0);
   const selectRepository = useCallback((repository: ProviderRepository | null, accountId?: string) => {
     setCloneSource(repository?.cloneUrl ?? ''); setCloneName(repository?.name ?? ''); setCloneAccountId(repository ? accountId : undefined);
   }, []);
@@ -62,7 +70,7 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
     native<RepositoryLocation[]>('repository_recent').then(v => { if (live) setRecent(Array.isArray(v) ? v : []); }).catch(e => { if (live) { setRecent([]); setError(errorMessage(e)); } });
     // ponytail: WSL is optional; an unavailable host just hides the WSL view.
     native<WslDistribution[]>('wsl_distributions').then(v => { if (live && v.length) { setDistributions(v); setDistribution(v[0].name); } }).catch(() => {});
-    return () => { live = false; request.current++; };
+    return () => { live = false; request.current++; sshProbeRequest.current++; sshBrowseRequest.current++; };
   }, []);
   function show(next: View) { setView(next); setError(''); }
   async function browse(next = path) {
@@ -93,19 +101,60 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
     setError('');
     return result;
   }
+  /** A different host, user or port makes every pending SSH answer obsolete: it
+   * describes a destination the form no longer names, and acting on it would show
+   * folders or a successful test for the wrong machine. */
+  function setSshDestination(next: { host?: string; user?: string; port?: string }) {
+    if (next.host !== undefined) setSshHost(next.host);
+    if (next.user !== undefined) setSshUser(next.user);
+    if (next.port !== undefined) setSshPort(next.port);
+    sshProbeRequest.current++; sshBrowseRequest.current++;
+    setSshBusy(false); setSshBrowseBusy(false);
+    setSshProbe(null); setSshFolders([]); setSshBrowsing(false);
+  }
+  /** Drops a probe whose path the user has since changed; the request that is
+   * still in flight will finish without reporting anything. */
+  function cancelSshProbe() {
+    sshProbeRequest.current++;
+    setSshProbe(null); setSshBusy(false);
+  }
+  /** A typed path makes a pending listing obsolete: its folder would replace what
+   * the user just entered. */
+  function setSshPathValue(value: string) {
+    setSshPath(value);
+    sshBrowseRequest.current++;
+    setSshBrowseBusy(false); setSshBrowsing(false); setSshFolders([]);
+    setSshProbe(null);
+  }
   async function testSsh() {
     const location = sshLocation();
     if (!location) return;
-    const token = ++request.current; setSshBusy(true); setSshProbe(null);
+    const token = ++sshProbeRequest.current; setSshBusy(true); setSshProbe(null);
     try {
       const probe = await native<SshProbe>('ssh_test', { target: { host: location.host, user: location.user, port: location.port, path: location.path } });
-      if (token === request.current) setSshProbe(probe);
+      if (token === sshProbeRequest.current) setSshProbe(probe);
     } catch (e) {
-      if (token !== request.current) return;
+      if (token !== sshProbeRequest.current) return;
       const code = typeof e === 'object' && e !== null && 'code' in e ? String(e.code) : '';
       const hint = sshFailureHint(code);
       setError(hint ? `${errorMessage(e)} ${hint}` : errorMessage(e));
-    } finally { if (token === request.current) setSshBusy(false); }
+    } finally { if (token === sshProbeRequest.current) setSshBusy(false); }
+  }
+  /** Browses one directory on the host; the listing replaces the manual path. */
+  async function browseSsh(next: string) {
+    const target = sshTargetFromForm({ host: sshHost, user: sshUser, port: sshPort });
+    if (typeof target === 'string') { setError(target); return; }
+    const token = ++sshBrowseRequest.current;
+    setSshBrowsing(true); setSshBrowseBusy(true); setError('');
+    try {
+      const folders = await native<DirectoryEntry[]>('ssh_directories', { target: { ...target, path: next } });
+      if (token !== sshBrowseRequest.current) return;
+      setSshFolders(folders); setSshPath(next);
+      // A listing that moved the path makes a probe still in flight describe the
+      // previous directory, so that answer must not be reported.
+      if (next !== sshPath) cancelSshProbe();
+    } catch (e) { if (token === sshBrowseRequest.current) setError(errorMessage(e)); }
+    finally { if (token === sshBrowseRequest.current) setSshBrowseBusy(false); }
   }
   const views: [View, string, typeof Clock3][] = [['recent', 'Recent', Clock3], ['clone', 'Clone', Download], ['ssh', 'Open over SSH', Server], ...(distributions.length ? [['wsl', 'Browse WSL', SquareTerminal] as [View, string, typeof Clock3]] : [])];
   function navKey(event: KeyboardEvent) {
@@ -169,12 +218,30 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
           </form></div>}
           {view === 'ssh' && <div className="start-form">
             <form className="start-form" onSubmit={event => { event.preventDefault(); void testSsh(); }}>
-              <label className="field">Host<input autoFocus value={sshHost} disabled={sshBusy} onChange={event => { setSshHost(event.target.value); setSshProbe(null); }} placeholder="home, or home.tailnet.ts.net" /></label>
+              <label className="field">Host<input autoFocus value={sshHost} disabled={sshBusy} onChange={event => setSshDestination({ host: event.target.value })} placeholder="home, or home.tailnet.ts.net" /></label>
               <div className="field-row">
-                <label className="field">User (optional)<input value={sshUser} disabled={sshBusy} onChange={event => { setSshUser(event.target.value); setSshProbe(null); }} placeholder="uses ~/.ssh/config" /></label>
-                <label className="field">Port (optional)<input inputMode="numeric" value={sshPort} disabled={sshBusy} onChange={event => { setSshPort(event.target.value); setSshProbe(null); }} placeholder="22" /></label>
+                <label className="field">User (optional)<input value={sshUser} disabled={sshBusy} onChange={event => setSshDestination({ user: event.target.value })} placeholder="uses ~/.ssh/config" /></label>
+                <label className="field">Port (optional)<input inputMode="numeric" value={sshPort} disabled={sshBusy} onChange={event => setSshDestination({ port: event.target.value })} placeholder="22" /></label>
               </div>
-              <label className="field">Repository path<input className="mono" value={sshPath} disabled={sshBusy} onChange={event => { setSshPath(event.target.value); setSshProbe(null); }} placeholder="/home/you/code/thing" /></label>
+              <div className="field">
+                <span>Repository path</span>
+                <div className="field-row">
+                  <input className="mono" aria-label="Repository path" value={sshPath} disabled={sshBusy} onChange={event => setSshPathValue(event.target.value)} placeholder="/home/you/code/thing" />
+                  <button type="button" className="secondary-button" disabled={sshBusy || sshBrowseBusy} onClick={() => void browseSsh(sshPath.trim() && sshPath.trim().startsWith('/') ? sshPath.trim() : '/')}>{sshBrowseBusy ? 'Reading…' : 'Browse…'}</button>
+                </div>
+              </div>
+              {sshBrowsing && <div className="field">
+                <span>Folders in <code className="mono">{sshPath || '/'}</code></span>
+                {sshBrowseBusy ? <p className="muted small" role="status">Reading folders…</p>
+                  : !sshFolders.length ? <p className="muted small">No subfolders here. Open this folder, or go up.</p>
+                  : <ul className="start-list" aria-label="Remote folders">
+                    {sshFolders.map(folder => <li key={folder.path}><button type="button" className="start-item" disabled={sshBrowseBusy} onClick={() => void browseSsh(folder.path)}><Folder size={16} /><span><strong>{folder.name}</strong><small>{folder.path}</small></span></button></li>)}
+                  </ul>}
+                <div className="start-actions">
+                  {sshPath !== '/' && <button type="button" className="secondary-button" disabled={sshBrowseBusy} onClick={() => void browseSsh(parentPath(sshPath))}><ArrowUp size={14} />Parent folder</button>}
+                  <button type="button" className="primary-button" disabled={sshBrowseBusy} onClick={() => setSshBrowsing(false)}>Use this folder</button>
+                </div>
+              </div>}
               {alert}
               {sshProbe && <p className="muted small" role="status">Connected · {sshProbe.gitVersion}{sshProbe.name ? ` · ${sshProbe.name} is a Git repository.` : ''}</p>}
               <div className="start-actions">

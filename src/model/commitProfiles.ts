@@ -1,5 +1,5 @@
 import type { RepositorySession } from './repository';
-import { locationIdentity } from './ssh';
+import { repositoryStorageKey } from './ssh';
 
 export interface CommitProfile { id: string; name: string; email: string }
 export const MAX_COMMIT_PROFILES = 20;
@@ -17,5 +17,7 @@ export function validateCommitProfile(value: unknown): CommitProfile {
 }
 
 export function commitProfileRepositoryKey(session: RepositorySession): string {
-  return JSON.stringify([locationIdentity(session.location), session.root]);
+  // Same storage identity as commit drafts: native/WSL selections saved before SSH
+  // support keep resolving, and SSH destinations stay isolated by host.
+  return repositoryStorageKey(session.location, session.root);
 }
