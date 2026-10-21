@@ -37,11 +37,12 @@ sources:
 # SSH repository transport
 
 An SSH location (`{kind: "ssh", host, port?, user?, path}`) is a session whose Git runs
-on another machine. Only `process.rs` knows this: it wraps every command as
-`ssh … -- destination "sh -c '<script>'"`, one argument, where the script is
-`env … git [-C path] …` with each word single-quoted. OpenSSH joins remote arguments
-with spaces before the login shell splits them, so `sh -c` and its script have to be
-quoted into a single word; separate arguments would run only `env`. The read and
+on another machine. `process.rs` wraps every command in one ASCII-only SSH envelope.
+The login shell sees fixed syntax and octal bytes; explicit POSIX `sh` decodes them
+with `printf` and evaluates the `env … git [-C path] …` script. Raw newlines and
+history-expansion characters never reach the login-shell parser: nesting POSIX
+single quotes alone was unsafe under tcsh. Expansion-aware platform limits fail
+closed, and decoding leaves binary stdin untouched. The read and
 mutation contracts therefore travel as remote `env` assignments rather than local child
 environment, and `-c` overrides remain argv. Host, user, port and path are validated
 wherever they are used, because `ssh` re-parses the remote command with the login
@@ -53,7 +54,8 @@ identity, proxy or host-key options, no `known_hosts` writes, and the user's
 clients because Win32 OpenSSH lacks `ControlMaster`; its `ControlPath` is a quoted,
 length-bounded hashed name per destination, because OpenSSH's `-o` parser splits an
 unquoted value on spaces and a Unix socket path cannot hold OpenSSH's listener suffix.
-Both the app-data directory and the temp fallback are measured, and multiplexing is
+Both the app-data directory and the random private temp fallback are measured and
+validated for ownership, permissions and non-symlink directory type. Multiplexing is
 skipped when neither fits rather than handing OpenSSH an unusable path. The local askpass and editor
 bridges cannot be forwarded, so remote fetch/push authenticate on that host and a write
 needing a local prompt is refused instead of silently losing the prompt.[^process][^contract]
@@ -75,6 +77,12 @@ lists immediate subfolders with one `find` per directory (no `python3`), so the 
 form can browse instead of demanding an exact path; both run without a session and
 store nothing. The connect form mirrors the target validation only for feedback; the
 backend re-validates.[^ssh][^frontend][^welcome]
+
+The connection probe accepts both bare repositories and working trees. SSH lock
+identity is textual: two aliases for one repository do not share a Gitty lock.
+Tracked-content fingerprint patches are digested on the host with an independently
+checked producer status; only the digest crosses SSH, without weakening content,
+symlink, mode or conflict sensitivity.[^process][^repository][^ssh]
 
 Verification is split: `ssh_tests.rs` runs the real workspace through a shell double of
 `ssh` on Unix that joins remote arguments as OpenSSH does before a shell parses them

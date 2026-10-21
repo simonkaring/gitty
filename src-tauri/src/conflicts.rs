@@ -35,11 +35,12 @@ fn saved_but_unstaged(error: Error) -> Error {
 // execute inside Linux, rather than follow Windows UNC/reparse-point semantics,
 // and an SSH repository's files exist only on the remote host. All ancestors and
 // the final file are opened relative to pinned directory fds there too.
-const REMOTE_FILE: &str = r#"
+pub(crate) const REMOTE_FILE: &str = r#"
 import os, sys, json, stat
 r = json.loads(sys.stdin.buffer.readline())
 root, path, action = r['root'], r['path'], r['action']
 fds = []
+write_started = False
 try:
  d = os.open(root, os.O_RDONLY | os.O_DIRECTORY); fds.append(d)
  for part in path.split('/')[:-1]:
@@ -66,7 +67,9 @@ try:
   expected = r['expected']
   if expected['kind'] != kind or bytes(expected['bytes']) != data: raise ValueError('staleConflict: working file changed; reload it')
   if action == 'delete':
-   if m is not None: os.unlink(name, dir_fd=d)
+   if m is not None:
+    write_started = True
+    os.unlink(name, dir_fd=d)
   elif action == 'symlink':
    import secrets
    target = sys.stdin.buffer.read(16777217)
@@ -74,6 +77,7 @@ try:
    tmp = '.gitty-resolution-' + secrets.token_hex(16)
    try:
     os.symlink(os.fsdecode(target), tmp, dir_fd=d)
+    write_started = True
     os.rename(tmp, name, src_dir_fd=d, dst_dir_fd=d)
    finally:
     try: os.unlink(tmp, dir_fd=d)
@@ -86,12 +90,14 @@ try:
     with os.fdopen(f, 'wb') as stream:
      stream.write(sys.stdin.buffer.read(16777217)); stream.flush(); os.fsync(stream.fileno())
      os.fchmod(stream.fileno(), 0o755 if r['executable'] else 0o644)
+    write_started = True
     os.rename(tmp, name, src_dir_fd=d, dst_dir_fd=d)
    finally:
     try: os.unlink(tmp, dir_fd=d)
     except FileNotFoundError: pass
 except Exception as e:
- print(str(e), file=sys.stderr); sys.exit(1)
+ code = 'staleConflict' if str(e).startswith('staleConflict:') else ('mutationUnverified' if write_started else 'unsupportedConflict')
+ print(json.dumps({'code': code, 'message': str(e)}), file=sys.stderr); sys.exit(1)
 finally:
  for fd in reversed(fds): os.close(fd)
 "#;
@@ -167,6 +173,27 @@ impl Repository {
                     }
                 })?;
         if !output.success {
+            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stderr) {
+                if let (Some(code), Some(message)) =
+                    (value["code"].as_str(), value["message"].as_str())
+                {
+                    if matches!(
+                        code,
+                        "staleConflict" | "mutationUnverified" | "unsupportedConflict"
+                    ) {
+                        return Err(Error::new(code, message));
+                    }
+                }
+            }
+            if action != "read" && output.code != Some(127) {
+                return Err(Error::new(
+                    "mutationUnverified",
+                    format!(
+                        "{} The working file may already have changed. Refresh before retrying.",
+                        crate::mutate::report(&output)
+                    ),
+                ));
+            }
             return Err(unsupported(&format!(
                 "{} conflict filesystem access requires python3 on that host and a supported path: {}",
                 if matches!(self.location(), RepositoryLocation::Wsl { .. }) { "WSL" } else { "SSH" },
@@ -699,7 +726,10 @@ mod helper_tests {
             std::fs::read_link(&path).unwrap(),
             std::path::Path::new("other-target")
         );
-        assert!(!python(request, b"overwrite").status.success());
+        let stale = python(request, b"overwrite");
+        assert!(!stale.status.success());
+        let error: serde_json::Value = serde_json::from_slice(&stale.stderr).unwrap();
+        assert_eq!(error["code"], "staleConflict");
         assert_eq!(std::fs::read(&target).unwrap(), b"untouched");
     }
 
@@ -717,5 +747,12 @@ mod helper_tests {
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(output.stdout, b"directory\0");
+        let uncertain = python(
+            serde_json::json!({"root": dir.path().to_str().unwrap(), "path": "nested", "action": "delete", "expected": {"kind": "directory", "bytes": []}}),
+            &[],
+        );
+        assert!(!uncertain.status.success());
+        let error: serde_json::Value = serde_json::from_slice(&uncertain.stderr).unwrap();
+        assert_eq!(error["code"], "mutationUnverified");
     }
 }

@@ -17,6 +17,57 @@ fn branch_delete_request_rejects_unknown_fields_and_uses_camel_case() {
     assert!(serde_json::from_value::<BranchDeleteRequest>(invalid).is_err());
 }
 
+#[test]
+#[cfg(unix)]
+fn successful_local_delete_with_recreated_ref_never_deletes_origin_even_when_forced() {
+    use std::os::unix::fs::PermissionsExt;
+    for force in [false, true] {
+        let repo = init();
+        std::fs::write(repo.path().join("base"), "base").unwrap();
+        commit(repo.path(), "base");
+        git(repo.path(), &["switch", "-c", "topic"]);
+        if force {
+            std::fs::write(repo.path().join("topic"), "unmerged").unwrap();
+        }
+        let tip = if force {
+            commit(repo.path(), "unmerged")
+        } else {
+            git(repo.path(), &["rev-parse", "HEAD"])
+        };
+        git(repo.path(), &["switch", "main"]);
+        let remote = tempfile::tempdir().unwrap();
+        git(remote.path(), &["init", "--bare"]);
+        let remote_path = remote.path().to_str().unwrap();
+        git(repo.path(), &["remote", "add", "origin", remote_path]);
+        git(
+            repo.path(),
+            &["push", "origin", "refs/heads/topic:refs/heads/topic"],
+        );
+        let hooks = repo.path().join(".git/recreate-hooks");
+        std::fs::create_dir(&hooks).unwrap();
+        let hook = hooks.join("reference-transaction");
+        std::fs::write(&hook, format!("#!/bin/sh\n[ \"$1\" = committed ] || exit 0\nwhile read old new ref; do\n if [ \"$ref\" = refs/heads/topic ] && [ \"$new\" = 0000000000000000000000000000000000000000 ]; then git update-ref refs/heads/topic '{tip}'; fi\ndone\n")).unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        git(
+            repo.path(),
+            &["config", "core.hooksPath", hooks.to_str().unwrap()],
+        );
+        let data = tempfile::tempdir().unwrap();
+        let mut service = Service::new(data.path().into());
+        let state = open(&mut service, repo.path());
+        let mut req = request("topic", &state, &tip, force);
+        req.delete_origin = true;
+        req.expected_origin_oid = Some(tip.clone());
+        req.expected_push_url = Some(remote_path.into());
+        let result = service
+            .delete_branch(&state.session.handle, req, None)
+            .unwrap();
+        assert_eq!(result.local.unwrap().status, "unverified");
+        assert_eq!(result.origin.unwrap().status, "notAttempted");
+        assert_eq!(git(remote.path(), &["rev-parse", "refs/heads/topic"]), tip);
+    }
+}
+
 fn request(
     branch: &str,
     state: &crate::dto::RepositoryState,

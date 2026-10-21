@@ -717,10 +717,12 @@ impl Repository {
                 Error::new("staleCursor", "History cursor expired; reload history")
             })?
         } else {
-            if history.walks.len() >= 8 {
-                history.walks.clear();
-                history.cursors.clear();
-            }
+            // A new generation expires old cursors explicitly. Retaining eight
+            // paused rev-list processes per tab consumes remote SSH sessions even
+            // though only the latest walk is normally used. Never restart an old
+            // cursor against current refs: it must report staleCursor instead.
+            history.walks.clear();
+            history.cursors.clear();
             let (tips, shallow) = self.tips(query.branch.as_deref())?;
             let generation = token();
             let walk = Walk::new(self.location(), tips, shallow)?;
@@ -838,6 +840,20 @@ impl Repository {
             "--ignore-submodules=none",
             "--",
         ]);
+        if matches!(self.location(), RepositoryLocation::Ssh { .. }) {
+            let output = process::run(process::git_digest_command(self.location(), &a)?)?;
+            if !output.success {
+                return Err(self.failed(&output));
+            }
+            let digest = process::text_ref(&output.stdout)?.trim_end_matches('\n');
+            if !matches!(digest.len(), 40 | 64)
+                || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            {
+                return Err(Error::new("gitParse", "Invalid remote content digest"));
+            }
+            digest.hash(&mut hash);
+            return Ok(hash.finish());
+        }
         let mut stream = crate::stream::GitStream::diff(self.location(), &a)?;
         while let Some(record) = stream.next()? {
             record.hash(&mut hash);

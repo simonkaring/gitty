@@ -55,6 +55,11 @@ requested literal path. Complete status refreshes and write checks remain
 repository-wide. Index-before/index-after checks and byte-based hunk tokens are
 unchanged; previews are not cached across revisions.[^diff][^status][^contract]
 
+Full status retains content-aware fingerprints, not stat-only shortcuts. SSH
+tracked binary patches are digested where the files live; only a bounded Git blob
+digest crosses the channel, and an independently checked producer status rejects
+partial reads. Local/WSL patch hashing and existing untracked hashing are unchanged.[^status][^contract]
+
 The UI regressions use 10,000 entries with stubbed geometry; the Chromium fixture
 uses real wrapped-row layout, deep selection, simulated writes, keyboard/focus,
 folding, narrow resizing, and unchanged-status refresh anchoring. The native

@@ -238,6 +238,36 @@ fn pinned_topological_walk_merge_parents_and_moving_refs() {
 }
 
 #[test]
+fn starting_history_generation_bounds_walkers_and_explicitly_expires_old_cursors() {
+    let d = init();
+    for i in 0..3 {
+        std::fs::write(d.path().join("file"), i.to_string()).unwrap();
+        commit(d.path(), &format!("commit {i}"));
+    }
+    let data = tempfile::tempdir().unwrap();
+    let mut service = Service::new(data.path().into());
+    let state = open(&mut service, d.path());
+    let repo = service.repo(&state.session.handle).unwrap();
+    let first = repo.history(None, 1, HistoryQuery::default()).unwrap();
+    let cursor = first.cursor.unwrap();
+    let second = repo.history(None, 1, HistoryQuery::default()).unwrap();
+    assert_ne!(first.generation, second.generation);
+    assert_eq!(repo.history.lock().unwrap().walks.len(), 1);
+    assert_eq!(
+        repo.history(Some(cursor), 1, HistoryQuery::default())
+            .unwrap_err()
+            .code,
+        "staleCursor"
+    );
+    assert_eq!(
+        repo.history(second.cursor, 1, HistoryQuery::default())
+            .unwrap()
+            .generation,
+        second.generation
+    );
+}
+
+#[test]
 fn working_file_previews_with_thousands_of_unrelated_changes() {
     let d = init();
     let count = 2_000;

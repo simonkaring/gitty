@@ -312,6 +312,7 @@ impl Repository {
                     "--no-tags",
                     "--no-prune",
                     "--no-prune-tags",
+                    "--no-write-fetch-head",
                     "--refmap=",
                     "--",
                     &remote,
@@ -403,6 +404,7 @@ impl Repository {
                 // Fetch precisely one branch, then integrate its pinned object ID.
                 // No merge/rebase ever runs after an uncertain or failed fetch.
                 let (mut fetch, env) = network();
+                let private_ref = format!("refs/gitty/pull/{}", uuid::Uuid::new_v4());
                 fetch.extend(args(&[
                     "fetch",
                     "--no-all",
@@ -410,94 +412,130 @@ impl Repository {
                     "--no-tags",
                     "--no-prune",
                     "--no-prune-tags",
+                    "--no-write-fetch-head",
                     "--refmap=",
                     "--",
                     &remote,
                     &format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}"),
+                    &format!("refs/heads/{branch}:{private_ref}"),
                 ]));
-                let fetched =
-                    network_result(self.write(&fetch, &env, &[], 0)?, wsl && interactive)?;
-                let incoming = resolve(self.location(), "FETCH_HEAD")?;
-                let mut a = args(&[
-                    // Branch mergeOptions can otherwise silently turn this
-                    // explicitly selected mode into a squash/no-commit merge.
-                    "-c",
-                    &format!("branch.{current}.mergeOptions="),
-                    "-c",
-                    "core.editor=true",
-                    "-c",
-                    "sequence.editor=true",
-                    "-c",
-                    "merge.autoStash=false",
-                    "-c",
-                    "rebase.autoStash=false",
-                    "-c",
-                    "submodule.recurse=false",
-                    "-c",
-                    "rebase.abbreviateCommands=false",
-                ]);
-                match pull_mode {
-                    PullMode::FfOnly | PullMode::Merge => {
-                        a.extend(args(&[
-                            "merge",
-                            "--no-edit",
-                            "--no-autostash",
-                            "--no-overwrite-ignore",
-                            if matches!(pull_mode, PullMode::FfOnly) {
-                                "--ff-only"
-                            } else {
-                                "--ff"
-                            },
-                            "--",
-                            &incoming,
-                        ]));
-                    }
-                    PullMode::Rebase => {
-                        if self
-                            .status_entries()?
-                            .entries
-                            .iter()
-                            .any(|entry| !entry.untracked)
-                        {
-                            return Err(Error::new(
+                let fetched = self.write(&fetch, &env, &[], 0)
+                    .and_then(|output| network_result(output, wsl && interactive))
+                    .map_err(|mut error| {
+                        error.message.push_str(&format!("\nNo integration was attempted. An interrupted fetch may have retained {private_ref}; refresh and inspect before another action."));
+                        error
+                    })?;
+                let incoming = resolve(self.location(), &private_ref).map_err(|error|
+                    Error::new("mutationUnverified", format!("Fetch completed, but its private tip {private_ref} could not be read: {} No integration was attempted. Refresh and inspect before another action.", error.message)))?;
+                let result = (|| -> Result<ActionOutput> {
+                    let mut a = args(&[
+                        // Branch mergeOptions can otherwise silently turn this
+                        // explicitly selected mode into a squash/no-commit merge.
+                        "-c",
+                        &format!("branch.{current}.mergeOptions="),
+                        "-c",
+                        "core.editor=true",
+                        "-c",
+                        "sequence.editor=true",
+                        "-c",
+                        "merge.autoStash=false",
+                        "-c",
+                        "rebase.autoStash=false",
+                        "-c",
+                        "submodule.recurse=false",
+                        "-c",
+                        "rebase.abbreviateCommands=false",
+                    ]);
+                    match pull_mode {
+                        PullMode::FfOnly | PullMode::Merge => {
+                            a.extend(args(&[
+                                "merge",
+                                "--no-edit",
+                                "--no-autostash",
+                                "--no-overwrite-ignore",
+                                if matches!(pull_mode, PullMode::FfOnly) {
+                                    "--ff-only"
+                                } else {
+                                    "--ff"
+                                },
+                                "--",
+                                &incoming,
+                            ]));
+                        }
+                        PullMode::Rebase => {
+                            if self
+                                .status_entries()?
+                                .entries
+                                .iter()
+                                .any(|entry| !entry.untracked)
+                            {
+                                return Err(Error::new(
                                 "dirtyWorktree",
                                 "Commit or stash staged and unstaged changes before pulling with rebase.",
                             ));
+                            }
+                            let range = format!("{incoming}..HEAD");
+                            if !self
+                                .check_text(&["rev-list", "--merges", &range, "--"])?
+                                .is_empty()
+                            {
+                                return Err(Error::new("mergeHistory", "This pull would flatten local merge history. Rebase it explicitly in Git."));
+                            }
+                            let mut targets: Vec<String> = self
+                                .check_text(&["rev-list", &range, "--"])?
+                                .lines()
+                                .map(String::from)
+                                .collect();
+                            targets.push(incoming.clone());
+                            self.protect_untracked(&targets)?;
+                            a.extend(args(&[
+                                "rebase",
+                                "--merge",
+                                "--no-autostash",
+                                "--no-update-refs",
+                                "--no-rebase-merges",
+                                "--no-autosquash",
+                                "--no-fork-point",
+                                &incoming,
+                            ]));
                         }
-                        let range = format!("{incoming}..HEAD");
-                        if !self
-                            .check_text(&["rev-list", "--merges", &range, "--"])?
-                            .is_empty()
-                        {
-                            return Err(Error::new("mergeHistory", "This pull would flatten local merge history. Rebase it explicitly in Git."));
-                        }
-                        let mut targets: Vec<String> = self
-                            .check_text(&["rev-list", &range, "--"])?
-                            .lines()
-                            .map(String::from)
-                            .collect();
-                        targets.push(incoming.clone());
-                        self.protect_untracked(&targets)?;
-                        a.extend(args(&[
-                            "rebase",
-                            "--merge",
-                            "--no-autostash",
-                            "--no-update-refs",
-                            "--no-rebase-merges",
-                            "--no-autosquash",
-                            "--no-fork-point",
-                            &incoming,
-                        ]));
                     }
+                    let integrated = action_result(self.write(&a, &env, &[], 0)?)?;
+                    Ok(ActionOutput {
+                        output: [fetched.output, integrated.output]
+                            .into_iter()
+                            .filter(|s| !s.is_empty())
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    })
+                })();
+                // Expected-OID deletion cannot remove a ref another actor changed.
+                // Cleanup is not integration: never turn a completed merge/rebase
+                // into a retryable error or obscure its original failure.
+                let cleanup = self.write(
+                    &args(&["update-ref", "-d", &private_ref, &incoming]),
+                    &[],
+                    &[],
+                    0,
+                );
+                let warning = match cleanup {
+                    Ok(output) if output.success => None,
+                    Ok(output) => Some(report(&output)),
+                    Err(error) => Some(error.message),
+                };
+                match (result, warning) {
+                    (Ok(mut output), Some(warning)) => {
+                        output.output.push_str(&format!("\nIntegration completed. Temporary pull ref cleanup failed ({private_ref}): {warning}. Do not repeat the integration; refresh first."));
+                        Ok(output)
+                    }
+                    (Err(mut error), Some(warning)) => {
+                        error.message.push_str(&format!(
+                            "\nTemporary pull ref cleanup also failed ({private_ref}): {warning}"
+                        ));
+                        Err(error)
+                    }
+                    (result, None) => result,
                 }
-                let integrated = action_result(self.write(&a, &env, &[], 0)?)?;
-                Ok(ActionOutput {
-                    output: [fetched.output, integrated.output]
-                        .into_iter()
-                        .filter(|s| !s.is_empty())
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                })
             }
         }
     }

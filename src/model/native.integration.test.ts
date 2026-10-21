@@ -54,6 +54,20 @@ describe('native snapshot IPC integration', () => {
     expect(result.cursor).toBeNull(); expect(result.commits.map(c => c.id)).toEqual(['b']);
     expect(previous.commits.map(c => c.id)).toEqual(['a']);
   });
+  it('bounds automatic paging for a previously loaded tip orphaned by reset or rebase', async () => {
+    const commits = (offset: number) => Array.from({ length: 200 }, (_, i) => commit(`reachable-${offset + i}`));
+    const mock = scripted([
+      ['repository_snapshot', snap('reachable-0')],
+      ['repository_history', page(commits(0), 'second')],
+      ['repository_history', page(commits(200), 'still-thousands-more')],
+      ['repository_state', state('reachable-0')],
+    ]);
+    const result = await readNativeSnapshot('session', { ...mock, previous, preserve: ['a'] });
+    expect(result.commits).toHaveLength(400);
+    expect(result.cursor).toBe('still-thousands-more');
+    expect(previous.commits[0].id).toBe('a'); // inspector selection is not rewritten
+    expect(mock.steps).toHaveLength(0);
+  });
   it('excludes a deleted target from automatic keep-visible paging without filtering returned history', async () => {
     const firstPage = Array.from({ length: 200 }, (_, index) => commit(`tip-${index}`, [`parent-${index}`]));
     const mock = scripted([['repository_snapshot', snap('tip-0')], ['repository_history', page(firstPage, 'next')], ['repository_state', state('tip-0')]]);

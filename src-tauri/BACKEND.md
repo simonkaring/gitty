@@ -51,9 +51,9 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
 
 ## Read semantics
 
-- Git is the installed executable, launched with explicit arguments and no shell.
+- Git is the installed executable, launched with explicit arguments (no local shell).
   Native paths use `git -C`; WSL uses `wsl.exe --distribution … --exec env … git -C …`;
-  SSH locations run `ssh … -- <user@>host "sh -c '<quoted script>'"` (one remote
+  SSH locations run `ssh … -- <user@>host <encoded POSIX-shell envelope>` (one remote
   argument) so Git executes on the remote host (see
   [SSH repositories](#ssh-repositories)). Native WSL UNC
   locations are rejected.
@@ -92,8 +92,9 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   Git itself may still inspect ancestry before yielding topological output, depending
   on its version and commit-graph availability; Git's internal memory is not bounded
   by the application's record buffer. The replay spool grows with visited history.
-  Pages are limited to 200 and a session to eight generations (the ninth resets
-  the cache and terminates old walkers). Closing/expiring a session closes its
+  Pages are limited to 200 and a session to one retained generation. Starting a
+  new generation expires prior cursors and terminates/reaps their walkers; replay
+  within the retained generation stays pinned. Closing/expiring a session closes its
   temp files and terminates/reaps its walkers. Expired cursors return `staleCursor`.
   Objects removed by external pruning cannot be recovered; no retention refs are created.
 - Commit objects provide original parent IDs, including unavailable parents at
@@ -138,7 +139,12 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   unchanged status letters still refresh. Untracked files are hashed with one
   `hash-object --no-filters --stdin-paths` batch; names the line protocol cannot
   carry verbatim (newline, carriage return, leading quote) or a batch Git rejects
-  fall back to one no-index patch per file. The tracked patch and untracked hash,
+  fall back to one no-index patch per file. On SSH, the tracked binary-capable
+  patch is streamed into `git hash-object --stdin` on the host, transferring only
+  its digest. A private temporary status file checks the producer independently
+  of the pipeline consumer; incomplete/failed reads fail closed. This needs `mktemp`,
+  `cat`, `rm`, `rmdir` and POSIX `sh`, not Python or base64. It still computes the
+  complete patch remotely (not a stat-only cache). The tracked digest and untracked hash,
   and the independent state reads, run concurrently because each process launch
   has substantial, load-dependent overhead through `wsl.exe`. Repository state
   also fingerprints remotes and shallow boundaries
@@ -167,7 +173,10 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   while the refreshed HEAD is that `oid`. A failed or uncertain write has no confirmed
   `oid`, so nothing is remapped, and a failed refresh never forces a reveal. The same
   filter stops later refreshes from walking all history for an inspector-only orphan
-  (a selected ID that was not in the loaded history). Explicit reveal and paging are
+  (a selected ID that was not in the loaded history). Automatic keep-visible paging
+  is bounded to the previous loaded prefix (at least 200) plus one 200-row page,
+  even when a previously reachable selection becomes orphaned after reset/rebase.
+  The orphan remains selected and inspectable. Explicit reveal and paging are
   unchanged. After a successful refresh the selection moves to the new commit only if
   it is the same session, the selection is still the old HEAD, and no user selection
   has happened since the write was submitted (including away and back); compare
@@ -210,13 +219,21 @@ Transport policy (fixed in `process.rs`, not configurable from the frontend):
 
 - `ssh -T -x -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10
   -o ServerAliveInterval=15 -o ServerAliveCountMax=3 [ControlMaster/ControlPath/
-  ControlPersist] [-p port] -- destination "sh -c '<script>'"`. OpenSSH joins the
-  remote arguments with spaces and lets the login shell split them, so `sh -c` and its
-  script are **one** argument, itself quoted for that parse; as separate arguments the
-  host would receive `sh -c env …` and run only `env`. Multiplexing is Unix-only
+  ControlPersist] [-p port] -- destination <envelope>`. OpenSSH joins remote
+  arguments before the login shell parses them. The one envelope argument contains
+  only fixed ASCII syntax and octal-encoded script bytes: POSIX `printf` inside
+  explicit `sh` decodes and evaluates the script without consuming stdin. Raw
+  user newlines/quotes/history expansions never reach the login-shell parser;
+  nesting POSIX single quotes alone is unsafe under tcsh. Expanded commands are
+  capped at 24 KiB on Windows and 96 KiB on Unix (`inputLimit`), leaving room for
+  local SSH options; binary messages/pathspecs/helpers retain their stdin channel.
+  Multiplexing is Unix-only
   because Win32 OpenSSH does not implement `ControlMaster`. Its control sockets live in
   `<app data>/ssh` with mode 0700, one 16-hex name per destination, or in a per-process
-  temp directory when that path is too long for a Unix socket. The `ControlPath` value
+  randomly named private temp directory when that path is too long or unsafe.
+  Existing control directories must be real directories owned by the effective
+  user without group/other permission bits; symlinks are refused, not chmodded.
+  The `ControlPath` value
   is double-quoted for OpenSSH's `-o` parser, which splits unquoted values on spaces,
   and stays within 88 bytes so OpenSSH's `.XXXXXXXXXX` listener suffix fits
   `sun_path`. Both candidate directories are measured; if neither fits (a long
@@ -251,7 +268,7 @@ untracked discard, stash, merge/rebase/cherry-pick/reset, tags and branch deleti
 remain available because they only need Git.
 
 `ssh_test({target: {host, port?, user?, path?}}) -> {gitVersion, name}` runs the same
-transport without a session: `git --version` always, and `rev-parse --show-toplevel`
+transport without a session: `git --version` always, then bare/worktree discovery
 plus the directory name when a path is given. It stores nothing. Failures map to
 `invalidHost`, `invalidUser`, `invalidPort`, `invalidPath`, `hostKeyUnknown`,
 `authRequired`, `hostUnknown`, `connectFailed`, `posixShellRequired`, `notARepository`,
@@ -268,8 +285,9 @@ directory returns `notFound`, an unreadable one `permissionDenied`, a failed rem
 command `listFailed`, and a dead connection keeps the SSH transport codes.
 
 Fingerprints and mutation locks stay per session; the lock key includes the SSH
-destination (`user@host:port`) as well as the common Git directory, so identical paths
-on two hosts are never serialized against each other.
+destination (`user@host:port`) as well as the common Git directory. This is textual
+identity: different SSH aliases for the same underlying host/repository do not share
+a Gitty lock; Git's own locks and external-change checks still apply.
 
 ## Worktree management
 
@@ -358,7 +376,7 @@ targeted conflict resolutions have the additional contract documented below.
   `GIT_LITERAL_PATHSPECS`, `GIT_NO_LAZY_FETCH`, `GIT_NO_REPLACE_OBJECTS`,
   `GIT_TERMINAL_PROMPT=0`, `protocol.allow=never`, `core.fsmonitor=false`,
   `core.untrackedCache=false`, `maintenance.auto=false` and `gc.auto=0`, and are
-  still launched with explicit arguments and no shell. They drop the read-only
+  launched with explicit arguments (SSH uses the encoded shell envelope above). They drop the read-only
   overrides: `GIT_OPTIONAL_LOCKS=0` (a write must take the index lock),
   `LC_ALL=C`, and the diff display suppressions, because `git -c` settings reach
   hooks through `GIT_CONFIG_PARAMETERS` and hooks deserve the user's own
@@ -470,8 +488,13 @@ targeted conflict resolutions have the additional contract documented below.
     failed query is an error, not permission. It reads local refs only, which are not
     proof about the remote, so the message says to fetch.
   The inline message editor sends both `true`.
-- Writes get a 120-second deadline of their own (hooks and signing are
-  interactive-speed work) instead of the 60-second read request budget; checks
+- Writes get a 120-second execution budget of their own instead of the read
+  request budget. Authenticated, operation-token-scoped askpass/editor bridge waits
+  do not consume execution time. Overlapping scoped waits count once, and
+  prior-command/pre-launch waits grant no execution credit. Each prompt still
+  expires after 90 seconds; prompt-enabled commands have a hard 30-minute overall ceiling. Unbridged helper,
+  signing and hook waits still consume execution time. Scope cancellation terminates
+  the process tree; Gitty never claims or manually removes an abandoned index.lock. Checks
   around them get 30 seconds. A write that is abandoned — timeout, output limit,
   or a lost process — returns `mutationUnverified`, whose message says the
   repository may already have changed and to refresh and check before retrying.
@@ -622,6 +645,14 @@ exactly-full final page is reported truncated); Bitbucket when the envelope has 
   five minutes while active and visible. The backend's `backgroundFetch` action
   uses an explicit `+refs/heads/*:refs/remotes/<remote>/*` refspec with `--no-tags`
   and no pruning; it never moves local heads, checks out, merges, or rebases.
+  Fetches use `--no-write-fetch-head`, including explicit fetch and pull. Pull
+  fetches its selected branch to both its normal tracking ref and a random private
+  `refs/gitty/pull/<UUID>` ref, resolves that exact ref once, then integrates the OID.
+  Background/external updates to FETCH_HEAD or tracking refs cannot redirect it.
+  Private pull refs are excluded from graph tips and operation all-ref fingerprints.
+  Post-integration cleanup deletes only the expected OID; cleanup failure is a
+  warning on successful integration, never an invitation to repeat it. Interrupted
+  fetches can leave hidden retention refs requiring manual inspection/cleanup.
   Explicit fetch and pull's fetch phase likewise allow non-fast-forward updates
   only to remote-tracking refs so they follow rewritten remote history; pull's
   selected integration mode and push's no-force safeguards remain unchanged.
@@ -658,7 +689,7 @@ exactly-full final page is reported truncated); Bitbucket when the envelope has 
   (`AskpassRegistry::start_operation_with`), or `null` for a token without a label.
   `prompt` is Git's own text and can be influenced by hooks or remotes, so the dialog
   renders `context` separately as provenance. Gitty keeps answers in memory only. A cancelled or expired prompt fails the helper,
-  and a prompt has a 90-second response deadline within Git's write deadline.
+   and a prompt has a 90-second response deadline separate from the execution budget.
   On Windows, explicit WSL fetch/pull/push/branch deletion can use a per-operation scoped askpass
   bridge when `wslpath` translates the Gitty executable for Windows interop.
   If translation fails (or no askpass registry is available), the helper-UI
@@ -790,7 +821,11 @@ remain unverified and require refresh/review.
   explicit `--ff` or `--no-ff`, and `--no-edit`. `source` may be any resolvable
   revision, including a full remote-tracking ref such as
   `refs/remotes/origin/topic`; non-local `destination` refs are rejected with
-  `invalidReference`. Merging reads the source ref and never moves it. An optional merge `message` is
+   `invalidReference`. The source OID is resolved before switching. A nonzero switch
+   aborts integration; a successful switch must confirm the destination symbolic
+   HEAD and pinned tip. The effective destination's `branch.*.mergeOptions` is
+   cleared per command so configured squash/no-commit cannot override review.
+   Merging never moves a separate source ref. An optional merge `message` is
   validated before any destination switch: nonblank, at most 64 KiB of UTF-8,
   and no NUL. Native Git reads an operation-owned temporary file; WSL Git reads
   the message from stdin via `--file=/dev/stdin`. Absent messages retain
@@ -805,7 +840,9 @@ remain unverified and require refresh/review.
   overwritten or ordinary staged changes that would enter a true merge commit.
   Switch/merge refuse ignored-file overwrites. Rebase/cherry-pick preflight
   destination/replay trees, including queued continuation steps, for obstructing
-  ignored or untracked files.
+   ignored or untracked files. These checks summarize untracked directories and
+   refine only target paths/ancestors, including ignored files; unrelated siblings
+   are allowed and exhausted deadlines/output budgets fail closed.
 - Merge `stashChanges` is optional and defaults to `false`. Explicit opt-in saves
   staged, unstaged and untracked work with `stash push --include-untracked` under
   the same mutation lock as the merge. Reviewed state, message and targets are

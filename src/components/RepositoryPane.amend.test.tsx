@@ -160,14 +160,15 @@ it('does not follow, remap or reveal when the refresh after an amend fails', asy
   } finally { await t.cleanup(); }
 });
 
-it('does not remap or follow a write that reported no new commit, and reconciles by looking for the old tip', async () => {
+it('does not remap or follow an uncertain write, and bounds reconciliation for the old tip', async () => {
   const t = await mount();
   try {
     repo.amend = async () => { setHead('h2'); throw { code: 'mutationUnverified', message: 'Git reported a failure but HEAD moved to h2. Refresh and check the status before retrying.' }; };
     await t.save();
     await vi.waitFor(() => expect(t.q('.commit-message-editor [role="alert"]')?.textContent).toContain('HEAD moved to h2'));
-    // Without a confirmed oid nothing is guessed: the old tip is searched for across the whole history.
-    expect(history()).toBe(Math.ceil(TOTAL / PAGE));
+    // Without a confirmed oid nothing is guessed. Best-effort keep-visible stops
+    // after the loaded prefix plus one page; the old tip stays inspectable.
+    expect(history()).toBe(2);
     expect(t.selected()).toBe('h1');
     expect(calls('repository_amend_commit')).toHaveLength(1);
   } finally { await t.cleanup(); }

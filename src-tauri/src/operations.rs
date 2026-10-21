@@ -470,7 +470,13 @@ impl Repository {
         .try_into()
         .unwrap_or_else(|_| unreachable!());
         let index = index?;
-        let all_refs = all_refs?;
+        // Per-pull retention refs are transport implementation details, not
+        // reviewed repository state; background reads must not invalidate review.
+        let all_refs = all_refs?
+            .lines()
+            .filter(|line| !line.starts_with("refs/gitty/pull/"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let incoming = match kind {
             OperationKind::Merge => merge.clone(),
             OperationKind::Rebase => rebase.clone().or_else(|| value("rebase-merge/onto")),
@@ -590,17 +596,21 @@ impl Repository {
     pub(crate) fn protect_untracked(&self, targets: &[String]) -> Result<()> {
         // reset --hard (used internally by rebase) deletes obstructing untracked
         // files, including ignored files that porcelain status does not report.
-        // No exclude flags: inspect ignored files too, without reading their data.
+        // No exclude flags: inspect ignored files too. Summarize directories so
+        // huge ignored build/dependency trees do not enumerate every leaf. Only
+        // refine a directory when a target actually enters it.
         let started = std::time::Instant::now();
-        let raw_others = self.check_text(&["ls-files", "--others", "-z"])?;
+        let raw_others = self.check_text(&[
+            "ls-files",
+            "--others",
+            "--directory",
+            "--no-empty-directory",
+            "-z",
+        ])?;
         if raw_others.is_empty() {
             return Ok(());
         }
-        let mut others: Vec<_> = raw_others
-            .split('\0')
-            .filter(|p| !p.is_empty())
-            .map(|p| p.trim_end_matches('/'))
-            .collect();
+        let mut others: Vec<_> = raw_others.split('\0').filter(|p| !p.is_empty()).collect();
         others.sort_unstable();
         others.dedup();
         let remaining = || {
@@ -608,6 +618,7 @@ impl Repository {
                 .filter(|d| !d.is_zero())
                 .ok_or_else(|| Error::new("timeout", "Untracked-file protection exceeded its deadline. Narrow this operation or complete it in Git."))
         };
+        let mut refined = std::collections::HashMap::<String, String>::new();
         for target in targets {
             let output = process::run_for(
                 process::git_command(
@@ -629,6 +640,52 @@ impl Repository {
                 loop {
                     if let Ok(i) = others.binary_search(&ancestor) {
                         collision = Some(others[i]);
+                        break;
+                    }
+                    // A summarized untracked directory may have only siblings
+                    // of the target. Probe the target and its ancestors precisely;
+                    // an ancestor directory alone is not an obstruction, a file
+                    // at that ancestor is. Cache probes across replay targets.
+                    let directory = format!("{ancestor}/");
+                    if others.binary_search(&directory.as_str()).is_ok() {
+                        let mut path = tracked;
+                        loop {
+                            if !refined.contains_key(path) {
+                                let output = process::run_for(
+                                    process::git_command(
+                                        self.location(),
+                                        &args(&[
+                                            "ls-files",
+                                            "--others",
+                                            "--directory",
+                                            "--no-empty-directory",
+                                            "-z",
+                                            "--",
+                                            path,
+                                        ]),
+                                    )?,
+                                    remaining()?,
+                                )?;
+                                if !output.success {
+                                    return Err(self.failed(&output));
+                                }
+                                refined.insert(path.to_string(), process::text(output.stdout)?);
+                            }
+                            let found = refined[path]
+                                .split('\0')
+                                .filter(|p| !p.is_empty())
+                                .any(|p| if path == tracked { true } else { p == path });
+                            if found {
+                                return Err(Error::new("dirtyWorktree", format!("Untracked or ignored path {path:?} could be overwritten by this operation. Move or preserve it in Git first.")));
+                            }
+                            if path == ancestor {
+                                break;
+                            }
+                            path = path
+                                .rsplit_once('/')
+                                .map(|(parent, _)| parent)
+                                .unwrap_or(ancestor);
+                        }
                         break;
                     }
                     match ancestor.rsplit_once('/') {
@@ -970,6 +1027,9 @@ impl Repository {
                 message,
                 stash_changes: _,
             } => {
+                // Pin before switching: HEAD and abbreviated refs can change
+                // meaning when the destination becomes the checked-out branch.
+                let oid = resolve(self.location(), &source)?;
                 if let Some(message) = message {
                     crate::mutate::validate_message(&message)?;
                     input = message.into_bytes();
@@ -1007,6 +1067,7 @@ impl Repository {
                         "Switch to a local branch before merging.",
                     ));
                 }
+                let mut effective_destination = state.session.head_ref.clone().unwrap_or_default();
                 if let Some(destination) = destination {
                     if destination.starts_with("refs/") && !destination.starts_with("refs/heads/") {
                         return Err(Error::new(
@@ -1018,10 +1079,11 @@ impl Repository {
                         .strip_prefix("refs/heads/")
                         .unwrap_or(&destination);
                     self.valid_name(branch, "heads")?;
+                    effective_destination = format!("refs/heads/{branch}");
                     if format!("refs/heads/{branch}")
                         != state.session.head_ref.as_deref().unwrap_or_default()
                     {
-                        resolve(self.location(), &format!("refs/heads/{branch}"))?;
+                        let destination_oid = resolve(self.location(), &effective_destination)?;
                         let switch = args(&[
                             "switch",
                             "--no-overwrite-ignore",
@@ -1029,10 +1091,35 @@ impl Repository {
                             "--",
                             branch,
                         ]);
-                        self.write(&switch, &[], &[], 0)?;
+                        let switched = self.write(&switch, &[], &[], 0)?;
+                        if !switched.success {
+                            return Err(self.failed(&switched));
+                        }
+                        let verified = (|| -> Result<bool> {
+                            Ok(self
+                                .check_text(&["symbolic-ref", "--quiet", "HEAD"])?
+                                .trim_end()
+                                == effective_destination
+                                && self.head_commit()?.as_deref() == Some(destination_oid.as_str()))
+                        })();
+                        if !matches!(verified, Ok(true)) {
+                            let detail = verified
+                                .err()
+                                .map(|error| format!(" {}", error.message))
+                                .unwrap_or_default();
+                            return Err(Error::new("mutationUnverified", format!("The destination switch could not be verified. No merge was started. Refresh and review before another action.{detail}")));
+                        }
                     }
                 }
-                let oid = resolve(self.location(), &source)?;
+                let branch = effective_destination
+                    .strip_prefix("refs/heads/")
+                    .ok_or_else(|| {
+                        Error::new(
+                            "invalidReference",
+                            "Merge requires a local destination branch.",
+                        )
+                    })?;
+                a.extend(args(&["-c", &format!("branch.{branch}.mergeOptions=")]));
                 a.extend(args(&[
                     "merge",
                     "--no-edit",

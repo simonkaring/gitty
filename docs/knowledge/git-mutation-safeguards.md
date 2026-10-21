@@ -85,6 +85,10 @@ same-named remotes distinct. Review precedes execution; the backend switches to
 the destination if needed and never moves the source ref. Self-drops, tag/remote
 destinations and mixed payloads are rejected; commit drops remain cherry-picks
 onto the current local branch only. A checked-out branch is required.[^graph-drops][^graph-drop-tests][^operations]
+The source OID is pinned before switching. A failed switch aborts without merging;
+a successful switch must confirm destination symbolic HEAD and its reviewed tip.
+Destination `branch.*.mergeOptions` is cleared for the command so squash/no-commit
+configuration cannot override the reviewed merge mode; hooks/signing remain enabled.[^operations][^operation-tests]
 
 Branch context actions (including right-click and Shift+F10) merge a local or
 remote-tracking source into the current local branch. They never offer a remote
@@ -139,6 +143,8 @@ Origin deletion uses one same-name refspec and an expected-OID lease. Local
 failure/uncertainty prevents the remote attempt; partial target outcomes remain
 structured for the UI. Deletion refresh excludes removed target tips from
 automatic keep-visible paging while leaving explicit navigation unchanged.[^branch-delete][^branch-delete-ui]
+Origin deletion is centrally gated on a verified `deleted` local outcome, including
+safe/forced commands that succeeded but whose ref was recreated or unreadable.[^branch-delete]
 
 Origin reset is an explicitly confirmed destructive graph action for the
 checked-out same-named local branch. Review shows the fetched tip, local-only
@@ -148,6 +154,12 @@ untracked/ignored target obstructions are refused before `reset --hard`. It does
 not fetch or push, and failures require refresh and an explicit new review rather
 than retry. See `operations_reset_origin_*` real-Git regressions and the dialog
 tests for source-backed entry points.[^operations][^operation-tests][^origin-reset-dialog]
+
+Untracked obstruction checks summarize ignored/untracked directories, then refine
+only target paths/ancestors. Noncolliding siblings remain allowed; a failed or
+over-budget query never grants permission. Pull uses a private fetched-OID ref,
+not mutable FETCH_HEAD/tracking refs; private refs do not affect graph/review
+fingerprints, and cleanup cannot make completed integration retryable.[^operations][^remote-writes]
 
 When changing this area, inspect `Service::mutate`, the action's Rust preflight,
 and `writeAndRefresh`. Existing regression entry points include

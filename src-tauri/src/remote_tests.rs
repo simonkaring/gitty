@@ -264,6 +264,92 @@ fn remote_fetch_counts_fast_forward_pull_and_push() {
 }
 
 #[test]
+#[cfg(unix)]
+fn remote_pull_integrates_private_fetched_oid_despite_fetch_head_and_tracking_race() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    let wrong = f.git(&["rev-parse", "HEAD"]);
+    let peer = f.peer(bare.path());
+    peer.write("incoming", "fetched source\n");
+    let incoming = peer.commit("incoming");
+    peer.remote(json!({"kind":"push"})).unwrap();
+    let hooks = f.dir.path().join(".git/race-hooks");
+    std::fs::create_dir(&hooks).unwrap();
+    let hook = hooks.join("reference-transaction");
+    std::fs::write(&hook, format!("#!/bin/sh\n[ \"$1\" = committed ] || exit 0\ninput=$(cat)\ncase \"$input\" in *refs/gitty/pull/*) printf '%s\\n' '{wrong}' > .git/FETCH_HEAD; git update-ref refs/remotes/origin/main '{wrong}';; esac\n")).unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    f.git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    f.remote(json!({"kind":"pull"})).unwrap();
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), incoming);
+    assert!(f
+        .git(&["for-each-ref", "--format=%(refname)", "refs/gitty/pull"])
+        .is_empty());
+}
+
+#[test]
+fn remote_fetch_does_not_touch_fetch_head_and_private_refs_do_not_change_review() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    std::fs::write(f.dir.path().join(".git/FETCH_HEAD"), "sentinel\n").unwrap();
+    let peer = f.peer(bare.path());
+    peer.write("incoming", "incoming\n");
+    peer.commit("incoming");
+    peer.remote(json!({"kind":"push"})).unwrap();
+    f.remote(json!({"kind":"backgroundFetch"})).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join(".git/FETCH_HEAD")).unwrap(),
+        "sentinel\n"
+    );
+    let before = f.repo.operation_state().unwrap().fingerprint;
+    let state = f.repo.state().unwrap().fingerprint;
+    let orphan = f.git(&["commit-tree", "HEAD^{tree}", "-m", "private-only orphan"]);
+    f.git(&["update-ref", "refs/gitty/pull/test-only", &orphan]);
+    assert_eq!(f.repo.operation_state().unwrap().fingerprint, before);
+    assert_eq!(f.repo.state().unwrap().fingerprint, state);
+    assert!(!f
+        .repo
+        .history(None, 200, HistoryQuery::default())
+        .unwrap()
+        .commits
+        .iter()
+        .any(|commit| commit.id == orphan));
+    // A non-private ref still belongs to the all-ref review fingerprint.
+    f.git(&["update-ref", "refs/notes/test-only", &orphan]);
+    assert_ne!(f.repo.operation_state().unwrap().fingerprint, before);
+}
+
+#[test]
+#[cfg(unix)]
+fn remote_pull_cleanup_uses_expected_oid_without_reclassifying_success() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    let base = f.git(&["rev-parse", "HEAD"]);
+    let peer = f.peer(bare.path());
+    peer.write("incoming", "incoming\n");
+    let incoming = peer.commit("incoming");
+    peer.remote(json!({"kind":"push"})).unwrap();
+    let hooks = f.dir.path().join(".git/cleanup-hooks");
+    std::fs::create_dir(&hooks).unwrap();
+    let hook = hooks.join("post-merge");
+    std::fs::write(&hook, format!("#!/bin/sh\nref=$(git for-each-ref --format='%(refname)' refs/gitty/pull/)\ngit update-ref \"$ref\" '{base}'\n")).unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    f.git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    let result = f.remote(json!({"kind":"pull"})).unwrap();
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), incoming);
+    assert!(result.output.contains("Integration completed"));
+    assert!(result.output.contains("Do not repeat"));
+    assert_eq!(
+        f.git(&["for-each-ref", "--format=%(objectname)", "refs/gitty/pull/"]),
+        base
+    );
+}
+
+#[test]
 fn remote_fetch_skips_upstream_counts_and_branch_configuration() {
     let f = Fixture::new();
     let _bare = f.bare_remote();
@@ -889,7 +975,7 @@ fn explicit_branch_fetch_and_pull_work_without_upstream_and_failed_fetch_never_i
         "refs/remotes/origin/main"
     );
     let before = f.git(&["rev-parse", "HEAD"]);
-    assert_eq!(f.git(&["rev-parse", "FETCH_HEAD"]), incoming);
+    assert_eq!(f.git(&["rev-parse", "refs/remotes/origin/main"]), incoming);
     assert!(f
         .remote(json!({"kind":"pull", "branch":"missing"}))
         .is_err());

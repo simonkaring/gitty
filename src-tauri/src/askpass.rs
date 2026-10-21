@@ -62,6 +62,7 @@ struct AskpassPromptPayload {
 pub struct AskpassGuard<'a> {
     registry: &'a AskpassRegistry,
     token: String,
+    _budget: crate::process::PromptScope,
 }
 
 impl AskpassGuard<'_> {
@@ -122,6 +123,7 @@ impl AskpassRegistry {
             .insert(token.clone(), context);
         AskpassGuard {
             registry: self,
+            _budget: crate::process::PromptScope::new(&token),
             token,
         }
     }
@@ -130,7 +132,11 @@ impl AskpassRegistry {
         for (_, pending) in self.requests.lock().unwrap().drain() {
             let _ = pending.reply.send(None);
         }
-        self.active_tokens.lock().unwrap().clear();
+        let mut active = self.active_tokens.lock().unwrap();
+        for token in active.keys() {
+            crate::process::cancel_prompt_scope(token);
+        }
+        active.clear();
     }
 
     /// Removes the helper script. Best effort: the script lives in the shared
@@ -204,6 +210,7 @@ fn handle_connection<F, E>(
     };
 
     let mut writer = &stream;
+    let _wait = crate::process::prompt_wait(supplied);
     if emit_prompt(request_id, prompt, context).is_ok() {
         // The child process has a shorter read timeout. A dismissed or lost
         // prompt must not strand a thread.

@@ -283,6 +283,23 @@ impl Repository {
                 }
             }
         }
+        // Every local path (including successful commands whose verification
+        // failed) must pass the same gate before any remote deletion is attempted.
+        if delete_local
+            && !local
+                .as_ref()
+                .is_some_and(|result| result.status == "deleted")
+        {
+            if delete_origin {
+                origin = Some(outcome(
+                    "origin",
+                    "notAttempted",
+                    None,
+                    Some("Local deletion was not verified; origin was left untouched.".into()),
+                ));
+            }
+            return Ok(BranchDeleteResult { local, origin });
+        }
         if delete_origin {
             let result = (|| -> Result<_> {
                 let current_preflight = self.origin_preflight(

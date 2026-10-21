@@ -278,7 +278,15 @@ impl Repository {
                 &format!("{}^{{commit}}", request.start_point),
             ])?;
             if !request.branch.is_empty() {
-                self.check(&["check-ref-format", "--branch", &request.branch])?;
+                if !self
+                    .check(&["check-ref-format", "--branch", &request.branch])?
+                    .success
+                {
+                    return Err(Error::new(
+                        "invalidRequest",
+                        "Invalid worktree branch name.",
+                    ));
+                }
             }
             preview = format!(
                 "Create at {} from {} ({oid}){}",
@@ -418,7 +426,9 @@ impl Service {
                         ));
                     }
                     if !request.branch.is_empty() {
-                        repo.check(&["check-ref-format", "--branch", &request.branch])?;
+                        if !repo.check(&["check-ref-format", "--branch", &request.branch])?.success {
+                            return Err(Error::new("invalidRequest", "Invalid worktree branch name."));
+                        }
                         command.extend(["-b".into(), request.branch.clone()]);
                     }
                     command.extend([
@@ -707,6 +717,26 @@ mod tests {
         let mut service = Service::new(data.path().into());
         let main = open(&mut service, repo.path());
         let mut create = request("create", "");
+        let folders = tempfile::tempdir().unwrap();
+        create.destination = folders
+            .path()
+            .join("invalid-branch")
+            .to_str()
+            .unwrap()
+            .into();
+        create.branch = "bad..branch".into();
+        assert_eq!(
+            service
+                .repo(&main.session.handle)
+                .unwrap()
+                .worktree_review(&create)
+                .err()
+                .unwrap()
+                .code,
+            "invalidRequest"
+        );
+        assert!(!std::path::Path::new(&create.destination).exists());
+        create.branch.clear();
         create.destination = "relative".into();
         assert_eq!(
             execute(&service, &main.session.handle, &create)

@@ -96,11 +96,11 @@ ssh [-T] [-x] [-o BatchMode=yes] [-o StrictHostKeyChecking=yes]
     [-o ControlMaster=auto] [-o 'ControlPath="<app-data>/ssh/<16-hex>"']
     [-o ControlPersist=60]
     [-p <port>] [--] [<user>@]<host>
-    "sh -c '<remote script>'"
+    <one ASCII octal-encoded script envelope>
 ```
 
-`<remote script>` is generated locally and is the **only** string the remote shell
-parses:
+The POSIX script is generated locally, but never exposed literally to the login
+shell. It is decoded only inside explicitly invoked `sh`:
 
 ```
 env GIT_...=... LC_ALL=C git -C <quoted path> --no-pager -c ... <quoted args...>
@@ -108,16 +108,14 @@ env GIT_...=... LC_ALL=C git -C <quoted path> --no-pager -c ... <quoted args...>
 
 Rules that follow from that:
 
-- **Quoting is mandatory, twice.** The local `Command` never uses a shell, but OpenSSH
-  joins every remote argument with spaces and lets the login shell split the result.
-  So `sh -c` and the script are **one** argument, quoted again with
-  `askpass::shell_quote` for that join; passing them as separate argv elements would
-  make the host run `sh -c env …`, i.e. only `env`. Inside the script every remote word
-  is single-quoted with the same escaping. An argument that begins with `-` stays an
-  argument because it is quoted and preceded by an explicit `--` where Git accepts one.
-- **Prefer `sh -c`.** Wrapping the script in `sh -c '<script>'` means the login shell
-  only has to parse `sh -c '…'`, so fish/csh/`zsh` startup files cannot reinterpret our
-  Git arguments.
+- **Encode before the login shell.** OpenSSH joins remote arguments before the login
+  shell parses them. Nested POSIX single quoting was unsafe for newline-containing
+  values under tcsh. The outer envelope now contains only fixed ASCII syntax and
+  octal bytes, decoded by POSIX `printf` inside `sh`, without using stdin. Inside
+  that decoded script each argv/environment word is POSIX single-quoted. Expanded
+  command size is bounded for Windows/Unix, with explicit refusal rather than truncation.
+  Real sh/tcsh execution is covered by process tests when those shells are installed;
+  fish runtime remains unverified.
 - **Environment is part of the remote command.** SSH does not forward the host
   environment, so the read contract's `GIT_OPTIONAL_LOCKS=0`, `LC_ALL=C`,
   `GIT_NO_LAZY_FETCH=1`, `GIT_NO_REPLACE_OBJECTS=1`, `GIT_TERMINAL_PROMPT=0`,
@@ -137,7 +135,9 @@ Rules that follow from that:
   fails with `keyword controlpath extra arguments at end of line`), and the path stays
   within 88 bytes so OpenSSH's `.XXXXXXXXXX` listener suffix still fits `sun_path`
   (104 bytes on macOS); an over-long home directory falls back to a short per-process
-  temp directory, that fallback is measured too, and when neither fits the command
+  random private temp directory. Existing directories must be owned by the effective
+  user, non-symlink directories with no group/other permissions. The fallback is
+  measured too, and when neither fits the command
   runs without multiplexing instead of failing. `ssh -G -F /dev/null` validates the
   option without connecting or reading the developer's own SSH configuration.
 - **`BatchMode=yes` and `StrictHostKeyChecking=yes` are fixed.** Gitty never writes a

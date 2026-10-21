@@ -465,10 +465,96 @@ fn ssh_commands_never_interpolate_a_value_into_an_option_position() {
         !argv.iter().any(|arg| arg == "sh" || arg == "-c"),
         "{argv:?}"
     );
-    // The path and the subcommand each appear exactly once, quoted; the dedicated
-    // test above proves the shell hands them to Git as literal words.
-    assert_eq!(script.matches("a b").count(), 1, "{script}");
-    assert_eq!(script.matches("status").count(), 1, "{script}");
+    // User values are octal bytes, not login-shell source. End-to-end tests
+    // prove that decoding restores the exact argv and binary stdin.
+    assert!(!script.contains("a b"));
+    assert!(!script.contains("status"));
+}
+
+#[test]
+fn ssh_tracked_binary_digest_is_bounded_and_content_sensitive() {
+    let f = Fixture::new();
+    let binary = vec![0u8; 2 * 1024 * 1024];
+    std::fs::write(f.dir.path().join("binary"), &binary).unwrap();
+    std::os::unix::fs::symlink("file", f.dir.path().join("link")).unwrap();
+    f.git(&["add", "binary", "link"]);
+    f.git(&["commit", "-m", "binary and link"]);
+    let mut changed = binary;
+    changed[1024] = 1;
+    std::fs::write(f.dir.path().join("binary"), &changed).unwrap();
+    let first = f.repo().status().unwrap().fingerprint;
+    let modified = std::fs::metadata(f.dir.path().join("binary"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    changed[1024] = 2;
+    std::fs::write(f.dir.path().join("binary"), &changed).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(f.dir.path().join("binary"))
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    let second = f.repo().status().unwrap().fingerprint;
+    assert_ne!(first, second);
+    // Symlink target bytes, not followed file content, participate in the patch.
+    std::fs::remove_file(f.dir.path().join("link")).unwrap();
+    std::os::unix::fs::symlink("missing-target", f.dir.path().join("link")).unwrap();
+    assert_ne!(second, f.repo().status().unwrap().fingerprint);
+    let command = process::git_digest_command(
+        &remote(f.dir.path()),
+        &args(&["diff", "--binary", "--no-ext-diff", "--no-textconv", "--"]),
+    )
+    .unwrap();
+    let output = process::run(command).unwrap();
+    assert!(output.success);
+    assert!(output.stdout.len() <= 65);
+    // Failed producers must not return the digest of a partial/empty patch.
+    let bad = process::git_digest_command(
+        &remote(f.dir.path()),
+        &args(&["diff", "--invalid-option-for-test"]),
+    )
+    .unwrap();
+    assert!(!process::run(bad).unwrap().success);
+}
+
+#[test]
+fn ssh_connection_probe_accepts_bare_repository() {
+    install_shim();
+    let bare = tempfile::tempdir().unwrap();
+    crate::tests::git(bare.path(), &["init", "--bare"]);
+    let probe = crate::ssh::test(SshTarget {
+        host: "test-host".into(),
+        port: None,
+        user: None,
+        path: Some(bare.path().to_str().unwrap().into()),
+    })
+    .unwrap();
+    assert!(probe.git_version.starts_with("git version"));
+    assert!(probe.name.is_some());
+}
+
+#[test]
+fn ssh_content_fingerprints_support_sha256_repositories() {
+    install_shim();
+    let dir = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| crate::tests::git(dir.path(), args);
+    git(&["init", "-b", "main", "--object-format=sha256"]);
+    git(&["config", "user.name", "Test"]);
+    git(&["config", "user.email", "test@example.com"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    std::fs::write(dir.path().join("file\nname"), b"base\0").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-m", "base"]);
+    let data = tempfile::tempdir().unwrap();
+    let service = Service::new(data.path().into());
+    let state = service.open(remote(dir.path())).unwrap();
+    assert_eq!(state.session.head.unwrap().len(), 64);
+    let repo = service.repo(&state.session.handle).unwrap();
+    std::fs::write(dir.path().join("file\nname"), b"edit\0").unwrap();
+    let first = repo.status().unwrap().fingerprint;
+    std::fs::write(dir.path().join("file\nname"), b"next\0").unwrap();
+    assert_ne!(first, repo.status().unwrap().fingerprint);
 }
 
 #[test]

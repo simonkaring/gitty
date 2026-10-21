@@ -114,6 +114,179 @@ impl Fixture {
     }
 }
 
+#[test]
+fn operations_merge_failed_destination_switch_never_merges_current_branch() {
+    for stash_changes in [false, true] {
+        let f = Fixture::new();
+        let original = f.git(&["rev-parse", "HEAD"]);
+        f.git(&["branch", "destination"]);
+        f.git(&["switch", "-c", "source"]);
+        f.write("incoming", "incoming\n");
+        f.commit("incoming");
+        f.git(&["switch", "main"]);
+        let linked = tempfile::tempdir().unwrap();
+        f.git(&[
+            "worktree",
+            "add",
+            linked.path().join("linked").to_str().unwrap(),
+            "destination",
+        ]);
+        f.write("local", "precious work\n");
+        let error = f
+            .run(GitAction::Merge {
+                source: "source".into(),
+                destination: Some("destination".into()),
+                no_fast_forward: true,
+                message: None,
+                stash_changes,
+            })
+            .unwrap_err();
+        assert_eq!(f.git(&["symbolic-ref", "HEAD"]), "refs/heads/main");
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), original);
+        assert!(!f.dir.path().join("incoming").exists());
+        if stash_changes {
+            assert_eq!(error.code, "mergeWorkSaved");
+            assert!(error.message.contains("stash"));
+            assert!(!f.git(&["stash", "list"]).is_empty());
+        } else {
+            assert_eq!(
+                std::fs::read_to_string(f.dir.path().join("local")).unwrap(),
+                "precious work\n"
+            );
+        }
+    }
+}
+
+#[test]
+fn operations_merge_dirty_destination_switch_aborts_before_integration() {
+    let f = Fixture::new();
+    let original = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["switch", "-c", "destination"]);
+    f.write("file", "destination\n");
+    let destination = f.commit("destination");
+    f.git(&["switch", "main"]);
+    f.git(&["switch", "-c", "source"]);
+    f.write("incoming", "source\n");
+    f.commit("source");
+    f.git(&["switch", "main"]);
+    f.write("file", "precious local\n");
+    assert!(f
+        .run(GitAction::Merge {
+            source: "source".into(),
+            destination: Some("destination".into()),
+            no_fast_forward: true,
+            message: None,
+            stash_changes: false
+        })
+        .is_err());
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), original);
+    assert_eq!(f.git(&["rev-parse", "destination"]), destination);
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("file")).unwrap(),
+        "precious local\n"
+    );
+    assert!(!f.dir.path().join("incoming").exists());
+}
+
+#[test]
+fn operations_merge_pins_head_source_before_switching_destination() {
+    let f = Fixture::new();
+    f.git(&["branch", "destination"]);
+    f.write("incoming", "current HEAD source\n");
+    let source = f.commit("source");
+    f.run(GitAction::Merge {
+        source: "HEAD".into(),
+        destination: Some("destination".into()),
+        no_fast_forward: false,
+        message: None,
+        stash_changes: false,
+    })
+    .unwrap();
+    assert_eq!(f.git(&["symbolic-ref", "HEAD"]), "refs/heads/destination");
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), source);
+}
+
+#[test]
+fn operations_merge_ignores_destination_merge_options_for_reviewed_modes() {
+    for switched in [false, true] {
+        for no_fast_forward in [false, true] {
+            for options in ["--squash --no-commit", "--no-commit"] {
+                let f = Fixture::new();
+                f.git(&["branch", "destination"]);
+                f.git(&["switch", "-c", "source"]);
+                f.write("incoming", "source\n");
+                let incoming = f.commit("source");
+                f.git(&["switch", "main"]);
+                let destination = if switched { "destination" } else { "main" };
+                f.git(&[
+                    "config",
+                    &format!("branch.{destination}.mergeOptions"),
+                    options,
+                ]);
+                let result = f
+                    .run(GitAction::Merge {
+                        source: "source".into(),
+                        destination: switched.then(|| "destination".into()),
+                        no_fast_forward,
+                        message: None,
+                        stash_changes: false,
+                    })
+                    .unwrap();
+                assert_eq!(result.operation.kind, OperationKind::None);
+                if no_fast_forward {
+                    assert_eq!(
+                        f.git(&["show", "-s", "--format=%P", "HEAD"])
+                            .split_whitespace()
+                            .count(),
+                        2
+                    );
+                } else {
+                    assert_eq!(f.git(&["rev-parse", "HEAD"]), incoming);
+                }
+                assert!(f.git(&["status", "--porcelain"]).is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn operations_untracked_protection_refines_only_targeted_ignored_directories() {
+    let f = Fixture::new();
+    f.write(".gitignore", "build/\n");
+    f.commit("ignore build");
+    let base = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["switch", "-c", "target"]);
+    std::fs::create_dir_all(f.dir.path().join("build/nested")).unwrap();
+    f.write("build/nested/target", "tracked\n");
+    f.git(&["add", "-f", "build/nested/target"]);
+    f.git(&["commit", "-m", "target"]);
+    let target = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["switch", "main"]);
+    std::fs::create_dir_all(f.dir.path().join("build/nested/siblings")).unwrap();
+    for i in 0..2000 {
+        f.write(&format!("build/nested/siblings/{i}"), "ignored");
+    }
+    f.repo
+        .protect_untracked(std::slice::from_ref(&target))
+        .unwrap();
+    f.write("build/nested/target", "precious ignored\n");
+    assert_eq!(
+        f.repo
+            .protect_untracked(std::slice::from_ref(&target))
+            .unwrap_err()
+            .code,
+        "dirtyWorktree"
+    );
+    std::fs::remove_file(f.dir.path().join("build/nested/target")).unwrap();
+    std::fs::create_dir(f.dir.path().join("build/nested/target")).unwrap();
+    f.write("build/nested/target/leaf", "precious ignored\n");
+    assert_eq!(
+        f.repo.protect_untracked(&[target]).unwrap_err().code,
+        "dirtyWorktree"
+    );
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), base);
+}
+
 #[cfg(unix)]
 #[test]
 fn operations_symlink_conflict_selects_exact_side_without_following_target() {

@@ -39,6 +39,11 @@ a changed state triggers a walk bracketed by a live state check. Mixed
 generations, nonadvancing cursors, and inconsistent ancestry are rejected before
 publication.[^history][^loader]
 
+Only one history generation per session retains a walker/spool. A new generation
+explicitly expires older cursors with `staleCursor`; replay in the retained walk
+never re-resolves current refs. This bounds paused native/SSH process retention,
+without claiming a measured SSH MaxSessions failure.[^history]
+
 Search is separate from history generations: a session runs one search at a time,
 so a newer `repository_search` (or closing the session, or `repository_cancel_search`)
 cancels the in-flight one with the silent `cancelled` code, and results are hydrated
@@ -52,6 +57,9 @@ confirmed amend, the old HEAD can be remapped to the returned OID before paging,
 only while that OID is the refreshed HEAD. Otherwise an unreachable old tip or
 inspector-only orphan could cause a full-history scan. Session checks prevent
 superseded asynchronous reads from publishing.[^loader][^tests]
+Even a previously loaded tip can become unreachable after reset/rebase. Automatic
+keep-visible therefore stops after the previous loaded prefix (at least 200 rows)
+plus one page; selection/inspection survives, and explicit reveal remains separate.[^loader][^tests]
 The pane defers its initial open to a cancellable microtask, so development
 StrictMode's synchronous effect replay does not launch a discarded session.
 Closing a pane still invalidates in-flight reads and closes late-opened handles.[^pane]

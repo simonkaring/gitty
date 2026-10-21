@@ -113,6 +113,10 @@ export async function readNativeSnapshot(handle: string, options: {
       .filter(id => !excluded.has(id))
       .map(id => remap && id === remap.from ? remap.to : id));
     const count = Math.max(200, options.previous?.commits.length ?? 0);
+    // Keep-visible is best effort, not explicit reveal. A reset/rebase may orphan
+    // even an ID in the previous history; never scan an unbounded walk while a
+    // write waits for its reconciliation refresh to finish.
+    const keepVisibleBudget = count + 200;
     do {
       const page: HistoryPage = await call<HistoryPage>('repository_history', { cursor, limit: 200, query: {} });
       if (generation && page.generation !== generation) throw new Error('History generation changed during refresh. Retry.');
@@ -120,7 +124,7 @@ export async function readNativeSnapshot(handle: string, options: {
       generation = page.generation;
       commits = appendUnique(commits, page.commits); cursor = page.cursor;
       page.commits.forEach(commit => keep.delete(commit.id));
-    } while (cursor && (commits.length < count || keep.size > 0));
+    } while (cursor && (commits.length < count || (keep.size > 0 && commits.length < keepVisibleBudget)));
     const after = await call<RepositoryState>('repository_state');
     if (before.fingerprint !== after.fingerprint || status.head !== after.session.head || status.headRef !== after.session.headRef) continue;
     validateHistory(commits);

@@ -27,6 +27,7 @@ struct ActiveMutation {
     git_dir: PathBuf,
     common_dir: PathBuf,
     plan: Option<Vec<RebaseStep>>,
+    budget: crate::process::PromptScope,
 }
 
 pub struct ActiveMutationGuard<'a> {
@@ -67,6 +68,9 @@ impl EditorRegistry {
     }
 
     pub fn cancel_all(&self) {
+        for mutation in self.active_mutations.lock().unwrap().values() {
+            mutation.budget.cancel();
+        }
         let mut reqs = self.requests.lock().unwrap();
         for (_, request) in reqs.drain() {
             let _ = request.sender.send(None);
@@ -106,6 +110,7 @@ impl EditorRegistry {
                 common_dir: fs::canonicalize(common_dir)
                     .unwrap_or_else(|_| PathBuf::from(common_dir)),
                 plan,
+                budget: crate::process::PromptScope::new(&token),
             },
         );
         ActiveMutationGuard {
@@ -396,12 +401,13 @@ fn handle_connection_within<F, E>(
         registry.requests.lock().unwrap().insert(
             request_id,
             PendingRequest {
-                token: request_token,
+                token: request_token.clone(),
                 sender: tx,
             },
         );
     }
 
+    let _wait = crate::process::prompt_wait(&request_token);
     if emit_prompt(request_id, file_name.to_string(), content_str).is_ok() {
         let response = rx.recv_timeout(Duration::from_secs(90));
         match response {

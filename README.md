@@ -28,7 +28,7 @@ Open **http://127.0.0.1:1420**. The browser preview demonstrates the workspace w
 Install **Git 2.37+** and the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your platform, including stable Rust/Cargo:
 
 - **macOS:** macOS 14+ and Xcode Command Line Tools. The bundled credential manager includes the .NET 10 runtime, which requires macOS 14+. Native window controls overlay the app header.
-- **Windows:** Microsoft C++ Build Tools and WebView2. No POSIX shell assumptions or hard-coded filesystem paths in the backend.
+- **Windows:** Microsoft C++ Build Tools and WebView2. Local Git execution does not require a POSIX shell; SSH repository hosts do.
 - **Linux:** the distribution’s WebKitGTK 4.1 and other Tauri development libraries. See the prerequisites link for your distribution's setup. Window controls are integrated into the app header using Gitty's styling; their placement, order, and visibility follow GTK's system button layout, including changes while running. Drag the header to move the window, double-click it to maximize/restore, or drag an edge/corner to resize. There is no separate native titlebar.
 
 ```sh
@@ -76,7 +76,11 @@ URL clones and explicit fetch/pull/push allow browser sign-in through Git creden
 
 **Settings → Integrations** connects GitHub.com, GitLab.com and Azure DevOps work/school accounts through browser device authorization. A manual access-token fallback also supports Bitbucket Cloud and Azure DevOps personal accounts. Provider accounts authorize repository browsing, explicitly selected native HTTPS clones, and Gitty's pull-request APIs. Ordinary URL cloning and subsequent Git operations retain credential-helper/SSH authentication. OAuth access/refresh tokens and manual tokens live in the OS credential store; only account metadata is stored in app data. Self-hosted account browsing and Bitbucket account-based cloning are not supported. See the [authentication contract](src-tauri/BACKEND.md#remote-tracking-and-authentication) for account storage and provider behavior.
 
-History reads, search, and inspection remain read-only. The **Working changes** graph entry opens staging and commit controls; graph and sidebar action controls provide explicit branch operations. The backend uses the installed Git with separate read/write command contracts and shell-free arguments. Missing objects, unsupported encodings, partial/promisor clones, and process limits return explicit errors.
+History reads, search, and inspection remain read-only. The **Working changes** graph entry opens staging and commit controls; graph and sidebar action controls provide explicit branch operations. The backend uses installed Git with separate read/write contracts and explicit arguments. SSH encodes arguments before the remote login shell parses them and requires POSIX `sh`; tracked-content digests additionally use `mktemp`, `cat`, `rm` and `rmdir` on the host. Missing objects, unsupported encodings, partial/promisor clones, and process limits return explicit errors.
+
+Automatic refresh searches only a bounded history prefix to keep a selection visible; a commit orphaned by reset/rebase remains inspectable without blocking write completion on a full-history scan. Starting a new history walk expires older walk cursors explicitly. Fetch/pull do not overwrite `FETCH_HEAD`; pull integrates its own pinned fetched OID even if background tracking refs move.
+
+For network Git actions, Gitty deliberately overrides custom `core.sshCommand` with its strict-host-key SSH policy (and noninteractive background mode). Put compatible keys, agents and host aliases in `~/.ssh/config`; arbitrary custom SSH command wrappers are not supported. For SSH repository sessions, different textual aliases for the same host/path do not share the app's mutation lock.
 
 ## Stage, review, and commit
 
@@ -238,7 +242,7 @@ src-tauri/
   src/provider_pr.rs             Provider pull-request APIs
   src/provider_repositories.rs   Repository discovery and scoped clone credentials
   src/worktree_files.rs          Guarded discard, ignore, open and reveal actions
-  src/process.rs                 Bounded shell-free process execution
+  src/process.rs                 Bounded process execution and encoded SSH envelopes
   src/stream.rs                  Backpressured Git streams and lifecycle cleanup
   src/wsl.rs                     Windows distribution discovery and Linux browsing
   src/ssh.rs                     SSH connection test and failure mapping

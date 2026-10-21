@@ -33,6 +33,8 @@ Locks are never implicitly overridden, branches are retained, and main/bare
 targets cannot be managed. Prune previews expiry **now**, including recently missing
 registrations, while retaining locked entries and working folders. Exact command
 and error semantics belong in the backend contract.[^backend][^ui][^contract]
+New branch names must pass Git's `check-ref-format --branch` with a successful
+exit status during review and execution; merely launching the check is not validation.[^backend]
 
 Move/removal require closed target sessions; prune refuses open prunable targets.
 Opening/publishing sessions shares the mutation lock, and queued writes recheck

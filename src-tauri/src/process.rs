@@ -1,4 +1,5 @@
-//! All subprocesses have bounded capture, a deadline, controlled stdin and no shell.
+//! Subprocesses have bounded capture, a deadline and controlled stdin. SSH uses
+//! an encoded envelope through the login shell, then a POSIX shell on the host.
 use crate::dto::{Error, RepositoryLocation, Result};
 use std::{
     io::{Read, Seek, SeekFrom, Write},
@@ -19,6 +20,133 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 pub const MUTATION_TIMEOUT: Duration = Duration::from_secs(120);
 /// Checks around a mutation share the mutation lock, not the read deadline.
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+/// Human wait time is excluded only for authenticated, operation-scoped bridge
+/// prompts. A hard wall-clock ceiling still bounds repeated prompts.
+const PROMPT_OVERALL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+#[derive(Default)]
+struct PromptTime {
+    waits: usize,
+    since: Option<Instant>,
+    elapsed: Duration,
+    observers: Vec<std::sync::Weak<PromptClock>>,
+}
+#[derive(Default)]
+struct PromptClock {
+    time: std::sync::Mutex<PromptTime>,
+    cancelled: AtomicBool,
+}
+fn prompt_clocks(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<PromptClock>>> {
+    static CLOCKS: OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<PromptClock>>>,
+    > = OnceLock::new();
+    CLOCKS.get_or_init(Default::default)
+}
+pub(crate) struct PromptScope {
+    token: String,
+    clock: Arc<PromptClock>,
+}
+impl PromptScope {
+    pub(crate) fn new(token: &str) -> Self {
+        let clock = Arc::new(PromptClock::default());
+        prompt_clocks()
+            .lock()
+            .unwrap()
+            .insert(token.into(), Arc::downgrade(&clock));
+        Self {
+            token: token.into(),
+            clock,
+        }
+    }
+    pub(crate) fn cancel(&self) {
+        self.clock.cancelled.store(true, Ordering::Relaxed);
+    }
+}
+impl Drop for PromptScope {
+    fn drop(&mut self) {
+        self.cancel();
+        prompt_clocks().lock().unwrap().remove(&self.token);
+    }
+}
+pub(crate) struct PromptWait(Arc<PromptClock>);
+pub(crate) fn cancel_prompt_scope(token: &str) {
+    if let Some(clock) = prompt_clocks()
+        .lock()
+        .unwrap()
+        .get(token)
+        .and_then(std::sync::Weak::upgrade)
+    {
+        clock.cancelled.store(true, Ordering::Relaxed);
+    }
+}
+pub(crate) fn prompt_wait(token: &str) -> Option<PromptWait> {
+    let clock = prompt_clocks().lock().unwrap().get(token)?.upgrade()?;
+    clock.begin_wait();
+    Some(PromptWait(clock))
+}
+impl Drop for PromptWait {
+    fn drop(&mut self) {
+        self.0.end_wait();
+    }
+}
+impl PromptClock {
+    fn begin_wait(&self) {
+        let mut time = self.time.lock().unwrap();
+        if time.waits == 0 {
+            time.since = Some(Instant::now());
+            time.observers.retain(|observer| {
+                if let Some(observer) = observer.upgrade() {
+                    observer.begin_wait();
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+        time.waits += 1;
+    }
+    fn end_wait(&self) {
+        let mut time = self.time.lock().unwrap();
+        time.waits -= 1;
+        if time.waits == 0 {
+            if let Some(since) = time.since.take() {
+                time.elapsed += since.elapsed();
+            }
+            time.observers.retain(|observer| {
+                if let Some(observer) = observer.upgrade() {
+                    observer.end_wait();
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+    }
+    /// Subscribe a fresh per-command clock. It records the union of all selected
+    /// token waits, starting now, not historical wait credit from an earlier
+    /// command or launch. Budget clocks never subscribe to another budget clock.
+    fn observe(&self, budget: &Arc<PromptClock>) {
+        let mut time = self.time.lock().unwrap();
+        time.observers
+            .retain(|observer| observer.strong_count() > 0);
+        if time.waits > 0 {
+            budget.begin_wait();
+        }
+        time.observers.push(Arc::downgrade(budget));
+    }
+    fn elapsed(&self) -> Duration {
+        let time = self.time.lock().unwrap();
+        time.elapsed + time.since.map(|since| since.elapsed()).unwrap_or_default()
+    }
+}
+fn execution_expired(
+    elapsed: Duration,
+    paused: Duration,
+    execution: Duration,
+    overall: Duration,
+) -> bool {
+    elapsed.saturating_sub(paused) > execution || elapsed > overall
+}
 // Test-only, per-thread process-launch counter. Tests run on parallel threads, so
 // a thread-local (propagated into `parallel` workers) keeps counts uncontaminated.
 #[cfg(test)]
@@ -115,26 +243,56 @@ fn ssh_control_dir() -> PathBuf {
         .get()
         .cloned()
         .unwrap_or_else(temp_control_dir);
-    private_dir(&dir);
     dir
 }
 /// The per-process directory used when no app-data directory is configured or when
 /// that directory is too long for a socket path.
 fn temp_control_dir() -> PathBuf {
-    std::env::temp_dir().join(format!("gitty-ssh-{}", std::process::id()))
+    static TEMP: OnceLock<Option<tempfile::TempDir>> = OnceLock::new();
+    TEMP.get_or_init(|| {
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("gs-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        builder.tempdir().ok()
+    })
+    .as_ref()
+    .map(|dir| dir.path().to_path_buf())
+    // Deliberately unusable when private directory creation failed: the
+    // transport will omit multiplexing rather than use a shared directory.
+    .unwrap_or_else(|| std::env::temp_dir().join("gitty-control-unavailable".repeat(100)))
 }
 /// Creates `dir` if needed and keeps it user-only: sockets here grant access to the
 /// user's authenticated sessions.
-fn private_dir(dir: &std::path::Path) {
-    if dir.exists() {
-        return;
-    }
-    let _ = std::fs::create_dir_all(dir);
+fn private_dir(dir: &std::path::Path) -> bool {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
     }
+    if let Err(error) = builder.create(dir) {
+        if error.kind() != std::io::ErrorKind::AlreadyExists {
+            return false;
+        }
+    }
+    let Ok(metadata) = std::fs::symlink_metadata(dir) else {
+        return false;
+    };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        return metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o077 == 0;
+    }
+    #[cfg(not(unix))]
+    true
 }
 /// The kernel rejects a Unix socket path past `sun_path` (104 bytes on macOS, 108
 /// on Linux), and OpenSSH also appends `.XXXXXXXXXX` while it creates the listening
@@ -167,15 +325,14 @@ fn control_path_in(
 ) -> Option<PathBuf> {
     let name = control_name(destination);
     let candidate = preferred.join(&name);
-    if candidate.as_os_str().len() <= MAX_CONTROL_PATH {
+    if candidate.as_os_str().len() <= MAX_CONTROL_PATH && private_dir(preferred) {
         return Some(candidate);
     }
     let candidate = fallback.join(name);
     if candidate.as_os_str().len() > MAX_CONTROL_PATH {
         return None;
     }
-    private_dir(fallback);
-    Some(candidate)
+    private_dir(fallback).then_some(candidate)
 }
 /// One `-o` value. OpenSSH parses each `-o` as a configuration line and splits it
 /// on whitespace, so a value that contains a space (macOS app-data paths do) must be
@@ -200,10 +357,17 @@ fn valid_env_key(key: &str) -> bool {
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
-/// The one string the remote login shell parses. Every word is single-quoted and
-/// environment is passed as `env` assignments, because SSH forwards neither the
-/// local environment nor a pre-split argv.
+/// POSIX script decoded only by the explicitly invoked host `sh`, never passed
+/// literally to the login shell (notably, tcsh does not quote newlines like sh).
 fn ssh_script(env: &[(String, String)], words: &[String]) -> Result<String> {
+    if env.iter().any(|(_, value)| value.contains('\0'))
+        || words.iter().any(|word| word.contains('\0'))
+    {
+        return Err(Error::new(
+            "invalidRequest",
+            "Remote arguments cannot contain NUL.",
+        ));
+    }
     let mut parts: Vec<String> = Vec::new();
     if !env.is_empty() {
         parts.push("env".into());
@@ -283,9 +447,28 @@ pub(crate) fn ssh_command(location: &RepositoryLocation) -> Result<Command> {
     cmd.arg("--").arg(destination);
     Ok(cmd)
 }
-/// Runs a word list on the remote host through `sh -c`, so fish/csh startup files
-/// cannot reinterpret Git's arguments. Only validated values and Git arguments
-/// reach this function.
+/// ASCII-only outer envelope: the login shell sees no user-controlled quoting,
+/// newlines, history expansion, substitutions or metacharacters. POSIX printf
+/// decodes octal bytes without Python/base64 and without consuming binary stdin.
+fn ssh_envelope(script: &str) -> Result<String> {
+    use std::fmt::Write;
+    let mut envelope = String::from("sh -c 'eval \"$(printf \"");
+    for byte in script.bytes() {
+        write!(envelope, "\\{byte:03o}").expect("writing to String");
+    }
+    envelope.push_str("\")\"'");
+    // OpenSSH forwards one argument. Bound the expanded ASCII command, not the
+    // original argv: Windows has a ~32K command line and Linux a 128K argument.
+    let limit = if cfg!(windows) { 24 * 1024 } else { 96 * 1024 };
+    if envelope.len() > limit {
+        return Err(Error::new(
+            "inputLimit",
+            "Encoded SSH command exceeds the platform command-line budget; narrow the request.",
+        ));
+    }
+    Ok(envelope)
+}
+/// Runs a word list on the remote host with an encoded login-shell envelope.
 pub(crate) fn ssh_exec(
     location: &RepositoryLocation,
     env: &[(String, String)],
@@ -293,11 +476,7 @@ pub(crate) fn ssh_exec(
 ) -> Result<Command> {
     let script = ssh_script(env, words)?;
     let mut cmd = ssh_command(location)?;
-    // OpenSSH joins the remote argv with spaces and lets the login shell split it,
-    // so `sh -c` and the script must be one word. As separate arguments they would
-    // arrive as `sh -c env 'A=B' 'git' …`, and that inner shell would run only `env`.
-    // Quoting the script again keeps every remote word literal through that join.
-    cmd.arg(format!("sh -c {}", crate::askpass::shell_quote(&script)));
+    cmd.arg(ssh_envelope(&script)?);
     Ok(cmd)
 }
 
@@ -468,6 +647,45 @@ fn run_with_timeout(command: &mut Command, timeout: Duration) -> Result<Output> 
     run_with_stdin(command, timeout, Stdio::null())
 }
 fn run_with_stdin(command: &mut Command, timeout: Duration, stdin: Stdio) -> Result<Output> {
+    run_with_stdin_budget(command, timeout, PROMPT_OVERALL_TIMEOUT, stdin)
+}
+fn run_with_stdin_budget(
+    command: &mut Command,
+    timeout: Duration,
+    overall: Duration,
+    stdin: Stdio,
+) -> Result<Output> {
+    // Native bridge tokens live in env; WSL forwards them as env argv. Never
+    // recognize arbitrary/global tokens, only currently registered scopes.
+    let tokens = command
+        .get_envs()
+        .filter_map(|(key, value)| {
+            matches!(
+                key.to_str(),
+                Some("GITTY_ASKPASS_TOKEN" | "GITTY_EDITOR_TOKEN")
+            )
+            .then(|| value.and_then(|value| value.to_str()).map(String::from))
+            .flatten()
+        })
+        .chain(
+            command
+                .get_args()
+                .filter_map(|arg| arg.to_str())
+                .filter_map(|arg| {
+                    arg.strip_prefix("GITTY_ASKPASS_TOKEN=")
+                        .or_else(|| arg.strip_prefix("GITTY_EDITOR_TOKEN="))
+                        .map(String::from)
+                }),
+        );
+    let clocks: Vec<_> = tokens
+        .filter_map(|token| {
+            prompt_clocks()
+                .lock()
+                .unwrap()
+                .get(&token)
+                .and_then(std::sync::Weak::upgrade)
+        })
+        .collect();
     let trace = std::env::var_os("GITTY_TRACE_PROCESS").is_some();
     let launched = Instant::now();
     command
@@ -506,20 +724,49 @@ fn run_with_stdin(command: &mut Command, timeout: Duration, stdin: Stdio) -> Res
     let out = thread::spawn(move || capture(stdout, a));
     let err = thread::spawn(move || capture(stderr, b));
     let start = Instant::now();
+    let budget = Arc::new(PromptClock::default());
+    for clock in &clocks {
+        clock.observe(&budget);
+    }
     let mut failure = None;
     let mut exited = None;
     let mut nap = Duration::from_millis(1);
     let status = loop {
-        if overflow.load(Ordering::Relaxed) || start.elapsed() > timeout {
+        let paused = budget.elapsed();
+        let cancelled = clocks
+            .iter()
+            .any(|clock| clock.cancelled.load(Ordering::Relaxed));
+        let exceeded = execution_expired(
+            start.elapsed(),
+            paused,
+            timeout,
+            if clocks.is_empty() { timeout } else { overall },
+        );
+        if overflow.load(Ordering::Relaxed) || exceeded || cancelled {
             failure = Some(if overflow.load(Ordering::Relaxed) {
                 Error::new(
                     "outputLimit",
                     "Git output exceeded the 32 MiB per-stream limit; narrow the request",
                 )
+            } else if cancelled {
+                Error::new(
+                    "cancelled",
+                    "The prompt operation was cancelled; refresh before another action.",
+                )
             } else {
                 Error::new(
                     "timeout",
-                    format!("Command exceeded its {} ms deadline", timeout.as_millis()),
+                    if !clocks.is_empty() && start.elapsed() > overall {
+                        format!(
+                            "Command exceeded its {} ms overall deadline (including prompts)",
+                            overall.as_millis()
+                        )
+                    } else {
+                        format!(
+                            "Command exceeded its {} ms execution deadline",
+                            timeout.as_millis()
+                        )
+                    },
                 )
             });
             #[cfg(unix)]
@@ -610,7 +857,17 @@ pub fn git(location: &RepositoryLocation, args: &[String]) -> Result<Output> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Contract {
     Read,
+    ReadDigest,
     Mutation,
+}
+/// Reduce a potentially large read on the SSH host before transport. The
+/// producer's exit status is recorded separately: POSIX pipelines alone would
+/// silently accept a partial diff when only hash-object succeeds.
+pub(crate) fn git_digest_command(
+    location: &RepositoryLocation,
+    args: &[String],
+) -> Result<Command> {
+    command(location, args, Contract::ReadDigest, &[])
 }
 pub(crate) fn git_command(location: &RepositoryLocation, args: &[String]) -> Result<Command> {
     command(location, args, Contract::Read, &[])
@@ -683,7 +940,7 @@ fn command_inner(
     identity: &[(&str, &str)],
     extra_env: &[(String, String)],
 ) -> Result<Command> {
-    let read = contract == Contract::Read;
+    let read = contract != Contract::Mutation;
     if let RepositoryLocation::Native { path } = location {
         if path.to_ascii_lowercase().starts_with("\\\\wsl") {
             return Err(Error::new(
@@ -813,6 +1070,12 @@ fn command_inner(
             crate::dto::validate_ssh_path(path)?;
             let mut words = vec!["git".to_string()];
             words.extend(git_args);
+            if contract == Contract::ReadDigest {
+                let script = "tmp=$(mktemp -d) || exit 1\ntrap 'rm -f \"$tmp/status\"; rmdir \"$tmp\"' 0\ntrap 'exit 1' 1 2 15\n( \"$@\"; printf '%s\\n' \"$?\" > \"$tmp/status\" ) | git hash-object --stdin\nresult=$?\ntest \"$(cat \"$tmp/status\")\" = 0 || exit 1\nexit \"$result\"";
+                let mut wrapper = args(&["sh", "-c", script, "gitty-digest"]);
+                wrapper.extend(words);
+                words = wrapper;
+            }
             ssh_exec(location, &vars, &words)?
         }
     };
@@ -884,6 +1147,220 @@ pub fn validate_distribution(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(unix)]
+    fn ssh_encoded_envelope_survives_sh_and_tcsh_with_binary_stdin() {
+        let hostile = "é\n'; touch INJECTED; #\n$(touch INJECTED) `touch INJECTED` ! $HOME \\\"";
+        let script = ssh_script(
+            &[("HOSTILE".into(), hostile.into())],
+            &args(&[
+                "sh",
+                "-c",
+                "printf '%s\\0%s\\0' \"$HOSTILE\" \"$1\"; cat",
+                "_",
+                hostile,
+            ]),
+        )
+        .unwrap();
+        let envelope = ssh_envelope(&script).unwrap();
+        assert!(!envelope.contains('\n'));
+        assert!(!envelope.contains('!'));
+        for shell in ["sh", "tcsh"] {
+            if Command::new(shell)
+                .arg("-c")
+                .arg("exit 0")
+                .status()
+                .is_err()
+            {
+                continue;
+            }
+            let dir = tempfile::tempdir().unwrap();
+            let mut command = Command::new(shell);
+            command.arg("-c").arg(&envelope).current_dir(dir.path());
+            let binary = b"\0\xff\ninput\0";
+            let output = run_with_input_for(command, binary, CHECK_TIMEOUT, 1024).unwrap();
+            assert!(
+                output.success,
+                "{shell}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                output.stdout,
+                [hostile.as_bytes(), b"\0", hostile.as_bytes(), b"\0", binary].concat()
+            );
+            assert!(!dir.path().join("INJECTED").exists());
+            if Command::new("python3").arg("--version").output().is_ok() {
+                // The real multiline conflict helper must survive a tcsh login
+                // parse too, with its JSON + arbitrary binary stdin unchanged.
+                let path = "conflict\nfile";
+                std::fs::write(dir.path().join(path), b"old").unwrap();
+                let request = serde_json::json!({"root": dir.path(), "path": path, "action": "write", "expected": {"kind": "file", "bytes": [111,108,100]}, "executable": false});
+                let mut input = serde_json::to_vec(&request).unwrap();
+                input.push(b'\n');
+                input.extend_from_slice(binary);
+                let helper = ssh_script(
+                    &[],
+                    &args(&["python3", "-c", crate::conflicts::REMOTE_FILE]),
+                )
+                .unwrap();
+                let mut command = Command::new(shell);
+                command.arg("-c").arg(ssh_envelope(&helper).unwrap());
+                let output = run_with_input_for(command, &input, CHECK_TIMEOUT, 8192).unwrap();
+                assert!(
+                    output.success,
+                    "{shell}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert_eq!(std::fs::read(dir.path().join(path)).unwrap(), binary);
+            }
+        }
+        assert_eq!(
+            ssh_envelope(&"x".repeat(100 * 1024)).unwrap_err().code,
+            "inputLimit"
+        );
+        assert_eq!(
+            ssh_script(&[], &args(&["a\0b"])).unwrap_err().code,
+            "invalidRequest"
+        );
+    }
+    #[test]
+    #[cfg(unix)]
+    fn ssh_control_directory_rejects_symlinks_and_public_permissions() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("link");
+        symlink(dir.path(), &link).unwrap();
+        assert!(!private_dir(&link));
+        let public = dir.path().join("public");
+        std::fs::create_dir(&public).unwrap();
+        std::fs::set_permissions(&public, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(!private_dir(&public));
+        assert!(private_dir(&temp_control_dir()));
+    }
+    #[test]
+    #[cfg(unix)]
+    fn execution_budget_excludes_only_scoped_prompt_waits() {
+        assert!(
+            execution_expired(
+                Duration::from_millis(100),
+                Duration::from_millis(100),
+                Duration::from_millis(20),
+                Duration::from_millis(80)
+            ),
+            "prompt time cannot exceed the overall ceiling"
+        );
+        let token = uuid::Uuid::new_v4().to_string();
+        let scope = PromptScope::new(&token);
+        let dir = tempfile::tempdir().unwrap();
+        let ready = dir.path().join("ready");
+        let done = dir.path().join("done");
+        let prompt_token = token.clone();
+        let prompt_ready = ready.clone();
+        let prompt_done = done.clone();
+        // The first authenticated prompt is already pending as its helper
+        // launches. Its *current* wait may pause the new command, but past wait
+        // credit must not. This also isolates tiny scaled execution budgets from
+        // OS executable-approval delays before the helper signals readiness.
+        let first_wait = prompt_wait(&token).unwrap();
+        let prompts = thread::spawn(move || {
+            // Start only once this child is running. Independent sleeps could
+            // finish during a slow spawn, testing historical credit instead.
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !prompt_ready.exists() {
+                assert!(Instant::now() < deadline, "child did not signal readiness");
+                thread::sleep(Duration::from_millis(5));
+            }
+            thread::sleep(Duration::from_millis(600));
+            drop(first_wait);
+            thread::sleep(Duration::from_millis(20));
+            let second_wait = prompt_wait(&prompt_token).unwrap();
+            thread::sleep(Duration::from_millis(600));
+            drop(second_wait);
+            thread::sleep(Duration::from_millis(20));
+            std::fs::write(prompt_done, b"done").unwrap();
+        });
+        let mut command = Command::new("sh");
+        command
+            // Builtins only: no repeated helper launches in the handshake loop.
+            .arg("-c")
+            .arg(format!(
+                "printf ready > {}; while [ ! -f {} ]; do :; done",
+                crate::askpass::shell_quote(ready.to_str().unwrap()),
+                crate::askpass::shell_quote(done.to_str().unwrap())
+            ))
+            .env("GITTY_EDITOR_TOKEN", &token);
+        let result = run_with_timeout(&mut command, Duration::from_secs(1));
+        prompts.join().unwrap();
+        assert!(result.unwrap().success);
+        let other_token = uuid::Uuid::new_v4().to_string();
+        let _other_scope = PromptScope::new(&other_token);
+        let other_wait = prompt_wait(&other_token).unwrap();
+        let mut hung = Command::new("sleep");
+        hung.arg("5").env("GITTY_EDITOR_TOKEN", &token);
+        assert_eq!(
+            run_with_timeout(&mut hung, Duration::from_millis(40))
+                .err()
+                .unwrap()
+                .code,
+            "timeout"
+        );
+        drop(other_wait); // another operation's prompt never pauses this command
+        let wait = prompt_wait(&token).unwrap();
+        let mut overall = Command::new("sleep");
+        overall.arg("5").env("GITTY_EDITOR_TOKEN", &token);
+        let error = run_with_stdin_budget(
+            &mut overall,
+            Duration::from_millis(40),
+            Duration::from_millis(120),
+            Stdio::null(),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.code, "timeout");
+        assert!(error.message.contains("overall deadline"));
+        drop(wait);
+        scope.cancel();
+        let mut cancelled = Command::new("sleep");
+        cancelled.arg("5").env("GITTY_EDITOR_TOKEN", &token);
+        assert_eq!(
+            run_with_timeout(&mut cancelled, Duration::from_secs(5))
+                .err()
+                .unwrap()
+                .code,
+            "cancelled"
+        );
+    }
+    #[test]
+    fn prompt_budget_starts_fresh_and_combines_overlapping_scoped_waits() {
+        let first = Arc::new(PromptClock::default());
+        let second = Arc::new(PromptClock::default());
+        first.time.lock().unwrap().elapsed = Duration::from_secs(90);
+        first.begin_wait();
+        first.time.lock().unwrap().since = Some(Instant::now() - Duration::from_secs(10));
+        let observed = Instant::now();
+        let budget = Arc::new(PromptClock::default());
+        first.observe(&budget);
+        {
+            let time = budget.time.lock().unwrap();
+            assert_eq!(time.elapsed, Duration::ZERO);
+            assert_eq!(time.waits, 1);
+            assert!(
+                time.since.unwrap() >= observed,
+                "pre-launch wait must not grant historical credit"
+            );
+        }
+        second.observe(&budget);
+        second.begin_wait();
+        second.begin_wait(); // nested prompts on one token remain one interval
+        assert_eq!(budget.time.lock().unwrap().waits, 2);
+        first.end_wait();
+        assert_eq!(budget.time.lock().unwrap().waits, 1);
+        second.end_wait();
+        assert_eq!(budget.time.lock().unwrap().waits, 1);
+        second.end_wait();
+        assert_eq!(budget.time.lock().unwrap().waits, 0);
+        assert!(budget.time.lock().unwrap().since.is_none());
+    }
     #[test]
     fn non_utf8_metadata_is_never_lossily_aliased() {
         assert_eq!(
@@ -1031,10 +1508,12 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn ssh_control_paths_fit_the_socket_limit_and_stay_per_destination() {
+        use std::os::unix::fs::PermissionsExt;
         let long = std::path::Path::new(
             "/home/someone/with/a/very/long/home/directory/Library/Application Support/app.gitty.desktop/ssh",
         );
         let short = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(short.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let fits = |path: &std::path::Path| path.as_os_str().len() <= MAX_CONTROL_PATH;
 
         // A directory that fits is preferred over the temp-directory fallback.

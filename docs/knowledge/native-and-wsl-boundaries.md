@@ -48,8 +48,8 @@ Wayland/X11 GUI behavior requires separate runtime verification.[^windows][^linu
 
 Rust owns repository Git and filesystem work. Native Git uses explicit arguments
 with `git -C`; WSL locations use `wsl.exe --distribution … --exec env … git -C …`
-on Windows; SSH locations send the same script as one quoted `sh -c '…'` remote
-argument, because OpenSSH joins remote arguments before the login shell parses them
+on Windows; SSH locations send an octal-encoded script in one fixed ASCII remote
+envelope, because OpenSSH joins remote arguments before the login shell parses them
 (see [SSH repository transport](ssh-remote-repositories.md)). Native
 locations on `\\wsl…` UNC paths are refused by the process layer; the UI
 must represent them as a distribution plus Linux path. Read and mutation
@@ -89,6 +89,11 @@ hold a per-operation scoped askpass token, not the app token, so prompts end wit
 the operation. The loopback bridges bound pre-authentication input (256-byte
 token, 4 KiB prompt), an absolute 10 s handshake deadline, and 16 concurrent
 connections; helper scripts are removed on window close.[^askpass][^bridge]
+For captured mutations, only authenticated scoped bridge waits pause the 120-second
+execution budget. Per-prompt 90-second deadlines and a hard 30-minute overall
+command ceiling still apply; unbridged signing/helper waits are not paused.[^process][^askpass]
+The per-command clock starts fresh and records the union of overlapping scoped
+waits, never historical wait credit from a previous command or process launch.[^process]
 Each scoped token carries an app-supplied `{repository, operation}` label that the
 `git_askpass_prompt` payload forwards as `context` (null for an unlabelled token), so
 the dialog shows provenance apart from Git's own, hook-influenceable prompt text.[^askpass]
@@ -96,6 +101,8 @@ the dialog shows provenance apart from Git's own, hook-influenceable prompt text
 Background fetch deliberately bypasses the Gitty mutation lock and read deadline:
 it moves only `refs/remotes/*` and must not block local writes behind the network.
 Explicit remote actions still use the lock.[^remote]
+All fetches suppress FETCH_HEAD writes; pull separately pins a random private
+retention ref so concurrent background tracking updates cannot change integration.[^remote]
 Fetch (including background fetch and pull's fetch phase) force-updates only
 remote-tracking refs to follow rewritten remote history; it does not force local
 branches or pushes. WSL failure messages label credential advice as conditional,

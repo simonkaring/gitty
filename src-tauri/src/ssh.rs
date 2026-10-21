@@ -47,7 +47,25 @@ pub fn test(target: SshTarget) -> Result<SshProbe> {
                 path: path.clone(),
             };
             let output = process::run_for(
-                process::git_command(&location, &args(&["rev-parse", "--show-toplevel"]))?,
+                process::git_command(&location, &args(&["rev-parse", "--is-bare-repository"]))?,
+                process::CHECK_TIMEOUT,
+            )?;
+            if !output.success {
+                return Err(failure(&output));
+            }
+            let bare = process::text(output.stdout)?.trim() == "true";
+            let output = process::run_for(
+                process::git_command(
+                    &location,
+                    &args(&[
+                        "rev-parse",
+                        if bare {
+                            "--absolute-git-dir"
+                        } else {
+                            "--show-toplevel"
+                        },
+                    ]),
+                )?,
                 process::CHECK_TIMEOUT,
             )?;
             if !output.success {
