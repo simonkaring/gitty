@@ -15,6 +15,7 @@ export function Worktrees({ session, revision, active, busy, onOpen, onWrite }: 
   const [items, setItems] = useState<Worktree[]>([]);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState<{ action: WorktreeAction; target?: Worktree } | null>(null);
+  const [open, setOpen] = useState(true);
   const sequence = useRef(0);
   const reload = useCallback(async () => {
     const id = ++sequence.current;
@@ -30,21 +31,34 @@ export function Worktrees({ session, revision, active, busy, onOpen, onWrite }: 
     return () => { sequence.current++; window.removeEventListener('focus', refresh); worktreeEvents.removeEventListener('change', refresh); };
   }, [active, revision, reload]);
   const demo = isDemoHandle(session.handle);
-  return <section className="worktrees-section" aria-label="Worktrees">
-    <div className="worktrees-heading"><FolderGit2 size={15} /><strong>Worktrees</strong><span className="count">{items.length}</span><span className="spacer" /><button className="icon-button sm" aria-label="Refresh worktrees" onClick={() => void reload()} disabled={busy}><RefreshCw size={13} /></button><button className="icon-button sm" aria-label="Create worktree" disabled={busy || demo} onClick={() => setEditing({ action: 'create' })}><Plus size={15} /></button></div>
-    {items.map(item => <div className={`ref-action-row worktree-row${item.path === session.root ? ' current' : ''}`} key={item.path}>
-      <button className="ref-item" title={item.path} aria-current={item.path === session.root ? 'true' : undefined} disabled={busy || item.bare || item.prunable !== null} onClick={() => onOpen(worktreeLocation(session.location, item.path))}>
-        {item.path === session.root ? <Check size={14} /> : item.locked !== null ? <LockKeyhole size={14} /> : <FolderGit2 size={14} />}<span><span className="worktree-name">{worktreeName(item.path)}</span><small>{item.bare ? 'Bare repository' : item.branch?.replace('refs/heads/', '') ?? `Detached · ${item.head?.slice(0, 7) ?? 'unborn'}`}{item.prunable !== null ? ' · missing / stale' : ''}{item.locked !== null ? ' · locked' : ''}</small></span>
-      </button>
-      <button className="icon-button sm" aria-label={`Manage worktree ${item.path}`} disabled={busy || demo || item.main || item.bare} onClick={() => setEditing({ action: item.locked !== null ? 'unlock' : 'move', target: item })}>…</button>
-    </div>)}
-    {error && <p className="alert" role="alert">{error}</p>}
-    {demo ? <p className="empty-category">Worktree management requires a real repository in the desktop app.</p> : <button className="text-button worktree-prune" disabled={busy} onClick={() => setEditing({ action: 'prune' })}>Prune stale worktrees…</button>}
-    {editing && <WorktreeDialog key={`${session.handle}:${editing.target?.path ?? editing.action}`} session={session} initial={editing.action} target={editing.target} busy={busy} onWrite={onWrite} onClose={() => setEditing(null)} onComplete={(request, open) => {
-      setEditing(null); worktreeEvents.dispatchEvent(new Event('change')); void reload();
-      if (request.action === 'create' && open) onOpen(worktreeLocation(session.location, request.destination));
+  return <>
+    <details className="reference-group" aria-label="Worktrees" open={open} onToggle={e => setOpen(e.currentTarget.open)}>
+      <summary>
+        <FolderGit2 size={15} aria-hidden="true" />
+        Worktrees
+        <span className="count">{items.length}</span>
+        <span className="reference-group-actions">
+          <button className="icon-button sm" aria-label="Refresh worktrees" title="Refresh worktrees" onClick={e => { e.preventDefault(); e.stopPropagation(); void reload(); }} onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') e.stopPropagation(); }} disabled={busy}><RefreshCw size={13} /></button>
+          <button className="icon-button sm" aria-label="Create worktree" title="Create worktree" disabled={busy || demo} onClick={e => { e.preventDefault(); e.stopPropagation(); setEditing({ action: 'create' }); }} onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') e.stopPropagation(); }}><Plus size={15} /></button>
+        </span>
+      </summary>
+      <div className="reference-tree">
+        {items.map(item => <div className={`ref-action-row worktree-row${item.path === session.root ? ' current' : ''}`} key={item.path}>
+          <button className="ref-item" title={item.path} aria-current={item.path === session.root ? 'true' : undefined} disabled={busy || item.bare || item.prunable !== null} onClick={() => onOpen(worktreeLocation(session.location, item.path))}>
+            {item.path === session.root ? <Check className="current-branch-check" size={14} aria-hidden="true" /> : item.locked !== null ? <LockKeyhole size={14} aria-hidden="true" /> : <FolderGit2 size={14} aria-hidden="true" />}<span><span className="worktree-name">{worktreeName(item.path)}</span><small>{item.bare ? 'Bare repository' : item.branch?.replace('refs/heads/', '') ?? `Detached · ${item.head?.slice(0, 7) ?? 'unborn'}`}{item.prunable !== null ? ' · missing / stale' : ''}{item.locked !== null ? ' · locked' : ''}</small></span>
+          </button>
+          <button className="icon-button sm" aria-label={`Manage worktree ${item.path}`} disabled={busy || demo || item.main || item.bare} onClick={() => setEditing({ action: item.locked !== null ? 'unlock' : 'move', target: item })}>…</button>
+        </div>)}
+        {!items.length && <p className="empty-category">No worktrees</p>}
+        {error && <p className="alert" role="alert">{error}</p>}
+        {demo ? <p className="empty-category">Worktree management requires a real repository in the desktop app.</p> : <button className="text-button worktree-prune" disabled={busy} onClick={() => setEditing({ action: 'prune' })}>Prune stale worktrees…</button>}
+      </div>
+    </details>
+    {editing && <WorktreeDialog key={`${session.handle}:${editing.target?.path ?? editing.action}`} session={session} initial={editing.action} target={editing.target} busy={busy} onWrite={onWrite} onClose={() => setEditing(null)} onComplete={(request, openInTab) => {
+      setEditing(null); setOpen(true); worktreeEvents.dispatchEvent(new Event('change')); void reload();
+      if (request.action === 'create' && openInTab) onOpen(worktreeLocation(session.location, request.destination));
     }} />}
-  </section>;
+  </>;
 }
 
 export function WorktreeDialog({ session, initial, target, busy, onWrite, onClose, onComplete }: {

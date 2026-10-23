@@ -94,3 +94,28 @@ it('shows demo worktrees but disables management', async () => {
     expect(host.textContent).toContain('requires a real repository');
   } finally { await act(async () => root.unmount()); }
 });
+
+it('renders worktrees in a reference-group dropdown with summary actions and toggle support', async () => {
+  const main = { ...target, path: '/repo', branch: 'refs/heads/main', main: true };
+  invoke.mockResolvedValue([main, target]);
+  const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
+  try {
+    await act(async () => root.render(<Worktrees session={session} active revision={0} busy={false} onOpen={vi.fn()} onWrite={vi.fn()} />));
+    const details = host.querySelector<HTMLDetailsElement>('details.reference-group')!;
+    expect(details).not.toBeNull();
+    expect(details.open).toBe(true);
+    const summary = details.querySelector('summary')!;
+    expect(summary.textContent).toContain('Worktrees');
+    expect(summary.querySelector('.count')?.textContent).toBe('2');
+    expect(summary.querySelector('[aria-label="Refresh worktrees"]')).not.toBeNull();
+    expect(summary.querySelector('[aria-label="Create worktree"]')).not.toBeNull();
+    expect(details.querySelector('.reference-tree')).not.toBeNull();
+
+    // Toggle event updates details state
+    await act(async () => {
+      details.open = false;
+      details.dispatchEvent(new Event('toggle'));
+    });
+    expect(details.open).toBe(false);
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
