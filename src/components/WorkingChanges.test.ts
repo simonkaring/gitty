@@ -875,6 +875,36 @@ describe('large working file lists', () => {
       host.remove();
     }
   });
+
+  it('stops correcting a window whose geometry really oscillates', async () => {
+    // Rows whose height depends on what is mounted (and a scrollbar that toggles with it) cannot
+    // be settled by any tolerance: every pass legitimately changes the next. The correction
+    // budget must end that chain instead of letting React abort the view with
+    // "Maximum update depth exceeded".
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const rows = Array.from({ length: 400 }, (_, i) => entry(`src/moved/dir/file-${String(i).padStart(4, '0')}.ts`, '.', 'M'));
+    let passes = 0;
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const box = (top: number, height: number, width = 380) => ({ x: 0, y: top, top, left: 0, right: width, bottom: top + height, width, height, toJSON: () => ({}) });
+      if (this.classList.contains('working-files-list')) return box(0, 600);
+      if (this.classList.contains('working-file-window')) { passes += 1; return box(32, WORKING_FILE_ESTIMATE * rows.length); }
+      if (this.dataset.workingIndex !== undefined) return box(32, passes % 2 === 0 ? 34 : 60);
+      return box(0, 0);
+    });
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => { root.render(createElement(WorkingChanges, { session, status: { entries: rows, head: 'head', headRef: session.headRef, fingerprint: 'oscillating' }, revision: 0, busy: false, onMutation: async () => ({}), loadDiff: async () => diff, onRefresh: async () => {} })); });
+      expect(host.querySelector('.working-file-select')).not.toBeNull();
+      expect(host.querySelectorAll('.working-file').length).toBeLessThan(150);
+      expect(passes).toBeLessThan(20);
+    } finally {
+      rect.mockRestore();
+      await act(async () => { root.unmount(); });
+      host.remove();
+    }
+  });
 });
 
 describe('virtualized diff rows', () => {

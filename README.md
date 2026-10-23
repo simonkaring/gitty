@@ -304,6 +304,12 @@ PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/wor
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/integrations.smoke.mjs
 ```
 
+The working-files fixture also runs in WebKit, which is closer to the macOS/Linux desktop webview; set `SMOKE_BROWSER=webkit` (install the engine once with `npx playwright install webkit`). It defaults to Chromium, where `CHROMIUM_EXECUTABLE_PATH` can point at a system Chrome:
+
+```sh
+SMOKE_BROWSER=webkit PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/working-files.smoke.mjs
+```
+
 ### Historical: Milestone 3 verification
 
 - **68 frontend tests** and **74 Rust tests** passed; Rust tests use real temporary repositories.

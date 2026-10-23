@@ -1,7 +1,10 @@
 // Real variable-height file list with synthetic status/diffs and simulated writes.
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
-const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const engines = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+// The desktop app renders in the platform webview, so the fixture must hold in WebKit as well as
+// Chromium: SMOKE_BROWSER=webkit node src/components/working-files.smoke.mjs
+const engine = process.env.SMOKE_BROWSER === 'webkit' ? 'webkit' : 'chromium';
 const fixture = `
 import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -39,7 +42,7 @@ const server = await createServer({ logLevel: 'error', server: { host: '127.0.0.
 let browser;
 try {
   await server.listen();
-  browser = await chromium.launch({ headless: true, ...(process.env.CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.CHROMIUM_EXECUTABLE_PATH } : {}) });
+  browser = await engines[engine].launch({ headless: true, ...(engine === 'chromium' && process.env.CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.CHROMIUM_EXECUTABLE_PATH } : {}) });
   const page = await browser.newPage({ viewport: { width: 1100, height: 800 }, reducedMotion: 'reduce' });
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(`${server.resolvedUrls.local[0]}working-files-preview`);
@@ -103,5 +106,5 @@ try {
   await page.getByRole('button', { name: 'Stage all (10000)', exact: true }).click();
   assert.equal(await page.evaluate(() => window.writes.at(-1).paths.length), 10000);
   assert.deepEqual(errors, []);
-  console.log('Working-file virtualization smoke passed (synthetic IPC, Chromium).');
+  console.log(`Working-file virtualization smoke passed (synthetic IPC, ${engine}).`);
 } finally { await browser?.close(); await server.close(); }

@@ -9,6 +9,12 @@ export const WORKING_FILE_ESTIMATE = 34;
  * every pass, which can flip the rendered window between two ranges until React aborts the
  * update loop. The diff viewer uses the same tolerance. */
 export const WORKING_FILE_MEASURE_TOLERANCE = 0.5;
+/** Tolerance alone cannot stop a window whose geometry really oscillates (a row whose height
+ * depends on what is mounted, a scrollbar that appears and disappears). Cap the corrections a
+ * single layout generation may make, so the list settles on a stable window instead of
+ * re-rendering until React aborts the update loop. Scrolling, resizing, folding, or a status
+ * refresh starts a fresh budget. */
+export const WORKING_FILE_CORRECTION_BUDGET = 2;
 const OVERSCAN = 12;
 interface FileMetrics { heights: Map<number, number>; offsets: Float64Array; width: number }
 
@@ -39,30 +45,53 @@ export function WorkingFileWindow({ entries, collapsed, layoutKey, children }: {
   const range = window.metrics === metrics ? window : { start: 0, end: Math.min(entries.length, 36) };
   const update = useRef<() => void>(() => {});
   const [, relayout] = useState(0);
+  const corrections = useRef(0);
+  /** Set while we write `scrollTop` ourselves, so the resulting scroll event does not refill the
+   * correction budget. Only a scroll the user (or the browser) caused is a fresh trigger. */
+  const anchoring = useRef(false);
+  const generation = useRef<unknown[]>([entries, layoutKey, collapsed, virtual]);
 
   useLayoutEffect(() => {
     if (!virtual || collapsed) return;
     const node = host.current!;
     const scroller = node.closest<HTMLElement>('.working-files-list')!;
+    // A refresh, fold, or group change is an external trigger and may correct again. This effect
+    // also re-runs when a correction changes the window; that re-run must keep the budget spent.
+    const current = [entries, layoutKey, collapsed, virtual];
+    if (current.some((value, index) => value !== generation.current[index])) {
+      generation.current = current;
+      corrections.current = 0;
+    }
     const groupTop = () => node.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop - scroller.clientTop;
     const measure = () => {
-      let changed = false;
       const width = node.getBoundingClientRect().width;
-      if (metrics.width && width && Math.abs(metrics.width - width) > WORKING_FILE_MEASURE_TOLERANCE) { metrics.heights.clear(); changed = true; }
-      if (width) metrics.width = width;
+      const resized = !!metrics.width && !!width && Math.abs(metrics.width - width) > WORKING_FILE_MEASURE_TOLERANCE;
+      const measured: { index: number; height: number }[] = [];
       for (const row of node.querySelectorAll<HTMLElement>('[data-working-index]')) {
         const index = Number(row.dataset.workingIndex);
         const height = row.getBoundingClientRect().height;
-        if (height > 0 && Math.abs(height - (metrics.heights.get(index) ?? 0)) > WORKING_FILE_MEASURE_TOLERANCE) { metrics.heights.set(index, height); changed = true; }
+        // A resized list re-wraps every label, so every mounted row is worth remeasuring.
+        if (height > 0 && (resized || Math.abs(height - (metrics.heights.get(index) ?? 0)) > WORKING_FILE_MEASURE_TOLERANCE)) measured.push({ index, height });
       }
-      if (!changed) return;
+      if (!resized && !measured.length) return;
+      if (corrections.current >= WORKING_FILE_CORRECTION_BUDGET) return;
+      corrections.current += 1;
+      if (resized) metrics.heights.clear();
+      if (width) metrics.width = width;
+      for (const { index, height } of measured) metrics.heights.set(index, height);
       const top = groupTop();
       const anchor = visibleRows(metrics.offsets, scroller.scrollTop - top, 0, 0, 1).start;
       const oldOffset = metrics.offsets[anchor];
       const average = metrics.heights.size ? [...metrics.heights.values()].reduce((sum, height) => sum + height, 0) / metrics.heights.size : WORKING_FILE_ESTIMATE;
       metrics.offsets = rowOffsets(entries.length, i => metrics.heights.get(i) ?? average);
-      // Keep the first visible file stationary as estimates become measured heights.
-      if (scroller.scrollTop > top && scroller.scrollTop < top + metrics.offsets[entries.length]) scroller.scrollTop += metrics.offsets[anchor] - oldOffset;
+      // Keep the first visible file stationary as estimates become measured heights. Browsers
+      // round scrollTop to device pixels, so a sub-pixel write moves nothing and would only
+      // re-trigger this pass.
+      const shift = metrics.offsets[anchor] - oldOffset;
+      if (Math.abs(shift) > WORKING_FILE_MEASURE_TOLERANCE && scroller.scrollTop > top && scroller.scrollTop < top + metrics.offsets[entries.length]) {
+        anchoring.current = true;
+        scroller.scrollTop += shift;
+      }
       relayout(value => value + 1);
     };
     const sync = () => {
@@ -73,14 +102,24 @@ export function WorkingFileWindow({ entries, collapsed, layoutKey, children }: {
         : visibleRows(metrics.offsets, top, height, OVERSCAN, 4);
       setWindow(current => current.metrics === metrics && current.start === next.start && current.end === next.end ? current : { metrics, ...next });
     };
+    const onScroll = () => {
+      if (anchoring.current) anchoring.current = false;
+      else corrections.current = 0;
+      sync();
+    };
     update.current = sync;
     measure(); sync();
-    scroller.addEventListener('scroll', sync, { passive: true });
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => { measure(); sync(); });
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(records => {
+      // The group or its scroller changing size is an external trigger; a row changing size is
+      // the correction being applied and must not refill the budget.
+      if (records.some(record => record.target === node || record.target === scroller)) corrections.current = 0;
+      measure(); sync();
+    });
     observer?.observe(node);
     observer?.observe(scroller);
     for (const row of node.querySelectorAll<HTMLElement>('[data-working-index]')) observer?.observe(row);
-    return () => { scroller.removeEventListener('scroll', sync); observer?.disconnect(); };
+    return () => { scroller.removeEventListener('scroll', onScroll); observer?.disconnect(); };
   }, [virtual, collapsed, layoutKey, entries, metrics, range.start, range.end, focused]);
 
   useLayoutEffect(() => {
