@@ -876,6 +876,57 @@ describe('large working file lists', () => {
     }
   });
 
+  it('does not refill the correction budget when the list is observed again', async () => {
+    // The window effect re-runs whenever the rendered range moves and re-observes the group and
+    // its scroller, and ResizeObserver reports an initial record for every target it observes.
+    // Treating that record as an external resize refills the correction budget, so a window whose
+    // rows genuinely oscillate schedules one correction after another and React aborts the view.
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const rows = Array.from({ length: 400 }, (_, i) => entry(`src/moved/dir/file-${String(i).padStart(4, '0')}.ts`, '.', 'M'));
+    let passes = 0;
+    const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const box = (top: number, height: number, width = 380) => ({ x: 0, y: top, top, left: 0, right: width, bottom: top + height, width, height, toJSON: () => ({}) });
+      if (this.classList.contains('working-files-list')) return box(0, 600);
+      if (this.classList.contains('working-file-window')) { passes += 1; return box(32, WORKING_FILE_ESTIMATE * rows.length); }
+      if (this.dataset.workingIndex !== undefined) return box(32, passes % 2 === 0 ? 34 : 60);
+      return box(0, 0);
+    });
+    const originalObserver = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      private targets = new Set<Element>();
+      private live = true;
+      private scheduled = false;
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(target: Element) {
+        this.targets.add(target);
+        // One batch per observed set, like a frame's delivery, including the initial record
+        // every newly observed target receives.
+        if (this.scheduled) return;
+        this.scheduled = true;
+        queueMicrotask(() => {
+          this.scheduled = false;
+          if (this.live) this.callback([...this.targets].map(target => ({ target, contentRect: { width: 0, height: 0 } })) as unknown as ResizeObserverEntry[], this as unknown as ResizeObserver);
+        });
+      }
+      unobserve(target: Element) { this.targets.delete(target); }
+      disconnect() { this.live = false; this.targets.clear(); }
+    } as unknown as typeof ResizeObserver;
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => { root.render(createElement(WorkingChanges, { session, status: { entries: rows, head: 'head', headRef: session.headRef, fingerprint: 'reobserved' }, revision: 0, busy: false, onMutation: async () => ({}), loadDiff: async () => diff, onRefresh: async () => {} })); });
+      expect(host.querySelector('.working-file-select')).not.toBeNull();
+      expect(host.querySelectorAll('.working-file').length).toBeLessThan(150);
+      expect(passes).toBeLessThan(30);
+    } finally {
+      globalThis.ResizeObserver = originalObserver;
+      rect.mockRestore();
+      await act(async () => { root.unmount(); });
+      host.remove();
+    }
+  });
+
   it('stops correcting a window whose geometry really oscillates', async () => {
     // Rows whose height depends on what is mounted (and a scrollbar that toggles with it) cannot
     // be settled by any tolerance: every pass legitimately changes the next. The correction

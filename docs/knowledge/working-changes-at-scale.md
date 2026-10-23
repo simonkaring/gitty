@@ -45,8 +45,13 @@ so a fractional `scrollTop` write cannot re-trigger the pass it came from.
 Tolerance cannot settle geometry that genuinely oscillates (a row whose height
 depends on what is mounted, a scrollbar that toggles with it), so a layout
 generation admits only `WORKING_FILE_CORRECTION_BUDGET` corrections; scrolling,
-an external resize, folding, or a status refresh starts a new one. An unchanged
-path order retains offsets across status refreshes. Folding a large group mounts no file rows while counts, selection,
+an external resize, folding, or a status refresh starts a new one. Only a change
+in the scroller's own size is an external resize: a re-observed target's initial
+record and the group node's own height (which follows the spacer arithmetic) do
+not refill the budget, and the scroll event caused by an anchoring write is
+matched by position instead of being taken for a user scroll. Without those
+guards every correction schedules the next one. An unchanged path order retains
+offsets across status refreshes. Folding a large group mounts no file rows while counts, selection,
 and the preview remain; small groups retain their hidden rows.[^window][^working]
 
 Large groups give the focused row's selection and action buttons tab stops;
@@ -70,10 +75,11 @@ tracked binary patches are digested where the files live; only a bounded Git blo
 digest crosses the channel, and an independently checked producer status rejects
 partial reads. Local/WSL patch hashing and existing untracked hashing are unchanged.[^status][^contract]
 
-The UI regressions use 10,000 entries with stubbed geometry and include two
+The UI regressions use 10,000 entries with stubbed geometry and include three
 windows that must settle instead of re-laying out: sub-pixel noise, which the
-tolerance absorbs, and a material oscillation, which only the correction budget
-can stop. The browser fixture uses real wrapped-row layout, deep selection,
+tolerance absorbs, a material oscillation, which only the correction budget
+can stop, and a re-observed window whose initial observer records must not
+refill that budget. The browser fixture uses real wrapped-row layout, deep selection,
 simulated writes, keyboard/focus, folding, narrow resizing, and unchanged-status
 refresh anchoring, and runs in Chromium or WebKit (`SMOKE_BROWSER=webkit`). The native
 regression uses 2,000 partially staged files in a real temporary repository and

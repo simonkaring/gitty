@@ -46,9 +46,12 @@ export function WorkingFileWindow({ entries, collapsed, layoutKey, children }: {
   const update = useRef<() => void>(() => {});
   const [, relayout] = useState(0);
   const corrections = useRef(0);
-  /** Set while we write `scrollTop` ourselves, so the resulting scroll event does not refill the
-   * correction budget. Only a scroll the user (or the browser) caused is a fresh trigger. */
-  const anchoring = useRef(false);
+  /** The scroll position we wrote ourselves. Its scroll event (browsers can deliver more than
+   * one, and may clamp the value) must not refill the correction budget; a scroll the user or
+   * the browser caused is a fresh trigger. */
+  const anchored = useRef<number | null>(null);
+  /** Last seen scroller size. Only a real change is an external resize. */
+  const viewport = useRef({ width: 0, height: 0 });
   const generation = useRef<unknown[]>([entries, layoutKey, collapsed, virtual]);
 
   useLayoutEffect(() => {
@@ -89,8 +92,10 @@ export function WorkingFileWindow({ entries, collapsed, layoutKey, children }: {
       // re-trigger this pass.
       const shift = metrics.offsets[anchor] - oldOffset;
       if (Math.abs(shift) > WORKING_FILE_MEASURE_TOLERANCE && scroller.scrollTop > top && scroller.scrollTop < top + metrics.offsets[entries.length]) {
-        anchoring.current = true;
         scroller.scrollTop += shift;
+        // Read back the value the browser actually accepted (it clamps at the ends) so the
+        // scroll event this write causes is recognised as ours.
+        anchored.current = scroller.scrollTop;
       }
       relayout(value => value + 1);
     };
@@ -103,17 +108,23 @@ export function WorkingFileWindow({ entries, collapsed, layoutKey, children }: {
       setWindow(current => current.metrics === metrics && current.start === next.start && current.end === next.end ? current : { metrics, ...next });
     };
     const onScroll = () => {
-      if (anchoring.current) anchoring.current = false;
-      else corrections.current = 0;
+      const mine = anchored.current !== null && Math.abs(scroller.scrollTop - anchored.current) <= WORKING_FILE_MEASURE_TOLERANCE;
+      if (!mine) { anchored.current = null; corrections.current = 0; }
       sync();
     };
     update.current = sync;
     measure(); sync();
     scroller.addEventListener('scroll', onScroll, { passive: true });
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(records => {
-      // The group or its scroller changing size is an external trigger; a row changing size is
-      // the correction being applied and must not refill the budget.
-      if (records.some(record => record.target === node || record.target === scroller)) corrections.current = 0;
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => {
+      // Only the scroller's own size is an external viewport change. This effect re-observes its
+      // targets whenever the rendered window moves, and ResizeObserver reports an initial record
+      // for each one; counting those (or the group node, whose height just follows our spacers)
+      // as a resize refills the budget and lets every correction schedule the next one.
+      const width = scroller.clientWidth, height = scroller.clientHeight;
+      if (width > 0 && height > 0 && (Math.abs(width - viewport.current.width) > WORKING_FILE_MEASURE_TOLERANCE || Math.abs(height - viewport.current.height) > WORKING_FILE_MEASURE_TOLERANCE)) {
+        viewport.current = { width, height };
+        corrections.current = 0;
+      }
       measure(); sync();
     });
     observer?.observe(node);
