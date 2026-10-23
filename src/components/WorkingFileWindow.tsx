@@ -4,6 +4,11 @@ import { rowOffsets, visibleRows } from '../model/splitDiff';
 
 export const WORKING_FILES_VIRTUALIZE_ABOVE = 200;
 export const WORKING_FILE_ESTIMATE = 34;
+/** Measured geometry moves by sub-pixel amounts with interface zoom, fractional fonts and
+ * scrollbar rounding. Treating that noise as a new measurement re-lays out and re-renders on
+ * every pass, which can flip the rendered window between two ranges until React aborts the
+ * update loop. The diff viewer uses the same tolerance. */
+export const WORKING_FILE_MEASURE_TOLERANCE = 0.5;
 const OVERSCAN = 12;
 interface FileMetrics { heights: Map<number, number>; offsets: Float64Array; width: number }
 
@@ -43,12 +48,12 @@ export function WorkingFileWindow({ entries, collapsed, layoutKey, children }: {
     const measure = () => {
       let changed = false;
       const width = node.getBoundingClientRect().width;
-      if (metrics.width && width && metrics.width !== width) { metrics.heights.clear(); changed = true; }
+      if (metrics.width && width && Math.abs(metrics.width - width) > WORKING_FILE_MEASURE_TOLERANCE) { metrics.heights.clear(); changed = true; }
       if (width) metrics.width = width;
       for (const row of node.querySelectorAll<HTMLElement>('[data-working-index]')) {
         const index = Number(row.dataset.workingIndex);
         const height = row.getBoundingClientRect().height;
-        if (height > 0 && metrics.heights.get(index) !== height) { metrics.heights.set(index, height); changed = true; }
+        if (height > 0 && Math.abs(height - (metrics.heights.get(index) ?? 0)) > WORKING_FILE_MEASURE_TOLERANCE) { metrics.heights.set(index, height); changed = true; }
       }
       if (!changed) return;
       const top = groupTop();

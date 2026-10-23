@@ -35,7 +35,12 @@ sidebar's shared scroller. Prefix sums of measured variable row heights and a
 measured average (initially a fixed estimate) locate a viewport plus overscan.
 Spacers retain offscreen space; wrapped paths and secondary labels keep their
 natural heights. Measurements anchor the first visible file; resizing discards
-old widths' measurements. An unchanged path order retains offsets across status
+old widths' measurements. Width and row-height changes below
+`WORKING_FILE_MEASURE_TOLERANCE` are ignored, as the diff viewer already does:
+sub-pixel geometry from interface zoom, fractional fonts, and scrollbar rounding
+is not a real measurement, and acting on it re-lays out on every pass and can
+flip the rendered window between two ranges until React aborts with an
+update-depth error. An unchanged path order retains offsets across status
 refreshes. Folding a large group mounts no file rows while counts, selection,
 and the preview remain; small groups retain their hidden rows.[^window][^working]
 
@@ -60,7 +65,8 @@ tracked binary patches are digested where the files live; only a bounded Git blo
 digest crosses the channel, and an independently checked producer status rejects
 partial reads. Local/WSL patch hashing and existing untracked hashing are unchanged.[^status][^contract]
 
-The UI regressions use 10,000 entries with stubbed geometry; the Chromium fixture
+The UI regressions use 10,000 entries with stubbed geometry and include a
+sub-pixel-noisy window that must settle instead of re-laying out; the Chromium fixture
 uses real wrapped-row layout, deep selection, simulated writes, keyboard/focus,
 folding, narrow resizing, and unchanged-status refresh anchoring. The native
 regression uses 2,000 partially staged files in a real temporary repository and
