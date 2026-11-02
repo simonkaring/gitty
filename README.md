@@ -37,7 +37,7 @@ npm run desktop:build           # Production app and platform bundles
 npm run check:rust              # Cargo check (build the frontend first)
 ```
 
-`src-tauri/tauri.conf.json` sets the app identity, window limits, a restrictive CSP (including Gravatar images when enabled), and platform icons. `app-icon.svg` is the editable source; regenerate assets with `npm run tauri -- icon app-icon.svg --output src-tauri/icons`. Release packaging is paused while the app is validated locally. Signed Windows installers and a notarized macOS DMG must be built, verified, and tested on their target platforms before treating the bundles as release-ready. No signing secrets belong in this repository.
+`src-tauri/tauri.conf.json` sets the app identity, window limits, a restrictive CSP (including Gravatar images when enabled), and platform icons. `app-icon.svg` is the editable source; regenerate assets with `npm run tauri -- icon app-icon.svg --output src-tauri/icons`. The titlebar mark in `src/components/AppMark.tsx` mirrors its branch geometry, so update both together. Release packaging is paused while the app is validated locally. Signed Windows installers and a notarized macOS DMG must be built, verified, and tested on their target platforms before treating the bundles as release-ready. No signing secrets belong in this repository.
 
 ## Explore a real repository
 

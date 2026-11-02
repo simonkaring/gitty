@@ -1,6 +1,7 @@
-import { GitBranch, Search } from 'lucide-react';
+import { Search } from 'lucide-react';
 import { useRef, type Dispatch, type SetStateAction } from 'react';
 import { useSettings } from '../model/settings';
+import { AppMark } from './AppMark';
 
 /** Inspector (right pane) width bounds in px. Shared by the workspace, its resizer and the repository pane
  * so keyboard End/Home, clamping and aria-valuemin/max all agree. */
@@ -18,7 +19,7 @@ export function usePaneWidth(name: 'sidebar' | 'inspector', fallback: number, mi
 }
 
 export function Brand({ demo = false }: { demo?: boolean }) {
-  return <div className="brand" data-tauri-drag-region><span className="brand-icon" data-tauri-drag-region><GitBranch size={22} /></span><span data-tauri-drag-region>gitty<span className="brand-period">.</span></span><span className="badge">{demo ? 'DEMO' : 'LOCAL GIT'}</span></div>;
+  return <div className="brand" data-tauri-drag-region><span className="brand-icon" data-tauri-drag-region><AppMark /></span><span data-tauri-drag-region>gitty<span className="brand-period">.</span></span><span className="badge">{demo ? 'DEMO' : 'LOCAL GIT'}</span></div>;
 }
 export function CommandSearchButton({ onClick }: { onClick: () => void }) {
   const isMac = document.documentElement.dataset.platform === 'macos' || /Mac/.test(navigator.platform);
