@@ -42,6 +42,7 @@ const QUIET_COMMANDS = new Set([
   'repository_sync_info',
   'repository_stashes',
   'repository_git_identity',
+  'repository_commit_graph_status',
   'repository_branch_relation',
   'repository_conflict_file',
   'repository_pick',

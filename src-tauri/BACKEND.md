@@ -342,6 +342,42 @@ runtime coverage is not implied by host tests.
 
 ## Write semantics
 
+### Explicit history acceleration
+
+- `repository_commit_graph_status({ handle })` returns the string `present`,
+  `missing`, or `disabled`. The read checks effective Boolean `core.commitGraph`
+  first (`false` takes precedence over an existing file), resolves monolithic
+  `objects/info/commit-graph` and split `objects/info/commit-graphs/commit-graph-chain`
+  paths through `git rev-parse --path-format=absolute --git-path`, and checks
+  effective recursive alternates reported by `git count-objects -v` if the primary
+  store has no graph. It does not walk history, validate graph contents/freshness,
+  or report Bloom-filter coverage. File tests execute on the repository's native,
+  WSL, or SSH machine; remote paths are never inspected on the host filesystem.
+- `repository_write_commit_graph({ handle })` returns `ActionOutput { output: "" }`.
+  This explicit, single-attempt mutation rechecks configuration inside
+  `Service::mutate` and refuses `core.commitGraph=false` with
+  `commitGraphDisabled`. It uses `git_mutation_command` and logs
+  `git commit-graph write --reachable --changed-paths --split` through the same
+  activity-log sink as other writes, with a 15-minute subprocess deadline.
+  Git's default size-tiered split strategy reuses layers for repeated writes;
+  existing layers need not gain filters until Git rewrites them. Only object-store
+  commit-graph metadata is written (including split-chain/layer updates and Git's
+  own lock files). **Refs, index, and working files are untouched**; this action
+  does not run gc, repack, prune objects, fetch, or modify configuration. It does
+  not need a reviewed HEAD/status fingerprint because it cannot overwrite user
+  content or move refs. Bare, linked-worktree, WSL, and SSH repositories are
+  supported; ordinary stage/commit operation-state refusals do not apply.
+  Shallow repositories return `unsupportedShallowCommitGraph` because Git cannot
+  use commit-graphs with shallow boundaries; Gitty does not unshallow or fetch.
+- The client observes first-page history IPC duration independently of snapshot
+  reads. Advice requires missing metadata and at least 300 ms, and is dismissed
+  per canonical repository identity. The palette action is available independently
+  of advice eligibility. The existing mutation lifecycle refreshes after success
+  or failure without retrying; acceleration explicitly starts a new history walk
+  even when refs are unchanged, and success is shown only after reconciliation.
+
+### Ordinary staging and commits
+
 This section describes the ordinary staging/commit API. Graph operations and
 targeted conflict resolutions have the additional contract documented below.
 

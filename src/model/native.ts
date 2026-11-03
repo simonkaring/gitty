@@ -78,6 +78,8 @@ export function validateHistory(commits: CommitSummary[]) {
  * read and only publish once refs agree. */
 export async function readNativeSnapshot(handle: string, options: {
   previous?: Pick<NativeSnapshot, 'state' | 'commits' | 'cursor' | 'generation'>;
+  /** Restart history while retaining the previous loaded count and known anchors. */
+  forceHistory?: boolean;
   /** Automatic keep-visible candidates (selection, scroll anchor). With `previous`, only IDs that were
    * actually in the previous history are kept: an ID outside it, such as an inspector-only orphan, can never
    * be found by walking and would otherwise make every refresh read the entire history. */
@@ -90,6 +92,8 @@ export async function readNativeSnapshot(handle: string, options: {
   remap?: { from: string; to: string };
   current?: () => boolean;
   invoke?: typeof native;
+  /** Client IPC duration of the first history page, excluding snapshot reads. */
+  onFirstHistoryPage?: (millis: number) => void;
 } = {}): Promise<NativeSnapshot> {
   const invoke = options.invoke ?? native;
   const check = () => { if (options.current && !options.current()) throw new Error('Repository request superseded.'); };
@@ -98,7 +102,7 @@ export async function readNativeSnapshot(handle: string, options: {
   };
   for (let attempt = 0; attempt < 3; attempt++) {
     const { state: before, status, operation } = await call<RepositorySnapshot>('repository_snapshot');
-    if (options.previous && before.fingerprint === options.previous.state.fingerprint) {
+    if (options.previous && !options.forceHistory && before.fingerprint === options.previous.state.fingerprint) {
       validateHistory(options.previous.commits);
       return { state: before, status, operation, commits: options.previous.commits, cursor: options.previous.cursor, generation: options.previous.generation };
     }
@@ -118,7 +122,9 @@ export async function readNativeSnapshot(handle: string, options: {
     // write waits for its reconciliation refresh to finish.
     const keepVisibleBudget = count + 200;
     do {
+      const pageStarted = performance.now();
       const page: HistoryPage = await call<HistoryPage>('repository_history', { cursor, limit: 200, query: {} });
+      if (!cursor) options.onFirstHistoryPage?.(performance.now() - pageStarted);
       if (generation && page.generation !== generation) throw new Error('History generation changed during refresh. Retry.');
       if (cursor && cursor === page.cursor) throw new Error('History cursor did not advance. Refresh and retry.');
       generation = page.generation;

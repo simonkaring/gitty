@@ -36,6 +36,8 @@ import { BranchDeleteDialog } from './BranchDeleteDialog';
 import { SearchResults } from './SearchResults';
 import { OriginResetDialog } from './OriginResetDialog';
 import { Worktrees } from './Worktrees';
+import { CommitGraphNotice } from './CommitGraphNotice';
+import { commitGraphCommand } from '../model/commitGraph';
 
 const GROUP_TONE = { staged: 'green', unstaged: 'amber', untracked: 'accent', conflict: 'red' } as const;
 
@@ -84,6 +86,8 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
   const [notice, setNotice] = useState('');
+  const [firstHistoryPageMs, setFirstHistoryPageMs] = useState(0);
+  const [commitGraphBusy, setCommitGraphBusy] = useState(false);
   // Notices are transient toasts; errors stay until dismissed.
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 6000); return () => clearTimeout(timer); }, [notice]);
   const [revision, setRevision] = useState(0);
@@ -185,7 +189,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       opened = await native<RepositoryState>('repository_open', { location });
       if (token !== epoch.current) { void close(opened.session.handle); return; }
       const handle = opened.session.handle;
-      const snapshot = await readNativeSnapshot(handle, { current: () => token === epoch.current });
+      const snapshot = await readNativeSnapshot(handle, { current: () => token === epoch.current, onFirstHistoryPage: setFirstHistoryPageMs });
       const activeOperation = snapshot.operation;
       if (token !== epoch.current) { void close(handle); return; }
       session.current = snapshot.state; setState(snapshot.state); setStatus(snapshot.status); fingerprint.current = snapshot.status.fingerprint; generation.current = snapshot.generation;
@@ -205,7 +209,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   }, [open]);
   /** `replace` is a confirmed rewrite of the tip (an amend): the selection and scroll anchor that were on `from`
    * follow it to `to`, and the history walk looks for `to` rather than the now unreachable `from`. */
-  const refresh = useCallback(async (force = false, replace?: { from: string; to: string }, excludeKeepVisible: string[] = []) => {
+  const refresh = useCallback(async (force = false, replace?: { from: string; to: string }, excludeKeepVisible: string[] = [], reloadHistory = false) => {
     const current = session.current;
     if (!current) return;
     if (!force && (lock.current || mutationLock.current)) return;
@@ -218,6 +222,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       const handle = current.session.handle;
       const snapshot = await readNativeSnapshot(handle, {
         previous: { state: current, commits: history.current, cursor: nextCursor.current, generation: generation.current },
+        forceHistory: reloadHistory,
         preserve: [selectedRef.current, graph.current?.anchor()?.id ?? ''],
         excludeKeepVisible,
         remap: replace,
@@ -234,7 +239,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       operationSig.current = content;
       setOperation(previous => operationChanged || !previous ? activeOperation : previous);
       const { state: updated, status: working } = snapshot;
-      const changed = updated.fingerprint !== current.fingerprint;
+      const changed = reloadHistory || updated.fingerprint !== current.fingerprint;
       const workingChanged = working.fingerprint !== fingerprint.current;
       if (changed) {
         anchor.current = follow(graph.current?.anchor() ?? null);
@@ -372,7 +377,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   /** Same write+refresh lifecycle as `operationWrite`, for the remote/stash
    * IPC contract, which returns Git report text instead of a void result.
    * Callers summarize successful reports for this tab's notifications. */
-  async function remoteWrite(command: string, args: Record<string, unknown>, options: { quiet?: boolean } = {}): Promise<string> {
+  async function remoteWrite(command: string, args: Record<string, unknown>, options: { quiet?: boolean; reloadHistory?: boolean } = {}): Promise<string> {
     const current = session.current;
     if (!current || mutationLock.current || blockedRef.current) throw new Error('Repository mutations are blocked. Refresh successfully before retrying.');
     const token = epoch.current;
@@ -389,7 +394,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     try {
       while (lock.current && isCurrent()) await new Promise(resolve => setTimeout(resolve, 25));
       if (!isCurrent()) throw new Error('Repository session changed.');
-      const outcome = await remoteAndRefresh(current.session.handle, command, args, () => refresh(true), isCurrent);
+      const outcome = await remoteAndRefresh(current.session.handle, command, args, () => refresh(true, undefined, [], options.reloadHistory), isCurrent);
       if (outcome.superseded) throw new Error('Repository session changed.');
       if (fetching && isCurrent()) {
         // A failed pull may have fetched and then refused to integrate; only a
@@ -410,6 +415,16 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       }
       throw e;
     } finally { if (holdsLock && isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
+  }
+  async function speedUpHistory() {
+    if (commitGraphBusy || mutationLock.current || blockedRef.current) return;
+    const handle = session.current?.session.handle;
+    setCommitGraphBusy(true);
+    try {
+      await remoteWrite('repository_write_commit_graph', {}, { reloadHistory: true });
+      if (session.current?.session.handle === handle) setNotice('History accelerated with a commit-graph. Refs and working files are unchanged.');
+    } catch { /* The existing mutation lifecycle owns errors and reconciliation. */ }
+    finally { setCommitGraphBusy(false); }
   }
   /** The last routine refresh, so an SSH session polls on its own slower cadence. */
   const lastRefresh = useRef(0);
@@ -633,6 +648,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     const writeBlocked = mutationBusy || mutationBlocked;
     const { head, headRef } = state.session;
     const repo: PaletteCommand[] = [
+      commitGraphCommand(() => void speedUpHistory(), writeBlocked || commitGraphBusy),
       { id: 'fetch', group: 'Repository', label: 'Fetch', icon: <RefreshCw size={15} />, disabled: writeBlocked, run: () => void runMenuRemote({ kind: 'fetch' }) },
       { id: 'pull', group: 'Repository', label: 'Pull', icon: <Download size={15} />, disabled: writeBlocked || !headRef, run: () => void runMenuRemote({ kind: 'pull', pullMode: DEFAULT_PULL_MODE }) },
       { id: 'push', group: 'Repository', label: 'Push', icon: <Upload size={15} />, disabled: writeBlocked || !headRef, run: () => { if (headRef) void pushFromMenu(headRef); } },
@@ -662,6 +678,8 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       fetchStatus={fetchStatus}
       notify={setNotice} />}
     {active && <>
+      {state && !state.session.shallow && !commitGraphBusy && <CommitGraphNotice key={state.session.handle} handle={state.session.handle} repositoryKey={sessionKey(location, state.session)} active={active} firstPageMs={firstHistoryPageMs} busy={mutationBusy || mutationBlocked} onRun={() => void speedUpHistory()} />}
+      {commitGraphBusy && <Toast tone="progress">Speeding up history… Writing commit-graph and changed-path filters.</Toast>}
       {actionError && <Toast tone="error" onDismiss={() => setActionError('')}>{actionError}</Toast>}
       {error && <Toast tone="error" action={<button className="secondary-button" disabled={busy} onClick={() => state ? void refresh() : void open()}>Retry</button>}>{error}</Toast>}
       {busy && !state && <Toast tone="progress">Opening {locationLabel(location)}…{location.kind === 'wsl' && ' A stopped WSL distribution can take a few seconds to start.'}{location.kind === 'ssh' && ' Connecting over SSH; a sleeping host can take a few seconds.'}</Toast>}

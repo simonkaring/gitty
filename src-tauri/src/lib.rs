@@ -6,6 +6,7 @@ pub mod editor;
 mod clone;
 mod clone_dto;
 mod commit;
+mod commit_graph;
 mod conflicts;
 mod credentials;
 mod diff;
@@ -43,6 +44,27 @@ use tauri::{Emitter, Manager};
 
 type Shared = Arc<Service>;
 type Accounts = Arc<provider_accounts::AccountStore>;
+
+#[tauri::command]
+async fn repository_commit_graph_status(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+) -> Result<commit_graph::CommitGraphStatus> {
+    with_service(state, move |s| s.repo(&handle)?.commit_graph_status()).await
+}
+#[tauri::command]
+async fn repository_write_commit_graph(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+) -> Result<ActionOutput> {
+    with_service(state, move |s| {
+        s.write_commit_graph(&handle)?;
+        Ok(ActionOutput {
+            output: String::new(),
+        })
+    })
+    .await
+}
 
 #[tauri::command]
 async fn repository_worktrees(
@@ -754,6 +776,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            repository_commit_graph_status,
+            repository_write_commit_graph,
             repository_worktrees,
             repository_worktree_review,
             repository_worktree_execute,
