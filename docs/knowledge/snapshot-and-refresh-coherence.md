@@ -20,6 +20,10 @@ sources:
     resource: ../../src/components/RepositoryPane.tsx
   - id: working
     resource: ../../src/components/WorkingChanges.tsx
+  - id: watcher
+    resource: ../../src-tauri/src/watcher.rs
+  - id: policy
+    resource: ../../src/model/autoFetch.ts
 ---
 
 # Snapshot and refresh coherence
@@ -68,6 +72,18 @@ After a branch-deletion result, the pane removes deleted or unverified target OI
 automatic selection/anchor keep-visible candidates before refreshing. Returned
 history remains intact, and explicit reveal/paging behavior is unchanged.[^pane-refresh]
 
+What triggers a routine refresh depends on the session. Native sessions call
+`repository_watch` once a handle exists; while it reports active, the pane
+refreshes on `repository_changed` for its handle, on focus, on activation, and
+on a 60-second safety-net poll. Otherwise (WSL, a failed watcher) it polls every
+five seconds; SSH every 30. Events only schedule `refresh()`, never bypass it:
+an event arriving during a read or write retries after it, a hidden tab or
+window keeps it pending, and bursts collapse into one read. The backend coalesces
+(300 ms quiet, 2 s maximum) and drops only object-store, Git-directory lock,
+access-only and Git-ignored working-path events. Gitty's own optional-lock-free
+reads do not write the index, so they do not trigger events; a real-repository
+test guards that.[^watcher][^policy]
+
 `RepositoryPane` coordinates reads with write completion. File/index-only
 mutations refresh status, falling back to full refresh if HEAD/ref moved;
 commit/amend use full refresh. A failed post-write refresh blocks further
@@ -103,5 +119,10 @@ Related: [mutation safeguards](git-mutation-safeguards.md),
 [^tests]: Scripted snapshot race and keep-visible regressions.
 [^contract]: Read limitations and fingerprint coverage.
 [^pane-refresh]: Deletion-specific exclusion passed to `readNativeSnapshot`.
+[^watcher]: `Watchers::start`, event classification, the coalescing worker, and its
+  real-repository tests (edit, ref change, bursts, ignored paths, own reads, close, linked worktree).
+[^policy]: `routineRefreshInterval` and `createChangeRefresher`, with
+  [autoFetch.test.ts](../../src/model/autoFetch.test.ts) and
+  [RepositoryPane.watch.test.tsx](../../src/components/RepositoryPane.watch.test.tsx) (mocked IPC/events).
 [^working]: [WorkingChanges](../../src/components/WorkingChanges.tsx) and the
   “stable staging updates” regressions in [WorkingChanges.test.ts](../../src/components/WorkingChanges.test.ts).
