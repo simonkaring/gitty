@@ -6,7 +6,7 @@ import { suggestedCloneName, type CloneRequest } from '../model/clone';
 import { locationForPickedFolder } from '../model/wslPath';
 import { Segmented } from './ui';
 import { sshDestination, sshFailureHint, sshLocationFromForm, sshTargetFromForm, type SshLocation, type SshProbe } from '../model/ssh';
-import { RepositoryBrowser } from './RepositoryBrowser';
+import { RepositoryBrowser } from './lazyDialogs';
 import type { ProviderRepository } from '../model/providerRepositories';
 
 /** Lanes for the decorative background graph: [x, fromY, toY, color var]. */

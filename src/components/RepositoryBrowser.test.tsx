@@ -37,6 +37,7 @@ afterEach(async () => { await act(async () => root.unmount()); container.remove(
 async function mount() {
   await act(async () => root.render(<StartPage onOpen={() => {}} onClone={onClone} cloneBusy={false} />));
   await click('Clone');
+  await vi.waitFor(() => expect(container.textContent).not.toContain('Loading repositories…'));
 }
 async function click(text: string) {
   const button = [...container.querySelectorAll('button')].find(value => value.textContent === text);

@@ -1,15 +1,10 @@
-import { useEffect, useRef, useState, type ButtonHTMLAttributes } from 'react';
-import { Settings as SettingsIcon } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { Dialog } from './ui';
 import { DEFAULT_SETTINGS, MONO_FONTS, useSettings } from '../model/settings';
 import { COLOR_KEYS, MAX_CUSTOM_THEMES, MAX_THEME_FILE_BYTES, contrastRatio, exportTheme, importTheme, isColor, validateTheme, type ThemeDefinition } from '../model/themes';
 import { MAX_COMMIT_PROFILES, validateCommitProfile, type CommitProfile } from '../model/commitProfiles';
 import { IntegrationsSettings } from './IntegrationsSettings';
 
-export function SettingsButton({ className = 'icon-button', ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
-  const { openSettings } = useSettings();
-  return <button type="button" className={className} title="Settings (⌘ / Ctrl+,)" aria-label="Open settings" {...props} onClick={() => openSettings()}><SettingsIcon size={18} /></button>;
-}
 const newId = () => `custom-${crypto.randomUUID()}`;
 const sections = ['Appearance', 'Commit profiles', 'Integrations', 'Editor & diffs', 'Workspace reset', 'About / shortcuts'] as const;
 type Section = typeof sections[number];
