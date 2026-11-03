@@ -131,6 +131,11 @@ async function measure(app, repo) {
   for (let i = 0; i < 200 && !pid; i++) { [pid] = pidsOf(app); if (!pid) await sleep(25); }
   if (!pid) throw new Error(`${app.name} did not start`);
   const visual = probeJson('watch', pid, epoch, timeout, settle, threshold);
+  // Without window captures only the first window is known; never report it as completion.
+  if (!visual.captures) {
+    console.warn(`  ! no window captures${visual.error ? `: ${visual.error}` : ''} — grant Screen Recording to the terminal (or ${probe}) to measure visual completion`);
+    visual.completeMs = null;
+  }
   const launchCpuNs = family(pid).cpuNs;
   await sleep(5000);
   const loaded = family(pid);
@@ -143,6 +148,7 @@ async function measure(app, repo) {
     timedOut: visual.timedOut,
     changes: visual.changes,
     captures: visual.captures,
+    captureError: visual.error ?? null,
     launchCpuMs: launchCpuNs / 1e6,
     footprint: loaded.footprint,
     footprintAfterIdle: idle.footprint,
