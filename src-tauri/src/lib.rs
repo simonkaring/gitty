@@ -684,9 +684,34 @@ fn app_window_button_layout(app: tauri::AppHandle) -> String {
     }
 }
 
+/// Repository named on the command line (`gitty <path>`), opened in a tab at startup.
+struct LaunchPath(Option<String>);
+
+/// The first non-option argument, made absolute against the launch directory.
+/// Options such as macOS's `-psn_…` are ignored; the path is validated when opened.
+fn launch_path(
+    args: impl IntoIterator<Item = std::ffi::OsString>,
+    cwd: &std::path::Path,
+) -> Option<String> {
+    let arg = args
+        .into_iter()
+        .skip(1)
+        .find(|arg| !arg.to_string_lossy().starts_with('-'))?;
+    cwd.join(arg).to_str().map(String::from)
+}
+
+#[tauri::command]
+fn app_launch_path(state: tauri::State<'_, LaunchPath>) -> Option<String> {
+    state.0.clone()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let launch = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| launch_path(std::env::args_os(), &cwd));
     tauri::Builder::default()
+        .manage(LaunchPath(launch))
         .setup(|app| {
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             for (_, window) in app.webview_windows() {
@@ -734,6 +759,7 @@ pub fn run() {
             repository_worktree_execute,
             app_window_button_layout,
             app_start_dragging,
+            app_launch_path,
             backend_info,
             list_provider_accounts,
             provider_connect_token,
@@ -796,6 +822,8 @@ pub fn run() {
         .expect("Unable to start Gitty");
 }
 
+#[cfg(test)]
+mod bench_tests;
 #[cfg(test)]
 mod branch_delete_tests;
 #[cfg(test)]

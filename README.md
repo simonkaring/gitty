@@ -41,6 +41,8 @@ npm run check:rust              # Cargo check (build the frontend first)
 
 ## Explore a real repository
 
+To open a repository directly, pass its path when launching the app: `/Applications/Gitty.app/Contents/MacOS/gitty ~/code/project` or `open -a Gitty --args ~/code/project` (use an absolute path with `open`). The path opens in a new tab alongside restored tabs, or focuses its existing tab; an invalid path shows the usual error in that tab.
+
 Run `npm run desktop`, choose **Open repository**, then use the native folder picker, a recent location, **Open over SSH**, or the clone form. **Open over SSH** runs Git on another machine (for example a home PC over Tailscale) with your own `ssh` configuration: give an alias and optional user/port, then browse remote folders or type the absolute repository path, and **Test connection**. It uses the same graph, staging, commit, conflict and fetch/push workflow; opening/revealing files, `.gitignore` appends, worktree move/remove, cloning into that host, and interactive rebase editing are refused with a reason, and conflict editing needs `python3` there. Gitty never answers a password prompt or accepts a host key; trust the host once with `ssh <alias>` first.
 
 A clone targets a selected native folder or the currently browsed WSL folder, reports progress, can be cancelled, and opens the completed repository in a new tab. Clones are full, use the remote's default branch, do not initialize submodules, and copy local-source objects instead of hardlinking them. On Windows, the picker also offers WSL distribution discovery and Linux-directory browsing, and a folder chosen under `\\wsl.localhost\<distribution>\` (or `\\wsl$\`) opens through that distribution's Git. WSL Git runs inside the selected distribution; its conflict editor filesystem helper also requires Python 3. Windows/WSL runtime validation is still pending.
@@ -280,6 +282,16 @@ total time plus mutation-lock waits, without arguments, stdin, or environment
 values. Remove the variable to disable tracing. On Windows, real WSL timing and
 safety tests can be run against temporary repositories with
 `$env:GITTY_WSL_TEST_DISTRO="Ubuntu"; cargo test --manifest-path src-tauri/Cargo.toml wsl_tests -- --nocapture --test-threads=1`.
+
+### Performance benchmarks
+
+```sh
+npm run bench:fixtures -- --real   # Synthetic repositories (+ a git/git clone, ~300 MB)
+npm run bench:backend              # Release-mode timings of Gitty's native reads
+npm run bench:apps                 # macOS: Gitty vs GitKraken launch, memory, idle CPU
+```
+
+Fixtures, the compiled probe and JSON results go to `$TMPDIR/gitty-bench` (override with `GITTY_BENCH_DIR` or `--dir`). `bench:backend` runs the ignored `bench_tests::backend_benchmark` Rust test and reports median wall time and Git processes launched for opening a tab, the five-second refresh snapshot, status, history pages, commit detail/files and search, next to raw `git` floors. `bench:apps` **quits running Gitty and GitKraken instances**, launches each with the repository path (Gitty from `src-tauri/target/release/bundle/macos` when built with `npm run tauri -- build --bundles app`, otherwise `/Applications`), and records first-window time, when the window stops visibly changing, process-family memory footprint and idle CPU including child `git` processes. It needs Screen Recording permission for the terminal. Visual completion is pixel-based and cannot tell a finished graph from a static loading state; check the per-run `changes` in the JSON. Both apps keep their own restored tabs, which affects their startup work.
 
 SSH transport tests use a `ssh` double that joins the remote arguments as OpenSSH does and runs the result through a real shell (Unix only, `src-tauri/src/ssh_tests.rs`); they do not exercise authentication, host keys or a real network. `ssh_test` in the connect form is the manual check for a real host. Testing is local-only for now; pushes and pull requests do not trigger GitHub Actions checks. Run `npm run build` before the Rust checks so the frontend assets are available. For native compilation, run `npm run tauri -- build --no-bundle` on the target platform. Local checks validate the host platform; Windows and Linux runtime behavior require testing on those platforms. Automated cross-platform checks can be introduced in Azure DevOps when needed. The signed-release GitHub workflow has been removed while the app is validated locally.
 

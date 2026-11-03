@@ -3,6 +3,10 @@
 The commands described by `src/model/repository.ts`, `src/model/clone.ts`, `src/model/operations.ts`, and `src/model/worktrees.ts` are registered by `src/lib.rs`. The
 Rust DTOs serialize the same camelCase fields and `{code, message}` errors.
 `backend_info` remains available and reports native capability.
+`app_launch_path() -> string | null` returns the first non-option command-line
+argument, made absolute against the launch directory but not otherwise
+validated; the frontend opens it once per app run as a native tab, and
+`repository_open` reports any error.
 
 Ordinary index/commit writes use these commands:
 

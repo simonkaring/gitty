@@ -19,6 +19,9 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { DEFAULT_BUTTON_LAYOUT, parseWindowButtonLayout, WindowControls, WindowResizeHandles } from './WindowControls';
 import { NARROW_PANE_MAX_WIDTH, setPaneOpen, settleSidePanes, type SidePane } from '../model/paneLayout';
 
+/** A repository named on the command line opens once per app run, not again after leaving the demo. */
+let launchPathHandled = false;
+
 function initialTabsState(demo: boolean): TabsState {
   const persisted = demo ? { tabs: [{ id: 'demo', location: demoLocation(DEMO_REPOS[0].name) }], activeId: 'demo' } : loadPersistedTabs(window.localStorage);
   return {
@@ -99,6 +102,16 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
   useEffect(() => { if (pendingNotice) { notify(pendingNotice); dispatch({ type: 'noticeShown' }); } }, [pendingNotice, notify]);
 
   const openLocation = useCallback((location: RepositoryLocation, fromTabId?: string) => dispatch({ type: 'open', location, fromTabId }), []);
+  useEffect(() => {
+    if (demo || !isTauri() || launchPathHandled) return;
+    let disposed = false;
+    void invoke<string | null>('app_launch_path').then(path => {
+      if (disposed || launchPathHandled) return;
+      launchPathHandled = true;
+      if (path) openLocation({ kind: 'native', path });
+    }).catch(error => { if (!disposed) notify(`Could not read the launch repository: ${errorMessage(error)}`); });
+    return () => { disposed = true; };
+  }, [demo, openLocation, notify]);
   const startClone = useCallback((request: CloneRequest, fromTabId?: string) => {
     if (clone.status === 'running' || clone.status === 'cancelling') return;
     if (demo) { notify('Cloning requires the desktop app.'); return; }

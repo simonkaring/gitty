@@ -21,4 +21,5 @@ okf_version: "0.2"
 # Verification and upkeep
 
 - [Demo and native verification](demo-and-native-verification.md) - Which checks exercise simulated IPC, real Git, or platform runtime behavior.
+- [Performance benchmarks](performance-benchmarks.md) - Backend timing harness, Gitty-versus-GitKraken app comparison, and what each measurement can and cannot show.
 - [Knowledge maintenance](maintenance.md) - How to keep this small source-backed OKF bundle aligned with code and tests.
