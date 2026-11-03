@@ -159,7 +159,7 @@ export async function demoInvoke(command: string, args: Record<string, unknown>)
       if (kind === 'fetch' || kind === 'backgroundFetch') return { output: kind === 'fetch' ? 'Already up to date (demo remote).' : '' };
       return unsupported('pull and push');
     }
-    case 'repository_delete_branch': return unsupported('branch deletion');
+    case 'repository_delete_branch': case 'repository_delete_branches': return unsupported('branch deletion');
     default: return unsupported('this action');
   }
 }

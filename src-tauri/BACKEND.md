@@ -872,6 +872,7 @@ capability is exposed):
 - `repository_resolve_conflict({handle, path, fingerprint, resolution}) -> void`
 - `repository_remotes({handle}) -> RemoteInfo[]`
 - `repository_delete_branch({handle, request}) -> BranchDeleteResult`
+- `repository_delete_branches({handle, request}) -> BranchBatchDeleteResult`
 - `open_external_url({url}) -> void`
 - `editor_reply({requestId, content}) -> void`
 
@@ -911,6 +912,33 @@ note without undoing remote success. Outcomes preserve per-target `deleted`,
 `failed`, `unverified` and `notAttempted` states plus structured errors/notes.
 No deletion is rolled back or automatically retried. Timeouts/capture failures
 remain unverified and require refresh/review.
+
+### Batch branch deletion
+
+`repository_delete_branches` deletes up to 500 branches (sidebar folders) under
+one mutation lock. The strict camelCase request has `branches` (each `branch`
+plus optional `expectedLocalOid`/`expectedOriginOid`), shared `expectedHead`,
+`expectedHeadRef`, `expectedPushUrl`, `deleteLocal`, `deleteOrigin`, and
+`forceLocal`, a list of names from `branches` confirmed for forced local
+deletion. Duplicate names, invalid names, missing OIDs for selected targets, or
+force names outside the request are rejected. The single-branch shared preflight
+(writable, non-bare, no conflicts or operation, pinned HEAD) and, when origin is
+selected, the exact single push URL and non-mirror check run once; failure
+returns an error before any write.
+
+Afterwards each branch is independent: a changed local OID, the checked-out
+branch, a branch checked out in a worktree, or a changed origin tracking OID
+refuses only that branch (origin preflight failure leaves its local target
+`notAttempted`). Local deletion uses the same safe `-d` then guarded `-D` helper
+as single deletion; `-D` is used only for names in `forceLocal`. Origin is never
+attempted for a branch whose local outcome is not `deleted`. Remaining origin
+targets are rechecked, then deleted in one non-atomic `git push --porcelain`
+with one `--force-with-lease=refs/heads/<name>:<oid>` and `:refs/heads/<name>`
+per branch. Each branch's origin status comes from its porcelain line (`-`
+deleted, `!` refused); a failed push with no line for a branch reports the push
+error for it. Tracking-ref cleanup follows the single-branch rule. The result is
+`{branches: [{branch, local, origin}]}` using the single-branch target outcome
+shape. Nothing is rolled back or retried automatically.
 
 ### Operation safety and semantics
 

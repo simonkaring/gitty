@@ -1116,6 +1116,16 @@ button[data-danger='true']:hover:not(:disabled) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.reference-folder-actions {
+  margin-left: auto;
+  flex-shrink: 0;
+  opacity: 0;
+}
+.reference-folder > summary:hover > .reference-folder-actions,
+.reference-folder > summary:focus-within > .reference-folder-actions,
+.reference-folder > summary:focus-visible > .reference-folder-actions {
+  opacity: 1;
+}
 .reference-folder-children {
   margin-left: 8px;
   padding-left: 12px;
@@ -3473,6 +3483,7 @@ button[data-danger='true']:hover:not(:disabled) {
 .branch-delete-review dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 .branch-delete-outcomes { display: grid; gap: 6px; margin-top: 12px; }
 .branch-delete-outcomes ul { display: grid; gap: 6px; margin: 0; padding-left: 16px; overflow-wrap: anywhere; }
+.branch-folder-list { max-height: 220px; overflow-y: auto; font-size: var(--fs-xs); }
 .operation-dialog pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

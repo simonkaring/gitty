@@ -3,6 +3,7 @@ import { Check, ChevronRight, Folder, FolderOpen, FolderGit2, GitBranch, Globe2,
 import type { CommitSummary, RepositoryState } from '../model/repository';
 import { acceptsGraphDrop, graphDropAction, REF_DRAG_TYPE, COMMIT_DRAG_TYPE } from './HistoryGraph';
 import type { ActionContext } from './OperationDialog';
+import { folderLabel, type BranchFolder } from '../model/branchDelete';
 
 interface NativeSidebarProps {
   state: RepositoryState;
@@ -15,6 +16,7 @@ interface NativeSidebarProps {
   onAction: (context: ActionContext) => void;
   folderOpen: Record<string, boolean>;
   onFolderOpen: (key: string, open: boolean) => void;
+  openFolderMenu?: (folder: BranchFolder, x: number, y: number, trigger: HTMLElement) => void;
   worktrees?: ReactNode;
 }
 
@@ -50,7 +52,7 @@ export function buildRefTree(refs: RepositoryState['refs'], prefix: string, remo
   return root;
 }
 
-export function NativeSidebar({ state, commits, filters, busy, reveal, switchBranch, openMenu, onAction, folderOpen, onFolderOpen, worktrees }: NativeSidebarProps) {
+export function NativeSidebar({ state, commits, filters, busy, reveal, switchBranch, openMenu, onAction, folderOpen, onFolderOpen, openFolderMenu, worktrees }: NativeSidebarProps) {
   const { session } = state;
   return <aside className="sidebar native-sidebar" aria-label="Repository references">
     <div className="workspace-label"><FolderGit2 size={22} /><span>{session.name}<small title={session.root}>{session.root}</small></span></div>
@@ -84,11 +86,17 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
           const key = `${session.handle}:${kind}:${[...parts, name].join('/')}`;
           const currentPrefix = kind === 'local' ? session.headRef?.replace(prefix, '') : undefined;
           const initiallyOpen = !!currentPrefix?.startsWith(`${[...parts, name].join('/')}/`);
+          const path = [...parts, name];
+          const folder: BranchFolder | null = kind === 'local' ? { kind: 'local', path: path.join('/') }
+            : kind === 'remote' && path.length > 1 && path[0] === 'origin' ? { kind: 'origin', path: path.slice(1).join('/') } : null;
           return <details className="reference-folder" key={key} open={folderOpen[key] ?? initiallyOpen} onToggle={event => onFolderOpen(key, event.currentTarget.open)}>
-            <summary title={[...parts, name].join('/')}>
+            <summary title={path.join('/')}
+              onContextMenu={folder && openFolderMenu ? event => { event.preventDefault(); openFolderMenu(folder, event.clientX, event.clientY, event.currentTarget); } : undefined}
+              onKeyDown={folder && openFolderMenu ? event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openFolderMenu(folder, rect.left, rect.bottom, event.currentTarget); } } : undefined}>
               <ChevronRight className="reference-folder-chevron" size={12} aria-hidden="true" />
               {kind === 'remote' && parts.length === 0 ? <Globe2 className="reference-folder-icon" size={14} aria-hidden="true" /> : <><Folder className="reference-folder-icon folder-closed" size={14} aria-hidden="true" /><FolderOpen className="reference-folder-icon folder-open" size={14} aria-hidden="true" /></>}
               <span className="reference-folder-name">{name}</span>
+              {folder && openFolderMenu && <button type="button" className="icon-button sm reference-folder-actions" aria-label={`Actions for folder ${folderLabel(folder)}`} aria-haspopup="menu" onClick={event => { event.preventDefault(); event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); openFolderMenu(folder, rect.left, rect.bottom, event.currentTarget); }}>…</button>}
             </summary>
             <div className="reference-folder-children">{renderTree(child, [...parts, name])}</div>
           </details>;

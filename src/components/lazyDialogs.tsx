@@ -16,6 +16,7 @@ export const ConflictEditor = lazyView(() => import('./ConflictEditor').then(m =
 export const PullRequestDialog = lazyView(() => import('./PullRequestDialog').then(m => ({ default: m.PullRequestDialog })));
 export const RemoteStashDialog = lazyView(() => import('./RemoteStashDialog').then(m => ({ default: m.RemoteStashDialog })));
 export const BranchDeleteDialog = lazyView(() => import('./BranchDeleteDialog').then(m => ({ default: m.BranchDeleteDialog })));
+export const BranchFolderDeleteDialog = lazyView(() => import('./BranchFolderDeleteDialog').then(m => ({ default: m.BranchFolderDeleteDialog })));
 export const OriginResetDialog = lazyView(() => import('./OriginResetDialog').then(m => ({ default: m.OriginResetDialog })));
 export const CommandPalette = lazyView(() => import('./CommandPalette').then(m => ({ default: m.CommandPalette })));
 export const SettingsDialog = lazyView(() => import('./Settings').then(m => ({ default: m.SettingsDialog })));

@@ -343,6 +343,19 @@ async fn repository_delete_branch(
     .await
 }
 #[tauri::command]
+async fn repository_delete_branches(
+    state: tauri::State<'_, Shared>,
+    registry: tauri::State<'_, Arc<crate::askpass::AskpassRegistry>>,
+    handle: String,
+    request: branch_delete::BranchBatchDeleteRequest,
+) -> Result<branch_delete::BranchBatchDeleteResult> {
+    let registry = registry.inner().clone();
+    with_service(state, move |s| {
+        s.delete_branches(&handle, request, Some(&registry))
+    })
+    .await
+}
+#[tauri::command]
 async fn repository_conflict_file(
     state: tauri::State<'_, Shared>,
     handle: String,
@@ -883,6 +896,7 @@ pub fn run() {
             repository_branch_relation,
             repository_run_operation,
             repository_delete_branch,
+            repository_delete_branches,
             repository_conflict_file,
             repository_resolve_conflict,
             repository_remotes,

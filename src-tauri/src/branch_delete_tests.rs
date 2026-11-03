@@ -1,5 +1,5 @@
 use crate::{
-    branch_delete::BranchDeleteRequest,
+    branch_delete::{BranchBatchDeleteItem, BranchBatchDeleteRequest, BranchDeleteRequest},
     repository::Service,
     tests::{commit, git, init, open},
 };
@@ -428,4 +428,270 @@ fn origin_delete_uses_a_lease_and_keeps_local_tracking_ref_when_peer_moved() {
     assert_eq!(deleted.origin.unwrap().status, "deleted");
     assert!(git(repo.path(), &["for-each-ref", "refs/remotes/origin/topic"]).is_empty());
     assert!(git(remote.path(), &["for-each-ref", "refs/heads/topic"]).is_empty());
+}
+
+fn batch(
+    state: &crate::dto::RepositoryState,
+    items: &[(&str, Option<&str>, Option<&str>)],
+    delete_local: bool,
+    push_url: Option<&str>,
+    force: &[&str],
+) -> BranchBatchDeleteRequest {
+    BranchBatchDeleteRequest {
+        branches: items
+            .iter()
+            .map(|(branch, local, origin)| BranchBatchDeleteItem {
+                branch: (*branch).into(),
+                expected_local_oid: local.map(Into::into),
+                expected_origin_oid: origin.map(Into::into),
+            })
+            .collect(),
+        expected_head: state.session.head.clone(),
+        expected_head_ref: state.session.head_ref.clone(),
+        expected_push_url: push_url.map(Into::into),
+        delete_local,
+        delete_origin: push_url.is_some(),
+        force_local: force.iter().map(|name| (*name).into()).collect(),
+    }
+}
+
+#[test]
+fn batch_request_is_strict_and_validated_before_writes() {
+    let valid = serde_json::json!({
+        "branches": [{ "branch": "feat/a", "expectedLocalOid": "0123456789012345678901234567890123456789", "expectedOriginOid": null }],
+        "expectedHead": null, "expectedHeadRef": "refs/heads/main", "expectedPushUrl": null,
+        "deleteLocal": true, "deleteOrigin": false, "forceLocal": []
+    });
+    assert!(serde_json::from_value::<BranchBatchDeleteRequest>(valid.clone()).is_ok());
+    let mut invalid = valid;
+    invalid["branches"][0]["surprise"] = serde_json::json!(true);
+    assert!(serde_json::from_value::<BranchBatchDeleteRequest>(invalid).is_err());
+
+    let repo = init();
+    std::fs::write(repo.path().join("base"), "base").unwrap();
+    let tip = commit(repo.path(), "base");
+    git(repo.path(), &["branch", "feat/a", &tip]);
+    let data = tempfile::tempdir().unwrap();
+    let mut service = Service::new(data.path().into());
+    let state = open(&mut service, repo.path());
+    let handle = &state.session.handle;
+    let duplicate = batch(
+        &state,
+        &[("feat/a", Some(&tip), None), ("feat/a", Some(&tip), None)],
+        true,
+        None,
+        &[],
+    );
+    assert_eq!(
+        service
+            .delete_branches(handle, duplicate, None)
+            .unwrap_err()
+            .code,
+        "invalidRequest"
+    );
+    let foreign_force = batch(
+        &state,
+        &[("feat/a", Some(&tip), None)],
+        true,
+        None,
+        &["other"],
+    );
+    assert_eq!(
+        service
+            .delete_branches(handle, foreign_force, None)
+            .unwrap_err()
+            .code,
+        "invalidRequest"
+    );
+    let mut stale = batch(&state, &[("feat/a", Some(&tip), None)], true, None, &[]);
+    stale.expected_head = Some("stale".into());
+    assert_eq!(
+        service
+            .delete_branches(handle, stale, None)
+            .unwrap_err()
+            .code,
+        "staleOperation"
+    );
+    assert_eq!(git(repo.path(), &["rev-parse", "refs/heads/feat/a"]), tip);
+}
+
+#[test]
+fn batch_local_delete_reports_each_branch_and_forces_only_confirmed_names() {
+    let repo = init();
+    std::fs::write(repo.path().join("base"), "base").unwrap();
+    let base = commit(repo.path(), "base");
+    git(repo.path(), &["branch", "feat/merged", &base]);
+    git(repo.path(), &["branch", "feat/stale", &base]);
+    git(repo.path(), &["switch", "-c", "feat/unmerged"]);
+    std::fs::write(repo.path().join("work"), "work").unwrap();
+    let unmerged = commit(repo.path(), "unmerged");
+    git(repo.path(), &["switch", "main"]);
+    let linked = tempfile::tempdir().unwrap();
+    let worktree = linked.path().join("worktree");
+    git(
+        repo.path(),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "feat/used",
+            worktree.to_str().unwrap(),
+        ],
+    );
+    let data = tempfile::tempdir().unwrap();
+    let mut service = Service::new(data.path().into());
+    let state = open(&mut service, repo.path());
+    let handle = &state.session.handle;
+    let items = [
+        ("feat/merged", Some(base.as_str()), None),
+        (
+            "feat/stale",
+            Some("0000000000000000000000000000000000000001"),
+            None,
+        ),
+        ("feat/unmerged", Some(unmerged.as_str()), None),
+        ("feat/used", Some(base.as_str()), None),
+        ("main", Some(base.as_str()), None),
+    ];
+    let result = service
+        .delete_branches(handle, batch(&state, &items, true, None, &[]), None)
+        .unwrap();
+    let status = |name: &str| {
+        let item = result
+            .branches
+            .iter()
+            .find(|item| item.branch == name)
+            .unwrap();
+        let local = item.local.as_ref().unwrap();
+        (
+            local.status,
+            local.error.as_ref().map(|error| error.code.clone()),
+        )
+    };
+    assert_eq!(status("feat/merged"), ("deleted", None));
+    assert_eq!(
+        status("feat/stale"),
+        ("failed", Some("staleOperation".into()))
+    );
+    assert_eq!(
+        status("feat/unmerged"),
+        ("failed", Some("branchNotMerged".into()))
+    );
+    assert_eq!(status("feat/used"), ("failed", Some("branchInUse".into())));
+    assert_eq!(status("main"), ("failed", Some("currentBranch".into())));
+    assert_eq!(
+        git(repo.path(), &["rev-parse", "refs/heads/feat/stale"]),
+        base
+    );
+    assert_eq!(
+        git(repo.path(), &["rev-parse", "refs/heads/feat/unmerged"]),
+        unmerged
+    );
+
+    let forced = service
+        .delete_branches(
+            handle,
+            batch(
+                &state,
+                &[("feat/unmerged", Some(&unmerged), None)],
+                true,
+                None,
+                &["feat/unmerged"],
+            ),
+            None,
+        )
+        .unwrap();
+    assert_eq!(forced.branches[0].local.as_ref().unwrap().status, "deleted");
+    assert!(git(repo.path(), &["for-each-ref", "refs/heads/feat/unmerged"]).is_empty());
+}
+
+#[test]
+fn batch_origin_delete_uses_one_leased_push_and_reports_partial_refusal() {
+    let repo = init();
+    std::fs::write(repo.path().join("base"), "base").unwrap();
+    let base = commit(repo.path(), "base");
+    for branch in ["feat/one", "feat/two", "feat/moved"] {
+        git(repo.path(), &["branch", branch, &base]);
+    }
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "--bare"]);
+    let remote_path = remote.path().to_str().unwrap();
+    git(repo.path(), &["remote", "add", "origin", remote_path]);
+    git(
+        repo.path(),
+        &["push", "origin", "refs/heads/feat/*:refs/heads/feat/*"],
+    );
+    git(repo.path(), &["fetch", "origin"]);
+    let peer = tempfile::tempdir().unwrap();
+    git(
+        peer.path(),
+        &["clone", remote_path, peer.path().to_str().unwrap()],
+    );
+    git(
+        peer.path(),
+        &["switch", "-c", "feat/moved", "--track", "origin/feat/moved"],
+    );
+    git(peer.path(), &["config", "user.name", "Peer"]);
+    git(peer.path(), &["config", "user.email", "peer@example.test"]);
+    std::fs::write(peer.path().join("peer"), "peer").unwrap();
+    let moved = commit(peer.path(), "peer movement");
+    git(
+        peer.path(),
+        &["push", "origin", &format!("{moved}:refs/heads/feat/moved")],
+    );
+
+    let data = tempfile::tempdir().unwrap();
+    let mut service = Service::new(data.path().into());
+    let state = open(&mut service, repo.path());
+    let items = [
+        ("feat/one", Some(base.as_str()), Some(base.as_str())),
+        ("feat/two", Some(base.as_str()), Some(base.as_str())),
+        ("feat/moved", Some(base.as_str()), Some(base.as_str())),
+    ];
+    let result = service
+        .delete_branches(
+            &state.session.handle,
+            batch(&state, &items, true, Some(remote_path), &[]),
+            None,
+        )
+        .unwrap();
+    let origin = |name: &str| {
+        result
+            .branches
+            .iter()
+            .find(|item| item.branch == name)
+            .unwrap()
+            .origin
+            .as_ref()
+            .unwrap()
+    };
+    assert_eq!(origin("feat/one").status, "deleted");
+    assert_eq!(origin("feat/two").status, "deleted");
+    assert_eq!(
+        origin("feat/moved").status,
+        "failed",
+        "{:?}",
+        origin("feat/moved")
+    );
+    assert!(git(
+        remote.path(),
+        &["for-each-ref", "refs/heads/feat/one", "refs/heads/feat/two"]
+    )
+    .is_empty());
+    assert!(git(
+        repo.path(),
+        &["for-each-ref", "refs/remotes/origin/feat/one"]
+    )
+    .is_empty());
+    assert_eq!(
+        git(remote.path(), &["rev-parse", "refs/heads/feat/moved"]),
+        moved
+    );
+    assert_eq!(
+        git(
+            repo.path(),
+            &["rev-parse", "refs/remotes/origin/feat/moved"]
+        ),
+        base
+    );
 }

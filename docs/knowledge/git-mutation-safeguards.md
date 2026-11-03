@@ -20,6 +20,8 @@ sources:
     resource: ../../src-tauri/src/branch_delete.rs
   - id: branch-delete-ui
     resource: ../../src/model/branchDelete.ts
+  - id: branch-folder-dialog
+    resource: ../../src/components/BranchFolderDeleteDialog.tsx
   - id: operations
     resource: ../../src-tauri/src/operations.rs
   - id: operation-tests
@@ -156,6 +158,13 @@ structured for the UI. Deletion refresh excludes removed target tips from
 automatic keep-visible paging while leaving explicit navigation unchanged.[^branch-delete][^branch-delete-ui]
 Origin deletion is centrally gated on a verified `deleted` local outcome, including
 safe/forced commands that succeeded but whose ref was recreated or unreadable.[^branch-delete]
+Sidebar folder deletion uses a separate batch command sharing the same local
+helper and preflight. Whole-request checks fail before writes; afterwards each
+branch is refused or reported on its own. Forced local deletion applies only to
+names explicitly listed after a reviewed `branchNotMerged` refusal, and origin
+targets go out as one leased non-atomic push with per-ref porcelain outcomes.
+See the [batch contract](../../src-tauri/BACKEND.md#batch-branch-deletion) and the
+`batch_*` regressions in `branch_delete_tests.rs`.[^branch-delete][^branch-delete-ui][^branch-folder-dialog]
 
 Origin reset is an explicitly confirmed destructive graph action for the
 checked-out same-named local branch. Review shows the fetched tip, local-only
@@ -193,7 +202,8 @@ publication shares the mutation lock, and queued writes recheck handle validity.
 [^hunk-tests]: Real-repository hunk preservation regressions.
 [^workflow-tests]: Mocked write/refresh lifecycle regressions.
 [^branch-delete]: Dedicated branch deletion preflight and remote/local outcomes.
-[^branch-delete-ui]: Branch target resolution and confirmation request construction.
+[^branch-delete-ui]: Branch and folder target resolution and confirmation request construction.
+[^branch-folder-dialog]: Folder deletion review, skipped branches and single force confirmation for refused unmerged branches.
 [^operations]: Merge message validation, bounded delivery and Git-based continuation.
 [^operation-tests]: Custom merge message, fast-forward, conflict restart and invalid-input regressions.
 [^operation-dialog]: Editable merge message and captured review display.

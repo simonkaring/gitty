@@ -74,6 +74,20 @@ export interface BranchDeleteTargetResult {
 }
 export interface BranchDeleteResult { local: BranchDeleteTargetResult | null; origin: BranchDeleteTargetResult | null }
 export interface BranchDeleteExecution { result: BranchDeleteResult; refreshError?: string }
+export interface BranchBatchDeleteItem { branch: string; expectedLocalOid?: string; expectedOriginOid?: string }
+export interface BranchBatchDeleteRequest {
+  branches: BranchBatchDeleteItem[];
+  expectedHead: string | null;
+  expectedHeadRef: string | null;
+  expectedPushUrl?: string;
+  deleteLocal: boolean;
+  deleteOrigin: boolean;
+  /** Names from `branches` confirmed for forced local deletion. */
+  forceLocal: string[];
+}
+export interface BranchBatchDeleteOutcome extends BranchDeleteResult { branch: string }
+export interface BranchBatchDeleteResult { branches: BranchBatchDeleteOutcome[] }
+export interface BranchBatchDeleteExecution { result: BranchBatchDeleteResult; refreshError?: string }
 
 export interface EditorPromptPayload {
   requestId: number;
@@ -85,6 +99,7 @@ export interface EditorPromptPayload {
  * repository_operation_state({handle}) -> OperationState
  * repository_branch_relation({handle, first, second}) -> [firstOnly, secondOnly]
  * repository_delete_branch({handle, request: BranchDeleteRequest}) -> BranchDeleteResult
+ * repository_delete_branches({handle, request: BranchBatchDeleteRequest}) -> BranchBatchDeleteResult
  * repository_run_operation({handle, request: OperationRequest}) -> OperationResult
  * repository_conflict_file({handle, path}) -> ConflictFile
  * repository_resolve_conflict({handle, path, fingerprint, resolution: ConflictResolution}) -> void
