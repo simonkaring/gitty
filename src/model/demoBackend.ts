@@ -16,7 +16,7 @@ export const DEMO_REPOS = [
 ];
 export const demoLocation = (name: string): RepositoryLocation => ({ kind: 'native', path: `~/Developer/${name}` });
 
-interface DemoRepo { name: string; commits: Commit[]; refs: { name: string; commitId: string; kind: 'local' | 'remote' | 'tag' }[]; head: string; files: DemoFile[]; ahead: number }
+interface DemoRepo { name: string; commits: Commit[]; refs: { name: string; commitId: string; kind: 'local' | 'remote' | 'tag' }[]; head: string; files: DemoFile[]; ahead: number; commitGraph?: boolean }
 const repos = new Map<string, DemoRepo>();
 
 function repo(handle: unknown): DemoRepo {
@@ -64,6 +64,13 @@ export async function demoInvoke(command: string, args: Record<string, unknown>)
       return state(load(match.name));
     }
     case 'repository_state': return state(r());
+    case 'repository_commit_graph_status': return r().commitGraph ? 'present' : 'missing';
+    case 'repository_write_commit_graph': {
+      const repository = r();
+      await new Promise(resolve => setTimeout(resolve, 400));
+      repository.commitGraph = true;
+      return { output: '' };
+    }
     case 'repository_worktrees': { const session = state(r()).session; return [{ path: session.root, head: session.head, branch: session.headRef, bare: false, main: true, locked: null, prunable: null }]; }
     case 'repository_worktree_review': case 'repository_worktree_execute': return unsupported('worktree management');
     case 'repository_operation_state': return demoOperation;

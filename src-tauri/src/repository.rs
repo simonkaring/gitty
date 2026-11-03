@@ -786,6 +786,7 @@ impl Repository {
             cursor,
             generation,
             shallow,
+            first_page_millis: None,
         })
     }
     pub fn commit(&self, revision: &str) -> Result<CommitDetail> {

@@ -28,7 +28,7 @@ export interface CommitDetail extends CommitSummary { body: string; canEditMessa
  * True only on a checked-out branch with no operation/conflicts or containing remote-tracking ref.
  * Remote-tracking refs are local evidence, not proof about the remote; writes recheck eligibility. */
 export interface CommitEditEligibility { canEditMessage: boolean; editDisabledReason: string | null }
-export interface HistoryPage { commits: CommitSummary[]; cursor: string | null; generation: string; shallow: boolean }
+export interface HistoryPage { commits: CommitSummary[]; cursor: string | null; generation: string; shallow: boolean; /** Backend time for the first page of a freshly walked snapshot history. */ firstPageMillis?: number }
 export interface HistoryQuery { branch?: string }
 export interface StatusEntry { path: string; oldPath: string | null; indexStatus: string; worktreeStatus: string; conflicted: boolean; untracked: boolean }
 export interface RepositoryStatus { entries: StatusEntry[]; head: string | null; headRef: string | null; fingerprint: string }
@@ -45,7 +45,7 @@ export interface SearchResult { commits: CommitSummary[]; truncated: boolean }
 export interface RepositoryState { session: RepositorySession; refs: RepositoryRef[]; remotes: string[]; fingerprint: string }
 /** State, status and operation state read together by one command; the service retries until they agree. */
 export interface RepositorySnapshot { state: RepositoryState; status: RepositoryStatus; operation: OperationState; history?: HistoryPage | null }
-export interface SnapshotHistory { fingerprint?: string; previousHead?: string | null; preserve: string[]; preserveLimit: number; remap?: { from: string; to: string } }
+export interface SnapshotHistory { /** Omitted to force a fresh walk. */ fingerprint?: string; previousHead?: string | null; preserve: string[]; preserveLimit: number; remap?: { from: string; to: string } }
 export interface WslDistribution { name: string; running: boolean }
 export interface DirectoryEntry { name: string; path: string }
 export interface RepositoryError { code: string; message: string }

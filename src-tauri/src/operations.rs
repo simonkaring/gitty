@@ -415,12 +415,14 @@ impl Repository {
                     .clone()
                     .filter(|_| request.previous_head != state.session.head);
                 let budget = request.preserve_limit.unwrap_or(400).clamp(200, 20_000);
+                let started = std::time::Instant::now();
                 let mut result = self.history_with_state(
                     None,
                     200,
                     crate::dto::HistoryQuery { branch: None },
                     Some(&state),
                 )?;
+                result.first_page_millis = Some(started.elapsed().as_millis() as u64);
                 loop {
                     for commit in &result.commits {
                         keep.remove(&commit.id);

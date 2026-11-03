@@ -174,6 +174,9 @@ pub struct HistoryPage {
     pub cursor: Option<String>,
     pub generation: String,
     pub shallow: bool,
+    /// Backend time to produce the first page of a freshly walked snapshot history.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_page_millis: Option<u64>,
 }
 #[derive(Debug, Default, Deserialize)]
 pub struct HistoryQuery {

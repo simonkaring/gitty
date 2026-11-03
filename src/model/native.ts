@@ -77,6 +77,8 @@ export function validateHistory(commits: CommitSummary[]) {
  * and retries before publication. Unchanged state reuses the previous opaque generation. */
 export async function readNativeSnapshot(handle: string, options: {
   previous?: Pick<NativeSnapshot, 'state' | 'commits' | 'cursor' | 'generation'>;
+  /** Restart history while retaining the previous loaded count and known anchors. */
+  forceHistory?: boolean;
   /** Automatic keep-visible candidates (selection, scroll anchor). With `previous`, only IDs that were
    * actually in the previous history are kept: an ID outside it, such as an inspector-only orphan, can never
    * be found by walking and would otherwise make every refresh read the entire history. */
@@ -89,6 +91,8 @@ export async function readNativeSnapshot(handle: string, options: {
   remap?: { from: string; to: string };
   current?: () => boolean;
   invoke?: typeof native;
+  /** Time to produce the first history page of a fresh walk, excluding snapshot reads. */
+  onFirstHistoryPage?: (millis: number) => void;
 } = {}): Promise<NativeSnapshot> {
   const invoke = options.invoke ?? native;
   const check = () => { if (options.current && !options.current()) throw new Error('Repository request superseded.'); };
@@ -101,15 +105,16 @@ export async function readNativeSnapshot(handle: string, options: {
     const preserve = (options.preserve ?? []).filter(id => id && id !== WORKING_ID && (!known || known.has(id)) && !excluded.has(id));
     const preserveLimit = Math.max(400, ...preserve.map(id => (known?.get(id) ?? 0) + 400));
     const { state: before, status, operation, history } = await call<RepositorySnapshot>('repository_snapshot', {
-      history: { fingerprint: options.previous?.state.fingerprint, previousHead: options.previous?.state.session.head, preserve, preserveLimit, remap: options.remap },
+      history: { fingerprint: options.forceHistory ? undefined : options.previous?.state.fingerprint, previousHead: options.previous?.state.session.head, preserve, preserveLimit, remap: options.remap },
     });
-    if (options.previous && before.fingerprint === options.previous.state.fingerprint) {
+    if (options.previous && !options.forceHistory && before.fingerprint === options.previous.state.fingerprint) {
       validateHistory(options.previous.commits);
       return { state: before, status, operation, commits: options.previous.commits, cursor: options.previous.cursor, generation: options.previous.generation };
     }
     if (history) {
       if (status.head !== before.session.head || status.headRef !== before.session.headRef) throw new Error('Repository returned inconsistent snapshot HEAD. Refresh to retry.');
       validateHistory(history.commits);
+      if (history.firstPageMillis !== undefined) options.onFirstHistoryPage?.(history.firstPageMillis);
       return { state: before, status, operation, commits: history.commits, cursor: history.cursor, generation: history.generation };
     }
     if (history === null) throw new Error('Repository omitted changed history. Refresh to retry.');
@@ -127,7 +132,9 @@ export async function readNativeSnapshot(handle: string, options: {
     // write waits for its reconciliation refresh to finish.
     const keepVisibleBudget = preserveLimit;
     do {
+      const pageStarted = performance.now();
       const page: HistoryPage = await call<HistoryPage>('repository_history', { cursor, limit: 200, query: {} });
+      if (!cursor) options.onFirstHistoryPage?.(performance.now() - pageStarted);
       if (generation && page.generation !== generation) throw new Error('History generation changed during refresh. Retry.');
       if (cursor && cursor === page.cursor) throw new Error('History cursor did not advance. Refresh and retry.');
       generation = page.generation;
