@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus, GitCommitHorizontal, Globe2, Laptop, LocateFixed, RefreshCw, ScrollText, Search, Tag, Upload, X, ZoomIn, ZoomOut } from 'lucide-react';
-import { CommandPalette, type PaletteCommand } from './CommandPalette';
+import type { PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
 import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
 import { isCancelledSearch } from '../model/searchFlow';
@@ -13,14 +13,11 @@ import { DEFAULT_WORKING_DISCLOSURE, DiffPreview, WorkingChanges, type ActiveDif
 import { writeAndRefresh, type MutationOutcome } from '../model/workflow';
 import { remoteAndRefresh } from '../model/remoteFlow';
 import type { OperationState } from '../model/operations';
-import { OperationDialog, type ActionContext } from './OperationDialog';
-import { ActivityLogDialog } from './ActivityLogDialog';
+import type { ActionContext } from './OperationDialog';
+import { ActivityLogDialog, BranchDeleteDialog, CommandPalette, ConflictEditor, OperationDialog, OriginResetDialog, PullRequestDialog, RemoteStashDialog } from './lazyDialogs';
 import { GraphContextMenu, type MenuTarget } from './GraphContextMenu';
-import { ConflictEditor } from './ConflictEditor';
-import { PullRequestDialog } from './PullRequestDialog';
 import { RepositoryToolbar } from './RepositoryToolbar';
 import { PublishDialog } from './PublishDialog';
-import { RemoteStashDialog } from './RemoteStashDialog';
 import { toggleCommit } from '../model/operationUi';
 import { captureOperation, operationAndRefresh, operationContent } from '../model/operationFlow';
 import { SwitchBlockedDialog } from './SwitchBlockedDialog';
@@ -32,9 +29,7 @@ import { AUTO_FETCH_CHECK, autoFetchDue, backgroundFetchAllowed, isFetchingActio
 import { DEFAULT_PULL_MODE, branchPushRequest, remoteSuccessMessage, needsPublish, type RemoteActionRequest, type SyncInfo } from '../model/remote';
 import { branchDeleteTargets, branchDeleteMessage, type BranchDeleteScope } from '../model/branchDelete';
 import type { BranchDeleteExecution, BranchDeleteRequest, BranchDeleteResult, BranchDeleteTargetResult } from '../model/operations';
-import { BranchDeleteDialog } from './BranchDeleteDialog';
 import { SearchResults } from './SearchResults';
-import { OriginResetDialog } from './OriginResetDialog';
 import { Worktrees } from './Worktrees';
 
 const GROUP_TONE = { staged: 'green', unstaged: 'amber', untracked: 'accent', conflict: 'red' } as const;
