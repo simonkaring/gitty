@@ -47,13 +47,11 @@ const isolatedGitty = (args['gitty-profile'] ?? 'isolated') === 'isolated';
 /** Copy of Gitty with a separate bundle identifier, and so separate WebKit storage. */
 function isolatedCopy(source) {
   const target = join(dir, 'Gitty Bench.app');
-  const executable = 'Contents/MacOS/gitty';
-  if (!existsSync(join(target, executable)) || statSync(join(target, executable)).mtimeMs < statSync(join(source, executable)).mtimeMs) {
-    execFileSync('rm', ['-rf', target]);
-    execFileSync('ditto', [source, target]);
-    execFileSync('plutil', ['-replace', 'CFBundleIdentifier', '-string', 'app.gitty.desktop.bench', join(target, 'Contents/Info.plist')]);
-    execFileSync('codesign', ['--force', '--deep', '--sign', '-', target], { stdio: 'ignore' });
-  }
+  // Refreshed on every run: codesign rewrites the copy, so timestamps can't tell builds apart.
+  execFileSync('rm', ['-rf', target]);
+  execFileSync('ditto', [source, target]);
+  execFileSync('plutil', ['-replace', 'CFBundleIdentifier', '-string', 'app.gitty.desktop.bench', join(target, 'Contents/Info.plist')]);
+  execFileSync('codesign', ['--force', '--deep', '--sign', '-', target], { stdio: 'ignore' });
   return realpathSync(target);
 }
 
