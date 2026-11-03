@@ -53,20 +53,22 @@ it('reports first-page IPC duration without counting snapshot reads', async () =
     expect(observe).toHaveBeenCalledExactlyOnceWith(350);
   } finally { vi.restoreAllMocks(); }
 });
-it('forced history reload retains the previously loaded count despite unchanged refs', async () => {
+it('forced history reload walks fresh history despite unchanged refs', async () => {
   const state = { session: { head: null, headRef: null }, fingerprint: 'refs' } as unknown as RepositoryState;
   const commits = Array.from({ length: 401 }, (_, index) => ({ id: `c${index}`, parents: [], subject: 'Commit', author: 'Ada', email: 'a@example.com', timestamp: 1 }));
-  let page = 0;
-  const invoke = vi.fn(async (command: string) => {
-    if (command === 'repository_snapshot') return { state, status: { head: null, headRef: null }, operation: {} };
-    if (command === 'repository_history') {
-      const start = page++ * 200;
-      return { commits: commits.slice(start, start + 200), cursor: page < 3 ? `page${page}` : null, generation: 'new' };
+  const requests: unknown[] = [];
+  const invoke = vi.fn(async (command: string, args?: { history?: unknown }) => {
+    if (command === 'repository_snapshot') {
+      requests.push(args?.history);
+      return { state, status: { head: null, headRef: null }, operation: {}, history: { commits: commits.slice(0, 400), cursor: 'next', generation: 'new', shallow: false, firstPageMillis: 12 } };
     }
     return state;
   }) as unknown as typeof import('./native').native;
-  const snapshot = await readNativeSnapshot('real', { invoke, forceHistory: true, previous: { state, commits, cursor: 'old', generation: 'old' } });
-  expect(page).toBe(3);
-  expect(snapshot.commits).toHaveLength(401);
+  const observe = vi.fn();
+  const snapshot = await readNativeSnapshot('real', { invoke, forceHistory: true, onFirstHistoryPage: observe, previous: { state, commits, cursor: 'old', generation: 'old' } });
+  // No fingerprint: the backend may not reuse the unchanged generation.
+  expect(requests).toEqual([expect.objectContaining({ fingerprint: undefined })]);
+  expect(snapshot.commits).toHaveLength(400);
   expect(snapshot.generation).toBe('new');
+  expect(observe).toHaveBeenCalledExactlyOnceWith(12);
 });
