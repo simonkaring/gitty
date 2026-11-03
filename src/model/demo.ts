@@ -54,11 +54,13 @@ export function createDemoHistory(seed = 1, rounds = 140): RepositorySnapshot {
     const parent = tips.get(branch);
     const parents = [...new Set([...(parent ? [parent] : []), ...additional])];
     const id = hash(index + 1, seed);
+    const message = subject ?? subjects[(index + Math.floor(index / 12) + seed) % subjects.length];
+    const description = parents.length > 1
+      ? 'Bring the latest work together while preserving the full branch history.\n\nReviewed with the team and ready for the next release.'
+      : 'Improve readability in the history workspace and commit inspector.\n\nPreserve selection and scroll position when repository state changes.';
     chronological.push({
-      id, parents, subject: subject ?? subjects[(index + Math.floor(index / 12) + seed) % subjects.length],
-      body: parents.length > 1
-        ? 'Bring the latest work together while preserving the full branch history.\n\nReviewed with the team and ready for the next release.'
-        : 'Improve readability in the history workspace and commit inspector.\n\nPreserve selection and scroll position when repository state changes.',
+      id, parents, subject: message,
+      body: `${message}\n\n${description}`,
       author, email: `${author.toLowerCase().replace(' ', '.')}@example.com`,
       timestamp: Date.UTC(2026, 8, 18, 16, 42) - (rounds * 12 - index) * 37 * 60_000,
       branch, files: filesFor(index + seed),

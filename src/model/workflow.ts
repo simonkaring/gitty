@@ -108,3 +108,8 @@ export function draftFromCommitMessage(message: string): CommitDraft {
     body: message.slice(newline + 1).replace(/^\n/, '').trimEnd(),
   };
 }
+
+/** The description of a full commit message: everything below its subject line. */
+export function commitDescription(message: string): string {
+  return draftFromCommitMessage(message).body;
+}

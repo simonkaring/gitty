@@ -119,9 +119,9 @@ export async function demoInvoke(command: string, args: Record<string, unknown>)
       const current = r();
       const files = demoCommittedFiles(current.files);
       if (!files.length) throw { code: 'nothing_staged', message: 'Stage at least one change before committing.' };
-      const [subject, ...rest] = String(args.message).split('\n');
+      const [subject] = String(args.message).split('\n');
       const id = Array.from(crypto.getRandomValues(new Uint8Array(20)), byte => byte.toString(16).padStart(2, '0')).join('');
-      current.commits.unshift({ id, parents: [current.head], subject, body: rest.join('\n').trim(), author: 'Demo User', email: 'demo@example.com', timestamp: Date.now(), branch: 'main', files });
+      current.commits.unshift({ id, parents: [current.head], subject, body: String(args.message), author: 'Demo User', email: 'demo@example.com', timestamp: Date.now(), branch: 'main', files });
       current.refs = current.refs.map(ref => ref.name === 'main' ? { ...ref, commitId: id } : ref);
       current.head = id; current.ahead++;
       current.files = current.files.filter(file => file.index !== null || file.working !== null).map(file => ({ ...file, head: file.index }));

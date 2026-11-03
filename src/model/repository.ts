@@ -25,6 +25,7 @@ export interface CommitSummary { id: string; parents: string[]; subject: string;
  * HEAD points at, on a checked-out branch, with no operation or conflicts in progress and no known
  * remote-tracking ref containing it. When false, `editDisabledReason` is a readable explanation (including
  * when eligibility itself could not be checked). Remote-tracking refs are local data, not proof about the remote. */
+/** `body` is the full commit message, subject line included; the inspector shows only its description. */
 export interface CommitDetail extends CommitSummary { body: string; canEditMessage?: boolean; editDisabledReason?: string | null }
 export interface HistoryPage { commits: CommitSummary[]; cursor: string | null; generation: string; shallow: boolean }
 export interface HistoryQuery { branch?: string }

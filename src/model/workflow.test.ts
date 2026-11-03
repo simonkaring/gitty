@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { clearSubmittedDraft, commitMessage, discardableEntries, draftFromCommitMessage, draftKey, operationPaths, readDraft, saveDraft, writeAndRefresh } from './workflow';
+import { clearSubmittedDraft, commitDescription, commitMessage, discardableEntries, draftFromCommitMessage, draftKey, operationPaths, readDraft, saveDraft, writeAndRefresh } from './workflow';
 import type { RepositorySession, StatusEntry } from './repository';
 import type { native } from './native';
 import { demoCommittedFiles, demoFileDiff, demoStatus, demoWorkingFiles } from './demoWorkflow';
@@ -198,6 +198,9 @@ describe('draft durability', () => {
     expect(commitMessage({ subject: ' Subject ', body: ' Why\n\nDetails ' })).toBe('Subject\n\nWhy\n\nDetails');
     expect(draftFromCommitMessage('Subject\n\nWhy\nDetails\n')).toEqual({ subject: 'Subject', body: 'Why\nDetails' });
     expect(draftFromCommitMessage('Subject only')).toEqual({ subject: 'Subject only', body: '' });
+    expect(commitDescription('Subject\n\nWhy\nDetails\n')).toBe('Why\nDetails');
+    expect(commitDescription('Subject\nBody without a blank line')).toBe('Body without a blank line');
+    expect(commitDescription('Subject only')).toBe('');
   });
 });
 describe('whole-file staging', () => {

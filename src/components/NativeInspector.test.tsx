@@ -168,6 +168,46 @@ async function mount(initial: { selected?: string; session?: RepositorySession; 
 }
 const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; };
 
+it('shows the subject once, with the author and date in the commit metadata', async () => {
+  const t = await mount();
+  try {
+    expect(t.q('h2')?.textContent).toBe('Original subject');
+    // The backend body is the full message: the description must not repeat the heading.
+    expect(t.q('.commit-description')?.textContent).toBe('Original body');
+    expect(t.host.textContent?.match(/Original subject/g)).toHaveLength(1);
+    // One author block, inside the metadata, carrying the avatar, name and email.
+    expect(t.q('.author-block')).toBeNull();
+    const author = t.q('.commit-metadata .commit-author');
+    expect(author?.querySelector('.avatar')).not.toBeNull();
+    expect(author?.textContent).toContain('Ada Lovelace');
+    expect(author?.textContent).toContain('ada@example.com');
+    expect([...t.host.querySelectorAll('.commit-metadata dt')].map(dt => dt.textContent)).toContain('Date');
+    expect(t.q('.commit-metadata time')?.textContent).toContain('UTC');
+  } finally { await t.cleanup(); }
+});
+
+it('collapses a long description and expands it without opening the editor', async () => {
+  // jsdom has no layout: make the clamped description report overflowing content.
+  const scrollHeight = vi.spyOn(Element.prototype, 'scrollHeight', 'get').mockReturnValue(400);
+  const clientHeight = vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(80);
+  const t = await mount();
+  try {
+    expect(t.q('.commit-description')?.classList.contains('collapsed')).toBe(true);
+    expect(t.q('.commit-description-toggle')?.textContent).toBe('Show more');
+    await act(async () => { t.q<HTMLButtonElement>('.commit-description-toggle')!.click(); });
+    expect(t.q('.commit-description')?.classList.contains('collapsed')).toBe(false);
+    expect(t.q('.commit-description-toggle')?.textContent).toBe('Show less');
+    expect(t.form()).toBeNull();
+    await act(async () => { t.q<HTMLButtonElement>('.commit-description-toggle')!.click(); });
+    expect(t.q('.commit-description')?.classList.contains('collapsed')).toBe(true);
+    expect(t.q('.commit-description-toggle')?.textContent).toBe('Show more');
+  } finally {
+    await t.cleanup();
+    scrollHeight.mockRestore();
+    clientHeight.mockRestore();
+  }
+});
+
 it('edits the HEAD message inline, sending the captured commit and branch, and closes on a confirmed write', async () => {
   const t = await mount();
   try {
@@ -194,13 +234,14 @@ it('offers no editing for a commit that is not HEAD or that the backend refused,
     expect(t.q('[aria-label="Edit commit message"]')).toBeNull();
     expect(t.q('.commit-edit-note')).toBeNull();
   } finally { await t.cleanup(); }
-  // HEAD, refused: the readable reason is shown as a note, with no special-cased "Pushed" badge.
+  // HEAD, refused: the readable reason is available from an info icon, with no special-cased "Pushed" badge.
   eligibility = { canEditMessage: false, editDisabledReason: 'Contained in origin/main by local refs, which are not proof about the remote.' };
   t = await mount();
   try {
     expect(t.q('.editable-commit-heading')).toBeNull();
     expect(t.q('[aria-label="Edit commit message"]')).toBeNull();
-    expect(t.q('.commit-edit-note')?.textContent).toContain('not proof about the remote');
+    expect(t.q<HTMLElement>('.commit-edit-note')?.getAttribute('aria-label')).toContain('not proof about the remote');
+    expect(t.q('.commit-edit-note-tooltip')?.textContent).toContain('not proof about the remote');
     expect([...t.host.querySelectorAll('.badge')].map(badge => badge.textContent)).toEqual(['HEAD']);
   } finally { await t.cleanup(); }
   // Detached or session without a branch: no capture is possible, so no editing.

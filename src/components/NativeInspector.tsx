@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CommitDetail, DiffFile, FileDiff, RepositorySession } from '../model/repository';
 import { errorMessage, inspectorSpec, native } from '../model/native';
-import { AlertTriangle, ArrowUpRight, Check, ChevronDown, Copy, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, GitMerge, Pencil, X } from 'lucide-react';
+import { AlertTriangle, ArrowUpRight, Check, ChevronDown, Copy, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, GitMerge, Info, Pencil, X } from 'lucide-react';
 import type { ActiveDiffState } from './WorkingChanges';
 import { AuthorAvatar } from './AuthorAvatar';
-import { formatCommitDate } from '../model/dates';
+import { commitIsoString, formatCommitDate } from '../model/dates';
 import type { AuthorAvatarMode } from '../model/settings';
-import { commitMessage, draftFromCommitMessage, type MutationOutcome } from '../model/workflow';
+import { commitDescription, commitMessage, draftFromCommitMessage, type MutationOutcome } from '../model/workflow';
 
 /** Pause before fetching a newly selected commit, so rapid keyboard navigation only loads where it lands. */
 export const SELECTION_DEBOUNCE_MS = 120;
@@ -91,6 +91,9 @@ export function NativeInspector({
   const [bodyDraft, setBodyDraft] = useState('');
   const [savingMessage, setSavingMessage] = useState(false);
   const [editError, setEditError] = useState('');
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  const [descriptionOverflow, setDescriptionOverflow] = useState(false);
+  const descriptionRef = useRef<HTMLParagraphElement | null>(null);
 
   useEffect(() => {
     setParent('');
@@ -103,6 +106,8 @@ export function NativeInspector({
     editorToken.current++;
     setEditor(null);
     setEditError('');
+    setDescriptionExpanded(false);
+    setDescriptionOverflow(false);
   }, [selected]);
 
   const validParent = detail?.id === selected && detail.parents.includes(parent) ? parent : undefined;
@@ -214,6 +219,22 @@ export function NativeInspector({
   const date = detail
     ? formatCommitDate(detail.timestamp, { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC' }, 'en')
     : '';
+  const isoDate = detail ? commitIsoString(detail.timestamp) : '';
+  // `body` is the full message, so the subject heading above must not be repeated here.
+  const description = detail ? commitDescription(detail.body) : '';
+
+  // Collapse long descriptions; only reveal the toggle when the clamped text actually overflows.
+  useLayoutEffect(() => {
+    const el = descriptionRef.current;
+    if (!el) { setDescriptionOverflow(false); return; }
+    if (descriptionExpanded) return;
+    const measure = () => setDescriptionOverflow(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [selected, description, descriptionExpanded]);
 
   const isHead = !!session.head && viewId === session.head && selected === session.head;
   // Editing is offered only for the current, loaded HEAD: a commit that is not HEAD, a detail still
@@ -310,6 +331,12 @@ export function NativeInspector({
                   </span>
                   {!!session.head && viewId === session.head && <span className="badge" data-tone="accent">HEAD</span>}
                   <div className="commit-actions">
+                    {!isEditing && editNote && (
+                      <span className="icon-button commit-edit-note" tabIndex={0} role="img" aria-label={editNote}>
+                        <Info size={14} aria-hidden="true" />
+                        <span className="commit-edit-note-tooltip" role="tooltip">{editNote}</span>
+                      </span>
+                    )}
                     {canStartEditing && !isEditing && (
                       <button
                         className="icon-button"
@@ -403,8 +430,8 @@ export function NativeInspector({
                     {loading ? (
                       <h2 className="skeleton-text" style={{ width: '65%' }}>Loading commit…</h2>
                     ) : (
-                      <h2
-                        className={canStartEditing ? 'editable-commit-heading' : undefined}
+                      <div
+                        className={`commit-message-body${canStartEditing ? ' editable-commit-message' : ''}`}
                         onClick={canStartEditing ? startEditing : undefined}
                         title={canStartEditing ? 'Click to edit commit message' : undefined}
                         tabIndex={canStartEditing ? 0 : undefined}
@@ -416,50 +443,33 @@ export function NativeInspector({
                           }
                         } : undefined}
                       >
-                        {detail?.subject || viewId}
-                      </h2>
-                    )}
-                    {loading && (
-                      <div className="author-block" aria-hidden="true">
-                        <span className="avatar skeleton-text" />
-                        <div>
-                          <strong className="skeleton-text" style={{ width: '60%' }}>Author name</strong>
-                          <span className="skeleton-text">Jan 1, 2025, 12:00 PM UTC</span>
-                        </div>
-                      </div>
-                    )}
-                    {detail && (
-                      <div className="author-block">
-                        <AuthorAvatar name={detail.author} email={detail.email} mode={authorAvatarMode} />
-                        <div>
-                          <strong>{detail.author}</strong>
-                          <span>{date} UTC</span>
-                        </div>
+                        <h2 className={canStartEditing ? 'editable-commit-heading' : undefined}>
+                          {detail?.subject || viewId}
+                        </h2>
+                        {description && (
+                          <p ref={descriptionRef} className={`commit-description${descriptionExpanded ? '' : ' collapsed'}`}>
+                            {description}
+                          </p>
+                        )}
+                        {description && descriptionOverflow && (
+                          <button
+                            type="button"
+                            className="commit-description-toggle"
+                            aria-expanded={descriptionExpanded}
+                            onClick={e => {
+                              e.stopPropagation();
+                              setDescriptionExpanded(expanded => !expanded);
+                            }}
+                            onKeyDown={e => e.stopPropagation()}
+                          >
+                            {descriptionExpanded ? 'Show less' : 'Show more'}
+                          </button>
+                        )}
                       </div>
                     )}
                   </>
                 )}
               </div>
-
-              {!isEditing && editNote && <p className="commit-edit-note" role="note">{editNote}</p>}
-
-              {!isEditing && detail?.body && (
-                <p
-                  className={`commit-description${canStartEditing ? ' editable-commit-body' : ''}`}
-                  onClick={canStartEditing ? startEditing : undefined}
-                  title={canStartEditing ? 'Click to edit commit message' : undefined}
-                  tabIndex={canStartEditing ? 0 : undefined}
-                  role={canStartEditing ? 'button' : undefined}
-                  onKeyDown={canStartEditing ? e => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      startEditing();
-                    }
-                  } : undefined}
-                >
-                  {detail.body}
-                </p>
-              )}
 
               <dl className="commit-metadata">
                 <div>
@@ -471,7 +481,17 @@ export function NativeInspector({
                 {loading && (
                   <>
                     <div aria-hidden="true"><dt>Parent</dt><dd><span className="skeleton-text" style={{ fontSize: 'var(--fs-xs)' }}>0000000</span></dd></div>
-                    <div aria-hidden="true"><dt>Author</dt><dd><span className="skeleton-text">author@example.com</span></dd></div>
+                    <div aria-hidden="true">
+                      <dt>Author</dt>
+                      <dd className="commit-author">
+                        <span className="avatar tiny skeleton-text" />
+                        <span className="commit-author-identity">
+                          <span className="skeleton-text">Author name</span>
+                          <span className="skeleton-text">author@example.com</span>
+                        </span>
+                      </dd>
+                    </div>
+                    <div aria-hidden="true"><dt>Date</dt><dd><span className="skeleton-text">Jan 1, 2025, 12:00 PM UTC</span></dd></div>
                   </>
                 )}
                 {detail && (
@@ -491,10 +511,22 @@ export function NativeInspector({
                     </dd>
                   </div>
                 )}
-                {detail?.email && (
+                {detail && (
                   <div>
                     <dt>Author</dt>
-                    <dd className="email">{detail.email}</dd>
+                    <dd className="commit-author">
+                      <AuthorAvatar tiny name={detail.author} email={detail.email} mode={authorAvatarMode} />
+                      <span className="commit-author-identity">
+                        <span className="commit-author-name">{detail.author}</span>
+                        {detail.email && <span className="commit-author-email">{detail.email}</span>}
+                      </span>
+                    </dd>
+                  </div>
+                )}
+                {detail && (
+                  <div>
+                    <dt>Date</dt>
+                    <dd><time dateTime={isoDate}>{date} UTC</time></dd>
                   </div>
                 )}
               </dl>
