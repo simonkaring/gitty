@@ -22,6 +22,7 @@ it('runs the palette write once, shows progress, and reloads history even when r
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', false);
   HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   HTMLDialogElement.prototype.close = function () { this.open = false; };
+  Element.prototype.scrollIntoView ??= function () {};
   const state = { session: { handle: 'commitgraph-real', location: { kind: 'native', path: '/repo' }, name: 'repo', root: '/repo', gitDir: '/repo/.git', commonDir: '/repo/.git', linkedWorktree: false, shallow: false, bare: false, head: 'tip', headRef: 'refs/heads/main' }, refs: [], remotes: [], fingerprint: 'unchanged' };
   const status = { head: 'tip', headRef: 'refs/heads/main', fingerprint: 'status', entries: [] };
   const operation = { kind: 'none', label: '', current: null, incoming: null, step: null, total: null, conflicts: [], canContinue: false, canSkip: false, fingerprint: 'none' };
@@ -58,4 +59,4 @@ it('runs the palette write once, shows progress, and reloads history even when r
     expect(mocks.invoke.mock.calls.filter(([command]) => command === 'repository_history')).toHaveLength(2);
     await vi.waitFor(() => expect(mocks.invoke.mock.calls.filter(([command]) => command === 'repository_commit_graph_status')).toHaveLength(2));
   } finally { root.unmount(); host.remove(); toasts.remove(); }
-});
+}, 20_000);

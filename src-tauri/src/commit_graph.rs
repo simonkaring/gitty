@@ -33,7 +33,9 @@ impl Control {
         // Window close cannot rely on a worker getting another scheduling turn.
         // Share the spawn/publication lock so no child can escape cancellation.
         if let Ok(child) = self.child.lock() {
-            if let Some(child) = child.as_ref() { child.kill(); }
+            if let Some(child) = child.as_ref() {
+                child.kill();
+            }
         }
     }
 }
@@ -476,7 +478,15 @@ mod tests {
                 } else {
                     service.close(&state.session.handle).unwrap();
                 }
-                assert_eq!(worker.join().unwrap().err().expect("write must cancel").code, "cancelled");
+                assert_eq!(
+                    worker
+                        .join()
+                        .unwrap()
+                        .err()
+                        .expect("write must cancel")
+                        .code,
+                    "cancelled"
+                );
                 assert_eq!(unsafe { libc::kill(pid, 0) }, -1, "child was reaped");
             });
             drop(job);
