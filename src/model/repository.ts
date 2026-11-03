@@ -21,12 +21,13 @@ export interface RepositorySession {
 }
 export interface RepositoryRef { name: string; fullName: string; commitId: string; kind: 'local' | 'remote' | 'tag' }
 export interface CommitSummary { id: string; parents: string[]; subject: string; author: string; email: string; timestamp: number }
-/** `canEditMessage` is a read-only eligibility verdict for in-place message editing: true only for the commit
- * HEAD points at, on a checked-out branch, with no operation or conflicts in progress and no known
- * remote-tracking ref containing it. When false, `editDisabledReason` is a readable explanation (including
- * when eligibility itself could not be checked). Remote-tracking refs are local data, not proof about the remote. */
 /** `body` is the full commit message, subject line included; the inspector shows only its description. */
+/** Legacy eligibility fields are unchecked placeholders; use the separate eligibility command. */
 export interface CommitDetail extends CommitSummary { body: string; canEditMessage?: boolean; editDisabledReason?: string | null }
+/** Requested separately for HEAD; an absent/pending verdict must never enable editing.
+ * True only on a checked-out branch with no operation/conflicts or containing remote-tracking ref.
+ * Remote-tracking refs are local evidence, not proof about the remote; writes recheck eligibility. */
+export interface CommitEditEligibility { canEditMessage: boolean; editDisabledReason: string | null }
 export interface HistoryPage { commits: CommitSummary[]; cursor: string | null; generation: string; shallow: boolean }
 export interface HistoryQuery { branch?: string }
 export interface StatusEntry { path: string; oldPath: string | null; indexStatus: string; worktreeStatus: string; conflicted: boolean; untracked: boolean }
@@ -43,7 +44,8 @@ export interface SearchQuery { text: string; branch?: string; since?: string; un
 export interface SearchResult { commits: CommitSummary[]; truncated: boolean }
 export interface RepositoryState { session: RepositorySession; refs: RepositoryRef[]; remotes: string[]; fingerprint: string }
 /** State, status and operation state read together by one command; the service retries until they agree. */
-export interface RepositorySnapshot { state: RepositoryState; status: RepositoryStatus; operation: OperationState }
+export interface RepositorySnapshot { state: RepositoryState; status: RepositoryStatus; operation: OperationState; history?: HistoryPage | null }
+export interface SnapshotHistory { fingerprint?: string; previousHead?: string | null; preserve: string[]; preserveLimit: number; remap?: { from: string; to: string } }
 export interface WslDistribution { name: string; running: boolean }
 export interface DirectoryEntry { name: string; path: string }
 export interface RepositoryError { code: string; message: string }
@@ -79,8 +81,9 @@ export type RepositoryMutation =
  * repository_state({handle}) -> RepositoryState
  * repository_history({handle, cursor: string|null, limit, query: HistoryQuery}) -> HistoryPage
  * repository_commit({handle, oid}) -> CommitDetail
+ * repository_commit_edit_eligibility({handle, oid}) -> CommitEditEligibility
  * repository_status({handle}) -> RepositoryStatus
- * repository_snapshot({handle}) -> RepositorySnapshot
+ * repository_snapshot({handle, history?: SnapshotHistory}) -> RepositorySnapshot
  * repository_diff_files({handle, spec: DiffSpec}) -> DiffFile[]
  * repository_diff({handle, spec: DiffSpec, path}) -> FileDiff
  * repository_search({handle, query: SearchQuery}) -> SearchResult

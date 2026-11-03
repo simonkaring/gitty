@@ -116,6 +116,7 @@ impl Walk {
     }
 }
 pub struct Repository {
+    pub(crate) opening_state: Mutex<Option<RepositoryState>>,
     pub session: RepositorySession,
     pub(crate) history: Mutex<History>,
     /// Cancel flag of the one in-flight search, if any. Held only to swap the flag,
@@ -287,6 +288,7 @@ impl Service {
             head_ref: None,
         };
         let repo = Repository {
+            opening_state: Mutex::new(None),
             session,
             history: Mutex::new(History::default()),
             search: Mutex::new(None),
@@ -295,6 +297,7 @@ impl Service {
         let mutation = self.mutation_lock(&repo)?;
         let _mutation_guard = lock(&mutation)?;
         let state = repo.state()?;
+        *lock(&repo.opening_state)? = Some(state.clone());
         // Only recent-file updates serialize with one another; discovery and every
         // Git subprocess above run without holding the session registry lock.
         let _recent_guard = lock(&self.recent_lock)?;
@@ -585,6 +588,7 @@ impl Repository {
         }
         Self {
             session,
+            opening_state: Mutex::new(None),
             history: Mutex::new(History::default()),
             search: Mutex::new(None),
         }
@@ -710,6 +714,15 @@ impl Repository {
         limit: usize,
         query: HistoryQuery,
     ) -> Result<HistoryPage> {
+        self.history_with_state(cursor, limit, query, None)
+    }
+    pub(crate) fn history_with_state(
+        &self,
+        cursor: Option<String>,
+        limit: usize,
+        query: HistoryQuery,
+        state: Option<&RepositoryState>,
+    ) -> Result<HistoryPage> {
         let limit = limit.clamp(1, 200);
         let mut history = lock(&self.history)?;
         let (generation, start) = if let Some(cursor) = cursor {
@@ -723,7 +736,15 @@ impl Repository {
             // cursor against current refs: it must report staleCursor instead.
             history.walks.clear();
             history.cursors.clear();
-            let (tips, shallow) = self.tips(query.branch.as_deref())?;
+            let (tips, shallow) = if let Some(state) = state {
+                let mut tips: Vec<_> = state.refs.iter().map(|r| r.commit_id.clone()).collect();
+                tips.extend(state.session.head.clone());
+                tips.sort();
+                tips.dedup();
+                (tips, state.session.shallow)
+            } else {
+                self.tips(query.branch.as_deref())?
+            };
             let generation = token();
             let walk = Walk::new(self.location(), tips, shallow)?;
             history.walks.insert(generation.clone(), walk);
@@ -770,10 +791,14 @@ impl Repository {
     pub fn commit(&self, revision: &str) -> Result<CommitDetail> {
         let id = resolve(self.location(), revision)?;
         let raw = process::checked(self.location(), &args(&["cat-file", "commit", &id]))?;
-        let mut detail = crate::commit::parse(&id, &raw)?;
-        // The commit itself is parsed first so a failure while checking eligibility
-        // can never hide it. Eligibility never fails open: an error becomes the
-        // readable reason editing is unavailable.
+        crate::commit::parse(&id, &raw)
+    }
+    pub fn commit_edit_eligibility(&self, revision: &str) -> Result<CommitEditEligibility> {
+        let id = resolve(self.location(), revision)?;
+        let mut detail = CommitEditEligibility {
+            can_edit_message: false,
+            edit_disabled_reason: None,
+        };
         match self.message_edit_block(&id) {
             Ok(None) => detail.can_edit_message = true,
             Ok(Some(reason)) => detail.edit_disabled_reason = Some(reason),
@@ -1075,7 +1100,9 @@ impl Repository {
             "log",
             "--topo-order",
             "--no-show-signature",
-            "--format=%H%x00%an%x00%ae%x00%B%x00",
+            // Author identity fields are single-line commit headers. Keep each
+            // commit in one NUL-framed record instead of four cross-thread sends.
+            "--format=%H%n%an%n%ae%n%B%x00",
         ]);
         if let Some(since) = query.since {
             a.push(format!("--since-as-filter={since}"));
@@ -1102,19 +1129,20 @@ impl Repository {
         .with_cancel(cancel.clone());
         let mut ids = Vec::new();
         while let Some(raw) = stream.next()? {
-            let id = process::text(raw)?.trim_start_matches('\n').to_string();
-            if id.is_empty() {
+            let record = process::text(raw)?;
+            let record = record.trim_start_matches('\n');
+            if record.is_empty() {
                 continue;
             }
+            let mut fields = record.splitn(4, '\n');
+            let id = fields.next().unwrap();
             if !matches!(id.len(), 40 | 64) || !id.as_bytes().iter().all(u8::is_ascii_hexdigit) {
                 return Err(Error::new("gitParse", "Malformed search commit ID"));
             }
-            let mut field = || -> Result<String> {
-                process::text(
-                    stream
-                        .next()?
-                        .ok_or_else(|| Error::new("gitParse", "Incomplete search record"))?,
-                )
+            let mut field = || -> Result<&str> {
+                fields
+                    .next()
+                    .ok_or_else(|| Error::new("gitParse", "Incomplete search record"))
             };
             let author = field()?;
             let email = field()?;
@@ -1130,9 +1158,9 @@ impl Repository {
                 || author.to_lowercase().contains(&needle)
                 || email.to_lowercase().contains(&needle)
                 || message.to_lowercase().contains(&needle)
-                || ref_matches.contains(&id)
+                || ref_matches.contains(id)
             {
-                ids.push(id);
+                ids.push(id.to_string());
                 if ids.len() == 501 {
                     break;
                 }

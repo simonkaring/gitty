@@ -24,10 +24,11 @@ sources:
 
 # Snapshot and refresh coherence
 
-`Repository::snapshot` shares state/status with operation-state construction,
+`Repository::snapshot_with_history` shares state/status with operation-state construction,
 checks HEAD/ref agreement, and rechecks the state fingerprint. It retries up to
 three times before `unstable`. This is a best-effort read across external
-changes, not a transactional filesystem snapshot.[^snapshot][^contract]
+changes, not a transactional filesystem snapshot. Its first read may consume the
+server-owned opening state, still verified at the end.[^snapshot][^contract]
 Operation preflight builds its reviewed fingerprint from the same request-local
 state used for HEAD/ref validation. Index and all-ref fingerprint reads run
 concurrently; neither is omitted, and post-write operation/HEAD reads remain.[^snapshot]
@@ -35,7 +36,8 @@ concurrently; neither is omitted, and post-write operation/HEAD reads remain.[^s
 History generations pin concrete commit IDs and stream a walk with a replay
 spool. A cursor belongs to that walk; its generation is opaque, not a state
 fingerprint. In `readNativeSnapshot`, unchanged state reuses loaded history;
-a changed state triggers a walk bracketed by a live state check. Mixed
+a changed state requests a walk from the snapshot's starting-state tips, covered by
+the same final state check and returned in one IPC. Mixed
 generations, nonadvancing cursors, and inconsistent ancestry are rejected before
 publication.[^history][^loader]
 
@@ -58,8 +60,14 @@ only while that OID is the refreshed HEAD. Otherwise an unreachable old tip or
 inspector-only orphan could cause a full-history scan. Session checks prevent
 superseded asynchronous reads from publishing.[^loader][^tests]
 Even a previously loaded tip can become unreachable after reset/rebase. Automatic
-keep-visible therefore stops after the previous loaded prefix (at least 200 rows)
-plus one page; selection/inspection survives, and explicit reveal remains separate.[^loader][^tests]
+keep-visible stops at the deepest retained target's previous index plus 400 rows
+(at least 400, backend cap 20,000), and stops earlier once targets are found. It no
+longer reloads every previously loaded row on each ref change. Initial open/HEAD
+movement seeks HEAD up to 2,000 rows; the cursor remains available for older history.
+Selection/inspection survives, and explicit reveal remains separate.[^loader][^tests]
+Initial open scrolls to HEAD. A read-only refresh follows a moved HEAD only when
+the reader was still on the old HEAD and did not navigate during the read;
+write completion retains its existing confirmed-outcome navigation guards.[^pane]
 The pane defers its initial open to a cancellable microtask, so development
 StrictMode's synchronous effect replay does not launch a discarded session.
 Closing a pane still invalidates in-flight reads and closes late-opened handles.[^pane]

@@ -125,11 +125,13 @@ const head = (id: string, headRef: string | null = MAIN) => ({ handle: 'h', head
 type EditRequest = { oid: string; headRef: string; message: string };
 let eligibility: { canEditMessage?: boolean; editDisabledReason?: string | null } = { canEditMessage: true };
 let commitGate: Promise<void> | null = null;
-afterEach(() => { eligibility = { canEditMessage: true }; commitGate = null; });
+let eligibilityGate: Promise<void> | null = null;
+afterEach(() => { eligibility = { canEditMessage: true }; commitGate = null; eligibilityGate = null; });
 
 async function mount(initial: { selected?: string; session?: RepositorySession; revision?: number; writeBlocked?: boolean } = {}) {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.native.mockImplementation(async (command, args) => {
+    if (command === 'repository_commit_edit_eligibility') { if (eligibilityGate) await eligibilityGate; return eligibility; }
     if (command !== 'repository_commit') return files;
     const gate = commitGate;
     if (gate) await gate;
@@ -167,6 +169,30 @@ async function mount(initial: { selected?: string; session?: RepositorySession; 
   return api;
 }
 const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; };
+
+it('renders HEAD details while eligibility is pending and never enables editing before its verdict', async () => {
+  const gate = deferred<void>();
+  eligibilityGate = gate.promise;
+  const t = await mount();
+  try {
+    expect(t.q('h2')?.textContent).toBe('Original subject');
+    expect(t.q('.editable-commit-heading')).toBeNull();
+    expect(t.q('aside')?.getAttribute('aria-busy')).toBe('false');
+    await act(async () => { gate.resolve(); });
+    expect(t.q('.editable-commit-heading')).not.toBeNull();
+  } finally { await t.cleanup(); }
+});
+
+it('ignores a late eligibility verdict after the selection changes', async () => {
+  const gate = deferred<void>();
+  eligibilityGate = gate.promise;
+  const t = await mount();
+  try {
+    await t.render({ selected: 'c0' });
+    await act(async () => { gate.resolve(); });
+    expect(t.q('.editable-commit-heading')).toBeNull();
+  } finally { await t.cleanup(); }
+});
 
 it('shows the subject once, with the author and date in the commit metadata', async () => {
   const t = await mount();

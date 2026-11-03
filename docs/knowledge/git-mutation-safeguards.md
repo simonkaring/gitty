@@ -78,6 +78,11 @@ from the index. Message-only amend preserves the old tree; ordinary amend folds
 in staged content. Remote-tracking refs are local evidence, not proof of the
 remote's current state.[^contract][^hunk-tests]
 
+Commit details render independently of message-edit eligibility. The inspector
+requests the separate verdict only for loaded HEAD, keeps editing disabled while
+unknown/loading/failed, and ignores stale results. Writes still revalidate all
+expectations and remote containment under the mutation lock.[^contract][^writes]
+
 Branch drops in the graph/sidebar capture the dragged ref as merge source and
 the receiving local branch as explicit destination. Local and remote-tracking
 branch sources share this flow; full `refs/remotes/<remote>/<branch>` refs keep

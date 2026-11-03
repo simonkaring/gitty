@@ -50,6 +50,9 @@ scrolls the graph to the top.[^pane][^graph][^reveal-tests][^reveal-palette]
 
 Native search semantics and the 500-match limit remain defined by the backend;
 demo search uses simplified synthetic matches, not native Git coverage.[^backend]
+The backend retains the single topological OR-matching walk and 501st-match
+truncation check. One NUL-framed record per commit replaces four stream handoffs;
+message bodies and case-insensitive literal matching remain intact.[^backend]
 
 The footer opens workspace/repository commands, including on the welcome screen.
 Cmd/Ctrl+K remains available. Desktop demo switching lives in Settings →
