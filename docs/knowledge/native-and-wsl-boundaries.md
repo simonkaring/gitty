@@ -58,6 +58,13 @@ policies rather than replacing them with a generic runner. Only the local
 askpass and editor bridges are transport-specific: they exist for native and,
 through WSL interop, for WSL, and are refused for SSH rather than forwarded.[^process][^contract]
 
+Native macOS Git caches its PATH-selected executable once, bypassing only Apple's
+`/usr/bin/git` shim via a validated `xcrun --find git` result; failures use plain
+`git`. Custom wrappers and Windows/WSL/SSH Git selection remain intact. Captured
+commands and stream finalization wake on exit/reader notifications, with 25 ms
+deadline/cancellation/output checks rather than sleep-polling. Descendant-held
+pipes remain deadline-bound; tree termination and reaping are retained.[^process][^contract]
+
 WSL is a separate execution environment, not a Windows path alias. Distribution
 browsing and operation detection require Linux tools; conflict filesystem access
 uses a fixed Python 3 helper with pinned directory descriptors, shared with SSH

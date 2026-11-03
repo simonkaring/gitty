@@ -650,7 +650,7 @@ struct BackendInfo {
 #[tauri::command]
 async fn backend_info() -> Result<BackendInfo> {
     blocking(|| {
-        let mut c = std::process::Command::new("git");
+        let mut c = std::process::Command::new(process::native_git_program());
         c.arg("--version");
         Ok(BackendInfo {
             platform: std::env::consts::OS,

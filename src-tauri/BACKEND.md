@@ -185,8 +185,15 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   it is the same session, the selection is still the old HEAD, and no user selection
   has happened since the write was submitted (including away and back); compare
   base/target, refs and cherry-pick picks are never touched.
-- Process waits poll with a 1 ms to 10 ms backoff, so a Git command that finishes in a
-  few milliseconds is not charged a fixed 10 ms.
+- Captured commands and stream finalization receive child-exit and reader-completion
+  notifications instead of sleep-polling. A blocking waiter reaps the child; 25 ms
+  checks retain execution/overall prompt deadlines, cancellation and output limits,
+  including when descendants keep pipes open after the child exits. Stream record
+  waits retain their ~10 ms cancellation checks and bounded backpressure.
+- Native macOS Git resolves the user's PATH choice once. Only `/usr/bin/git` (the
+  xcrun shim, including symlinks to it) is replaced with a validated executable from
+  `xcrun --find git`; resolution failure falls back to plain `git`. User-selected
+  wrappers, Git for Windows, Linux, WSL and SSH execution remain unchanged.
 - Root commits compare against the computed empty-tree ID without writing objects.
   Merge comparisons default to first parent; a supplied parent must be an actual
   parent. Explicit comparisons resolve both inputs to commits before diffing.

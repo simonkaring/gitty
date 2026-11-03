@@ -18,6 +18,8 @@ sources:
     resource: ../../src-tauri/src/lib.rs
   - id: readme
     resource: ../../README.md
+  - id: process
+    resource: ../../src-tauri/src/process.rs
 ---
 
 # Performance benchmarks
@@ -46,6 +48,16 @@ a finished graph from a static loading state.[^apps][^probe][^launch]
 Results are local observations for one machine and app version; record the
 scope and date with any claim. See the README for invocation.[^readme]
 
+On macOS/M1 Pro (2026-11-03), five-iteration back-to-back native benchmarks using
+the pre-change release binary and the exit-notification/macOS-shim change measured
+small-repository `open` 140 → 47 ms, `state` 46 → 15 ms, first history page
+154 → 61 ms, and commit detail 343 → 106 ms, with unchanged launch counts.
+`GITTY_TRACE_PROCESS=1` records program-only spawn/total times (not arguments or
+credentials); across both repositories, median captured Git time fell 35.1 →
+11.7 ms. These are loaded-machine observations, not universal floors: git/git's
+first page regressed 716 → 1578 ms while its raw Git floor also rose to 1558 ms,
+so long-walk wall times do not isolate launch overhead.[^backend][^harness][^process]
+
 Related: [working changes at scale](working-changes-at-scale.md) and
 [verification scope](demo-and-native-verification.md).
 
@@ -56,3 +68,4 @@ Related: [working changes at scale](working-changes-at-scale.md) and
 [^probe]: `related`, `usage` and `watch`.
 [^launch]: `launch_path` and `app_launch_path`.
 [^readme]: Performance benchmarks section under Checks.
+[^process]: `native_git_program`, `ChildWait`, and program-only trace output.
