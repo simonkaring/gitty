@@ -200,7 +200,7 @@ impl Repository {
                 if !output.success {
                     return Err(self.failed(&output));
                 }
-                self.wsl_cat(distribution, &path).map(Some)
+                self.remote_cat(&path).map(Some)
             }
             RepositoryLocation::Ssh { .. } => {
                 let test = process::ssh_exec(self.location(), &[], &args(&["test", "-e", &path]))?;
@@ -214,15 +214,6 @@ impl Repository {
                 self.remote_cat(&path).map(Some)
             }
         }
-    }
-    fn wsl_cat(&self, distribution: &str, path: &str) -> Result<Vec<u8>> {
-        let mut cat = Command::new("wsl.exe");
-        cat.args(["--distribution", distribution, "--exec", "cat", "--", path]);
-        let output = process::run(cat)?;
-        if !output.success {
-            return Err(self.failed(&output));
-        }
-        Ok(output.stdout)
     }
     /// Reads one backend-constant metadata file on the host that owns it.
     fn remote_cat(&self, path: &str) -> Result<Vec<u8>> {

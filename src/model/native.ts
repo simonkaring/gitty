@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { Commit } from './types';
 import { demoInvoke } from './demoBackend';
-import type { CommitSummary, DiffSpec, HistoryPage, RepositorySnapshot, RepositoryState, RepositoryStatus, StatusEntry } from './repository';
+import type { CommitSummary, DiffSpec, RepositorySnapshot, RepositoryState, RepositoryStatus, StatusEntry } from './repository';
 import type { OperationState } from './operations';
 
 import { recordCommandEnd, recordCommandStart } from './activity';
@@ -117,34 +117,7 @@ export async function readNativeSnapshot(handle: string, options: {
       if (history.firstPageMillis !== undefined) options.onFirstHistoryPage?.(history.firstPageMillis);
       return { state: before, status, operation, commits: history.commits, cursor: history.cursor, generation: history.generation };
     }
-    if (history === null) throw new Error('Repository omitted changed history. Refresh to retry.');
-    // Compatibility with older/native mocked snapshot providers. Current native and
-    // demo backends return the already-verified history in the snapshot itself.
-    let commits: CommitSummary[] = [];
-    let cursor: string | null = null;
-    let generation = '';
-    const remap = options.remap && before.session.head === options.remap.to ? options.remap : undefined;
-    const keep = new Set(preserve
-      .map(id => remap && id === remap.from ? remap.to : id));
-    const count = 200;
-    // Keep-visible is best effort, not explicit reveal. A reset/rebase may orphan
-    // even an ID in the previous history; never scan an unbounded walk while a
-    // write waits for its reconciliation refresh to finish.
-    const keepVisibleBudget = preserveLimit;
-    do {
-      const pageStarted = performance.now();
-      const page: HistoryPage = await call<HistoryPage>('repository_history', { cursor, limit: 200, query: {} });
-      if (!cursor) options.onFirstHistoryPage?.(performance.now() - pageStarted);
-      if (generation && page.generation !== generation) throw new Error('History generation changed during refresh. Retry.');
-      if (cursor && cursor === page.cursor) throw new Error('History cursor did not advance. Refresh and retry.');
-      generation = page.generation;
-      commits = appendUnique(commits, page.commits); cursor = page.cursor;
-      page.commits.forEach(commit => keep.delete(commit.id));
-    } while (cursor && (commits.length < count || (keep.size > 0 && commits.length < keepVisibleBudget)));
-    const after = await call<RepositoryState>('repository_state');
-    if (before.fingerprint !== after.fingerprint || status.head !== after.session.head || status.headRef !== after.session.headRef) continue;
-    validateHistory(commits);
-    return { state: after, status, operation, commits, cursor, generation };
+    throw new Error('Repository omitted changed history. Refresh to retry.');
   }
   throw new Error('Repository kept changing during refresh. Showing the last consistent snapshot; retry when changes settle.');
 }

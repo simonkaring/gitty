@@ -32,7 +32,8 @@ contract with a 15-minute deadline. A separate common-directory job registry rej
 duplicate graph writes without holding the ordinary mutation lock, so stage/commit,
 remote actions and linked-worktree opens can proceed. Session/window close cancels
 the write and kills/reaps its local process tree; SSH/WSL remote cleanup depends on
-transport disconnect behavior. Preflight reads remain deadline-bounded.[^backend][^contract]
+transport disconnect behavior. Abnormal reader cleanup is bounded even when an
+escaped descendant holds the pipes open. Preflight reads remain deadline-bounded.[^backend][^contract]
 `--reachable --changed-paths --split` writes only object-store graph metadata;
 refs, index and working files remain untouched. Repeated writes reuse split
 layers, whose old Bloom-filter coverage may remain. Bare repositories and
@@ -43,8 +44,8 @@ with shallow boundaries; the action never fetches to remove those boundaries.[^b
 
 The active pane offers dismissible advice only for a missing graph after a first
 history page duration of at least 300 ms (not snapshot/open duration). The backend
-reports `firstPageMillis` from the fresh snapshot walk; client IPC timing is only
-used by the legacy compatibility path. Status is cached per session handle,
+reports `firstPageMillis` from the fresh snapshot walk; no client IPC timing
+fallback remains. Status is cached per session handle,
 including pending reads across tab switches, until a graph write completes.
 Dismissals persist per canonical repository identity. The command palette always
 offers the same explicit action. Its lightweight busy flag blocks duplicate graph

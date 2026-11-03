@@ -25,7 +25,11 @@ try {
       if (command === 'plugin:event|listen') return 1;
       if (command === 'plugin:event|unlisten') return;
       if (command.startsWith('plugin:webview|') || command.startsWith('plugin:window|')) return;
-      if (command === 'repository_snapshot') { const [state, status, operation] = await Promise.all(['repository_state', 'repository_status', 'repository_operation_state'].map(name => window.__TAURI_INTERNALS__.invoke(name, args))); return { state, status, operation }; }
+      if (command === 'repository_snapshot') {
+        const [state, status, operation] = await Promise.all(['repository_state', 'repository_status', 'repository_operation_state'].map(name => window.__TAURI_INTERNALS__.invoke(name, args)));
+        const history = args.history && args.history.fingerprint !== state.fingerprint ? await window.__TAURI_INTERNALS__.invoke('repository_history', { handle: args.handle, cursor: null, limit: 200, query: {} }) : null;
+        return { state, status, operation, history };
+      }
       if (command === 'repository_recent') return [{ kind: 'native', path: '/fixture' }];
       if (command === 'wsl_distributions') return [];
       if (command === 'repository_close') return;

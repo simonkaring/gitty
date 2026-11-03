@@ -46,7 +46,8 @@ fingerprint. In `readNativeSnapshot`, unchanged state reuses loaded history;
 a changed state requests a walk from the snapshot's starting-state tips, covered by
 the same final state check and returned in one IPC. Mixed
 generations, nonadvancing cursors, and inconsistent ancestry are rejected before
-publication.[^history][^loader]
+publication. Snapshot `history` is required: `null` permits unchanged-state reuse,
+but missing changed history fails instead of launching a legacy client walk.[^history][^loader]
 
 Only one history generation per session retains a walker/spool. A new generation
 explicitly expires older cursors with `staleCursor`; replay in the retained walk
@@ -73,7 +74,9 @@ longer reloads every previously loaded row on each ref change. Initial open/HEAD
 movement seeks HEAD up to 2,000 rows; the cursor remains available for older history.
 Selection/inspection survives, and explicit reveal remains separate.[^loader][^tests]
 Initial open scrolls to HEAD. A read-only refresh follows a moved HEAD only when
-the reader was still on the old HEAD and did not navigate during the read;
+the reader was still on the old HEAD, did not navigate during the read, and has no
+inline message editor open. An external HEAD move keeps the original draft selected
+and makes saving stale rather than silently switching the inspector;
 write completion retains its existing confirmed-outcome navigation guards.[^pane]
 The pane defers its initial open to a cancellable microtask, so development
 StrictMode's synchronous effect replay does not launch a discarded session.

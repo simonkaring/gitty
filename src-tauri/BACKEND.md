@@ -444,7 +444,8 @@ runtime coverage is not implied by host tests.
   `Service::mutate`'s ref/index/worktree lock, so ordinary writes and worktree opens
   can proceed. Git's own commit-graph lock protects against external writers.
   Closing the owning session or window cancels the write and kills/reaps its local
-  process tree (including the WSL/SSH transport); remote process cleanup is subject
+   process tree (including the WSL/SSH transport); abnormal reader cleanup is bounded
+   even if an escaped descendant retains the pipes. Remote process cleanup is subject
   to the transport's disconnect behavior. Preflight reads retain their ordinary
   bounded read deadlines and check cancellation before launching the long write.
   Git's default size-tiered split strategy reuses layers for repeated writes;
@@ -458,8 +459,8 @@ runtime coverage is not implied by host tests.
   Shallow repositories return `unsupportedShallowCommitGraph` because Git cannot
   use commit-graphs with shallow boundaries; Gitty does not unshallow or fetch.
 - `snapshot_with_history` reports `firstPageMillis` for the first page of a fresh
-  walk, excluding surrounding snapshot reads. Only the legacy client compatibility
-  path measures first-page IPC duration. Advice requires missing metadata and at
+   walk, excluding surrounding snapshot reads. The client requires snapshot history
+   for changed state rather than separate history reads. Advice requires missing metadata and at
   least 300 ms, and is dismissed per canonical repository identity. The palette action is available independently
   of advice eligibility. Advice caches status (including in-flight requests) per
   session handle until a commit-graph write completes. A lightweight progress flag
@@ -562,12 +563,14 @@ targeted conflict resolutions have the additional contract documented below.
   then classifies every requested path from that fresh status and refuses the whole
   request before running anything if any path does not qualify. Untracked files are
   deleted with `git clean --force --quiet -- <paths>`; tracked files with a worktree
-  status of `M`, `D` or `T` are restored with `git restore --worktree
+  status of `M`, `D` or `T` are restored with `git restore --worktree --no-recurse-submodules
   --pathspec-from-file=- --pathspec-file-nul`, whose source is the index, so staged
   content, including the staged half of a partially staged file, is kept. Refused with
   `invalidRequest`: staged-only or unchanged paths, unknown paths, directory or nested
   repository entries (a status path ending in `/`), and intent-to-add, renamed or
-  copied entries. Unmerged paths and operations in progress are refused as for stage.
+  copied entries. Raw diff gitlink modes also refuse submodules, whose nested edits
+  are not covered by the parent status fingerprint. Restore explicitly disables
+  recursion regardless of user configuration. Unmerged paths and operations in progress are refused as for stage.
   Restore runs before clean. A failure part-way through the clean batches leaves earlier
   batches applied, so clients re-read status after any outcome. There is no whole-tree
   form and `paths` must be explicit.
@@ -703,7 +706,8 @@ operation IDs are UUIDs, and closing the main window cancels registered clones.
   accepted before publication prevents the destination rename and cleans the owned
   temporary directory; after publication begins, cancellation is rejected and the
   clone reports its actual completion result. Native cancellation terminates the
-  process group. Windows uses a kill-on-close
+   process group and reaps the child; abnormal pipe-reader cleanup is bounded even
+   if an escaped descendant retains output pipes. Windows uses a kill-on-close
   Job Object for the `wsl.exe` launcher, but cannot guarantee every Linux descendant
   is terminated; Gitty never terminates an entire WSL distribution.
 
@@ -789,7 +793,10 @@ exactly-full final page is reported truncated); Bitbucket when the envelope has 
   Fetches use `--no-write-fetch-head`, including explicit fetch and pull. Pull
   fetches its selected branch to both its normal tracking ref and a random private
   `refs/gitty/pull/<UUID>` ref, resolves that exact ref once, then integrates the OID.
-  Background/external updates to FETCH_HEAD or tracking refs cannot redirect it.
+   Background/external updates to FETCH_HEAD or tracking refs cannot redirect it.
+   After fetch and before integration, pull rechecks the original HEAD OID and
+   symbolic branch, writable operation state and conflicts. A changed HEAD/branch
+   returns `staleOperation` without integration; external Git can still race after preflight.
   Private pull refs are excluded from graph tips and operation all-ref fingerprints.
   Post-integration cleanup deletes only the expected OID; cleanup failure is a
   warning on successful integration, never an invitation to repeat it. Interrupted

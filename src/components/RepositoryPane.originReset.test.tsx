@@ -29,10 +29,9 @@ beforeEach(() => {
   originTip = 'origin'; dirty = false; mocks.invoke.mockReset();
   mocks.invoke.mockImplementation(async (command: string) => {
     if (command === 'repository_open' || command === 'repository_state') return state();
-    if (command === 'repository_snapshot') return { state: state(), status: status(), operation };
+    if (command === 'repository_snapshot') return { state: state(), status: status(), operation, history: { commits: ['local', 'origin'].map(id => ({ id, parents: [], subject: id, author: 'Ada', email: 'ada@example.com', timestamp: 1 })), cursor: null, generation: 'g', shallow: false } };
     if (command === 'repository_operation_state') return operation;
     if (command === 'repository_branch_relation') return [1, 0];
-    if (command === 'repository_history') return { commits: ['local', 'origin'].map(id => ({ id, parents: [], subject: id, author: 'Ada', email: 'ada@example.com', timestamp: 1 })), cursor: null, generation: 'g', shallow: false };
     if (command === 'repository_commit') return { id: 'local', parents: [], subject: 'local', body: '', author: 'Ada', email: 'ada@example.com', timestamp: 1 };
     if (command === 'repository_diff_files') return [];
     if (command === 'repository_worktrees') return [];

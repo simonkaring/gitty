@@ -39,7 +39,11 @@ try {
     };
     window.__TAURI_INTERNALS__ = { invoke: async (command, args = {}) => {
       f.calls.push({ command, args: structuredClone(args) });
-      if (command === 'repository_snapshot') { const [state, status, operation] = await Promise.all(['repository_state', 'repository_status', 'repository_operation_state'].map(name => window.__TAURI_INTERNALS__.invoke(name, args))); return { state, status, operation }; }
+      if (command === 'repository_snapshot') {
+        const [state, status, operation] = await Promise.all(['repository_state', 'repository_status', 'repository_operation_state'].map(name => window.__TAURI_INTERNALS__.invoke(name, args)));
+        const history = args.history && args.history.fingerprint !== state.fingerprint ? await window.__TAURI_INTERNALS__.invoke('repository_history', { handle: args.handle, cursor: null, limit: 200, query: {} }) : null;
+        return { state, status, operation, history };
+      }
       if (command === 'repository_recent') return [location];
       if (command === 'wsl_distributions') return [];
       if (command === 'repository_open' || command === 'repository_state') return state();

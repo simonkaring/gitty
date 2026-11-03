@@ -158,6 +158,8 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   /** Counts user selection actions only (not automatic or session-reset selection), so an automatic
    * follow can tell that the user moved, including away and back to the same commit. */
   const navigation = useRef(0);
+  const messageEditing = useRef(false);
+  const onMessageEditingChange = useCallback((editing: boolean) => { messageEditing.current = editing; }, []);
   const activeRef = useRef(active);
   activeRef.current = active;
   const onIdentityRef = useRef(onIdentity);
@@ -250,7 +252,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
         anchor.current = follow(graph.current?.anchor() ?? null);
         generation.current = snapshot.generation;
         installHistory(snapshot.commits, snapshot.cursor);
-        if (!mutationLock.current && !replace && updated.session.head && updated.session.head !== current.session.head && selectedRef.current === current.session.head && navigation.current === startedNavigation) {
+        if (!mutationLock.current && !messageEditing.current && !replace && updated.session.head && updated.session.head !== current.session.head && selectedRef.current === current.session.head && navigation.current === startedNavigation) {
           setSelected(updated.session.head);
           jumpTo.current = updated.session.head;
           anchor.current = null;
@@ -852,6 +854,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
                 onActiveDiffChange={setActiveDiff}
                 notify={setNotice}
                 onEditMessage={editHeadMessage}
+                onEditingChange={onMessageEditingChange}
                 writeBlocked={mutationBusy || mutationBlocked}
                  authorAvatarMode={settings.authorAvatarMode}
               />

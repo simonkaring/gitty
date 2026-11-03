@@ -1606,11 +1606,15 @@ fn operations_unsupported_state_bare_and_signing_errors() {
     std::fs::remove_file(f.dir.path().join(".git/BISECT_LOG")).unwrap();
     f.resolve(ConflictResolution::Ours).unwrap();
     f.git(&["config", "commit.gpgSign", "true"]);
+    f.git(&["config", "gpg.format", "openpgp"]);
     f.git(&["config", "gpg.program", "gitty-nonexistent-signing-program"]);
     let before = f.git(&["rev-parse", "HEAD"]);
     let error = f.run(GitAction::Continue).unwrap_err();
+    assert_eq!(error.code, "git");
+    // Git may reject malformed global signing config before reading the local signer.
     assert!(
-        error.message.contains("gitty-nonexistent-signing-program"),
+        error.message.contains("gitty-nonexistent-signing-program")
+            || error.message.contains("bad config variable 'gpg.format'"),
         "{error:?}"
     );
     assert_eq!(f.git(&["rev-parse", "HEAD"]), before);

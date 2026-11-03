@@ -38,9 +38,8 @@ beforeEach(() => {
   mocks.invoke.mockImplementation(async command => {
     switch (command) {
       case 'repository_open': case 'repository_state': return state();
-      case 'repository_snapshot': return { state: state(), status: status(), operation: none };
+      case 'repository_snapshot': return { state: state(), status: status(), operation: none, history: { commits: [commit], cursor: null, generation: 'walk', shallow: false } };
       case 'repository_status': return status();
-      case 'repository_history': return { commits: [commit], cursor: null, generation: 'walk', shallow: false };
       case 'repository_commit': return { ...commit, body: 'Subject h1\n\nBody', canEditMessage: true, editDisabledReason: null };
       case 'repository_diff_files': return [];
       default: return undefined;

@@ -35,9 +35,8 @@ beforeEach(() => {
   mocks.invoke.mockImplementation((command, args = {}) => {
     switch (command) {
       case 'repository_open': case 'repository_state': return Promise.resolve(state());
-      case 'repository_snapshot': return Promise.resolve({ state: state(), status: status(), operation: none });
+      case 'repository_snapshot': return Promise.resolve({ state: state(), status: status(), operation: none, history: { commits: [commit], cursor: null, generation: 'walk', shallow: false } });
       case 'repository_status': return Promise.resolve(status());
-      case 'repository_history': return Promise.resolve({ commits: [commit], cursor: null, generation: 'walk', shallow: false });
       case 'repository_search': return new Promise((resolve, reject) => { searches.push({ query: args.query as { text: string }, resolve, reject }); });
       default: return Promise.resolve(undefined);
     }

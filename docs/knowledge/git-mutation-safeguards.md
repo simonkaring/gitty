@@ -82,7 +82,8 @@ for exact requirements.[^contract]
 
 Preserve working files and unrelated index entries when staging/unstaging hunks.
 Discard deliberately destroys selected unstaged content; tracked files restore
-from the index. Message-only amend preserves the old tree; ordinary amend folds
+from the index. Submodules are refused because parent fingerprints do not review
+nested work, and restore explicitly disables submodule recursion. Message-only amend preserves the old tree; ordinary amend folds
 in staged content. Remote-tracking refs are local evidence, not proof of the
 remote's current state.[^contract][^hunk-tests]
 
@@ -182,7 +183,9 @@ Untracked obstruction checks summarize ignored/untracked directories, then refin
 only target paths/ancestors. Noncolliding siblings remain allowed; a failed or
 over-budget query never grants permission. Pull uses a private fetched-OID ref,
 not mutable FETCH_HEAD/tracking refs; private refs do not affect graph/review
-fingerprints, and cleanup cannot make completed integration retryable.[^operations][^remote-writes]
+fingerprints, and cleanup cannot make completed integration retryable. After fetch,
+pull rechecks the original HEAD/branch, operation state and conflicts before
+integration; this preflight does not serialize external Git.[^operations][^remote-writes]
 
 When changing this area, inspect `Service::mutate`, the action's Rust preflight,
 and `writeAndRefresh`. Existing regression entry points include

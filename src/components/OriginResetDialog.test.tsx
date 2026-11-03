@@ -18,7 +18,7 @@ beforeEach(() => {
   Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.setAttribute('open', ''); } });
   invoke.mockReset();
   invoke.mockImplementation(async (command: string) => {
-    if (command === 'repository_snapshot') return { state, operation, status: { entries: [{ path: 'tracked', untracked: false }, { path: 'new', untracked: true }] } };
+    if (command === 'repository_snapshot') return { state, operation, status: { entries: [{ path: 'tracked', untracked: false }, { path: 'new', untracked: true }] }, history: null };
     if (command === 'repository_state') return state;
     if (command === 'repository_operation_state') return operation;
     if (command === 'repository_branch_relation') return [2, 1];
@@ -71,7 +71,7 @@ it('requires an explicit new review after a failed write without retrying it', a
 });
 it('refuses a review when working state changes during capture', async () => {
   invoke.mockImplementation(async (command: string) => {
-    if (command === 'repository_snapshot') return { state, operation, status: { entries: [] } };
+    if (command === 'repository_snapshot') return { state, operation, status: { entries: [] }, history: null };
     if (command === 'repository_state') return state;
     if (command === 'repository_operation_state') return { ...operation, fingerprint: 'changed' };
     return [2, 1];

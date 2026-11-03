@@ -550,9 +550,33 @@ impl Repository {
         }
         let (restore, delete) = classify_discard(&paths, &status.entries)?;
         if !restore.is_empty() {
+            let requested: HashSet<&str> = restore.iter().map(String::as_str).collect();
+            let raw = self.check_text(&[
+                "diff",
+                "--raw",
+                "-z",
+                "--no-renames",
+                "--ignore-submodules=none",
+                "--",
+            ])?;
+            let mut records = raw.split_terminator('\0');
+            while let Some(header) = records.next() {
+                let path = records
+                    .next()
+                    .ok_or_else(|| Error::new("gitParse", "Missing discard diff path"))?;
+                if header
+                    .split_whitespace()
+                    .take(2)
+                    .any(|mode| mode.trim_start_matches(':') == "160000")
+                    && requested.contains(path)
+                {
+                    return Err(Error::new("invalidRequest", "Submodule contents cannot be reviewed for discard. Preserve or discard nested changes in Git."));
+                }
+            }
             let a = args(&[
                 "restore",
                 "--worktree",
+                "--no-recurse-submodules",
                 "--pathspec-from-file=-",
                 "--pathspec-file-nul",
             ]);

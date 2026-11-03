@@ -30,9 +30,8 @@ beforeEach(() => {
   mocks.invoke.mockImplementation(async command => {
     switch (command) {
       case 'repository_open': case 'repository_state': return state();
-      case 'repository_snapshot': return { state: state(), status: status(), operation: none };
+      case 'repository_snapshot': return { state: state(), status: status(), operation: none, history: { commits, cursor: null, generation: 'walk', shallow: false } };
       case 'repository_status': return status();
-      case 'repository_history': return { commits, cursor: null, generation: 'walk', shallow: false };
       default: return undefined;
     }
   });

@@ -44,7 +44,7 @@ export interface SearchQuery { text: string; branch?: string; since?: string; un
 export interface SearchResult { commits: CommitSummary[]; truncated: boolean }
 export interface RepositoryState { session: RepositorySession; refs: RepositoryRef[]; remotes: string[]; fingerprint: string }
 /** State, status and operation state read together by one command; the service retries until they agree. */
-export interface RepositorySnapshot { state: RepositoryState; status: RepositoryStatus; operation: OperationState; history?: HistoryPage | null }
+export interface RepositorySnapshot { state: RepositoryState; status: RepositoryStatus; operation: OperationState; history: HistoryPage | null }
 export interface SnapshotHistory { /** Omitted to force a fresh walk. */ fingerprint?: string; previousHead?: string | null; preserve: string[]; preserveLimit: number; remap?: { from: string; to: string } }
 export interface WslDistribution { name: string; running: boolean }
 export interface DirectoryEntry { name: string; path: string }

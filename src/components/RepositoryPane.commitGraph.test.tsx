@@ -31,8 +31,7 @@ it('runs the palette write once, shows progress, and reloads history even when r
   let graphPresent = false;
   mocks.invoke.mockImplementation(async (command: string) => {
     if (command === 'repository_open' || command === 'repository_state') return state;
-    if (command === 'repository_snapshot') return { state, status, operation };
-    if (command === 'repository_history') return { commits: [{ id: 'tip', parents: [], subject: 'Tip', author: 'Ada', email: 'ada@example.com', timestamp: 1 }], cursor: null, generation: 'g', shallow: false };
+    if (command === 'repository_snapshot') return { state, status, operation, history: { commits: [{ id: 'tip', parents: [], subject: 'Tip', author: 'Ada', email: 'ada@example.com', timestamp: 1 }], cursor: null, generation: 'g', shallow: false } };
     if (command === 'repository_worktrees') return [];
     if (command === 'repository_commit_graph_status') return graphPresent ? 'present' : 'missing';
     if (command === 'repository_write_commit_graph') { const result = await write; graphPresent = true; return result; }
@@ -56,7 +55,8 @@ it('runs the palette write once, shows progress, and reloads history even when r
     expect(busy).not.toHaveBeenCalledWith('t', true);
     finish({ output: '' });
     await vi.waitFor(() => expect(toasts.textContent).toContain('History accelerated'), { timeout: 5000 });
-    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'repository_history')).toHaveLength(2);
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'repository_snapshot')).toHaveLength(2);
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === 'repository_history')).toHaveLength(0);
     await vi.waitFor(() => expect(mocks.invoke.mock.calls.filter(([command]) => command === 'repository_commit_graph_status')).toHaveLength(2));
   } finally { root.unmount(); host.remove(); toasts.remove(); }
 }, 20_000);

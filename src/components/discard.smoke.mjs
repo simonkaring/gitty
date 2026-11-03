@@ -36,7 +36,7 @@ try {
         case 'repository_close': return;
         case 'repository_operation_state': return operation();
         case 'repository_status': return status();
-        case 'repository_snapshot': return { state: state(), status: status(), operation: operation() };
+        case 'repository_snapshot': return { state: state(), status: status(), operation: operation(), history: args.history && args.history.fingerprint !== state().fingerprint ? { commits: history(), cursor: null, generation: `g:${f.head}`, shallow: false } : null };
         case 'repository_history': return { commits: history(), cursor: null, generation: `g:${f.head}`, shallow: false };
         case 'repository_commit': return commit(args.oid);
         case 'repository_diff_files': return [];
@@ -127,7 +127,8 @@ try {
   await page.getByRole('button', { name: 'Commit staged changes' }).click();
   await page.getByText(/Created commit/).waitFor();
   const afterCommit = await since(n);
-  assert.ok(afterCommit.includes('repository_snapshot') && afterCommit.includes('repository_history'));
+  assert.ok(afterCommit.includes('repository_snapshot'));
+  assert.ok(!afterCommit.includes('repository_history'));
   assert.deepEqual(errors, []);
   console.log('discard smoke OK');
 } finally { await browser.close(); await server.close(); }

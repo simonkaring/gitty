@@ -413,6 +413,7 @@ impl Repository {
                     )
                 })?;
                 self.remote_branch_name(branch)?;
+                let expected_head = self.head_commit()?;
                 // Fetch precisely one branch, then integrate its pinned object ID.
                 // No merge/rebase ever runs after an uncertain or failed fetch.
                 let (mut fetch, env) = network();
@@ -440,6 +441,18 @@ impl Repository {
                 let incoming = resolve(self.location(), &private_ref).map_err(|error|
                     Error::new("mutationUnverified", format!("Fetch completed, but its private tip {private_ref} could not be read: {} No integration was attempted. Refresh and inspect before another action.", error.message)))?;
                 let result = (|| -> Result<ActionOutput> {
+                    if self.sync_branch()?.as_ref() != Some(current)
+                        || self.head_commit()? != expected_head
+                    {
+                        return Err(Error::new("staleOperation", "HEAD or the checked-out branch changed during fetch. No integration was attempted; refresh before pulling again."));
+                    }
+                    self.require_writable()?;
+                    if !self.unmerged()?.is_empty() {
+                        return Err(Error::new(
+                            "unresolvedConflict",
+                            "Conflicts appeared during fetch. No integration was attempted.",
+                        ));
+                    }
                     let mut a = args(&[
                         // Branch mergeOptions can otherwise silently turn this
                         // explicitly selected mode into a squash/no-commit merge.

@@ -287,6 +287,44 @@ fn remote_pull_integrates_private_fetched_oid_despite_fetch_head_and_tracking_ra
 }
 
 #[test]
+#[cfg(unix)]
+fn pull_refuses_head_or_branch_changes_during_fetch() {
+    use std::os::unix::fs::PermissionsExt;
+    for change in ["git switch feature", "git reset --hard origin/main"] {
+        let f = Fixture::new();
+        let bare = f.bare_remote();
+        f.publish();
+        let original = f.git(&["rev-parse", "HEAD"]);
+        f.git(&["branch", "feature"]);
+        let peer = f.peer(bare.path());
+        peer.write("incoming", "fetched\n");
+        let incoming = peer.commit("incoming");
+        peer.remote(json!({"kind":"push"})).unwrap();
+        let hooks = f.dir.path().join(".git/race-hooks");
+        std::fs::create_dir(&hooks).unwrap();
+        let hook = hooks.join("reference-transaction");
+        std::fs::write(&hook, format!("#!/bin/sh\n[ \"$1\" = committed ] || exit 0\ninput=$(cat)\ncase \"$input\" in *refs/gitty/pull/*) {change} >&2;; esac\n")).unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        f.git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+        let error = f.remote(json!({"kind":"pull"})).unwrap_err();
+        assert_eq!(error.code, "staleOperation", "{change}: {error:?}");
+        assert!(error.message.contains("No integration was attempted"));
+        assert_eq!(f.git(&["rev-parse", "feature"]), original);
+        assert_eq!(
+            f.git(&["rev-parse", "main"]),
+            if change.contains("switch") {
+                original
+            } else {
+                incoming
+            }
+        );
+        assert!(f
+            .git(&["for-each-ref", "--format=%(refname)", "refs/gitty/pull"])
+            .is_empty());
+    }
+}
+
+#[test]
 fn remote_fetch_does_not_touch_fetch_head_and_private_refs_do_not_change_review() {
     let f = Fixture::new();
     let bare = f.bare_remote();

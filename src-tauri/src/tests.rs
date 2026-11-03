@@ -3053,6 +3053,45 @@ fn discard_restores_from_the_index_and_keeps_the_staged_half() {
 }
 
 #[test]
+fn discard_refuses_submodules_even_when_nested_edits_leave_the_review_unchanged() {
+    let source = init();
+    std::fs::write(source.path().join("file"), "base\n").unwrap();
+    commit(source.path(), "base");
+    let parent = init();
+    git(
+        parent.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            source.path().to_str().unwrap(),
+            "nested",
+        ],
+    );
+    commit(parent.path(), "submodule");
+    git(parent.path(), &["config", "submodule.recurse", "true"]);
+    let (service, _data, handle) = service_for(parent.path());
+    let repo = service.repo(&handle).unwrap();
+    let nested = parent.path().join("nested/file");
+    std::fs::write(&nested, "reviewed\n").unwrap();
+    let reviewed = repo.status().unwrap().fingerprint;
+    std::fs::write(&nested, "new work after review\n").unwrap();
+    assert_eq!(repo.status().unwrap().fingerprint, reviewed);
+    assert_eq!(
+        service
+            .discard(&handle, &["nested".into()], &reviewed)
+            .unwrap_err()
+            .code,
+        "invalidRequest"
+    );
+    assert_eq!(
+        std::fs::read_to_string(nested).unwrap(),
+        "new work after review\n"
+    );
+}
+
+#[test]
 fn discard_deletes_only_the_named_untracked_files_and_keeps_names_literal() {
     let d = init();
     std::fs::write(d.path().join("tracked"), "base\n").unwrap();

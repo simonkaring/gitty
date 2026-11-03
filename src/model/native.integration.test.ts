@@ -16,23 +16,23 @@ function scripted(steps: [string, unknown][]) {
   return { invoke: invoke as typeof native, calls: invoke, steps };
 }
 const operation: OperationState = { kind: 'none', label: '', current: null, incoming: null, step: null, total: null, conflicts: [], canContinue: false, canSkip: false, fingerprint: 'op' };
-const snap = (head = 'a', bare = false) => ({ state: state(head, bare), status: status(head), operation });
+const snap = (head = 'a', bare = false) => ({ state: state(head, bare), status: status(head), operation, history: page([commit(head)]) });
 const previous: NativeSnapshot = { state: state(), status: status(), operation, commits: [commit('a')], cursor: null, generation: 'old-walk' };
 
 describe('native snapshot IPC integration', () => {
   it('retries mismatched snapshot HEAD before publishing fresh or reused history', async () => {
     for (const reuse of [false, true]) {
       const mock = scripted([
-        ['repository_snapshot', { ...snap(), status: status('raced'), history: page([commit('a')]) }],
-        ['repository_snapshot', { ...snap(), history: page([commit('a')]) }],
+        ['repository_snapshot', { ...snap(), status: status('raced') }],
+        ['repository_snapshot', snap()],
       ]);
       const result = await readNativeSnapshot('session', { ...mock, previous: reuse ? previous : undefined });
-      expect(result.status.head).toBe(result.state.session.head);
+      expect(result.state.session.head).toBe(result.status.head);
       expect(mock.calls).toHaveBeenCalledTimes(2);
     }
   });
   it('bounds retries for persistently mismatched snapshot HEAD', async () => {
-    const invoke = vi.fn().mockResolvedValue({ ...snap(), status: status('raced'), history: page([commit('a')]) });
+    const invoke = vi.fn().mockResolvedValue({ ...snap(), status: status('raced') });
     await expect(readNativeSnapshot('session', { invoke })).rejects.toThrow('Repository kept changing');
     expect(invoke).toHaveBeenCalledTimes(3);
   });
@@ -40,141 +40,60 @@ describe('native snapshot IPC integration', () => {
     const commits = [commit('feature'), commit('a')];
     const mock = scripted([['repository_snapshot', { ...snap(), history: page(commits, 'older') }]]);
     const result = await readNativeSnapshot('session', mock);
-    expect(result.commits).toEqual(commits);
+    expect(result.commits).toBe(commits);
     expect(result.cursor).toBe('older');
     expect(mock.calls).toHaveBeenCalledExactlyOnceWith('repository_snapshot', { handle: 'session', history: { fingerprint: undefined, previousHead: undefined, preserve: [], preserveLimit: 400, remap: undefined } });
   });
-  it('refreshes to selection/anchor depth rather than the entire previously loaded prefix', async () => {
+  it('requests selection/anchor depth, not the entire previously loaded prefix', async () => {
     const deep = { ...previous, commits: Array.from({ length: 5000 }, (_, i) => commit(`c${i}`)) };
-    const mock = scripted([['repository_snapshot', { ...snap('new'), history: page([commit('new'), commit('c12')], 'more') }]]);
+    const mock = scripted([['repository_snapshot', snap('new')]]);
     await readNativeSnapshot('session', { ...mock, previous: deep, preserve: ['c0', 'c12', 'orphan', WORKING_ID] });
     expect(mock.calls).toHaveBeenCalledWith('repository_snapshot', expect.objectContaining({ history: expect.objectContaining({ preserve: ['c0', 'c12'], preserveLimit: 412 }) }));
   });
-  it('retains a deep viewport target with a bounded margin and filters deleted IDs before remapping', async () => {
+  it('filters deleted and orphan IDs before handing remapping to the backend', async () => {
     const deep = { ...previous, commits: Array.from({ length: 5000 }, (_, i) => commit(`c${i}`)) };
-    const mock = scripted([['repository_snapshot', { ...snap('new'), history: page([commit('new')], 'more') }]]);
-    await readNativeSnapshot('session', { ...mock, previous: deep, preserve: ['c4500', 'c1'], excludeKeepVisible: ['c1'], remap: { from: 'c4500', to: 'new' } });
-    expect(mock.calls).toHaveBeenCalledWith('repository_snapshot', expect.objectContaining({ history: expect.objectContaining({ preserve: ['c4500'], preserveLimit: 4900, remap: { from: 'c4500', to: 'new' } }) }));
+    const mock = scripted([['repository_snapshot', snap('new')]]);
+    const remap = { from: 'c4500', to: 'new' };
+    await readNativeSnapshot('session', { ...mock, previous: deep, preserve: ['c4500', 'c1', 'orphan'], excludeKeepVisible: ['c1'], remap });
+    expect(mock.calls).toHaveBeenCalledWith('repository_snapshot', expect.objectContaining({ history: expect.objectContaining({ preserve: ['c4500'], preserveLimit: 4900, remap }) }));
   });
-  it('reads state, status and operation in one call before starting a walk', async () => {
-    const mock = scripted([['repository_snapshot', snap('b')], ['repository_history', page([commit('b')])], ['repository_state', state('b')]]);
-    const result = await readNativeSnapshot('session', mock);
-    expect(result.state.session.head).toBe(result.status.head);
-    expect(result.operation).toBe(operation);
-    expect(result.commits[0].id).toBe('b'); expect(mock.steps).toHaveLength(0);
-  });
-  it('discards a complete candidate when refs move while history is being fetched', async () => {
-    const mock = scripted([
-      ['repository_snapshot', snap('a')], ['repository_history', page([commit('a')])], ['repository_state', state('b')],
-      ['repository_snapshot', snap('b')], ['repository_history', page([commit('b')], null, 'new-walk')], ['repository_state', state('b')],
-    ]);
-    const result = await readNativeSnapshot('session', mock);
-    expect(result.generation).toBe('new-walk'); expect(result.cursor).toBeNull();
-    expect(result.commits.map(c => c.id)).toEqual(['b']);
-  });
-  it('loads beyond the old prefix to preserve selection and viewport after more than a page of new commits', async () => {
-    const newest = Array.from({ length: 200 }, (_, i) => commit(`new-${i}`, [i === 199 ? 'a' : `new-${i + 1}`]));
-    const mock = scripted([
-      ['repository_snapshot', snap('new-0')],
-      ['repository_history', page(newest, 'page-2')],
-      ['repository_history', page([commit('a', ['anchor']), commit('anchor')])],
-      ['repository_state', state('new-0')],
-    ]);
-    const result = await readNativeSnapshot('session', { ...mock, previous, preserve: ['a', 'anchor'] });
-    expect(result.commits).toHaveLength(202);
-    expect(mock.calls.mock.calls.filter(([command]) => command === 'repository_history')).toHaveLength(2);
-  });
-  it('finishes the walk when a retained selection becomes unreachable without adding fake ancestry', async () => {
-    const mock = scripted([['repository_snapshot', snap('b')], ['repository_history', page([commit('b')])], ['repository_state', state('b')]]);
-    const result = await readNativeSnapshot('session', { ...mock, previous, preserve: ['a'] });
-    expect(result.cursor).toBeNull(); expect(result.commits.map(c => c.id)).toEqual(['b']);
-    expect(previous.commits.map(c => c.id)).toEqual(['a']);
-  });
-  it('bounds automatic paging for a previously loaded tip orphaned by reset or rebase', async () => {
-    const commits = (offset: number) => Array.from({ length: 200 }, (_, i) => commit(`reachable-${offset + i}`));
-    const mock = scripted([
-      ['repository_snapshot', snap('reachable-0')],
-      ['repository_history', page(commits(0), 'second')],
-      ['repository_history', page(commits(200), 'still-thousands-more')],
-      ['repository_state', state('reachable-0')],
-    ]);
-    const result = await readNativeSnapshot('session', { ...mock, previous, preserve: ['a'] });
-    expect(result.commits).toHaveLength(400);
-    expect(result.cursor).toBe('still-thousands-more');
-    expect(previous.commits[0].id).toBe('a'); // inspector selection is not rewritten
-    expect(mock.steps).toHaveLength(0);
-  });
-  it('excludes a deleted target from automatic keep-visible paging without filtering returned history', async () => {
-    const firstPage = Array.from({ length: 200 }, (_, index) => commit(`tip-${index}`, [`parent-${index}`]));
-    const mock = scripted([['repository_snapshot', snap('tip-0')], ['repository_history', page(firstPage, 'next')], ['repository_state', state('tip-0')]]);
-    const result = await readNativeSnapshot('session', { ...mock, previous, preserve: ['a'], excludeKeepVisible: ['a'] });
-    expect(result.commits).toHaveLength(200);
-    expect(result.commits.some(item => item.id === 'a')).toBe(false);
-    expect(result.cursor).toBe('next');
-    expect(mock.calls.mock.calls.filter(([command]) => command === 'repository_history')).toHaveLength(1);
-  });
-  describe('following an amended tip', () => {
-    const chain = (prefix: string, length: number) => Array.from({ length }, (_, i) => commit(`${prefix}${i}`, [`${prefix}${i + 1}`]));
-    const before: NativeSnapshot = { ...previous, state: state('old'), status: status('old'), commits: [commit('old', ['base']), commit('base')], cursor: null };
-    const walks = (mock: ReturnType<typeof scripted>) => mock.calls.mock.calls.filter(([command]) => command === 'repository_history').length;
-
-    it('follows the old tip to the new commit and stops at the first page instead of searching for an unreachable ID', async () => {
-      const mock = scripted([['repository_snapshot', snap('new')], ['repository_history', page([commit('new', ['base']), ...chain('x', 199)], 'more')], ['repository_state', state('new')]]);
-      const result = await readNativeSnapshot('session', { ...mock, previous: before, preserve: ['old'], remap: { from: 'old', to: 'new' } });
-      expect(result.commits).toHaveLength(200); expect(result.cursor).toBe('more');
-      expect(mock.steps).toHaveLength(0); expect(walks(mock)).toBe(1);
-    });
-    it('without the confirmed remap the same refresh walks on looking for the old tip', async () => {
-      const mock = scripted([
-        ['repository_snapshot', snap('new')], ['repository_history', page([commit('new', ['base']), ...chain('x', 199)], 'more')],
-        ['repository_history', page([commit('base')], null)], ['repository_state', state('new')],
-      ]);
-      const result = await readNativeSnapshot('session', { ...mock, previous: before, preserve: ['old'] });
-      expect(result.cursor).toBeNull(); expect(walks(mock)).toBe(2);
-    });
-    it('ignores a remap whose target is not the refreshed HEAD, so a moved HEAD cannot force a full walk for it', async () => {
-      const mock = scripted([
-        ['repository_snapshot', snap('hooked')], ['repository_history', page([commit('hooked', ['base']), ...chain('x', 199)], 'more')],
-        ['repository_history', page([commit('base')], null)], ['repository_state', state('hooked')],
-      ]);
-      await readNativeSnapshot('session', { ...mock, previous: before, preserve: ['old'], remap: { from: 'old', to: 'new' } });
-      // `old` was kept (it was in the previous history) and could not be found; `new` was never searched for.
-      expect(walks(mock)).toBe(2);
-    });
-    it('drops automatic candidates that were not in the previous history before remapping, so an inspector-only orphan never causes a scan', async () => {
-      const mock = scripted([['repository_snapshot', snap('new')], ['repository_history', page([commit('new'), ...chain('x', 199)], 'more')], ['repository_state', state('new')]]);
-      const result = await readNativeSnapshot('session', { ...mock, previous: { ...before, state: state('older') }, preserve: ['orphan', 'ghost', WORKING_ID], remap: { from: 'ghost', to: 'new' } });
-      expect(result.cursor).toBe('more'); expect(walks(mock)).toBe(1);
-    });
+  it('hands a confirmed amend to the snapshot without extra history reads', async () => {
+    const mock = scripted([['repository_snapshot', { ...snap('new'), history: page([commit('new')], 'more', 'new-walk') }]]);
+    const remap = { from: 'a', to: 'new' };
+    const result = await readNativeSnapshot('session', { ...mock, previous, preserve: ['a'], remap });
+    expect(mock.calls).toHaveBeenCalledExactlyOnceWith('repository_snapshot', { handle: 'session', history: { fingerprint: 'a', previousHead: 'a', preserve: ['a'], preserveLimit: 400, remap } });
+    expect(result.generation).toBe('new-walk');
+    expect(result.cursor).toBe('more');
   });
   it('reuses the pinned walk on unchanged polls with a single IPC call', async () => {
-    const mock = scripted([['repository_snapshot', snap()]]);
+    const mock = scripted([['repository_snapshot', { ...snap(), history: null }]]);
     const result = await readNativeSnapshot('session', { ...mock, previous });
-    expect(result.commits).toBe(previous.commits); expect(result.generation).toBe('old-walk');
-    expect(result.operation).toBe(operation);
-    expect(mock.steps).toHaveLength(0); expect(mock.calls).toHaveBeenCalledTimes(1);
+    expect(result.commits).toBe(previous.commits);
+    expect(result.generation).toBe('old-walk');
+    expect(mock.calls).toHaveBeenCalledOnce();
   });
-  it('walks history for a bare repository without a working-tree status', async () => {
-    const mock = scripted([['repository_snapshot', snap('a', true)], ['repository_history', page([commit('a')])], ['repository_state', state('a', true)]]);
-    const result = await readNativeSnapshot('session', mock);
-    expect(result.status.entries).toEqual([]); expect(mock.steps).toHaveLength(0);
+  it('accepts a bare snapshot with empty working status', async () => {
+    const mock = scripted([['repository_snapshot', snap('a', true)]]);
+    expect((await readNativeSnapshot('session', mock)).status.entries).toEqual([]);
+    expect(mock.calls).toHaveBeenCalledOnce();
+  });
+  it.each([null, undefined])('rejects missing changed history (%s) instead of using a legacy walk', async history => {
+    const mock = scripted([['repository_snapshot', { ...snap('new'), history }]]);
+    await expect(readNativeSnapshot('session', { ...mock, previous })).rejects.toThrow('omitted changed history');
+    expect(mock.calls).toHaveBeenCalledOnce();
   });
   it('rejects malformed ordering before it reaches graph layout', async () => {
-    const mock = scripted([['repository_snapshot', snap()], ['repository_history', page([commit('a'), commit('b', ['a'])])], ['repository_state', state()]]);
+    const mock = scripted([['repository_snapshot', { ...snap(), history: page([commit('a'), commit('b', ['a'])]) }]]);
     await expect(readNativeSnapshot('session', mock)).rejects.toThrow('inconsistent ancestry');
   });
-  it('bounds retries while refs keep moving', async () => {
-    const mock = scripted(Array.from({ length: 3 }, (): [string, unknown][] => [['repository_snapshot', snap('a')], ['repository_history', page([commit('a')])], ['repository_state', state('b')]]).flat());
-    await expect(readNativeSnapshot('session', mock)).rejects.toThrow('kept changing');
-    expect(mock.calls).toHaveBeenCalledTimes(9);
-  });
-  it('stops a superseded asynchronous read before issuing another IPC request', async () => {
+  it('stops a superseded read before publishing the snapshot', async () => {
     let resolve!: (value: unknown) => void;
     let current = true;
     const invoke = vi.fn(() => new Promise<unknown>(done => { resolve = done; }));
     const result = readNativeSnapshot('session', { invoke: invoke as typeof native, current: () => current });
     current = false; resolve(snap());
-    await expect(result).rejects.toThrow('superseded'); expect(invoke).toHaveBeenCalledTimes(1);
+    await expect(result).rejects.toThrow('superseded');
+    expect(invoke).toHaveBeenCalledOnce();
   });
 });
 
@@ -182,6 +101,6 @@ describe('inspector comparison modes', () => {
   it('working categories take precedence over a saved commit comparison', () => {
     expect(inspectorSpec(WORKING_ID, 'staged', 'base', 'target')).toEqual({ kind: 'staged' });
     expect(inspectorSpec(WORKING_ID, 'unstaged', 'base', 'target')).toEqual({ kind: 'unstaged' });
-    expect(inspectorSpec('commit', 'unstaged', 'base', 'target')).toEqual({ kind: 'compare', base: 'base', target: 'target' });
+    expect(inspectorSpec('commit', 'staged', 'base', 'target')).toEqual({ kind: 'compare', base: 'base', target: 'target' });
   });
 });

@@ -34,7 +34,11 @@ try {
     window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
     window.__TAURI_INTERNALS__ = { metadata: { currentWindow: { label: 'main' }, currentWebview: { windowLabel: 'main', label: 'main' } }, transformCallback: () => ++callbackId, unregisterCallback: () => {}, invoke: async (command, args) => {
       f.calls.push({ command, args });
-      if (command === 'repository_snapshot') { const [state, status, operation] = await Promise.all(['repository_state', 'repository_status', 'repository_operation_state'].map(name => window.__TAURI_INTERNALS__.invoke(name, args))); return { state, status, operation }; }
+      if (command === 'repository_snapshot') {
+        const [state, status, operation] = await Promise.all(['repository_state', 'repository_status', 'repository_operation_state'].map(name => window.__TAURI_INTERNALS__.invoke(name, args)));
+        const history = args.history && args.history.fingerprint !== state.fingerprint ? await window.__TAURI_INTERNALS__.invoke('repository_history', { handle: args.handle, cursor: null, limit: 200, query: {} }) : null;
+        return { state, status, operation, history };
+      }
       if (command === 'plugin:event|listen') return 1;
       if (command === 'plugin:event|unlisten') return;
       if (command.startsWith('plugin:webview|') || command.startsWith('plugin:window|')) return;

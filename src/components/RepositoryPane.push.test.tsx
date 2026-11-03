@@ -30,14 +30,13 @@ beforeEach(() => {
   mocks.invoke.mockReset();
   mocks.invoke.mockImplementation(async (command: string, args: Record<string, unknown>) => {
     if (command === 'repository_open' || command === 'repository_state') return state;
-    if (command === 'repository_snapshot') return { state, status, operation };
+    if (command === 'repository_snapshot') return { state, status, operation, history: { commits: ['main-tip', 'topic-tip', 'origin-topic'].map(id => ({ id, parents: [], subject: id, author: 'Ada', email: 'ada@example.com', timestamp: 1 })), cursor: null, generation: 'g', shallow: false } };
     if (command === 'repository_operation_state') return operation;
     if (command === 'repository_branch_relation') return [1, 0];
     if (command === 'repository_sync_info') {
       const branch = typeof args.branch === 'string' ? args.branch : 'main';
       return { branch, upstream: `origin/${branch}`, ahead: branch === 'topic' ? 2 : 0, behind: 0, remotes: ['origin'] };
     }
-    if (command === 'repository_history') return { commits: ['main-tip', 'topic-tip', 'origin-topic'].map(id => ({ id, parents: [], subject: id, author: 'Ada', email: 'ada@example.com', timestamp: 1 })), cursor: null, generation: 'g', shallow: false };
     if (command === 'repository_commit') return { id: 'main-tip', parents: [], subject: 'main', body: '', author: 'Ada', email: 'ada@example.com', timestamp: 1 };
     if (command === 'repository_diff_files') return [];
     if (command === 'repository_worktrees') return [];

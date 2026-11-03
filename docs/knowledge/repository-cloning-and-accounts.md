@@ -61,7 +61,9 @@ WSL, SSH, Bitbucket and self-hosted accounts use neither this browser nor its to
 injection. URL cloning still supports configured Git/SSH credentials and WSL helper
 authentication. Existing cancellation, temporary-directory ownership and no-replace
 publication guards (with a checked plain rename on filesystems that lack a no-replace
-rename) are shared by both clone paths.[^entry][^clone][^contract]
+rename) are shared by both clone paths. The shared child waiter kills/reaps the
+local process tree; abnormal pipe-reader cleanup is bounded even when an escaped
+descendant keeps a pipe open.[^entry][^clone][^contract]
 
 Changing accounts/organizations clears selection and keyed browser lifetimes ignore
 old results. Closing account settings refreshes metadata; API errors offer retry and

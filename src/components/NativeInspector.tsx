@@ -44,6 +44,7 @@ export function NativeInspector({
   onActiveDiffChange,
   notify,
   onEditMessage,
+  onEditingChange,
   writeBlocked = false,
   authorAvatarMode = 'initials',
 }: {
@@ -67,6 +68,7 @@ export function NativeInspector({
   /** Rewrites the message of the current HEAD only. The capture names the commit and branch the user
    * started editing; the owner revalidates them and never retargets. Never called for other commits. */
   onEditMessage?: (request: { oid: string; headRef: string; message: string }) => Promise<MutationOutcome>;
+  onEditingChange?: (editing: boolean) => void;
   /** A repository write is running, or the last refresh failed and writes are blocked. */
   writeBlocked?: boolean;
   authorAvatarMode?: AuthorAvatarMode;
@@ -92,6 +94,10 @@ export function NativeInspector({
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; editorToken.current++; }; }, []);
   const isEditing = !!editor;
+  useEffect(() => {
+    onEditingChange?.(isEditing);
+    return () => onEditingChange?.(false);
+  }, [isEditing, onEditingChange]);
   const [subjectDraft, setSubjectDraft] = useState('');
   const [bodyDraft, setBodyDraft] = useState('');
   const [savingMessage, setSavingMessage] = useState(false);

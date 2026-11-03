@@ -34,7 +34,7 @@ const commit = (index: number) => ({ id: repo.ids[index], parents: index + 1 < r
 const state = () => ({ session: { handle: 'real', location: { kind: 'native', path: '/repo' }, name: 'repo', root: '/repo', gitDir: '/repo/.git', commonDir: '/repo/.git', linkedWorktree: false, shallow: false, bare: false, head: repo.head, headRef: 'refs/heads/main' }, refs: [], remotes: [], fingerprint: `fp-${repo.head}` });
 const status = () => ({ entries: [], head: repo.head, headRef: 'refs/heads/main', fingerprint: 'status-1' });
 const calls = (name: string) => mocks.invoke.mock.calls.filter(([command]) => command === name);
-const history = () => calls('repository_history').length;
+const history = () => calls('repository_snapshot').length;
 
 beforeEach(() => {
   setHead('h1'); repo.failSnapshot = false;
@@ -43,7 +43,13 @@ beforeEach(() => {
   mocks.invoke.mockImplementation(async (command, args = {}) => {
     switch (command) {
       case 'repository_open': return state();
-      case 'repository_snapshot': if (repo.failSnapshot) throw { code: 'git', message: 'Snapshot unavailable' }; return { state: state(), status: status(), operation: none };
+      case 'repository_snapshot': {
+        if (repo.failSnapshot) throw { code: 'git', message: 'Snapshot unavailable' };
+        const request = args.history as { fingerprint?: string; preserve: string[]; preserveLimit: number; remap?: { from: string; to: string } };
+        const keep = request.preserve.map(id => request.remap?.to === repo.head && request.remap.from === id ? request.remap.to : id);
+        const end = keep.some(id => !repo.ids.slice(0, PAGE).includes(id)) ? Math.min(request.preserveLimit, repo.ids.length) : PAGE;
+        return { state: state(), status: status(), operation: none, history: request.fingerprint === state().fingerprint ? null : { commits: Array.from({ length: end }, (_, i) => commit(i)), cursor: end < repo.ids.length ? `${repo.head}:${end}` : null, generation: `walk-${repo.head}`, shallow: false } };
+      }
       case 'repository_state': return state();
       case 'repository_status': return status();
       case 'repository_history': {
@@ -104,6 +110,25 @@ it('follows an externally moved HEAD on refresh when the reader was still follow
     window.dispatchEvent(new Event('focus'));
     await vi.waitFor(() => expect(t.selected()).toBe('h2'));
     expect(mocks.graph.scrollTo).toHaveBeenCalledWith(0);
+  } finally { await t.cleanup(); }
+});
+
+it('keeps an open message draft on its original commit when refresh moves HEAD', async () => {
+  const t = await mount();
+  try {
+    t.q<HTMLElement>('h2.editable-commit-heading')!.click();
+    await vi.waitFor(() => expect(t.q('form.commit-message-editor')).not.toBeNull());
+    const input = t.q<HTMLInputElement>('.commit-message-editor input')!;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'Keep my draft');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await vi.waitFor(() => expect(input.value).toBe('Keep my draft'));
+    setHead('h2');
+    window.dispatchEvent(new Event('focus'));
+    await vi.waitFor(() => expect(t.q('.commit-message-editor [role="alert"]')?.textContent).toContain('HEAD changed'));
+    expect(t.selected()).toBe('h1');
+    expect(t.q<HTMLInputElement>('.commit-message-editor input')!.value).toBe('Keep my draft');
+    expect(t.q<HTMLButtonElement>('.commit-message-editor button[type="submit"]')!.disabled).toBe(true);
+    expect(calls('repository_amend_commit')).toHaveLength(0);
   } finally { await t.cleanup(); }
 });
 
@@ -180,7 +205,8 @@ it('does not remap or follow an uncertain write, and bounds reconciliation for t
     await vi.waitFor(() => expect(t.q('.commit-message-editor [role="alert"]')?.textContent).toContain('HEAD moved to h2'));
     // Without a confirmed oid nothing is guessed. Best-effort keep-visible stops
     // after the loaded prefix plus one page; the old tip stays inspectable.
-    expect(history()).toBe(2);
+    expect(history()).toBe(1);
+    expect(calls('repository_snapshot')[0][1]).toMatchObject({ history: { preserve: ['h1'], preserveLimit: 400, remap: undefined } });
     expect(t.selected()).toBe('h1');
     expect(calls('repository_amend_commit')).toHaveLength(1);
   } finally { await t.cleanup(); }

@@ -146,6 +146,22 @@ fn run_write(mut command: Command, control: &Control) -> Result<process::Output>
         child.kill();
     }
     child.reap();
+    if let Err(error) = result {
+        let deadline = Instant::now() + process::READER_SHUTDOWN_TIMEOUT;
+        while captured < 2 {
+            match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(process::ProcessEvent::Captured) => captured += 1,
+                Ok(process::ProcessEvent::Exited(_)) => {}
+                Err(_) => break,
+            }
+        }
+        for reader in readers {
+            if reader.is_finished() {
+                let _ = reader.join();
+            }
+        }
+        return Err(error);
+    }
     let mut output = Vec::new();
     for reader in readers {
         output.push(
@@ -402,6 +418,35 @@ impl Service {
 mod tests {
     use super::*;
     use crate::tests::{commit, git, init, open};
+
+    #[test]
+    #[cfg(unix)]
+    fn cancellation_does_not_wait_for_escaped_pipe_holders() {
+        if Command::new("python3").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let ready = dir.path().join("ready");
+        let path = ready.clone();
+        let control = Arc::new(Control::default());
+        let worker_control = control.clone();
+        let worker = thread::spawn(move || {
+            let mut command = Command::new("sh");
+            command.args(["-c", "python3 -c 'import os,sys,time; os.setsid(); open(sys.argv[1], \"w\").close(); time.sleep(3)' \"$1\" & wait", "gitty-test"]).arg(path);
+            run_write(command, &worker_control)
+        });
+        let waiting = Instant::now();
+        while !ready.exists() && waiting.elapsed() < Duration::from_secs(5) {
+            thread::sleep(Duration::from_millis(10));
+        }
+        control.cancel();
+        let start = Instant::now();
+        let result = worker.join().unwrap();
+        assert!(ready.exists());
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert_eq!(result.err().unwrap().code, "cancelled");
+        assert!(control.child.lock().unwrap().is_none());
+    }
 
     #[test]
     fn commit_graph_jobs_allow_mutations_and_worktree_opens_but_reject_duplicate_writes() {

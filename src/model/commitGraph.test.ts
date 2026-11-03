@@ -38,14 +38,13 @@ it('simulates status and the explicit write in the browser demo', async () => {
   expect(await demoInvoke('repository_write_commit_graph', args)).toEqual({ output: '' });
   expect(await demoInvoke('repository_commit_graph_status', args)).toBe('present');
 });
-it('reports first-page IPC duration without counting snapshot reads', async () => {
+it('reports backend first-page duration without counting snapshot IPC time', async () => {
   const observe = vi.fn();
   let now = 0;
   vi.spyOn(performance, 'now').mockImplementation(() => now);
   const state = { session: { head: null, headRef: null }, fingerprint: 'refs' };
   const invoke = vi.fn(async (command: string) => {
-    if (command === 'repository_snapshot') { now += 2000; return { state, status: { head: null, headRef: null }, operation: {} }; }
-    if (command === 'repository_history') { now += 350; return { commits: [], cursor: null, generation: 'g' }; }
+    if (command === 'repository_snapshot') { now += 2350; return { state, status: { head: null, headRef: null }, operation: {}, history: { commits: [], cursor: null, generation: 'g', firstPageMillis: 350 } }; }
     return state;
   }) as unknown as typeof import('./native').native;
   try {

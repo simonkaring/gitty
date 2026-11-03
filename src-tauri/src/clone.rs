@@ -13,7 +13,7 @@ use std::{
     process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU8, Ordering},
-        Arc,
+        mpsc, Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -29,18 +29,14 @@ const CLONE_FINISHED: u8 = 3;
 
 pub(crate) struct CloneControl {
     lifecycle: AtomicU8,
-    process_id: std::sync::atomic::AtomicU32,
-    #[cfg(windows)]
-    job: std::sync::Mutex<Option<process::ProcessJob>>,
+    child: Mutex<Option<process::ChildWait>>,
 }
 
 impl CloneControl {
     fn new() -> Self {
         Self {
             lifecycle: AtomicU8::new(CLONE_RUNNING),
-            process_id: std::sync::atomic::AtomicU32::new(0),
-            #[cfg(windows)]
-            job: std::sync::Mutex::new(None),
+            child: Mutex::new(None),
         }
     }
 
@@ -62,19 +58,9 @@ impl CloneControl {
     }
 
     fn terminate_process(&self) {
-        #[cfg(unix)]
-        {
-            let process_id = self.process_id.load(Ordering::Acquire);
-            if process_id != 0 {
-                unsafe {
-                    libc::kill(-(process_id as i32), libc::SIGKILL);
-                }
-            }
-        }
-        #[cfg(windows)]
-        if let Ok(job) = self.job.lock() {
-            if let Some(job) = job.as_ref() {
-                job.kill();
+        if let Ok(child) = self.child.lock() {
+            if let Some(child) = child.as_ref() {
+                child.kill();
             }
         }
     }
@@ -107,14 +93,6 @@ impl CloneControl {
 
     fn finish_operation(&self) {
         self.lifecycle.store(CLONE_FINISHED, Ordering::Release);
-    }
-
-    fn process_finished(&self) {
-        self.process_id.store(0, Ordering::Release);
-        #[cfg(windows)]
-        if let Ok(mut job) = self.job.lock() {
-            job.take();
-        }
     }
 }
 
@@ -750,6 +728,10 @@ fn run_clone(
     control: Arc<CloneControl>,
     emit: Arc<dyn Fn(CloneProgress) + Send + Sync>,
 ) -> Result<Output> {
+    let mut slot = lock(&control.child)?;
+    if control.cancelled() {
+        return Err(cancelled_error());
+    }
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -767,31 +749,29 @@ fn run_clone(
     let mut child = command
         .spawn()
         .map_err(|error| Error::new("processStart", error.to_string()))?;
-    control.process_id.store(child.id(), Ordering::Release);
-    #[cfg(windows)]
-    let job = match process::ProcessJob::attach(&child) {
-        Ok(job) => job,
-        Err(error) => {
-            control.process_finished();
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(error);
-        }
-    };
-    #[cfg(windows)]
-    if let Ok(mut stored) = control.job.lock() {
-        *stored = Some(job);
-    }
     let overflow = Arc::new(AtomicBool::new(false));
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
+    let (sender, receiver) = mpsc::channel();
+    *slot = Some(process::ChildWait::new(child, sender.clone())?);
+    drop(slot);
     let stdout_overflow = overflow.clone();
     let stderr_overflow = overflow.clone();
-    let out = thread::spawn(move || process::capture(stdout, stdout_overflow));
-    let err = thread::spawn(move || capture_progress(stderr, stderr_overflow, emit));
+    let out_sender = sender.clone();
+    let out = thread::spawn(move || {
+        let result = process::capture(stdout, stdout_overflow);
+        let _ = out_sender.send(process::ProcessEvent::Captured);
+        result
+    });
+    let err = thread::spawn(move || {
+        let result = capture_progress(stderr, stderr_overflow, emit);
+        let _ = sender.send(process::ProcessEvent::Captured);
+        result
+    });
     let start = Instant::now();
     let mut exited = None;
-    let (status, failure) = loop {
+    let mut captured = 0;
+    let result = loop {
         let failure = if control.cancelled() {
             Some(cancelled_error())
         } else if overflow.load(Ordering::Acquire) {
@@ -808,38 +788,50 @@ fn run_clone(
             None
         };
         if let Some(error) = failure {
-            control.terminate_process();
-            let _ = child.kill();
-            break (child.wait(), Some(error));
+            break Err(error);
         }
-        if let Some(status) = exited {
-            if out.is_finished() && err.is_finished() {
-                break (Ok(status), None);
+        if captured == 2 {
+            if let Some(status) = exited.take() {
+                break status;
             }
-            thread::sleep(Duration::from_millis(20));
-            continue;
         }
-        match child.try_wait() {
-            Ok(Some(status)) => exited = Some(status),
-            Ok(None) => thread::sleep(Duration::from_millis(20)),
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break (Err(error), None);
+        match receiver.recv_timeout(process::WAIT_CHECK_INTERVAL) {
+            Ok(process::ProcessEvent::Exited(status)) => exited = Some(status.map_err(Error::from)),
+            Ok(process::ProcessEvent::Captured) => captured += 1,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                break Err(Error::new("process", "Clone waiter ended unexpectedly"))
             }
         }
     };
+    let mut child = lock(&control.child)?.take().unwrap();
+    if result.is_err() {
+        child.kill();
+    }
+    child.reap();
+    if let Err(error) = result {
+        let deadline = Instant::now() + process::READER_SHUTDOWN_TIMEOUT;
+        while captured < 2 {
+            match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(process::ProcessEvent::Captured) => captured += 1,
+                Ok(process::ProcessEvent::Exited(_)) => {}
+                Err(_) => break,
+            }
+        }
+        for reader in [out, err] {
+            if reader.is_finished() {
+                let _ = reader.join();
+            }
+        }
+        return Err(error);
+    }
     let stdout = out
         .join()
         .map_err(|_| Error::new("process", "Clone stdout reader failed"))??;
     let stderr = err
         .join()
         .map_err(|_| Error::new("process", "Clone progress reader failed"))??;
-    control.process_finished();
-    if let Some(error) = failure {
-        return Err(error);
-    }
-    let status = status?;
+    let status = result?;
     Ok(Output {
         stdout,
         stderr,
@@ -1155,5 +1147,28 @@ mod tests {
         assert!(!published_temporary.exists());
         assert!(published_destination.exists());
         assert!(!publishing.request_cancel());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn cancellation_does_not_wait_for_escaped_pipe_holders() {
+        if Command::new("python3").arg("--version").output().is_err() {
+            return;
+        }
+        let control = Arc::new(CloneControl::new());
+        let trigger = control.clone();
+        let mut command = Command::new("sh");
+        command.args(["-c", "python3 -c 'import os,sys,time; os.setsid(); print(\"ready\", file=sys.stderr, flush=True); time.sleep(3)' & wait"]);
+        let start = Instant::now();
+        let result = run_clone(
+            command,
+            control.clone(),
+            Arc::new(move |_| {
+                trigger.request_cancel();
+            }),
+        );
+        assert!(start.elapsed() < Duration::from_secs(2));
+        assert_eq!(result.err().unwrap().code, "cancelled");
+        assert!(control.child.lock().unwrap().is_none());
     }
 }
