@@ -73,19 +73,6 @@ export function sortStashes(entries: StashEntry[]): StashEntry[] {
   return [...entries].sort((a, b) => stashIndex(a.selector) - stashIndex(b.selector));
 }
 
-export function describeRemoteAction(action: RemoteActionRequest): string {
-  if (action.kind === 'fetch') return `Fetch${action.remote ? ` ${action.remote}` : ''}`;
-  if (action.kind === 'backgroundFetch') return 'Background fetch';
-  if (action.kind === 'pull') return PULL_MODE_LABELS[action.pullMode ?? DEFAULT_PULL_MODE];
-  return `Push${action.remote && action.branch ? ` ${action.remote}/${action.branch}` : ''}`;
-}
-export function describeStashAction(action: StashActionRequest): string {
-  if (action.kind === 'save') return 'Stash changes';
-  if (action.kind === 'apply') return 'Apply stash';
-  if (action.kind === 'pop') return 'Pop stash';
-  return 'Drop stash';
-}
-
 /** Success notices use the requested action, not Git's terminal report. Only
  * recognize known no-op results; never guess a remote from an upstream label. */
 export function remoteSuccessMessage(action: RemoteActionRequest, output: string, currentBranch?: string | null): string {

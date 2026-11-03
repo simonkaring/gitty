@@ -5,18 +5,11 @@ import type { RepositoryLocation } from './repository';
  * explain a mistake before a round trip, not to be the security boundary. */
 export type SshLocation = Extract<RepositoryLocation, { kind: 'ssh' }>;
 
-export const isSshLocation = (location: RepositoryLocation): location is SshLocation => location.kind === 'ssh';
-
 /** `you@home:2222` — the destination part, without a path. */
 export function sshDestination(location: SshLocation): string {
   const user = location.user ? `${location.user}@` : '';
   const port = location.port ? `:${location.port}` : '';
   return `${user}${location.host}${port}`;
-}
-
-/** `you@home:~/code/thing`-style label for recents and the sidebar. */
-export function sshDisplayPath(location: SshLocation): string {
-  return `${sshDestination(location)}:${location.path}`;
 }
 
 /** Identity of the host, independent of the repository path. Drafts and commit

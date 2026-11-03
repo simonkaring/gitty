@@ -69,7 +69,7 @@ Each open tab retains its graph selection, scroll position, search filters, and 
 The toolbar beneath the tabs stays available while inspecting history or working changes:
 
 - **Pull:** fast-forward-only by default. Its dropdown also offers **Fetch only**, **Pull (merge)**, and **Pull (rebase)**. Fast-forward and merge pulls preserve local changes when Git can carry them safely and refuse overwrites. Rebase pulls require no tracked staged or unstaged changes; untracked files may remain if they do not obstruct incoming changes. Gitty never automatically stashes. Conflicts between commits use the operation banner and editor.
-- **Push / Publish…:** push the current branch to its configured upstream, or select a remote and destination branch to publish and set upstream. Push targets one branch and does not force updates. A local branch's action menu offers **Push \<branch\> to origin** when that branch has commits ahead of its same-name origin branch, even when the branch is not checked out; the push names that branch explicitly and leaves the checked-out branch alone.
+- **Push / Publish…:** push the current branch to its configured upstream (a branch that tracks a differently named upstream, such as `feature` tracking `origin/main`, asks you to choose the destination explicitly), or select a remote and destination branch to publish and set upstream. Push targets one branch and does not force updates. A local branch's action menu offers **Push \<branch\> to origin** when that branch has commits ahead of its same-name origin branch, even when the branch is not checked out; the push names that branch explicitly and leaves the checked-out branch alone.
 - **Branch:** create or switch a branch. When commits are selected, the menu also offers the ordered cherry-pick workflow.
 - **Stash…:** save tracked changes with an optional message and optional untracked files, then browse/apply/pop/drop stashes. **Restore staged changes** is enabled by default when applying or popping; uncheck it for worktree-only restoration. Pop retains the stash when application conflicts.
 - **Refresh:** update local repository state. Ahead/behind counts reflect locally known remote-tracking refs; fetching updates that information.
@@ -125,7 +125,7 @@ The browser demo does not modify repository files. Its history and diffs are syn
 - The operation banner provides **Continue**, **Skip** where applicable, **Abort**, and conflict links. The built-in conflict editor shows full base/current/incoming versions, editable results, block acceptance, and whole-file/deletion choices. On Unix and WSL, symlink conflicts allow exact side selection or deletion; external edits are detected before saving.
 - **Create pull request…** can list open requests (with a notice when the provider has more than the backend returned) and create one directly through a matching connected GitHub.com, GitLab.com, Azure DevOps, or Bitbucket Cloud account; HTTPS and SSH remotes (including scp-style `git@host:path`) for those hosts are recognized, host aliases and self-hosted instances are not. The dialog also offers a provider browser form where supported. Choose a local source branch and remote; use the toolbar's **Push / Publish…** first when needed. Creating a request never pushes your branch automatically.
 
-Branch creation and merges preserve local changes when Git can safely carry them and refuse overwrites. Branch switching offers an explicit carry-changes workflow; overlapping tracked edits can require a three-way merge and conflict resolution. Other new graph actions require a clean index/worktree, including no untracked files. Gitty never automatically stashes or forces a switch. Interactive rebase requires a native checkout and an ancestor base; WSL interactive editing is still unsupported. Submodule conflicts with two gitlink sides permit an index-only pointer selection without changing the nested worktree. Rebase ranges containing merge commits and directory/file conflicts have explicit limitations. See the [backend contract](src-tauri/BACKEND.md) for current operation semantics and [Milestone 3](docs/milestone-3.md) for the historical implementation record.
+Branch creation and merges preserve local changes when Git can safely carry them and refuse overwrites. Branch switching offers an explicit carry-changes workflow; overlapping tracked edits can require a three-way merge and conflict resolution. Other new graph actions require a clean index/worktree, including no untracked files. Gitty never automatically stashes or forces a switch. Interactive rebase requires a native checkout and an ancestor base; WSL interactive editing is still unsupported. Submodule conflicts with two gitlink sides permit an index-only pointer selection without changing the nested worktree. Rebase ranges containing merge commits and directory/file conflicts have explicit limitations. See the [backend contract](src-tauri/BACKEND.md) for current operation semantics.
 
 ## Settings and themes
 
@@ -260,14 +260,7 @@ src-tauri/
   capabilities/default.json     Minimal main-window permissions
   tauri.conf.json                Tauri 2 app/build/bundle configuration
 src-tauri/BACKEND.md              Current native Git and IPC contracts
-docs/architecture.md              Historical prototype architecture
-docs/milestone-2.md               Historical exploration implementation and validation
-docs/redesign-notes.md            Redesign and workflow implementation record
-docs/milestone-3.md               Historical graph operations and settings record
-docs/milestone-4-runtime.md       Platform verification procedures and open checks
 docs/ssh-remote-repositories.md   SSH transport design, delivered scope, and remaining refusals
-docs/authentication.md           Provider registration and authentication setup
-docs/provider-integrations.md    Provider integration implementation notes
 scripts/prepare-gcm.mjs           Checksum-pinned credential-manager preparation
 ```
 
@@ -303,16 +296,7 @@ Fixtures, the compiled probe and JSON results go to `$TMPDIR/gitty-bench` (overr
 
 SSH transport tests use a `ssh` double that joins the remote arguments as OpenSSH does and runs the result through a real shell (Unix only, `src-tauri/src/ssh_tests.rs`); they do not exercise authentication, host keys or a real network. `ssh_test` in the connect form is the manual check for a real host. Testing is local-only for now; pushes and pull requests do not trigger GitHub Actions checks. Run `npm run build` before the Rust checks so the frontend assets are available. For native compilation, run `npm run tauri -- build --no-bundle` on the target platform. Local checks validate the host platform; Windows and Linux runtime behavior require testing on those platforms. Automated cross-platform checks can be introduced in Azure DevOps when needed. The signed-release GitHub workflow has been removed while the app is validated locally.
 
-The verification notes below record results at the time of each implementation; they are not current test totals or claims that every historical browser scenario still matches the redesigned UI.
-
-### Historical: tabs, sync, stashes, hunk staging, amend, and clone verification
-
-- **139 frontend tests** and **113 Rust tests** passed. Rust integration tests use real temporary repositories and local bare remotes, including selected-hunk commits, amend freshness/hooks/signing, clone cancellation/publication linearization, independent local object files and cleanup, stash conflicts, divergent pulls, and single-branch publication.
-- All six Chromium smoke suites passed: `native`, `workflow`, `settings`, `tabs`, `operations`, and `hunks`. These use mocked Tauri IPC; coverage includes amend draft restoration and clone request/progress/open-tab behavior as well as retained per-tab state, active-only refresh, and operations completing or failing after switching tabs.
-- Production TypeScript/Vite build, Rust checks, formatting, and Clippy passed. The integrated macOS debug app built with `npm run desktop:build -- --debug --bundles app`.
-- Live remote authentication, packaged native GUI end-to-end interaction, and Windows/WSL/Linux runtime checks remain unverified.
-
-These historical browser suites require an existing Playwright/Chromium installation; their UI expectations may need updating for the current workspace:
+These browser smoke suites use mocked Tauri IPC and require an existing Playwright/Chromium installation; their UI expectations may need updating for the current workspace:
 
 ```sh
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/tabs.smoke.mjs
@@ -330,39 +314,10 @@ The working-files fixture also runs in WebKit, which is closer to the macOS/Linu
 SMOKE_BROWSER=webkit PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node src/components/working-files.smoke.mjs
 ```
 
-### Historical: Milestone 3 verification
-
-- **68 frontend tests** and **74 Rust tests** passed; Rust tests use real temporary repositories.
-- Production TypeScript/Vite build, Rust formatting and Clippy checks passed.
-- Native, workflow, operations, and settings Chromium smoke suites passed. Settings covers 13 scenario groups, including actual canvas theme colors, JSON round trips, pane reset/persistence, and narrow layouts.
-- The integrated macOS debug `Gitty.app` bundle built successfully. Browser native coverage uses mocked IPC; packaged native GUI end-to-end and Windows/WSL/Linux runtime checks remain open.
-
-### Historical: Milestone 2 verification
-
-- **22 frontend tests passed**, including asynchronous refresh races and graph clipping invariants.
-- **30 Rust tests passed on macOS**, using real temporary repositories, including a 100,005-commit fixture, merges, linked worktrees, conflicts, search semantics, process limits, read-only behavior, and cursor replay.
-- Strict TypeScript/Vite production build and Rust check/format checks passed.
-- Browser smoke passed for the demo and native workspace using mocked Tauri IPC, including refresh races, scroll preservation, comparisons, stale responses, and themes.
-- A macOS debug application bundle built successfully with `npm run desktop:build -- --debug --bundles app`. Native GUI repository interaction, Windows/WSL, Linux runtime, signed installers, and screen-reader validation remain release checks.
-
-### Historical: redesign and staging/commit verification
-
-- **45 frontend tests** and **49 Rust tests** passed.
-- TypeScript/Vite build, Rust check, formatting, and Clippy checks passed.
-- Chromium history and workflow smoke checks passed, including draft persistence, partial staging, rename/copy paths, duplicate-write protection, failed refresh recovery, themes, and narrow layouts. Native browser checks use mocked Tauri IPC.
-- The integrated macOS debug application bundle built successfully at `src-tauri/target/debug/bundle/macos/Gitty.app`. Native GUI end-to-end and other-platform runtime validation remain open.
-
-### Historical: Milestone 1 verification
-
-- Production frontend build and all **7 invariant tests passed** locally.
-- Automated Chromium smoke checks passed for virtualization, row selection, keyboard navigation, HEAD jumps, searching into unloaded history, no-results search, diffs, pointer/keyboard resizing, sidebar toggling, both themes, dialogs, repository switching, incremental loading, and narrow layouts. No uncaught browser errors were observed.
-- `npm audit` reported **0 vulnerabilities** at implementation time.
-- At M1 implementation time, `tauri info` recognized the app/config and macOS/Xcode environment, but Rust/Cargo was unavailable. M2 now includes `Cargo.lock` and successful native compilation as recorded above.
-
 ## Scope and next steps
 
-Repository tabs, native/WSL cloning, file/hunk/line staging, commits and amend, inline HEAD message editing, branch creation/switching, merge/rebase/interactive rebase/cherry-pick, tags, stashes, background fetch, explicit fetch/pull/push, regular-file and narrowly scoped symlink/submodule conflict resolution, provider pull-request APIs, the command palette, activity log, history column customization, zoom, and settings/custom themes are implemented. The browser demo uses the shared workspace with synthetic history, diffs, and simulated file staging/discard/commits. Directory/file conflicts, merge-preserving rebase, and WSL interactive rebase editing remain unsupported. Opening an existing repository on another machine over SSH is implemented (graph, working changes, staging, commits, operations, fetch/push, conflict editing) with explicit refusals for local-desktop actions, cloning into that host, and interactive rebase editing. See [SSH repository transport](docs/ssh-remote-repositories.md) for the delivered line and the tests behind it; a real tailnet host still needs manual verification. Windows/WSL interactive authentication, native GUI runtime checks, Linux rendering, screen-reader auditing, and signed/notarized artifact installation still need platform verification; see [Milestone 4 runtime checks](docs/milestone-4-runtime.md).
+Repository tabs, native/WSL cloning, file/hunk/line staging, commits and amend, inline HEAD message editing, branch creation/switching, merge/rebase/interactive rebase/cherry-pick, tags, stashes, background fetch, explicit fetch/pull/push, regular-file and narrowly scoped symlink/submodule conflict resolution, provider pull-request APIs, the command palette, activity log, history column customization, zoom, and settings/custom themes are implemented. The browser demo uses the shared workspace with synthetic history, diffs, and simulated file staging/discard/commits. Directory/file conflicts, merge-preserving rebase, and WSL interactive rebase editing remain unsupported. Opening an existing repository on another machine over SSH is implemented (graph, working changes, staging, commits, operations, fetch/push, conflict editing) with explicit refusals for local-desktop actions, cloning into that host, and interactive rebase editing. See [SSH repository transport](docs/ssh-remote-repositories.md) for the delivered line and the tests behind it; a real tailnet host still needs manual verification. Windows/WSL interactive authentication, native GUI runtime checks, Linux rendering, screen-reader auditing, and signed/notarized artifact installation still need platform verification.
 
 The demo snapshot remains materialized once per repository. Native history uses a pinned Git walk with bounded read-ahead and a temporary replay spool, batched metadata reads, and lazy diffs. Canvas and DOM rendering are viewport bounded; an interval index accelerates edge visibility queries. Lane layout and edge-index construction run in a Web Worker and append loaded history pages without replaying earlier lane reservations. Subsequent pages transfer only new nodes/edges, resolved parent endpoints, and a typed edge index. Viewport drawing still occurs on the main thread; large-history browser interaction profiling remains open.
 
-Start with the [backend contract](src-tauri/BACKEND.md) for current native behavior, [authentication contract](src-tauri/BACKEND.md#remote-tracking-and-authentication) for provider behavior, and [runtime checks](docs/milestone-4-runtime.md) for platform verification. The [M3 implementation](docs/milestone-3.md), [redesign and workflow notes](docs/redesign-notes.md), [M1 architecture record](docs/architecture.md), and [M2 implementation](docs/milestone-2.md) describe earlier implementation milestones.
+Start with the [backend contract](src-tauri/BACKEND.md) for current native behavior and the [authentication contract](src-tauri/BACKEND.md#remote-tracking-and-authentication) for provider behavior.

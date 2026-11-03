@@ -83,6 +83,12 @@ impl EditorRegistry {
         let _ = fs::remove_file(&self.script_path);
     }
 
+    /// Call before handing `script_path` to Git: the script can disappear while
+    /// the app runs, and the rebase edit would then fail to start.
+    pub fn ensure_script(&self) {
+        bridge::ensure_helper_script(&self.script_path, "editor");
+    }
+
     pub fn reply(&self, request_id: usize, content: Option<String>) -> Result<(), String> {
         if let Some(request) = self.requests.lock().unwrap().remove(&request_id) {
             let _ = request.sender.send(content);
@@ -135,30 +141,7 @@ pub fn init(app: AppHandle) -> std::io::Result<()> {
         tmp_dir.join(format!("gitty-editor-{script_id}.sh"))
     };
 
-    let current_exe = std::env::current_exe()?;
-
-    let script = if cfg!(windows) {
-        format!("@echo off\n\"{}\" editor %*", current_exe.display())
-    } else {
-        format!(
-            "#!/bin/sh\nexec {} editor \"$@\"",
-            crate::askpass::shell_quote(&current_exe.to_string_lossy())
-        )
-    };
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&script_path)?;
-    file.write_all(script.as_bytes())?;
-    if !cfg!(windows) {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&script_path)?.permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&script_path, perms)?;
-        }
-    }
+    bridge::write_helper_script(&script_path, &bridge::helper_script("editor")?)?;
 
     let registry = Arc::new(EditorRegistry::new(port, token.clone(), script_path));
     app.manage(registry.clone());

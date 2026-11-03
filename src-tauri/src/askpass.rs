@@ -12,7 +12,6 @@ pub struct AskpassRegistry {
     /// Scoped operation tokens and the label (if any) shown with their prompts.
     active_tokens: Mutex<HashMap<String, Option<AskpassContext>>>,
     pub port: u16,
-    pub token: String,
     pub script_path: std::path::PathBuf,
 }
 
@@ -94,14 +93,19 @@ impl Drop for AskpassGuard<'_> {
 }
 
 impl AskpassRegistry {
-    pub fn new(port: u16, token: String, script_path: std::path::PathBuf) -> Self {
+    pub fn new(port: u16, script_path: std::path::PathBuf) -> Self {
         Self {
             requests: Mutex::new(HashMap::new()),
             active_tokens: Mutex::new(HashMap::new()),
             port,
-            token,
             script_path,
         }
+    }
+
+    /// Call before handing `script_path` to Git: the script can disappear while
+    /// the app runs, and every prompt would then fail to start.
+    pub fn ensure_script(&self) {
+        bridge::ensure_helper_script(&self.script_path, "askpass");
     }
 
     /// Starts an operation scope without a prompt label.
@@ -194,10 +198,8 @@ fn handle_connection<F, E>(
     let context = {
         // Revalidate under the lock: the operation may have ended while reading.
         let active = registry.active_tokens.lock().unwrap();
-        let context = match active.get(supplied) {
-            Some(context) => context.clone(),
-            None if supplied == registry.token => None,
-            None => return,
+        let Some(context) = active.get(supplied).cloned() else {
+            return;
         };
         registry.requests.lock().unwrap().insert(
             request_id,
@@ -228,16 +230,13 @@ fn handle_connection<F, E>(
 
 impl AskpassRegistry {
     fn accepts(&self, supplied: &str) -> bool {
-        supplied == self.token || self.active_tokens.lock().unwrap().contains_key(supplied)
+        self.active_tokens.lock().unwrap().contains_key(supplied)
     }
 }
 
 pub fn init(app: AppHandle) -> std::io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
-
-    // The token authorizes local helper processes to submit a prompt.
-    let token = uuid::Uuid::new_v4().to_string();
 
     // A unique, exclusively created file avoids overwriting another process's
     // askpass script (or following a pre-existing symlink in the temp directory).
@@ -250,32 +249,9 @@ pub fn init(app: AppHandle) -> std::io::Result<()> {
         tmp_dir.join(format!("gitty-askpass-{script_id}.sh"))
     };
 
-    let current_exe = std::env::current_exe()?;
+    bridge::write_helper_script(&script_path, &bridge::helper_script("askpass")?)?;
 
-    let script = if cfg!(windows) {
-        format!("@echo off\n\"{}\" askpass %*", current_exe.display())
-    } else {
-        format!(
-            "#!/bin/sh\nexec {} askpass \"$@\"",
-            shell_quote(&current_exe.to_string_lossy())
-        )
-    };
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&script_path)?;
-    file.write_all(script.as_bytes())?;
-    if !cfg!(windows) {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&script_path)?.permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&script_path, perms)?;
-        }
-    }
-
-    let registry = Arc::new(AskpassRegistry::new(port, token, script_path));
+    let registry = Arc::new(AskpassRegistry::new(port, script_path));
     app.manage(registry.clone());
 
     let app_handle = app.clone();
@@ -439,7 +415,7 @@ mod tests {
     }
 
     fn registry() -> Arc<AskpassRegistry> {
-        Arc::new(AskpassRegistry::new(0, "app-token".into(), "helper".into()))
+        Arc::new(AskpassRegistry::new(0, "helper".into()))
     }
 
     #[test]
@@ -463,8 +439,9 @@ mod tests {
     #[test]
     fn oversize_prompt_is_rejected_after_authentication() {
         let registry = registry();
+        let scoped = registry.start_operation();
         let (mut client, prompts, server) = serve_once(registry.clone(), TEST_LIMITS);
-        let _ = client.write_all(format!("app-token\n{}\n", "p".repeat(5000)).as_bytes());
+        let _ = client.write_all(format!("{}\n{}\n", scoped.token(), "p".repeat(5000)).as_bytes());
         let mut reply = Vec::new();
         let _ = client.read_to_end(&mut reply);
         server.join().unwrap();
@@ -505,34 +482,29 @@ mod tests {
     }
 
     #[test]
-    fn valid_app_and_scoped_tokens_still_prompt_and_reply() {
+    fn valid_scoped_tokens_still_prompt_and_reply() {
         let registry = registry();
         let scoped = registry.start_operation();
-        for token in ["app-token".to_string(), scoped.token().to_string()] {
-            let (mut client, prompts, server) = serve_once(registry.clone(), TEST_LIMITS);
-            client
-                .write_all(format!("{token}\nPassword for example\n").as_bytes())
-                .unwrap();
-            let (id, prompt, context) = prompts.recv_timeout(Duration::from_secs(5)).unwrap();
-            assert_eq!(
-                context, None,
-                "unlabelled scopes and the app token carry no context"
-            );
-            assert_eq!(prompt, "Password for example");
-            registry
-                .requests
-                .lock()
-                .unwrap()
-                .remove(&id)
-                .unwrap()
-                .reply
-                .send(Some("secret ".into()))
-                .unwrap();
-            let mut reply = Vec::new();
-            client.read_to_end(&mut reply).unwrap();
-            assert_eq!(reply, b"1secret ");
-            server.join().unwrap();
-        }
+        let (mut client, prompts, server) = serve_once(registry.clone(), TEST_LIMITS);
+        client
+            .write_all(format!("{}\nPassword for example\n", scoped.token()).as_bytes())
+            .unwrap();
+        let (id, prompt, context) = prompts.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(context, None, "unlabelled scopes carry no context");
+        assert_eq!(prompt, "Password for example");
+        registry
+            .requests
+            .lock()
+            .unwrap()
+            .remove(&id)
+            .unwrap()
+            .reply
+            .send(Some("secret ".into()))
+            .unwrap();
+        let mut reply = Vec::new();
+        client.read_to_end(&mut reply).unwrap();
+        assert_eq!(reply, b"1secret ");
+        server.join().unwrap();
     }
 
     #[test]
@@ -548,7 +520,8 @@ mod tests {
 
     #[test]
     fn native_askpass_env_carries_a_scoped_token_that_dies_with_the_guard() {
-        let registry = AskpassRegistry::new(4521, "app-token".into(), "helper".into());
+        let dir = tempfile::tempdir().unwrap();
+        let registry = AskpassRegistry::new(4521, dir.path().join("helper.sh"));
         let token = {
             let guard = registry.start_operation();
             let (_, env) = crate::remote::network_args(true, Some(&guard));
@@ -557,10 +530,8 @@ mod tests {
                 .find(|(key, _)| key == "GITTY_ASKPASS_TOKEN")
                 .map(|(_, value)| value.clone())
                 .expect("interactive native actions pass an askpass token");
-            assert_ne!(token, registry.token, "never the app-lifetime token");
             assert_eq!(token, guard.token());
             assert!(registry.active_tokens.lock().unwrap().contains_key(&token));
-            assert!(!env.iter().any(|(_, value)| value == "app-token"));
             token
         };
         assert!(!registry.active_tokens.lock().unwrap().contains_key(&token));
@@ -572,10 +543,36 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("gitty-askpass-test.sh");
         std::fs::write(&script, "#!/bin/sh\n").unwrap();
-        let registry = AskpassRegistry::new(1, "t".into(), script.clone());
+        let registry = AskpassRegistry::new(1, script.clone());
         registry.cleanup();
         assert!(!script.exists());
         registry.cleanup();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_removed_helper_script_is_recreated_before_use_and_a_present_one_is_kept() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("gitty-askpass-test.sh");
+        let registry = AskpassRegistry::new(1, script.clone());
+        // Interactive network arguments must restore a script that a stale-file
+        // sweep or a temp-folder cleaner removed while the app was running.
+        let guard = registry.start_operation();
+        let _ = crate::remote::network_args(true, Some(&guard));
+        let restored = std::fs::read_to_string(&script).unwrap();
+        assert!(restored.starts_with("#!/bin/sh\nexec "));
+        assert!(restored.contains(" askpass \"$@\""));
+        assert_eq!(
+            std::fs::metadata(&script).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        std::fs::write(&script, "#!/bin/sh\n# custom\n").unwrap();
+        registry.ensure_script();
+        assert_eq!(
+            std::fs::read_to_string(&script).unwrap(),
+            "#!/bin/sh\n# custom\n"
+        );
     }
 
     #[test]
@@ -633,23 +630,6 @@ mod tests {
             client.read_to_end(&mut reply).unwrap();
             server.join().unwrap();
         }
-        // The app-lifetime token never carries a label.
-        let (mut client, prompts, server) = serve_once(registry.clone(), TEST_LIMITS);
-        client.write_all(b"app-token\nPassword\n").unwrap();
-        let (id, _, context) = prompts.recv_timeout(Duration::from_secs(5)).unwrap();
-        assert_eq!(context, None);
-        registry
-            .requests
-            .lock()
-            .unwrap()
-            .remove(&id)
-            .unwrap()
-            .reply
-            .send(None)
-            .unwrap();
-        let mut reply = Vec::new();
-        client.read_to_end(&mut reply).unwrap();
-        server.join().unwrap();
     }
 
     #[test]
@@ -676,7 +656,7 @@ mod tests {
 
     #[test]
     fn wsl_operation_tokens_expire_and_env_mapping_preserves_existing_entries() {
-        let registry = AskpassRegistry::new(12, "app-token".into(), "helper".into());
+        let registry = AskpassRegistry::new(12, "helper".into());
         let token = {
             let guard = registry.start_operation();
             assert!(registry

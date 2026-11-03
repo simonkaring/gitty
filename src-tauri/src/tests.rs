@@ -42,6 +42,50 @@ pub(super) fn open(service: &mut Service, path: &Path) -> RepositoryState {
 }
 
 #[test]
+fn stage_and_unstage_take_every_file_of_a_large_change_in_one_request() {
+    let d = init();
+    std::fs::create_dir(d.path().join("dir")).unwrap();
+    let paths: Vec<String> = (0..1_200).map(|i| format!("dir/file-{i:04}.txt")).collect();
+    for path in &paths {
+        std::fs::write(d.path().join(path), "x\n").unwrap();
+    }
+    let (service, _data, handle) = service_for(d.path());
+    let repo = service.repo(&handle).unwrap();
+    service.stage(&handle, &paths).unwrap();
+    let staged = repo.status().unwrap();
+    assert_eq!(staged.entries.len(), 1_200);
+    assert!(staged.entries.iter().all(|e| e.index_status == "A"));
+    service.unstage(&handle, &paths).unwrap();
+    assert!(repo.status().unwrap().entries.iter().all(|e| e.untracked));
+    // The request is still bounded, by size.
+    let huge: Vec<String> = (0..300)
+        .map(|i| format!("{i:04}{}", "x".repeat(3_500)))
+        .collect();
+    assert_eq!(
+        service.stage(&handle, &huge).unwrap_err().code,
+        "tooManyPaths"
+    );
+}
+
+#[test]
+fn a_damaged_or_unreadable_recent_list_does_not_stop_a_repository_from_opening() {
+    let d = init();
+    // Damaged JSON is replaced by the next open.
+    let data = tempfile::tempdir().unwrap();
+    std::fs::write(data.path().join("recent-repositories.json"), "{ not json").unwrap();
+    let mut service = Service::new(data.path().into());
+    assert_eq!(service.recent().unwrap_err().code, "recentData");
+    open(&mut service, d.path());
+    assert_eq!(service.recent().unwrap().len(), 1);
+    // A file that cannot be read at all is left alone, and the repository still opens.
+    let blocked = tempfile::tempdir().unwrap();
+    std::fs::create_dir(blocked.path().join("recent-repositories.json")).unwrap();
+    let mut service = Service::new(blocked.path().into());
+    open(&mut service, d.path());
+    assert!(blocked.path().join("recent-repositories.json").is_dir());
+}
+
+#[test]
 fn repository_git_identity_is_explicit_shared_and_detects_external_changes() {
     let d = init();
     std::fs::write(d.path().join("base"), "base").unwrap();
@@ -157,13 +201,13 @@ fn unborn_status_odd_paths_staged_untracked_and_persistence() {
     let odd = "-odd\tfile\nname.txt";
     std::fs::write(d.path().join(odd), "first\nsecond\n").unwrap();
     assert_eq!(repo.status().unwrap().entries[0].path, odd);
-    let files = repo.diff_files(&DiffSpec::Untracked).unwrap();
-    assert_eq!(files[0].additions, Some(2));
-    assert_eq!(files[0].path, odd);
     assert_eq!(
-        repo.diff(&DiffSpec::Untracked, odd).unwrap().hunks[0].lines[0].content,
-        "first"
+        repo.diff_files(&DiffSpec::Untracked).unwrap_err().code,
+        "invalidDiff"
     );
+    let untracked = repo.diff(&DiffSpec::Untracked, odd).unwrap();
+    assert_eq!(untracked.hunks[0].lines[0].content, "first");
+    assert_eq!(untracked.hunks[0].lines.len(), 2);
     git(d.path(), &["add", "--", odd]);
     assert_eq!(repo.status().unwrap().entries[0].index_status, "A");
     assert_eq!(
@@ -608,11 +652,7 @@ fn untracked_empty_binary_and_symlink_files() {
     let mut service = Service::new(data.path().into());
     let state = open(&mut service, d.path());
     let repo = service.repo(&state.session.handle).unwrap();
-    let files = repo.diff_files(&DiffSpec::Untracked).unwrap();
-    let empty = files.iter().find(|f| f.path == "empty").unwrap();
-    assert!(!empty.binary);
-    assert_eq!(empty.additions, Some(0));
-    assert!(files.iter().find(|f| f.path == "binary").unwrap().binary);
+    assert!(!repo.diff(&DiffSpec::Untracked, "empty").unwrap().binary);
     assert!(repo.diff(&DiffSpec::Untracked, "binary").unwrap().binary);
     assert!(repo
         .diff(&DiffSpec::Untracked, "empty")
@@ -626,6 +666,42 @@ fn untracked_empty_binary_and_symlink_files() {
         .message
         .unwrap()
         .contains("120000"));
+}
+
+/// `git hash-object --stdin-paths` stops at a dangling symlink or a symlink to a
+/// folder. Those files must be hashed alone: falling back to one process for every
+/// untracked file made each refresh cost seconds in a project with many of them.
+#[test]
+#[cfg(unix)]
+fn a_file_git_cannot_hash_does_not_unbatch_the_other_untracked_files() {
+    let d = init();
+    for i in 0..30 {
+        std::fs::write(d.path().join(format!("file-{i:02}")), format!("{i}\n")).unwrap();
+    }
+    std::os::unix::fs::symlink("missing-target", d.path().join("file-05-dangling")).unwrap();
+    std::os::unix::fs::symlink(".", d.path().join("file-20-folder-link")).unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let mut service = Service::new(data.path().into());
+    let state = open(&mut service, d.path());
+    let repo = service.repo(&state.session.handle).unwrap();
+    let (status, launches) = crate::process::count_spawns(|| repo.status().unwrap());
+    assert!(
+        launches < 12,
+        "{launches} Git launches for 32 untracked files"
+    );
+    assert_eq!(repo.status().unwrap().fingerprint, status.fingerprint);
+    // Files after each broken one must still be covered by the fingerprint.
+    for name in ["file-29", "file-10", "file-05-dangling"] {
+        let path = d.path().join(name);
+        let before = repo.status().unwrap().fingerprint;
+        if name.ends_with("dangling") {
+            std::fs::remove_file(&path).unwrap();
+            std::os::unix::fs::symlink("another-target", &path).unwrap();
+        } else {
+            std::fs::write(&path, "changed\n").unwrap();
+        }
+        assert_ne!(repo.status().unwrap().fingerprint, before, "{name}");
+    }
 }
 
 #[test]
@@ -1063,7 +1139,7 @@ fn batched_history_preserves_topology_unicode_large_bodies_and_detail_parity() {
 }
 
 #[test]
-fn batched_history_rejects_non_utf8_commit_metadata_without_lossy_conversion() {
+fn batched_history_shows_non_utf8_commit_metadata_lossily_but_detail_stays_strict() {
     let d = init();
     let tree = git(d.path(), &["hash-object", "-t", "tree", "-w", "--stdin"]);
     let mut raw = format!("tree {tree}\nauthor Test <test@example.org> 1700000000 +0000\ncommitter Test <test@example.org> 1700000000 +0000\nencoding ISO-8859-1\n\nsubject ").into_bytes();
@@ -1074,12 +1150,10 @@ fn batched_history_rejects_non_utf8_commit_metadata_without_lossy_conversion() {
     let mut service = Service::new(data.path().into());
     let state = open(&mut service, d.path());
     let repo = service.repo(&state.session.handle).unwrap();
-    assert_eq!(
-        repo.history(None, 200, HistoryQuery::default())
-            .unwrap_err()
-            .code,
-        "unsupportedEncoding"
-    );
+    // One commit in a legacy encoding must not fail the page of commits around it.
+    let page = repo.history(None, 200, HistoryQuery::default()).unwrap();
+    assert_eq!(page.commits.len(), 1);
+    assert_eq!(page.commits[0].subject, "subject \u{fffd}");
     assert_eq!(repo.commit(&id).unwrap_err().code, "unsupportedEncoding");
 }
 

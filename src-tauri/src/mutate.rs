@@ -16,7 +16,8 @@ use std::{collections::HashSet, process::Command};
 /// Windows caps a whole command line at ~32767 UTF-16 units and Unix caps both
 /// the total and a single argument, so an argv-shaped request could not honor
 /// these limits on every platform. These bounds are policy for one user action.
-const MAX_PATHS: usize = 1000;
+/// Paths are bounded by their total size, not their count: "Stage all" sends every
+/// file of a large change in one request.
 const MAX_PATHSPEC_BYTES: usize = 1024 * 1024;
 const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 /// Argument bytes per `git clean` process, far below every platform's limit.
@@ -375,12 +376,6 @@ impl Repository {
                 format!(
                     "Select at least one file to {verb}; an empty request never means every file."
                 ),
-            ));
-        }
-        if paths.len() > MAX_PATHS {
-            return Err(Error::new(
-                "tooManyPaths",
-                format!("At most {MAX_PATHS} files can be {verb}d in one request; work in smaller batches."),
             ));
         }
         let mut validated = Vec::with_capacity(paths.len());

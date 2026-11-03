@@ -537,6 +537,19 @@ describe('disclosure controls', () => {
     } finally { await unmount(); }
   });
 
+  it('closes the published diff when the working-changes panel unmounts', async () => {
+    const onActiveDiffChange = vi.fn<(diff: ActiveDiffState | null) => void>();
+    const { host, unmount } = await mountWith(rows, { onActiveDiffChange });
+    let unmounted = false;
+    try {
+      await click(host.querySelector('[aria-label="Unstaged: edited"]'));
+      await vi.waitFor(() => expect(onActiveDiffChange.mock.lastCall?.[0]?.diff).toBe(diff));
+      await unmount();
+      unmounted = true;
+      expect(onActiveDiffChange.mock.lastCall?.[0]).toBeNull();
+    } finally { if (!unmounted) await unmount(); }
+  });
+
   it('collapses and expands the composer from one labelled icon toggle without changing its h2 and count', async () => {
     const { host, onMutation, unmount } = await mountWith(rows);
     try {

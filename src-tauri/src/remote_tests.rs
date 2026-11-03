@@ -9,7 +9,7 @@ use std::{path::Path, process::Command, sync::Arc};
 
 #[test]
 fn wsl_network_bridge_uses_scoped_token_and_linux_executable_path() {
-    let registry = crate::askpass::AskpassRegistry::new(4521, "app-token".into(), "unused".into());
+    let registry = crate::askpass::AskpassRegistry::new(4521, "unused".into());
     let guard = registry.start_operation();
     let (args, env) = crate::remote::network_args_wsl(
         "/mnt/c/Program Files/Gitty/gitty.exe",
@@ -26,7 +26,6 @@ fn wsl_network_bridge_uses_scoped_token_and_linux_executable_path() {
     assert!(env.iter().any(
         |(key, value)| key == "SSH_ASKPASS" && value == "/mnt/c/Program Files/Gitty/gitty.exe"
     ));
-    assert!(!env.iter().any(|(_, value)| value == "app-token"));
 }
 
 #[cfg(unix)]
@@ -42,8 +41,7 @@ fn native_network_askpass_runs_git_helper_from_environment() {
     )
     .unwrap();
     std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let registry =
-        crate::askpass::AskpassRegistry::new(4521, "app-token".into(), script_path.clone());
+    let registry = crate::askpass::AskpassRegistry::new(4521, script_path.clone());
     let guard = registry.start_operation();
     let (args, env) = crate::remote::network_args(true, Some(&guard));
     assert!(env
@@ -552,8 +550,11 @@ fn remote_publication_is_single_branch_and_never_mirror_or_configured_force() {
         "refs/heads/published"
     );
     f.git(&["config", "remote.origin.mirror", "true"]);
+    // `main` tracks the differently named `published`, so the destination is chosen.
     assert_eq!(
-        f.remote(json!({"kind":"push"})).unwrap_err().code,
+        f.remote(json!({"kind":"push","branch":"published"}))
+            .unwrap_err()
+            .code,
         "mirrorRemote"
     );
     f.git(&["config", "remote.origin.mirror", "false"]);
@@ -570,7 +571,9 @@ fn remote_publication_is_single_branch_and_never_mirror_or_configured_force() {
         "/another-destination",
     ]);
     assert_eq!(
-        f.remote(json!({"kind":"push"})).unwrap_err().code,
+        f.remote(json!({"kind":"push","branch":"published"}))
+            .unwrap_err()
+            .code,
         "multiplePushUrls"
     );
 }
@@ -1044,7 +1047,17 @@ fn pull_uses_slashed_remote_and_nonmatching_upstream_and_ignores_merge_options()
     peer.write("peer-again", "new remote commit");
     let remote_head = peer.commit("remote moved");
     peer.git(&["push", "origin", "HEAD:published"]);
-    assert!(f.remote(json!({"kind":"push"})).is_err());
+    // `main` tracks the differently named `published`: pushing needs a chosen
+    // destination, so nothing lands on that branch by one click.
+    assert_eq!(
+        f.remote(json!({"kind":"push"})).unwrap_err().code,
+        "upstreamNameDiffers"
+    );
+    assert_eq!(git(bare.path(), &["rev-parse", "published"]), remote_head);
+    // A chosen destination still cannot overwrite remote history.
+    assert!(f
+        .remote(json!({"kind":"push", "branch":"published"}))
+        .is_err());
     assert_eq!(git(bare.path(), &["rev-parse", "published"]), remote_head);
     assert_eq!(
         git(

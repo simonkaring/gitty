@@ -399,10 +399,9 @@ async fn with_service<T: Send + 'static>(
     let state = state.inner().clone();
     blocking(move || f(&state)).await
 }
-#[tauri::command]
-async fn repository_pick() -> Result<Option<String>> {
+async fn pick_folder(title: &str) -> Result<Option<String>> {
     let selection = rfd::AsyncFileDialog::new()
-        .set_title("Open Git repository")
+        .set_title(title)
         .pick_folder()
         .await;
     selection
@@ -415,19 +414,12 @@ async fn repository_pick() -> Result<Option<String>> {
         .transpose()
 }
 #[tauri::command]
+async fn repository_pick() -> Result<Option<String>> {
+    pick_folder("Open Git repository").await
+}
+#[tauri::command]
 async fn repository_pick_clone_parent() -> Result<Option<String>> {
-    let selection = rfd::AsyncFileDialog::new()
-        .set_title("Choose clone destination folder")
-        .pick_folder()
-        .await;
-    selection
-        .map(|f| {
-            f.path()
-                .to_str()
-                .map(String::from)
-                .ok_or_else(|| Error::new("unsupportedEncoding", "Selected path is not UTF-8"))
-        })
-        .transpose()
+    pick_folder("Choose clone destination folder").await
 }
 #[tauri::command]
 async fn repository_open(
@@ -715,28 +707,6 @@ async fn wsl_directories(distribution: String, path: String) -> Result<Vec<Direc
     blocking(move || wsl::directories(&distribution, &path)).await
 }
 
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct BackendInfo {
-    platform: &'static str,
-    mode: &'static str,
-    native_git_available: bool,
-    wsl_available: bool,
-}
-#[tauri::command]
-async fn backend_info() -> Result<BackendInfo> {
-    blocking(|| {
-        let mut c = std::process::Command::new(process::native_git_program());
-        c.arg("--version");
-        Ok(BackendInfo {
-            platform: std::env::consts::OS,
-            mode: "native",
-            native_git_available: process::run(c).is_ok_and(|o| o.success),
-            wsl_available: cfg!(windows) && wsl::distributions().is_ok(),
-        })
-    })
-    .await
-}
 #[tauri::command]
 fn app_start_dragging(window: tauri::WebviewWindow) -> Result<()> {
     window
@@ -851,7 +821,6 @@ pub fn run() {
             app_window_button_layout,
             app_start_dragging,
             app_launch_path,
-            backend_info,
             list_provider_accounts,
             provider_connect_token,
             provider_oauth_start,

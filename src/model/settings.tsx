@@ -4,7 +4,6 @@ import { MAX_COMMIT_PROFILES, validateCommitProfile, type CommitProfile } from '
 export type { ThemeDefinition } from './themes';
 
 export const SETTINGS_KEY = 'gitty:settings';
-export const WORKSPACE_RESET_EVENT = 'gitty:workspace-reset';
 export const MONO_FONTS = ['Geist Mono Variable', 'JetBrains Mono'] as const;
 export const HISTORY_COLUMN_IDS = ['refs', 'graph', 'message', 'author', 'hash', 'date'] as const;
 export type HistoryColumnId = typeof HISTORY_COLUMN_IDS[number];
@@ -133,7 +132,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     const paneWidths = { ...DEFAULT_SETTINGS.paneWidths };
     updateSettings({ paneWidths });
     try { for (const [key, width] of Object.entries(paneWidths)) localStorage.setItem(`gitty:${key}-width`, String(width)); } catch { setStorageError('Pane sizes reset for this session; storage is unavailable.'); }
-    window.dispatchEvent(new CustomEvent(WORKSPACE_RESET_EVENT, { detail: paneWidths }));
   };
   return <Context.Provider value={{ settings, theme, themes: [...BUILTIN_THEMES, ...settings.customThemes], updateSettings, isSettingsOpen, settingsSection, openSettings: section => { setSettingsSection(section ?? null); setOpen(true); }, closeSettings: () => { setOpen(false); previewTheme(null); }, previewTheme, storageError, retryPersistence: () => persist(current.current), resetWorkspace }}>{children}</Context.Provider>;
 }

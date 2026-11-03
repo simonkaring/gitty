@@ -2,7 +2,6 @@
 
 The commands described by `src/model/repository.ts`, `src/model/clone.ts`, `src/model/operations.ts`, and `src/model/worktrees.ts` are registered by `src/lib.rs`. The
 Rust DTOs serialize the same camelCase fields and `{code, message}` errors.
-`backend_info` remains available and reports native capability.
 `app_launch_path() -> string | null` returns the first non-option command-line
 argument, made absolute against the launch directory but not otherwise
 validated; the frontend opens it once per app run as a native tab, and
@@ -145,12 +144,16 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   NUL-delimited. Spaces, tabs, newlines, leading dashes, and pathspec metacharacters
   are preserved. Non-UTF-8 paths/metadata return `unsupportedEncoding` because the
   shared string contract cannot represent arbitrary native bytes. Blob display
-  uses replacement characters for undecodable bytes.
+  uses replacement characters for undecodable bytes, and so do the rows of a
+  history page: one commit in a legacy encoding (a Latin-1 author name) shows
+  replacement characters instead of failing the 200 commits around it. The
+  single-commit detail read stays strict and returns `unsupportedEncoding`.
 - Status fingerprints include tracked/untracked content so repeated edits with
   unchanged status letters still refresh. Untracked files are hashed with one
-  `hash-object --no-filters --stdin-paths` batch; names the line protocol cannot
-  carry verbatim (newline, carriage return, leading quote) or a batch Git rejects
-  fall back to one no-index patch per file. On SSH, the tracked binary-capable
+  `hash-object --no-filters --stdin-paths` batch; a name the line protocol cannot
+  carry verbatim (newline, carriage return, leading quote), or a file Git stops at
+  (a dangling symlink, a symlink to a folder, a vanished file), is hashed alone
+  with a no-index patch while the files around it stay batched. On SSH, the tracked binary-capable
   patch is streamed into `git hash-object --stdin` on the host, transferring only
   its digest. A private temporary status file checks the producer independently
   of the pipeline consumer; incomplete/failed reads fail closed. This needs `mktemp`,
@@ -237,7 +240,9 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   and after actionable patch reads, and hunk tokens still fingerprint original
   patch bytes and index entries. Commit/comparison file-list behavior is unchanged.
 - Recent repositories are stored in app-data `recent-repositories.json`, capped
-  at 20 and replaced atomically. No repository files are written.
+  at 20 and replaced atomically. No repository files are written. The list never
+  blocks opening: a damaged file is replaced by the next open, and a file that
+  cannot be read or written is left alone while the repository still opens.
 - Identity reads report both repository-local and effective Git `user.name` / `user.email` values. The local values are read without includes; effective values honor Git's normal configuration precedence.
 - The folder picker uses `rfd`'s native asynchronous dialog. WSL discovery decodes
   UTF-16 output; browsing invokes Linux `find` directly, NUL-delimited, one directory
@@ -474,8 +479,8 @@ targeted conflict resolutions have the additional contract documented below.
   longer than 4096 bytes, or containing `..`, `.`, or empty segments. A single
   trailing `/` (how status reports untracked directories and embedded
   repositories) is trimmed, so such an entry stages as the one path it displays.
-  Requests are capped at 1000 paths and 1 MiB of path bytes; duplicates are
-  merged. Names with spaces, tabs, newlines, Unicode, a leading `-`, or pathspec
+  Requests are capped at 1 MiB of path bytes, not by a file count, so Stage all
+  and Unstage all send every file of a large change; duplicates are merged. Names with spaces, tabs, newlines, Unicode, a leading `-`, or pathspec
   metacharacters (`*`, `[`, `?`, `:`) stay literal: `GIT_LITERAL_PATHSPECS=1`
   disables pathspec magic and globbing, and `--pathspec-file-nul` disables
   C-quoting.
@@ -629,7 +634,8 @@ targeted conflict resolutions have the additional contract documented below.
   reconcile from `repository_state`/`repository_status` after every outcome.
 - Error codes for writes: `invalidHandle`, `invalidRequest`, `invalidPath`,
   `tooManyPaths`, `bareRepository`, `operationInProgress`, `indexLocked`,
-  `unresolvedConflict`, `unresolvedHead`, `nothingStaged`, `pushedCommit` (amend with
+  `unresolvedConflict`, `unresolvedHead`, `nothingStaged`, `upstreamNameDiffers` (a push with no
+  chosen destination whose upstream has a different branch name), `pushedCommit` (amend with
   `requireUnpushed` found a containing remote-tracking ref), `staleOperation` (discard review
   out of date), `openRefused`, `notFound`, `unsupported`, `openExternal`, `git` (Git exited
   non-zero: hook rejection, missing identity, signing failure, ignored or
@@ -686,7 +692,10 @@ operation IDs are UUIDs, and closing the main window cancels registered clones.
   SSH, self-hosted servers, host aliases, and Bitbucket are unsupported for this
   selected-account clone path; URL clones retain their existing transports.
 - The destination must not exist. Git clones into an operation-owned hidden sibling
-  and publishes it with a no-replace rename only after success. Failure, timeout,
+  and publishes it with a no-replace rename only after success. A filesystem
+  that cannot do a no-replace rename (EINVAL, ENOTSUP or ENOSYS, as on some
+  network or FUSE mounts) gets a plain rename after an absence check, so a
+  finished clone is never deleted for that reason. Failure, timeout,
   and cancellation remove only that owned temporary directory; an existing or
   concurrently created destination is never overwritten or deleted.
 - Progress records and total progress output are bounded and updates are throttled.
@@ -751,7 +760,12 @@ The repository is derived from the remote's push URL, which may be
 `ssh://[user@]host[:22]/path`, where `host` must equal the provider's host exactly
 (`github.com`, `gitlab.com`, `bitbucket.org`; Azure DevOps SSH uses
 `ssh.dev.azure.com` with the `v3/{org}/{project}/{repo}` layout, mapped to
-`{org}/{project}/_git/{repo}`). A `.git` suffix is stripped and the result is the same
+`{org}/{project}/_git/{repo}`). Azure HTTPS remotes may carry the organization
+as the user name, as Azure's Clone button hands them out
+(`https://{org}@dev.azure.com/{org}/…`); any other user name, or a password, is
+rejected. Azure project and repository names with spaces arrive as `%20` and stay
+encoded in the API address; encoded separators, dots, controls and malformed
+escapes are rejected. A `.git` suffix is stripped and the result is the same
 repository the HTTPS form yields. Other SSH ports, host aliases from SSH
 configuration (for example `github-work`), self-hosted servers, SSH passwords,
 queries/fragments and extra path segments are rejected with `invalidRemote`
@@ -802,13 +816,19 @@ exactly-full final page is reported truncated); Bitbucket when the envelope has 
   checks. The branch menu only offers a non-current push after an offline read
   shows the same-name `origin/<branch>` upstream and local commits ahead; it then
   pins both source and destination. No checkout or current-branch push occurs.
+  With no chosen `branch` (destination), a push uses the upstream's branch name
+  only when it equals the source's own name. A branch that tracks a differently
+  named upstream (`feature` tracking `origin/main`) returns `upstreamNameDiffers`
+  and pushes nothing; Publish names the destination explicitly. Git's
+  `push.default=simple` refuses the same push.
 - Background fetch remains noninteractive (`credential.interactive=false` plus
   `GCM_INTERACTIVE=false`) and can use existing credentials and SSH agents.
   Explicit clone/fetch/pull/push (and origin branch deletion) allow helper
   sign-in. Native operations can use a local askpass bridge when those cannot
   supply credentials; each operation holds its own scoped token (an
   `AskpassGuard`), so its pending prompts are cancelled when it ends. The
-  app-lifetime token is not given to Git. The `git_askpass_prompt` event payload is
+  There is no app-lifetime token: only scoped operation tokens authenticate a
+  prompt. The `git_askpass_prompt` event payload is
   `{requestId, prompt, context}` where `context` is `{repository, operation}`
   (strings, single-line, at most 200 characters; for example `gitty` / `fetch origin`,
   `push origin`, `delete origin/<branch>`, or the clone destination / `clone`) supplied
@@ -840,7 +860,10 @@ exactly-full final page is reported truncated); Bitbucket when the envelope has 
 - The helper scripts (`gitty-askpass-<uuid>`, `gitty-editor-<uuid>`) are removed
   on window close, and stale ones older than seven days are cleaned from the temp
   directory at startup (exact-name regular files only; symlinks and directories
-  are never touched).
+  are never touched). That sweep cannot tell a dead process's script from a live
+  one's (a second Gitty started from the command line, a temp-folder cleaner), so
+  each use of a script first recreates it if it is missing. Scripts are written
+  under a random name and renamed into place, so Git never runs a half-written one.
 - Origin branch deletion uses the same explicit network, credential-helper,
   native/WSL askpass, activity-log, and write-deadline infrastructure as push.
 - The frontend auto-fetches only the focused tab of a visible window: when a

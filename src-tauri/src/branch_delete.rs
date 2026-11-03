@@ -302,7 +302,7 @@ impl Repository {
                     askpass,
                 )?;
                 if !output.success {
-                    return Err(crate::remote::network_error(output, wsl).unwrap_err());
+                    return Err(crate::remote::network_result(output, wsl).unwrap_err());
                 }
                 Ok(self.remove_tracking_ref(&branch, &current))
             })();
@@ -555,7 +555,7 @@ impl Repository {
                 let success = output.success;
                 let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
                 let failure = (!success)
-                    .then(|| crate::remote::network_error(output, wsl).err())
+                    .then(|| crate::remote::network_result(output, wsl).err())
                     .flatten()
                     .unwrap_or_else(|| Error::new("git", "Origin refused the deletion."));
                 leased

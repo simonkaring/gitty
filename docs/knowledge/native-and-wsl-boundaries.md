@@ -110,7 +110,8 @@ Native interactive actions (fetch/pull/push, origin branch deletion, URL clone) 
 hold a per-operation scoped askpass token, not the app token, so prompts end with
 the operation. The loopback bridges bound pre-authentication input (256-byte
 token, 4 KiB prompt), an absolute 10 s handshake deadline, and 16 concurrent
-connections; helper scripts are removed on window close.[^askpass][^bridge]
+connections; helper scripts are removed on window close and recreated before use
+if they disappear while the app runs.[^askpass][^bridge]
 For captured mutations, only authenticated scoped bridge waits pause the 120-second
 execution budget. Per-prompt 90-second deadlines and a hard 30-minute overall
 command ceiling still apply; unbridged signing/helper waits are not paused.[^process][^askpass]
@@ -153,7 +154,7 @@ The [backend contract](../../src-tauri/BACKEND.md#read-semantics) and
 [^remote]: Explicit/background authentication branches and fallback handling.
 [^provider-repositories]: Cloud repository discovery and native-only account credential scope.
 [^askpass]: Executable translation and per-operation token lifecycle.
-[^bridge]: Connection cap, handshake deadline, bounded lines and stale-helper cleanup.
+[^bridge]: Connection cap, handshake deadline, bounded lines, stale-helper cleanup and helper-script recreation.
 [^bridge-test]: Construction-level WSL bridge regression.
 [^wsl-tests]: Real Ubuntu temporary-repository scan, snapshot and mutation checks.
 [^contract]: Filesystem, editor, and process-lifecycle platform limits.

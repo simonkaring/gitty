@@ -11,7 +11,10 @@ import type { CommitIdentity, GitIdentityValues } from '../model/repository';
 export interface RepositoryToolbarProps {
   handle: string;
   active: boolean;
+  /** Moves on every working-tree or operation change; the identity dialog re-reads with it. */
   revision: number;
+  /** Moves only when refs or HEAD change, which is all that ahead/behind and remotes depend on. */
+  stateRevision: number;
   busy: boolean;
   pickCount: number;
   pickMode: boolean;
@@ -32,7 +35,7 @@ const IDLE_FETCH: FetchStatus = { kind: 'idle' };
 /** Compact Pull / Push / Branch / Stash / Refresh toolbar. Sync info is a
  * passive, local-only read refetched when the active repository changes.
  * RepositoryPane separately schedules background fetches of remote refs. */
-export function RepositoryToolbar({ handle, active, revision, busy, pickCount, pickMode, onCreateBranch, onSwitchBranch, onCherryPick, onClearPick, onStartPickMode, onOpenStash, onRefresh, onWrite, notify, fetchStatus = IDLE_FETCH }: RepositoryToolbarProps) {
+export function RepositoryToolbar({ handle, active, revision, stateRevision, busy, pickCount, pickMode, onCreateBranch, onSwitchBranch, onCherryPick, onClearPick, onStartPickMode, onOpenStash, onRefresh, onWrite, notify, fetchStatus = IDLE_FETCH }: RepositoryToolbarProps) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return;
@@ -60,7 +63,7 @@ export function RepositoryToolbar({ handle, active, revision, busy, pickCount, p
     let live = true;
     native<SyncInfo>('repository_sync_info', { handle }).then(value => { if (live) { setSync(value); setSyncError(''); } }).catch(e => { if (live) setSyncError(errorMessage(e)); });
     return () => { live = false; };
-  }, [handle, revision, active]);
+  }, [handle, stateRevision, active]);
   useDismiss(pullMenuOpen, () => setPullMenuOpen(false), [pullMenuRef], pullToggleRef);
   useDismiss(branchMenuOpen, () => setBranchMenuOpen(false), [branchMenuRef], branchToggleRef);
   useMenuKeyboard(pullMenuRef, pullMenuOpen, () => setPullMenuOpen(false));

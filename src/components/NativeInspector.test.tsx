@@ -30,7 +30,7 @@ it('shows placeholders only on first load, then keeps the previous commit in pla
   });
   const host = document.createElement('div');
   const root = createRoot(host);
-  const props = { session: { handle: 'h', head: null } as unknown as RepositorySession, revision: 0, base: '', target: '', onJump() {}, onBase() {}, onTarget() {}, onSwap() {}, onClear() {}, onClose() {}, activePath: null, onActiveDiffChange() {} };
+  const props = { session: { handle: 'h', head: null } as unknown as RepositorySession, revision: 0, stateRevision: 0, base: '', target: '', onJump() {}, onBase() {}, onTarget() {}, onSwap() {}, onClear() {}, onClose() {}, activePath: null, onActiveDiffChange() {} };
   const render = (selected: string) => act(async () => { root.render(<NativeInspector {...props} selected={selected} />); });
   const aside = () => host.querySelector('aside')!;
   try {
@@ -84,8 +84,8 @@ it('fetches only the commit the selection settles on when it changes rapidly', a
   mocks.native.mockImplementation(async (command, args) => command === 'repository_commit' ? commit(args.oid!, `Subject ${args.oid}`) : files);
   const host = document.createElement('div');
   const root = createRoot(host);
-  const props = { session: { handle: 'h', head: null } as unknown as RepositorySession, revision: 0, base: '', target: '', onJump() {}, onBase() {}, onTarget() {}, onSwap() {}, onClear() {}, onClose() {}, activePath: null, onActiveDiffChange() {} };
-  const render = (selected: string, revision = 0) => act(async () => { root.render(<NativeInspector {...props} selected={selected} revision={revision} />); });
+  const props = { session: { handle: 'h', head: null } as unknown as RepositorySession, revision: 0, stateRevision: 0, base: '', target: '', onJump() {}, onBase() {}, onTarget() {}, onSwap() {}, onClear() {}, onClose() {}, activePath: null, onActiveDiffChange() {} };
+  const render = (selected: string, revision = 0, stateRevision = 0) => act(async () => { root.render(<NativeInspector {...props} selected={selected} revision={revision} stateRevision={stateRevision} />); });
   const fetched = (command: string) => mocks.native.mock.calls.filter(([name]) => name === command).map(([, args]) => args.oid ?? args.spec?.oid);
   try {
     // The first load is not delayed.
@@ -109,8 +109,12 @@ it('fetches only the commit the selection settles on when it changes rapidly', a
     expect(host.querySelector('h2')?.textContent).toBe('Subject d');
     expect(host.querySelector('aside')?.getAttribute('aria-busy')).toBe('false');
 
-    // A revision change of the same selection (status moved) still refetches right away so eligibility stays fresh.
+    // A working-tree change leaves a commit and its diff untouched: nothing is refetched, and the open diff is not reset.
     await render('d', 1);
+    expect(fetched('repository_commit')).toEqual(['a', 'd']);
+    expect(fetched('repository_diff_files')).toEqual(['a', 'd']);
+    // Refs or HEAD moving (a state revision) refetches the same selection right away.
+    await render('d', 2, 1);
     expect(fetched('repository_commit')).toEqual(['a', 'd', 'd']);
   } finally {
     await act(async () => { root.unmount(); });
@@ -128,7 +132,7 @@ let commitGate: Promise<void> | null = null;
 let eligibilityGate: Promise<void> | null = null;
 afterEach(() => { eligibility = { canEditMessage: true }; commitGate = null; eligibilityGate = null; });
 
-async function mount(initial: { selected?: string; session?: RepositorySession; revision?: number; writeBlocked?: boolean } = {}) {
+async function mount(initial: { selected?: string; session?: RepositorySession; revision?: number; stateRevision?: number; writeBlocked?: boolean } = {}) {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.native.mockImplementation(async (command, args) => {
     if (command === 'repository_commit_edit_eligibility') { if (eligibilityGate) await eligibilityGate; return eligibility; }
@@ -141,10 +145,10 @@ async function mount(initial: { selected?: string; session?: RepositorySession; 
   const notify = vi.fn<(message: string) => void>();
   const host = document.createElement('div');
   const root = createRoot(host);
-  let current = { selected: 'c1', session: head('c1'), revision: 0, writeBlocked: false, ...initial };
+  let current = { selected: 'c1', session: head('c1'), revision: 0, stateRevision: 0, writeBlocked: false, ...initial };
   const render = (next: Partial<typeof current> = {}) => act(async () => {
     current = { ...current, ...next };
-    root.render(<NativeInspector session={current.session} selected={current.selected} revision={current.revision} base="" target="" onJump={() => {}} onBase={() => {}} onTarget={() => {}} onSwap={() => {}} onClear={() => {}} onClose={() => {}} activePath={null} onActiveDiffChange={() => {}} onEditMessage={onEditMessage} notify={notify} writeBlocked={current.writeBlocked} />);
+    root.render(<NativeInspector session={current.session} selected={current.selected} revision={current.revision} stateRevision={current.stateRevision} base="" target="" onJump={() => {}} onBase={() => {}} onTarget={() => {}} onSwap={() => {}} onClear={() => {}} onClose={() => {}} activePath={null} onActiveDiffChange={() => {}} onEditMessage={onEditMessage} notify={notify} writeBlocked={current.writeBlocked} />);
   });
   await render();
   const q = <T extends Element>(selector: string) => host.querySelector<T>(selector);
@@ -378,7 +382,7 @@ it('blocks saving while commit details reload or eligibility is lost, without lo
     await t.open(); await t.edit('Draft');
     const reload = deferred<void>();
     commitGate = reload.promise;
-    await t.render({ revision: 1 });
+    await t.render({ revision: 1, stateRevision: 1 });
     expect(t.save()!.disabled).toBe(true);
     expect(t.alert()).toBe('Reloading commit details…');
     await t.shortcut();

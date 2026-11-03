@@ -48,7 +48,6 @@ export interface RepositorySnapshot { state: RepositoryState; status: Repository
 export interface SnapshotHistory { /** Omitted to force a fresh walk. */ fingerprint?: string; previousHead?: string | null; preserve: string[]; preserveLimit: number; remap?: { from: string; to: string } }
 export interface WslDistribution { name: string; running: boolean }
 export interface DirectoryEntry { name: string; path: string }
-export interface RepositoryError { code: string; message: string }
 export interface CreateCommitResult { oid: string }
 export interface CommitIdentity { name: string; email: string }
 export interface GitIdentityValues { name: string | null; email: string | null }

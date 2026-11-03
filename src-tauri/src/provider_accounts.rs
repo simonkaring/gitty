@@ -2,11 +2,7 @@
 //! in browser preferences or the metadata file.
 use crate::dto::{Error, Result};
 use serde::{Deserialize, Serialize};
-use std::{
-    io::{Read, Write},
-    path::PathBuf,
-    sync::Mutex,
-};
+use std::{io::Read, path::PathBuf, sync::Mutex};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -70,18 +66,9 @@ impl AccountStore {
     }
 
     fn save(&self, accounts: &[ProviderAccount]) -> Result<()> {
-        let parent = self
-            .path
-            .parent()
-            .ok_or_else(|| Error::new("accountData", "Invalid account storage path"))?;
-        std::fs::create_dir_all(parent)?;
-        let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
-        serde_json::to_writer(&mut tmp, accounts)
+        let bytes = serde_json::to_vec(accounts)
             .map_err(|_| Error::new("accountData", "Could not encode account metadata"))?;
-        tmp.flush()?;
-        tmp.as_file().sync_all()?;
-        tmp.persist(&self.path).map_err(|e| Error::from(e.error))?;
-        Ok(())
+        crate::repository::write_atomic(&self.path, &bytes)
     }
 
     fn key(id: &str) -> Result<keyring::Entry> {

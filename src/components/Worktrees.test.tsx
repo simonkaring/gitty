@@ -77,7 +77,7 @@ it('opens a sibling worktree with its WSL distribution and marks the current wor
   invoke.mockResolvedValue([main, target]);
   const host = document.createElement('div'); document.body.append(host); const root = createRoot(host); const onOpen = vi.fn();
   try {
-    await act(async () => root.render(<Worktrees session={session} active revision={0} busy={false} onOpen={onOpen} onWrite={vi.fn()} />));
+    await act(async () => root.render(<Worktrees session={session} active stateRevision={0} busy={false} onOpen={onOpen} onWrite={vi.fn()} />));
     expect(host.querySelector('[aria-current="true"]')?.getAttribute('title')).toBe('/repo');
     await act(async () => host.querySelector<HTMLButtonElement>('[title="/topic space"]')!.click());
     expect(onOpen).toHaveBeenCalledExactlyOnceWith({ kind: 'wsl', distribution: 'Ubuntu', path: '/topic space' });
@@ -89,7 +89,7 @@ it('shows demo worktrees but disables management', async () => {
   invoke.mockResolvedValue([{ ...target, path: '/repo', main: true }]);
   const host = document.createElement('div'); const root = createRoot(host);
   try {
-    await act(async () => root.render(<Worktrees session={{ ...session, handle: 'demo:repo' }} active revision={0} busy={false} onOpen={vi.fn()} onWrite={vi.fn()} />));
+    await act(async () => root.render(<Worktrees session={{ ...session, handle: 'demo:repo' }} active stateRevision={0} busy={false} onOpen={vi.fn()} onWrite={vi.fn()} />));
     expect(host.querySelector<HTMLButtonElement>('[aria-label="Create worktree"]')!.disabled).toBe(true);
     expect(host.textContent).toContain('requires a real repository');
   } finally { await act(async () => root.unmount()); }
@@ -100,7 +100,7 @@ it('renders worktrees in a reference-group dropdown with summary actions and tog
   invoke.mockResolvedValue([main, target]);
   const host = document.createElement('div'); document.body.append(host); const root = createRoot(host);
   try {
-    await act(async () => root.render(<Worktrees session={session} active revision={0} busy={false} onOpen={vi.fn()} onWrite={vi.fn()} />));
+    await act(async () => root.render(<Worktrees session={session} active stateRevision={0} busy={false} onOpen={vi.fn()} onWrite={vi.fn()} />));
     const details = host.querySelector<HTMLDetailsElement>('details.reference-group')!;
     expect(details).not.toBeNull();
     expect(details.open).toBe(true);

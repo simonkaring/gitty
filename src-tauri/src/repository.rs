@@ -165,6 +165,19 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>> {
         .lock()
         .map_err(|_| Error::new("worker", "Repository lock poisoned"))
 }
+/// Replaces `path` with `bytes` through a synced temporary file in the same folder
+/// and a rename, so a crash never leaves a half-written file.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::new("io", "Invalid storage path"))?;
+    std::fs::create_dir_all(parent)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    tmp.write_all(bytes)?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(path).map_err(|e| Error::from(e.error))?;
+    Ok(())
+}
 impl Service {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
@@ -330,20 +343,27 @@ impl Service {
                 "Close a repository before opening more than 32 sessions",
             ));
         }
-        let mut recent = self.read_recent()?;
-        recent.retain(|x| x != &repo.session.location);
-        recent.insert(0, repo.session.location.clone());
-        recent.truncate(20);
-        std::fs::create_dir_all(self.recent_path.parent().unwrap())?;
-        let bytes = serde_json::to_vec_pretty(&recent)
-            .map_err(|e| Error::new("recentData", e.to_string()))?;
-        let mut tmp = tempfile::NamedTempFile::new_in(self.recent_path.parent().unwrap())?;
-        tmp.write_all(&bytes)?;
-        tmp.as_file().sync_all()?;
-        tmp.persist(&self.recent_path)
-            .map_err(|e| Error::from(e.error))?;
+        // The recent list is a convenience: it must never stop a repository from
+        // opening. A damaged file is replaced; one that cannot be read at all, or
+        // written, is left alone.
+        let recent = match self.read_recent() {
+            Ok(recent) => Some(recent),
+            Err(e) if e.code == "recentData" => Some(vec![]),
+            Err(_) => None,
+        };
+        if let Some(mut recent) = recent {
+            recent.retain(|x| x != &repo.session.location);
+            recent.insert(0, repo.session.location.clone());
+            recent.truncate(20);
+            let _ = self.write_recent(&recent);
+        }
         lock(&self.repositories)?.insert(repo.session.handle.clone(), Arc::new(repo));
         Ok(state)
+    }
+    fn write_recent(&self, recent: &[RepositoryLocation]) -> Result<()> {
+        let bytes = serde_json::to_vec_pretty(recent)
+            .map_err(|e| Error::new("recentData", e.to_string()))?;
+        write_atomic(&self.recent_path, &bytes)
     }
     pub fn repo(&self, handle: &str) -> Result<Arc<Repository>> {
         lock(&self.repositories)?
@@ -400,16 +420,7 @@ impl Service {
                 true
             }
         });
-        std::fs::create_dir_all(self.recent_path.parent().unwrap())?;
-        let mut tmp = tempfile::NamedTempFile::new_in(self.recent_path.parent().unwrap())?;
-        tmp.write_all(
-            &serde_json::to_vec_pretty(&recent)
-                .map_err(|e| Error::new("recentData", e.to_string()))?,
-        )?;
-        tmp.as_file().sync_all()?;
-        tmp.persist(&self.recent_path)
-            .map_err(|e| Error::from(e.error))?;
-        Ok(())
+        self.write_recent(&recent)
     }
     /// Distinct repositories must not share a lock; linked worktrees must.
     pub(crate) fn repository_key(repo: &Repository) -> String {
@@ -913,9 +924,10 @@ impl Repository {
         Ok(hash.finish())
     }
     /// Hashes untracked content with `hash-object --stdin-paths` batches (one
-    /// process unless the path list exceeds a batch) rather than a process per file. Names that the line protocol
-    /// cannot carry verbatim, or a batch Git refuses (a dangling symlink, a file
-    /// that vanished), fall back to one no-index patch per file.
+    /// process unless the path list exceeds a batch) rather than a process per file.
+    /// A name the line protocol cannot carry verbatim, or a file Git refuses to hash
+    /// (a dangling symlink, a symlink to a folder, a file that vanished), gets one
+    /// no-index patch of its own; the files around it stay batched.
     pub(crate) fn untracked_content_hash(&self, paths: &[&str]) -> Result<u64> {
         let mut hash = DefaultHasher::new();
         // Git reports untracked embedded repositories as a single directory even
@@ -926,63 +938,73 @@ impl Repository {
             .filter(|p| !p.ends_with('/'))
             .collect();
         paths.hash(&mut hash);
-        if files.is_empty() {
-            return Ok(hash.finish());
+        let mut run: Vec<&str> = vec![];
+        for path in files {
+            if path.contains(['\n', '\r']) || path.starts_with('"') {
+                self.hash_untracked_run(&mut hash, &run)?;
+                run.clear();
+                self.hash_untracked_patch(&mut hash, path)?;
+            } else {
+                run.push(path);
+            }
         }
-        let batchable = files
-            .iter()
-            .all(|p| !p.contains(['\n', '\r']) && !p.starts_with('"'));
-        if batchable {
-            // Batches stay under the 8 MiB stdin limit; their outputs hash in path order.
-            let mut batched = hash.clone();
-            let mut complete = true;
-            for chunk in path_batches(&files, UNTRACKED_HASH_BATCH_BYTES) {
-                let input = chunk.join("\n") + "\n";
+        self.hash_untracked_run(&mut hash, &run)?;
+        Ok(hash.finish())
+    }
+    /// Batches stay under the 8 MiB stdin limit. When Git stops at a file it cannot
+    /// hash, the hashes it already printed cover the files before it, so only that
+    /// file leaves the batch and the rest are submitted again.
+    fn hash_untracked_run(&self, hash: &mut DefaultHasher, files: &[&str]) -> Result<()> {
+        for chunk in path_batches(files, UNTRACKED_HASH_BATCH_BYTES) {
+            let mut rest: &[&str] = &chunk;
+            while !rest.is_empty() {
                 let command = process::git_command(
                     self.location(),
                     &args(&["hash-object", "--no-filters", "--stdin-paths"]),
                 )?;
+                let input = rest.join("\n") + "\n";
                 let o = process::run_with_input_for(
                     command,
                     input.as_bytes(),
                     process::remaining_timeout()?,
                     8 * 1024 * 1024,
                 )?;
-                if !o.success
-                    || o.stdout
-                        .split(|b| *b == b'\n')
-                        .filter(|l| !l.is_empty())
-                        .count()
-                        != chunk.len()
-                {
-                    complete = false;
+                let lines: Vec<&[u8]> = o
+                    .stdout
+                    .split(|b| *b == b'\n')
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                if o.success && lines.len() == rest.len() {
+                    lines.hash(hash);
                     break;
                 }
-                o.stdout.hash(&mut batched);
-            }
-            if complete {
-                return Ok(batched.finish());
-            }
-        }
-        for path in files {
-            let a = args(&[
-                "diff",
-                "--no-index",
-                "--binary",
-                "--full-index",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--no-color",
-                "--",
-                "/dev/null",
-                path,
-            ]);
-            let mut stream = crate::stream::GitStream::diff(self.location(), &a)?;
-            while let Some(record) = stream.next()? {
-                record.hash(&mut hash);
+                // At least one file always leaves the batch, so this terminates.
+                let hashed = lines.len().min(rest.len() - 1);
+                lines[..hashed].hash(hash);
+                self.hash_untracked_patch(hash, rest[hashed])?;
+                rest = &rest[hashed + 1..];
             }
         }
-        Ok(hash.finish())
+        Ok(())
+    }
+    fn hash_untracked_patch(&self, hash: &mut DefaultHasher, path: &str) -> Result<()> {
+        let a = args(&[
+            "diff",
+            "--no-index",
+            "--binary",
+            "--full-index",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--",
+            "/dev/null",
+            path,
+        ]);
+        let mut stream = crate::stream::GitStream::diff(self.location(), &a)?;
+        while let Some(record) = stream.next()? {
+            record.hash(hash);
+        }
+        Ok(())
     }
     // Internal diff validation needs paths/status only, not refresh fingerprints.
     pub(crate) fn status_entries(&self) -> Result<RepositoryStatus> {

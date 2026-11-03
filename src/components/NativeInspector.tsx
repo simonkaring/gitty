@@ -31,6 +31,7 @@ export function NativeInspector({
   session,
   selected,
   revision,
+  stateRevision,
   base,
   target,
   onJump,
@@ -48,7 +49,10 @@ export function NativeInspector({
 }: {
   session: RepositorySession;
   selected: string;
+  /** Moves on every working-tree or operation change. Only the HEAD message-edit check depends on it. */
   revision: number;
+  /** Moves only when refs or HEAD change. A commit and its diff are immutable, so only this refetches them. */
+  stateRevision: number;
   base: string;
   target: string;
   onJump: (id: string) => void;
@@ -116,7 +120,7 @@ export function NativeInspector({
   const comparing = spec.kind === 'compare';
   /** The selection last handed to the backend, to tell a changed selection (debounced) from a refetch of the same one. */
   const dispatched = useRef<{ handle: string; selected: string } | null>(null);
-  const scope = JSON.stringify([selected, spec, revision, retry]);
+  const scope = JSON.stringify([selected, spec, stateRevision, retry]);
   const eligibilityScope = JSON.stringify([session.handle, session.head, session.headRef, selected, revision, retry]);
   const hasEditMessage = !!onEditMessage;
 
@@ -170,7 +174,7 @@ export function NativeInspector({
     const timer = settling ? setTimeout(load, SELECTION_DEBOUNCE_MS) : undefined;
     if (!settling) load();
     return () => { live = false; if (timer) clearTimeout(timer); };
-  }, [session.handle, selected, spec, revision, retry, scope, onActiveDiffChange]);
+  }, [session.handle, selected, spec, stateRevision, retry, scope, onActiveDiffChange]);
 
   useEffect(() => {
     if (previousActivePath.current && activePath === null) setPath('');

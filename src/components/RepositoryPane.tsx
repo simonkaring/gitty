@@ -641,63 +641,43 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       await runMenuRemote(action);
     } catch (e) { setActionError(errorMessage(e)); }
   }
-  async function deleteBranchesWrite(request: BranchBatchDeleteRequest): Promise<BranchBatchDeleteExecution> {
+  /** Runs one reviewed branch deletion under the mutation lock, then refreshes. When the write itself throws, `ifWriteFails`
+   * reports every target as failed (or unverified), so the dialog never loses what happened. */
+  async function branchDeleteWrite<Result>(command: string, request: unknown, ifWriteFails: (failed: (target: 'local' | 'origin') => BranchDeleteTargetResult) => Result, removedOids: (result: Result) => string[]): Promise<{ result: Result; refreshError?: string }> {
     const current = session.current;
     if (!current || mutationLock.current || blockedRef.current) throw new Error('Repository mutations are blocked. Refresh successfully before retrying.');
     const token = epoch.current;
     const isCurrent = () => token === epoch.current && session.current?.session.handle === current.session.handle;
     mutationLock.current = true; setMutationBusy(true);
-    let result: BranchBatchDeleteResult;
+    let result: Result;
     let writeError: unknown;
     let refreshError = '';
     try {
       while (lock.current && isCurrent()) await new Promise(resolve => setTimeout(resolve, 25));
       if (!isCurrent()) throw new Error('Repository session changed.');
-      try { result = await native<BranchBatchDeleteResult>('repository_delete_branches', { handle: current.session.handle, request }); }
+      try { result = await native<Result>(command, { handle: current.session.handle, request }); }
       catch (error) {
         writeError = error;
         const details = typeof error === 'object' && error !== null && 'code' in error && 'message' in error
           ? { code: String(error.code), message: String(error.message) }
           : { code: 'error', message: errorMessage(error) };
-        const failed = (target: 'local' | 'origin'): BranchDeleteTargetResult => ({ target, status: details.code === 'mutationUnverified' ? 'unverified' : 'failed', error: details, note: null });
-        result = { branches: request.branches.map(item => ({ branch: item.branch, local: request.deleteLocal ? failed('local') : null, origin: request.deleteOrigin ? failed('origin') : null })) };
+        result = ifWriteFails(target => ({ target, status: details.code === 'mutationUnverified' ? 'unverified' : 'failed', error: details, note: null }));
       }
       if (!isCurrent()) throw new Error('Repository session changed.');
-      try { await refresh(true, undefined, branchBatchRemovedOids(request, result)); }
+      try { await refresh(true, undefined, removedOids(result)); }
       catch (error) { refreshError = errorMessage(error); blockedRef.current = true; setMutationBlocked(true); }
       if (writeError && !refreshError) setActionError(errorMessage(writeError));
       return { result, ...(refreshError ? { refreshError } : {}) };
     } finally { if (isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
   }
-  async function deleteBranchWrite(request: BranchDeleteRequest): Promise<BranchDeleteExecution> {
-    const current = session.current;
-    if (!current || mutationLock.current || blockedRef.current) throw new Error('Repository mutations are blocked. Refresh successfully before retrying.');
-    const token = epoch.current;
-    const isCurrent = () => token === epoch.current && session.current?.session.handle === current.session.handle;
-    mutationLock.current = true; setMutationBusy(true);
-    let result: BranchDeleteResult;
-    let writeError: unknown;
-    let refreshError = '';
-    try {
-      while (lock.current && isCurrent()) await new Promise(resolve => setTimeout(resolve, 25));
-      if (!isCurrent()) throw new Error('Repository session changed.');
-      try { result = await native<BranchDeleteResult>('repository_delete_branch', { handle: current.session.handle, request }); }
-      catch (error) {
-        writeError = error;
-        const details = typeof error === 'object' && error !== null && 'code' in error && 'message' in error
-          ? { code: String(error.code), message: String(error.message) }
-          : { code: 'error', message: errorMessage(error) };
-        const failed = (target: 'local' | 'origin'): BranchDeleteTargetResult => ({ target, status: details.code === 'mutationUnverified' ? 'unverified' : 'failed', error: details, note: null });
-        result = { local: request.deleteLocal ? failed('local') : null, origin: request.deleteOrigin ? failed('origin') : null };
-      }
-      if (!isCurrent()) throw new Error('Repository session changed.');
-      const removed = [['deleted', 'unverified'].includes(result.local?.status ?? '') ? request.expectedLocalOid : undefined, ['deleted', 'unverified'].includes(result.origin?.status ?? '') ? request.expectedOriginOid : undefined].filter((oid): oid is string => !!oid);
-      try { await refresh(true, undefined, removed); }
-      catch (error) { refreshError = errorMessage(error); blockedRef.current = true; setMutationBlocked(true); }
-      if (writeError && !refreshError) setActionError(errorMessage(writeError));
-      return { result, ...(refreshError ? { refreshError } : {}) };
-    } finally { if (isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
-  }
+  const deleteBranchesWrite = (request: BranchBatchDeleteRequest): Promise<BranchBatchDeleteExecution> => branchDeleteWrite<BranchBatchDeleteResult>(
+    'repository_delete_branches', request,
+    failed => ({ branches: request.branches.map(item => ({ branch: item.branch, local: request.deleteLocal ? failed('local') : null, origin: request.deleteOrigin ? failed('origin') : null })) }),
+    result => branchBatchRemovedOids(request, result));
+  const deleteBranchWrite = (request: BranchDeleteRequest): Promise<BranchDeleteExecution> => branchDeleteWrite<BranchDeleteResult>(
+    'repository_delete_branch', request,
+    failed => ({ local: request.deleteLocal ? failed('local') : null, origin: request.deleteOrigin ? failed('origin') : null }),
+    result => [['deleted', 'unverified'].includes(result.local?.status ?? '') ? request.expectedLocalOid : undefined, ['deleted', 'unverified'].includes(result.origin?.status ?? '') ? request.expectedOriginOid : undefined].filter((oid): oid is string => !!oid));
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
       if (!activeRef.current) return;
@@ -754,7 +734,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   }
   return <>
     {active && paletteOpen && <CommandPalette commands={paletteCommands()} onClose={onClosePalette} />}
-    {state && <RepositoryToolbar handle={state.session.handle} active={active} revision={revision} busy={mutationBusy || mutationBlocked} pickCount={pickOrder.length} pickMode={pickMode}
+    {state && <RepositoryToolbar handle={state.session.handle} active={active} revision={revision} stateRevision={stateRevision} busy={mutationBusy || mutationBlocked} pickCount={pickOrder.length} pickMode={pickMode}
       onCreateBranch={() => setActionContext({ oid: state.session.head ?? '', ref: state.session.headRef ?? undefined, initial: 'createBranch' })}
       onSwitchBranch={() => setActionContext({ oid: state.session.head ?? '', initial: 'switchBranch' })}
       onCherryPick={() => setActionContext({ oid: pickOrder[0], commits: pickOrder, initial: 'cherryPick' })}
@@ -784,7 +764,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
         {!error && Array.from({ length: 12 }, (_, i) => <div key={i} className="skeleton-row" aria-hidden="true" style={{ animationDelay: `${i * 60}ms` }}><span className="skeleton-node" style={{ marginLeft: `${[0, 18, 0, 36, 18, 0][i % 6]}px` }} /><span className="skeleton" style={{ width: `${40 + ((i * 37) % 45)}%` }} /><span className="skeleton" style={{ width: 70 }} /></div>)}
       </div>
     </main> : <main className="workspace">
-        {sidebarOpen && <><NativeSidebar state={state} commits={commits} filters={filters} busy={busy} reveal={reveal} switchBranch={ref => void switchBranch(ref)} openMenu={openMenu} onAction={setActionContext} folderOpen={folderOpen} onFolderOpen={(key, open) => setFolderOpen(current => ({ ...current, [key]: open }))} openFolderMenu={(folder, x, y, trigger) => setFolderMenu({ folder, x, y, trigger })} worktrees={<Worktrees session={state.session} revision={revision} active={active} busy={mutationBusy || mutationBlocked} onOpen={onOpenWorktree} onWrite={operationWrite} />} /><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
+        {sidebarOpen && <><NativeSidebar state={state} commits={commits} filters={filters} busy={busy} reveal={reveal} switchBranch={ref => void switchBranch(ref)} openMenu={openMenu} onAction={setActionContext} folderOpen={folderOpen} onFolderOpen={(key, open) => setFolderOpen(current => ({ ...current, [key]: open }))} openFolderMenu={(folder, x, y, trigger) => setFolderMenu({ folder, x, y, trigger })} worktrees={<Worktrees session={state.session} stateRevision={stateRevision} active={active} busy={mutationBusy || mutationBlocked} onOpen={onOpenWorktree} onWrite={operationWrite} />} /><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
       <div className="workspace-main">
         {!sidebarOpen && filters}
         <div className="history-workspace">
@@ -859,6 +839,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
                 session={state.session}
                 selected={selected}
                 revision={revision}
+                stateRevision={stateRevision}
                 base={base}
                 target={target}
                 onJump={reveal}

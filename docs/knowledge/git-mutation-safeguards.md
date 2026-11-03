@@ -122,7 +122,10 @@ its same-name `origin/<branch>` upstream and commits ahead; the request pins tha
 branch as both source and destination, while the backend re-resolves the named
 source and reads its upstream configuration instead of the checked-out branch's.
 Explicit per-branch metadata reads reject missing or invalid local branches.
-The checked-out branch keeps the existing push/publish flow. Local ahead metadata
+The checked-out branch keeps the existing push/publish flow, except that a push with
+no chosen destination refuses an upstream whose branch name differs from the local
+one (`upstreamNameDiffers`), so one click cannot publish `feature` onto `main`; the
+Publish dialog names the destination. Local ahead metadata
 is a review signal, not proof of the remote's current state.[^remote-writes][^remote-dto][^remote-model][^branch-menu][^branch-push-tests][^remote-tests]
 
 Merge review includes a dedicated editable commit message and defaults to

@@ -3,7 +3,7 @@
 //! Any local process can connect to a 127.0.0.1 listener, so every connection is
 //! bounded before authentication: a cap on concurrent connections, an absolute
 //! handshake deadline, and (in the callers) byte limits on what is read.
-use std::io::{self, BufRead, Read};
+use std::io::{self, BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -118,6 +118,48 @@ pub(crate) fn read_bounded_line(reader: &mut impl BufRead, max: u64) -> io::Resu
         return Err(io::ErrorKind::InvalidData.into());
     }
     String::from_utf8(line).map_err(|_| io::ErrorKind::InvalidData.into())
+}
+
+/// The script Git runs for `mode` (`askpass` or `editor`): this executable again.
+pub(crate) fn helper_script(mode: &str) -> io::Result<String> {
+    let exe = std::env::current_exe()?;
+    Ok(if cfg!(windows) {
+        format!("@echo off\n\"{}\" {mode} %*", exe.display())
+    } else {
+        format!(
+            "#!/bin/sh\nexec {} {mode} \"$@\"",
+            crate::askpass::shell_quote(&exe.to_string_lossy())
+        )
+    })
+}
+
+/// Installs an executable helper script. It is written under an exclusively
+/// created random name and renamed into place, so Git never runs a half-written
+/// script and a pre-planted file or symlink at `path` is replaced, not followed.
+pub(crate) fn write_helper_script(path: &Path, contents: &str) -> io::Result<()> {
+    let dir = path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut file = tempfile::NamedTempFile::new_in(dir)?;
+    file.write_all(contents.as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o755))?;
+    }
+    file.persist(path).map_err(|e| e.error)?;
+    Ok(())
+}
+
+/// Puts back a helper script that vanished while the app kept running: another
+/// Gitty's start-up sweep (`remove_stale_helpers`) or a temp-folder cleaner can
+/// remove it, and Git would then fail to run it. Best effort, like the sweep.
+pub(crate) fn ensure_helper_script(path: &Path, mode: &str) {
+    if !path.is_file() {
+        let _ = helper_script(mode).and_then(|script| write_helper_script(path, &script));
+    }
 }
 
 /// Best-effort removal of `<prefix><uuid>.sh|.bat` helper scripts that a previous

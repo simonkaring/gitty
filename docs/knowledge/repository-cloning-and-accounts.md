@@ -60,7 +60,8 @@ Account-based clones require native destinations and canonical cloud HTTPS URLs;
 WSL, SSH, Bitbucket and self-hosted accounts use neither this browser nor its token
 injection. URL cloning still supports configured Git/SSH credentials and WSL helper
 authentication. Existing cancellation, temporary-directory ownership and no-replace
-publication guards are shared by both clone paths.[^entry][^clone][^contract]
+publication guards (with a checked plain rename on filesystems that lack a no-replace
+rename) are shared by both clone paths.[^entry][^clone][^contract]
 
 Changing accounts/organizations clears selection and keyed browser lifetimes ignore
 old results. Closing account settings refreshes metadata; API errors offer retry and

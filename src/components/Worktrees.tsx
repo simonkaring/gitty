@@ -7,8 +7,8 @@ import { Dialog } from './ui';
 
 const labels: Record<WorktreeAction, string> = { create: 'Create worktree', move: 'Move worktree', remove: 'Remove worktree', lock: 'Lock worktree', unlock: 'Unlock worktree', prune: 'Prune worktrees' };
 
-export function Worktrees({ session, revision, active, busy, onOpen, onWrite }: {
-  session: RepositorySession; revision: number; active: boolean; busy: boolean;
+export function Worktrees({ session, stateRevision, active, busy, onOpen, onWrite }: {
+  session: RepositorySession; stateRevision: number; active: boolean; busy: boolean;
   onOpen: (location: RepositorySession['location']) => void;
   onWrite: (command: string, args: Record<string, unknown>) => Promise<void>;
 }) {
@@ -29,7 +29,7 @@ export function Worktrees({ session, revision, active, busy, onOpen, onWrite }: 
     window.addEventListener('focus', refresh);
     worktreeEvents.addEventListener('change', refresh);
     return () => { sequence.current++; window.removeEventListener('focus', refresh); worktreeEvents.removeEventListener('change', refresh); };
-  }, [active, revision, reload]);
+  }, [active, stateRevision, reload]);
   const demo = isDemoHandle(session.handle);
   return <>
     <details className="reference-group" aria-label="Worktrees" open={open} onToggle={e => setOpen(e.currentTarget.open)}>

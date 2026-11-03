@@ -65,12 +65,17 @@ pub(crate) fn action(
     }
 }
 
-/// Keep the original quoted path headers and body bytes, including CR, invalid
-/// UTF-8 and no-newline markers. Only ASCII hunk coordinates are regenerated.
-/// Earlier omitted hunks must not contribute their line-count deltas: forward
-/// application is based on the old range, reverse application on the new range.
-fn selected_patch(bytes: &[u8], hunk_index: usize, reverse: bool) -> Result<Vec<u8>> {
-    let offsets = hunk_offsets(bytes);
+/// Where one hunk of a patch sits, and the line ranges its `@@` header declares.
+struct HunkHeader {
+    end: usize,
+    body_start: usize,
+    old_start: u64,
+    old_count: u64,
+    new_start: u64,
+    new_count: u64,
+}
+
+fn hunk_header(bytes: &[u8], offsets: &[usize], hunk_index: usize) -> Result<HunkHeader> {
     let start = *offsets
         .get(hunk_index)
         .ok_or_else(|| Error::new("invalidHunk", "Select an existing complete hunk."))?;
@@ -105,6 +110,30 @@ fn selected_patch(bytes: &[u8], hunk_index: usize, reverse: bool) -> Result<Vec<
     };
     let (old_start, old_count) = range(ascii(fields[1])?)?;
     let (new_start, new_count) = range(ascii(fields[2])?)?;
+    Ok(HunkHeader {
+        end,
+        body_start,
+        old_start,
+        old_count,
+        new_start,
+        new_count,
+    })
+}
+
+/// Keep the original quoted path headers and body bytes, including CR, invalid
+/// UTF-8 and no-newline markers. Only ASCII hunk coordinates are regenerated.
+/// Earlier omitted hunks must not contribute their line-count deltas: forward
+/// application is based on the old range, reverse application on the new range.
+fn selected_patch(bytes: &[u8], hunk_index: usize, reverse: bool) -> Result<Vec<u8>> {
+    let offsets = hunk_offsets(bytes);
+    let HunkHeader {
+        end,
+        body_start,
+        old_start,
+        old_count,
+        new_start,
+        new_count,
+    } = hunk_header(bytes, &offsets, hunk_index)?;
     // Empty ranges refer to the line *before* the insertion/deletion.
     let (old_start, new_start) = if reverse {
         (
@@ -159,40 +188,13 @@ fn selected_lines_patch(
     line_indices: &[usize],
 ) -> Result<Vec<u8>> {
     let offsets = hunk_offsets(bytes);
-    let start = *offsets
-        .get(hunk_index)
-        .ok_or_else(|| Error::new("invalidHunk", "Select an existing complete hunk."))?;
-    let end = offsets.get(hunk_index + 1).copied().unwrap_or(bytes.len());
-    let hunk_bytes = &bytes[start..end];
-    let body_start = start
-        + hunk_bytes
-            .iter()
-            .position(|b| *b == b'\n')
-            .ok_or_else(|| Error::new("gitParse", "Incomplete hunk header"))?
-        + 1;
-
-    let fields: Vec<_> = bytes[start..body_start]
-        .split(|b| *b == b' ')
-        .take(4)
-        .collect();
-    let range = |s: &str| -> Result<(u64, u64)> {
-        let (start, count) = s[1..].split_once(',').unwrap_or((&s[1..], "1"));
-        Ok((
-            start
-                .parse()
-                .map_err(|_| Error::new("gitParse", "Invalid hunk start"))?,
-            count
-                .parse()
-                .map_err(|_| Error::new("gitParse", "Invalid hunk count"))?,
-        ))
-    };
-    if fields.len() < 4 || !fields[1].starts_with(b"-") || !fields[2].starts_with(b"+") {
-        return Err(Error::new("gitParse", "Invalid hunk ranges"));
-    }
-    let ascii =
-        |b| std::str::from_utf8(b).map_err(|_| Error::new("gitParse", "Invalid hunk range"));
-    let (old_start, _old_count) = range(ascii(fields[1])?)?;
-    let (new_start, _new_count) = range(ascii(fields[2])?)?;
+    let HunkHeader {
+        end,
+        body_start,
+        old_start,
+        new_start,
+        ..
+    } = hunk_header(bytes, &offsets, hunk_index)?;
 
     let raw_lines = split_raw_lines(&bytes[body_start..end]);
     if line_indices.is_empty() {

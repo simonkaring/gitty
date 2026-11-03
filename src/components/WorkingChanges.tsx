@@ -177,6 +177,8 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
       isStaged,
     });
   }, [active, currentPreview, visiblePreview, busy, blocked, demo, onActiveDiffChange]);
+  // The diff pane's stage buttons act through this component, so closing the inspector must close the pane too.
+  useEffect(() => () => { onActiveDiffChange?.(null); }, []);
   const composerDraft = amending ? amendDraft ?? { subject: '', body: '' } : draft;
   const amendReady = amending && !!amendDraft && !!session.head && amendHead === session.head && status?.head === session.head && status.headRef === session.headRef;
   function edit(value: CommitDraft) {

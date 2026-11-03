@@ -62,8 +62,10 @@ fn parse_batch(ids: &[String], mut bytes: &[u8]) -> Result<Vec<CommitSummary>> {
             return Err(malformed());
         }
         // No allocation uses an untrusted object size. Capture already enforces
-        // the 32 MiB aggregate output limit for the entire page.
-        commits.push(parse(id, object)?.summary);
+        // the 32 MiB aggregate output limit for the entire page. Rows are display
+        // only, so one commit in a legacy encoding (a Latin-1 author name) shows
+        // replacement characters instead of failing the whole page of 200.
+        commits.push(parse_text(id, &String::from_utf8_lossy(object))?.summary);
         bytes = &bytes[size + 1..];
     }
     if !bytes.is_empty() {
@@ -73,7 +75,10 @@ fn parse_batch(ids: &[String], mut bytes: &[u8]) -> Result<Vec<CommitSummary>> {
 }
 
 pub fn parse(id: &str, bytes: &[u8]) -> Result<CommitDetail> {
-    let raw = process::text_ref(bytes)?;
+    parse_text(id, process::text_ref(bytes)?)
+}
+
+fn parse_text(id: &str, raw: &str) -> Result<CommitDetail> {
     let (headers, body) = raw
         .split_once("\n\n")
         .ok_or_else(|| Error::new("gitParse", "Malformed commit"))?;
@@ -193,11 +198,27 @@ mod tests {
             parse_batch(&two, &valid).is_err(),
             "Never return a partial page"
         );
-        let invalid_encoding = [object.as_slice(), &[0xff]].concat();
+    }
+
+    #[test]
+    fn a_legacy_encoded_commit_does_not_fail_its_history_page() {
+        let first = "a".repeat(40);
+        let second = "b".repeat(40);
+        let ids = vec![first.clone(), second.clone()];
+        let latin1 = b"author Bj\xf6rn <b@example.org> 1700000000 +0000\ncommitter Bj\xf6rn <b@example.org> 1700000000 +0000\nencoding ISO-8859-1\n\nsubject \xe9\n";
+        let utf8 = b"author Zoe <z@example.org> 1700000002 +0000\ncommitter Zoe <z@example.org> 1700000002 +0000\n\nfine\n";
+        let page = parse_batch(
+            &ids,
+            &[frame(&first, latin1), frame(&second, utf8)].concat(),
+        )
+        .unwrap();
+        assert_eq!(page.len(), 2);
+        assert_eq!(page[0].author, "Bj\u{fffd}rn");
+        assert_eq!(page[0].subject, "subject \u{fffd}");
+        assert_eq!(page[1].subject, "fine");
+        // A single commit's detail keeps the strict contract.
         assert_eq!(
-            parse_batch(&ids, &frame(&id, &invalid_encoding))
-                .unwrap_err()
-                .code,
+            parse(&first, latin1).unwrap_err().code,
             "unsupportedEncoding"
         );
     }

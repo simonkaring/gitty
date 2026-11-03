@@ -346,6 +346,18 @@ impl Repository {
                         "Publish this branch with setUpstream enabled for its first push.",
                     ));
                 }
+                // With no chosen destination the upstream's name is used, but only
+                // when it is the branch's own name: `feature` tracking `origin/main`
+                // must not publish onto `main` in one click. Git's default
+                // `push.default=simple` refuses the same push.
+                if let (None, Some(tracking)) = (branch, tracking_branch) {
+                    if tracking != source {
+                        return Err(Error::new(
+                            "upstreamNameDiffers",
+                            format!("{source} tracks {remote}/{tracking}, which has a different name. Choose the destination branch explicitly with Publish…, so nothing is pushed onto {tracking} by accident."),
+                        ));
+                    }
+                }
                 let destination = branch.or(tracking_branch).unwrap_or(source);
                 self.remote_branch_name(destination)?;
                 // Even an explicit refspec does not neutralize remote.*.mirror.
@@ -571,10 +583,6 @@ pub(crate) fn network_result(output: Output, wsl: bool) -> Result<ActionOutput> 
     })
 }
 
-pub(crate) fn network_error(output: Output, wsl: bool) -> Result<ActionOutput> {
-    network_result(output, wsl)
-}
-
 /// WSL actions without a scoped askpass bridge (no registry, or `wslpath` could not
 /// translate the Gitty executable) cannot prompt through Gitty, but a credential
 /// helper that opens its own window — typically Windows Git Credential Manager
@@ -625,6 +633,7 @@ pub(crate) fn network_args(
 
     if let Some(guard) = askpass.filter(|_| interactive) {
         let registry = guard.registry();
+        registry.ensure_script();
         a.extend(args(&[
             "-c",
             "core.sshCommand=ssh -oStrictHostKeyChecking=yes",

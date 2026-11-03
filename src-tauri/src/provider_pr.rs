@@ -101,6 +101,28 @@ fn scp_like_remote(remote: &str) -> Option<(&str, &str)> {
     Some((host, path))
 }
 
+/// The text a `%XX`-encoded path segment stands for, or `None` for a malformed
+/// escape or bytes that are not UTF-8.
+fn percent_decoded(part: &str) -> Option<String> {
+    let bytes = part.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = bytes.get(index + 1..index + 3)?;
+            if !hex.iter().all(u8::is_ascii_hexdigit) {
+                return None;
+            }
+            decoded.push(u8::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()?);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
 fn repository_url(remote: &str, provider: Provider) -> Result<ProviderRepository> {
     // `path` is the canonical repository path; `web_path` the browser path of the
     // remote exactly as the HTTPS form has always derived it.
@@ -108,8 +130,18 @@ fn repository_url(remote: &str, provider: Provider) -> Result<ProviderRepository
         let url = url::Url::parse(remote).map_err(|_| unsupported_remote(provider))?;
         match url.scheme() {
             "https" => {
+                // Azure's Clone button hands out `https://{org}@dev.azure.com/{org}/…`;
+                // that user name is the organization, not a credential.
+                let azure_org_user = provider == Provider::AzureDevops
+                    && !url.username().is_empty()
+                    && url
+                        .path()
+                        .trim_start_matches('/')
+                        .split('/')
+                        .next()
+                        .is_some_and(|org| org.eq_ignore_ascii_case(url.username()));
                 if url.host_str() != Some(provider.host())
-                    || !url.username().is_empty()
+                    || !(url.username().is_empty() || azure_org_user)
                     || url.password().is_some()
                     || url.port().is_some()
                     || url.query().is_some()
@@ -162,12 +194,24 @@ fn repository_url(remote: &str, provider: Provider) -> Result<ProviderRepository
     };
     let path = path.as_str();
     let parts: Vec<_> = path.split('/').collect();
+    // Azure project names may contain spaces, which remotes spell `My%20Project`.
+    // They stay encoded in the API address; the decoded name is only checked.
+    let azure = provider == Provider::AzureDevops;
     if parts.iter().any(|part| {
-        part.is_empty()
-            || *part == "."
-            || *part == ".."
-            || part.contains(['%', '\\', '?', '#', ':'])
-            || part.chars().any(|c| c.is_whitespace() || c.is_control())
+        let decoded = if azure {
+            percent_decoded(part)
+        } else {
+            Some((*part).to_string())
+        };
+        decoded.map_or(true, |name| {
+            part.is_empty()
+                || name == "."
+                || name == ".."
+                || (!azure && part.contains('%'))
+                || name.contains(['%', '\\', '/', '?', '#', ':'])
+                || part.chars().any(char::is_whitespace)
+                || name.chars().any(char::is_control)
+        })
     }) {
         return Err(Error::new("invalidRemote", "Unsupported repository path"));
     }
@@ -542,6 +586,55 @@ mod tests {
                 .api,
             "https://gitlab.com/api/v4/projects/team%2Fsub%2Fproject/merge_requests"
         );
+    }
+
+    #[test]
+    fn azure_remotes_as_azure_hands_them_out_are_accepted_and_stay_strict() {
+        let azure = Provider::AzureDevops;
+        let plain =
+            repository_url("https://org@dev.azure.com/org/project/_git/repo", azure).unwrap();
+        assert_eq!(
+            plain.api,
+            "https://dev.azure.com/org/project/_apis/git/repositories/repo/pullrequests?api-version=7.1"
+        );
+        assert_eq!(plain.web, "https://dev.azure.com/org/project/_git/repo/");
+        // Project and repository names with spaces stay percent-encoded in the API address.
+        let spaced = repository_url(
+            "https://ORG@dev.azure.com/org/My%20Project/_git/my%20repo",
+            azure,
+        )
+        .unwrap();
+        assert_eq!(
+            spaced.api,
+            "https://dev.azure.com/org/My%20Project/_apis/git/repositories/my%20repo/pullrequests?api-version=7.1"
+        );
+        assert_eq!(
+            repository_url("git@ssh.dev.azure.com:v3/org/My%20Project/repo", azure)
+                .unwrap()
+                .api,
+            "https://dev.azure.com/org/My%20Project/_apis/git/repositories/repo/pullrequests?api-version=7.1"
+        );
+        for remote in [
+            // The user name must be the organization, and never a password.
+            "https://other@dev.azure.com/org/project/_git/repo",
+            "https://org:secret@dev.azure.com/org/project/_git/repo",
+            // Encoded separators, dots, controls and malformed escapes cannot reshape the API path.
+            "https://org@dev.azure.com/org/a%2Fb/_git/repo",
+            "https://org@dev.azure.com/org/a%5Cb/_git/repo",
+            "https://org@dev.azure.com/org/%2e%2e/_git/repo",
+            "https://org@dev.azure.com/org/a%zzb/_git/repo",
+            "https://org@dev.azure.com/org/a%25b/_git/repo",
+            "https://org@dev.azure.com/org/a%00b/_git/repo",
+            "https://org@dev.azure.com/org/a%/_git/repo",
+        ] {
+            assert!(
+                repository_url(remote, azure).is_err(),
+                "{remote} must be rejected"
+            );
+        }
+        // Other providers keep refusing user names and encoded characters.
+        assert!(repository_url("https://org@github.com/org/repo", Provider::Github).is_err());
+        assert!(repository_url("https://github.com/org/re%20po", Provider::Github).is_err());
     }
 
     #[test]

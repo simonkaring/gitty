@@ -575,54 +575,77 @@ fn publish_clone(location: &RepositoryLocation, temporary: &str, destination: &s
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 fn rename_noreplace(from: &Path, to: &Path) -> Result<()> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
-    let from = CString::new(from.as_os_str().as_bytes())
+    let c_from = CString::new(from.as_os_str().as_bytes())
         .map_err(|_| Error::new("invalidCloneDestination", "Clone path contains NUL"))?;
-    let to = CString::new(to.as_os_str().as_bytes())
+    let c_to = CString::new(to.as_os_str().as_bytes())
         .map_err(|_| Error::new("invalidCloneDestination", "Clone path contains NUL"))?;
-    if unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) } == 0 {
+    if unsafe { libc::renamex_np(c_from.as_ptr(), c_to.as_ptr(), libc::RENAME_EXCL) } == 0 {
         Ok(())
     } else {
-        let error = std::io::Error::last_os_error();
-        if error.kind() == std::io::ErrorKind::AlreadyExists {
-            Err(Error::new(
-                "destinationExists",
-                "The clone destination appeared before completion. It was not overwritten.",
-            ))
-        } else {
-            Err(error.into())
-        }
+        noreplace_failed(std::io::Error::last_os_error(), from, to)
     }
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn rename_noreplace(from: &Path, to: &Path) -> Result<()> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
-    let from = CString::new(from.as_os_str().as_bytes())
+    let c_from = CString::new(from.as_os_str().as_bytes())
         .map_err(|_| Error::new("invalidCloneDestination", "Clone path contains NUL"))?;
-    let to = CString::new(to.as_os_str().as_bytes())
+    let c_to = CString::new(to.as_os_str().as_bytes())
         .map_err(|_| Error::new("invalidCloneDestination", "Clone path contains NUL"))?;
     if unsafe {
         libc::renameat2(
             libc::AT_FDCWD,
-            from.as_ptr(),
+            c_from.as_ptr(),
             libc::AT_FDCWD,
-            to.as_ptr(),
+            c_to.as_ptr(),
             libc::RENAME_NOREPLACE,
         )
     } == 0
     {
         Ok(())
     } else {
-        let error = std::io::Error::last_os_error();
-        if error.kind() == std::io::ErrorKind::AlreadyExists {
-            Err(Error::new(
-                "destinationExists",
-                "The clone destination appeared before completion. It was not overwritten.",
-            ))
-        } else {
-            Err(error.into())
-        }
+        noreplace_failed(std::io::Error::last_os_error(), from, to)
     }
+}
+
+/// What to do when the no-replace rename failed. A destination that appeared is
+/// refused. A filesystem that cannot do a no-replace rename at all (some network
+/// and FUSE mounts answer EINVAL, ENOTSUP or ENOSYS) must not cost the user the
+/// finished clone, so it gets a plain rename after an absence check.
+/// shortcut: that path is not atomic, a directory created in the gap is replaced
+/// if empty; only filesystems that cannot refuse atomically take it.
+#[cfg(unix)]
+fn noreplace_failed(error: std::io::Error, from: &Path, to: &Path) -> Result<()> {
+    if error.kind() == std::io::ErrorKind::AlreadyExists {
+        return Err(destination_appeared());
+    }
+    if !noreplace_unsupported(&error) {
+        return Err(error.into());
+    }
+    if to.symlink_metadata().is_ok() {
+        return Err(destination_appeared());
+    }
+    std::fs::rename(from, to).map_err(Into::into)
+}
+
+#[cfg(unix)]
+fn noreplace_unsupported(error: &std::io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(code) if code == libc::EINVAL
+            || code == libc::ENOTSUP
+            || code == libc::EOPNOTSUPP
+            || code == libc::ENOSYS
+    )
+}
+
+#[cfg(unix)]
+fn destination_appeared() -> Error {
+    Error::new(
+        "destinationExists",
+        "The clone destination appeared before completion. It was not overwritten.",
+    )
 }
 
 #[cfg(windows)]
@@ -652,9 +675,11 @@ fn progress_record(bytes: &[u8]) -> Option<CloneProgress> {
         return None;
     }
     let percent = message.find('%').and_then(|end| {
+        // `trim_end_matches` keeps the cut on a character boundary, even when a
+        // multi-byte character (a server's non-English text) precedes the digits.
         let start = message[..end]
-            .rfind(|c: char| !c.is_ascii_digit())
-            .map_or(0, |index| index + 1);
+            .trim_end_matches(|c: char| c.is_ascii_digit())
+            .len();
         message[start..end]
             .parse::<u8>()
             .ok()
@@ -854,6 +879,64 @@ mod tests {
         assert_eq!(progress.phase, "receiving objects");
         assert_eq!(progress.percent, Some(42));
         assert!(progress_record(b"\r").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_filesystem_without_noreplace_rename_still_publishes_the_clone() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("from");
+        let to = dir.path().join("to");
+        let make_source = || {
+            let _ = std::fs::remove_dir_all(&from);
+            std::fs::create_dir(&from).unwrap();
+            std::fs::write(from.join("file"), "x").unwrap();
+        };
+        let os = |code| std::io::Error::from_raw_os_error(code);
+        for code in [libc::EINVAL, libc::ENOTSUP, libc::ENOSYS] {
+            make_source();
+            noreplace_failed(os(code), &from, &to).unwrap();
+            assert!(to.join("file").is_file() && !from.exists(), "{code}");
+            std::fs::remove_dir_all(&to).unwrap();
+        }
+        // A destination that exists is never replaced, whichever way it is found.
+        make_source();
+        std::fs::create_dir(&to).unwrap();
+        for error in [
+            std::io::Error::from(std::io::ErrorKind::AlreadyExists),
+            os(libc::EINVAL),
+        ] {
+            assert_eq!(
+                noreplace_failed(error, &from, &to).unwrap_err().code,
+                "destinationExists"
+            );
+            assert!(from.join("file").is_file());
+        }
+        // Any other failure is reported, not retried.
+        assert_eq!(
+            noreplace_failed(os(libc::EACCES), &from, &to)
+                .unwrap_err()
+                .code,
+            "io"
+        );
+        assert!(from.join("file").is_file());
+    }
+
+    #[test]
+    fn progress_with_multibyte_text_before_the_percentage_does_not_panic() {
+        for (text, percent) in [
+            ("remote: 进度：50% done", Some(50)),
+            ("remote: 進捗：% done", None),
+            ("remote: \u{fffd}7% done", Some(7)),
+            ("remote: 完了：100%", Some(100)),
+            ("remote: ：101%", None),
+        ] {
+            assert_eq!(
+                progress_record(text.as_bytes()).unwrap().percent,
+                percent,
+                "{text}"
+            );
+        }
     }
 
     #[test]

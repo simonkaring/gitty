@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { branchPushRequest, defaultRemote, describeRemoteAction, describeStashAction, needsPublish, remoteSuccessMessage, sortStashes, stashSuccessMessage, syncSummary, type SyncInfo } from './remote';
+import { branchPushRequest, defaultRemote, needsPublish, remoteSuccessMessage, sortStashes, stashSuccessMessage, syncSummary, type SyncInfo } from './remote';
 
 describe('sync summary', () => {
   it('is empty without sync info', () => { expect(syncSummary(null)).toBe(''); });
@@ -57,23 +57,6 @@ describe('stash ordering', () => {
     const copy = [...entries];
     sortStashes(entries);
     expect(entries).toEqual(copy);
-  });
-});
-
-describe('action descriptions', () => {
-  it('describes fetch, pull modes, and push', () => {
-    expect(describeRemoteAction({ kind: 'fetch' })).toBe('Fetch');
-    expect(describeRemoteAction({ kind: 'fetch', remote: 'origin' })).toBe('Fetch origin');
-    expect(describeRemoteAction({ kind: 'pull', pullMode: 'rebase' })).toBe('Pull (rebase)');
-    expect(describeRemoteAction({ kind: 'pull' })).toBe('Pull (fast-forward only)');
-    expect(describeRemoteAction({ kind: 'push', remote: 'origin', branch: 'main' })).toBe('Push origin/main');
-    expect(describeRemoteAction({ kind: 'push' })).toBe('Push');
-  });
-  it('describes stash actions', () => {
-    expect(describeStashAction({ kind: 'save' })).toBe('Stash changes');
-    expect(describeStashAction({ kind: 'apply', oid: 'x' })).toBe('Apply stash');
-    expect(describeStashAction({ kind: 'pop', oid: 'x' })).toBe('Pop stash');
-    expect(describeStashAction({ kind: 'drop', oid: 'x' })).toBe('Drop stash');
   });
 });
 

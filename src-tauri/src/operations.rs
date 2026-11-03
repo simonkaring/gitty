@@ -1518,6 +1518,7 @@ impl Repository {
         let mut _editor_guard = None;
         if (before.kind == OperationKind::Rebase && is_continue) || is_interactive_rebase {
             if let (RepositoryLocation::Native { .. }, Some(editor)) = (self.location(), editor) {
+                editor.ensure_script();
                 env.push((
                     "GIT_EDITOR".into(),
                     crate::askpass::shell_quote(&editor.script_path.to_string_lossy()),

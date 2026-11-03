@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { locationIdentity, repositoryStorageKey, sshDestination, sshDisplayPath, sshFailureHint, sshLocationFromForm, validSshPath, validSshWord } from './ssh';
+import { locationIdentity, repositoryStorageKey, sshDestination, sshFailureHint, sshLocationFromForm, validSshPath, validSshWord } from './ssh';
 
 const form = { host: ' home ', user: '', port: '', path: '/home/me/code/thing' };
 
@@ -34,7 +34,6 @@ describe('SSH destinations', () => {
   it('renders the destination with and without optional parts', () => {
     expect(sshDestination({ kind: 'ssh', host: 'home', path: '/r' })).toBe('home');
     expect(sshDestination({ kind: 'ssh', host: 'home', user: 'me', port: 2222, path: '/r' })).toBe('me@home:2222');
-    expect(sshDisplayPath({ kind: 'ssh', host: 'home', user: 'me', path: '/r' })).toBe('me@home:/r');
   });
   it('keys the host identity separately from the repository path', () => {
     expect(locationIdentity({ kind: 'ssh', host: 'home', user: 'me', path: '/a' })).toBe(locationIdentity({ kind: 'ssh', host: 'home', user: 'me', path: '/b' }));

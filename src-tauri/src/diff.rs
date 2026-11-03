@@ -73,7 +73,7 @@ impl Repository {
         }
         Ok(a)
     }
-    fn untracked_patch(&self, path: &str, stats: bool) -> Result<Vec<u8>> {
+    fn untracked_patch(&self, path: &str) -> Result<Vec<u8>> {
         validate_path(path)?;
         if !self
             .status_entries_at(Some(path))?
@@ -86,18 +86,17 @@ impl Repository {
                 "The file is not currently untracked",
             ));
         }
-        let mut a = args(&[
+        let a = args(&[
             "diff",
             "--no-index",
             "--no-ext-diff",
             "--no-textconv",
             "--no-color",
+            "--patch",
+            "--",
+            "/dev/null",
+            path,
         ]);
-        a.push(if stats { "--numstat" } else { "--patch" }.into());
-        if stats {
-            a.push("-z".into());
-        }
-        a.extend(args(&["--", "/dev/null", path]));
         let output = process::git(self.location(), &a)?;
         if output.success || output.code == Some(1) {
             Ok(output.stdout)
@@ -109,36 +108,6 @@ impl Repository {
         }
     }
     pub fn diff_files(&self, spec: &DiffSpec) -> Result<Vec<DiffFile>> {
-        if matches!(spec, DiffSpec::Untracked) {
-            let status = self.status_entries()?;
-            return status
-                .entries
-                .into_iter()
-                .filter(|e| e.untracked)
-                .map(|entry| {
-                    let output = process::text(self.untracked_patch(&entry.path, true)?)?;
-                    let mut f = output.splitn(3, '\t');
-                    let a = if output.is_empty() {
-                        Some(0)
-                    } else {
-                        f.next().unwrap_or("").parse().ok()
-                    };
-                    let d = if output.is_empty() {
-                        Some(0)
-                    } else {
-                        f.next().unwrap_or("").parse().ok()
-                    };
-                    Ok(DiffFile {
-                        path: entry.path,
-                        old_path: None,
-                        status: "A".into(),
-                        additions: a,
-                        deletions: d,
-                        binary: a.is_none() || d.is_none(),
-                    })
-                })
-                .collect();
-        }
         let mut a = self.diff_args(spec)?;
         a.extend(args(&["--raw", "--numstat", "-z", "--no-abbrev", "--"]));
         let raw = process::text(process::checked(self.location(), &a)?)?;
@@ -220,7 +189,7 @@ impl Repository {
         let before = if actionable { index()? } else { vec![] };
         let mut modified = false;
         let bytes = if matches!(spec, DiffSpec::Untracked) {
-            self.untracked_patch(path, false)?
+            self.untracked_patch(path)?
         } else {
             let file = if matches!(
                 spec,

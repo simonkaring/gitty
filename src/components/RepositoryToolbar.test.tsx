@@ -16,7 +16,7 @@ beforeEach(async () => {
   document.body.append(host);
   root = createRoot(host);
   await act(async () => {
-    root.render(<RepositoryToolbar handle="repo" active revision={0} busy={false} pickCount={1} pickMode onCreateBranch={() => {}} onSwitchBranch={() => {}} onCherryPick={() => {}} onClearPick={() => {}} onStartPickMode={() => {}} onOpenStash={() => {}} onRefresh={() => {}} onWrite={async () => ''} notify={() => {}} />);
+    root.render(<RepositoryToolbar handle="repo" active revision={0} stateRevision={0} busy={false} pickCount={1} pickMode onCreateBranch={() => {}} onSwitchBranch={() => {}} onCherryPick={() => {}} onClearPick={() => {}} onStartPickMode={() => {}} onOpenStash={() => {}} onRefresh={() => {}} onWrite={async () => ''} notify={() => {}} />);
   });
 });
 afterEach(async () => { await act(async () => { root.unmount(); }); host.remove(); });
