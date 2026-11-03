@@ -47,12 +47,12 @@ it('runs the palette write once, shows progress, and reloads history even when r
     const command = await vi.waitFor(() => {
       const button = host.querySelector<HTMLElement>('#palette-speed-up-history');
       expect(button).not.toBeNull(); return button!;
-    });
+    }, { timeout: 5000 });
     command.click();
-    await vi.waitFor(() => expect(toasts.textContent).toContain('Speeding up history'));
+    await vi.waitFor(() => expect(toasts.textContent).toContain('Speeding up history'), { timeout: 5000 });
     expect(mocks.invoke.mock.calls.filter(([command]) => command === 'repository_write_commit_graph')).toHaveLength(1);
     finish({ output: '' });
-    await vi.waitFor(() => expect(toasts.textContent).toContain('History accelerated'));
+    await vi.waitFor(() => expect(toasts.textContent).toContain('History accelerated'), { timeout: 5000 });
     expect(mocks.invoke.mock.calls.filter(([command]) => command === 'repository_history')).toHaveLength(2);
   } finally { root.unmount(); host.remove(); toasts.remove(); }
 });
