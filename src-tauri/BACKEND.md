@@ -377,7 +377,15 @@ distribution and Linux paths; destination checks use shell-free Linux `test`.
 
 The review token pins the request and worktree list; create also pins the resolved
 starting commit, move/remove pin the target's content-aware status, removal also
-pins ignored-file hashes, and prune pins its exact dry-run output. Execution reconstructs this
+pins ignored files, and prune pins its exact dry-run output. Ignored names are
+streamed from `ls-files --others --ignored`, so build output has no listing cap.
+Up to 5,000 ignored files and 256 MiB (size checked natively only) are pinned by
+content; a larger set, typically build output, is pinned by its path list only
+(additions and removals are detected, edits are not), and the preview says so.
+Reading metadata for hundreds of thousands of uncached files would take tens of
+seconds.
+Untracked and ignored content hashing batches `hash-object --stdin-paths` path
+lists below the 8 MiB stdin limit. Execution reconstructs this
 evidence under the common-directory mutation lock. This rejects already-visible
 external changes but is not an atomic transaction with external Git/filesystem
 actors. Destination and content checks fail closed on errors or process limits.

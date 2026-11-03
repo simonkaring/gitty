@@ -16,6 +16,26 @@ pub fn fingerprint(data: impl Hash) -> String {
     data.hash(&mut h);
     format!("{:016x}", h.finish())
 }
+/// Path-list bytes per `hash-object --stdin-paths` launch, below the 8 MiB stdin cap.
+const UNTRACKED_HASH_BATCH_BYTES: usize = 4 * 1024 * 1024;
+/// Splits paths into consecutive batches whose newline-joined size stays within `limit`.
+fn path_batches<'a>(paths: &[&'a str], limit: usize) -> Vec<Vec<&'a str>> {
+    let mut batches = vec![];
+    let mut current: Vec<&str> = vec![];
+    let mut size = 0;
+    for &path in paths {
+        if !current.is_empty() && size + path.len() + 1 > limit {
+            batches.push(std::mem::take(&mut current));
+            size = 0;
+        }
+        size += path.len() + 1;
+        current.push(path);
+    }
+    if !current.is_empty() {
+        batches.push(current);
+    }
+    batches
+}
 pub fn token() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -892,8 +912,8 @@ impl Repository {
         }
         Ok(hash.finish())
     }
-    /// Hashes untracked content with one `hash-object --stdin-paths` for the
-    /// whole set rather than a process per file. Names that the line protocol
+    /// Hashes untracked content with `hash-object --stdin-paths` batches (one
+    /// process unless the path list exceeds a batch) rather than a process per file. Names that the line protocol
     /// cannot carry verbatim, or a batch Git refuses (a dangling symlink, a file
     /// that vanished), fall back to one no-index patch per file.
     pub(crate) fn untracked_content_hash(&self, paths: &[&str]) -> Result<u64> {
@@ -913,26 +933,35 @@ impl Repository {
             .iter()
             .all(|p| !p.contains(['\n', '\r']) && !p.starts_with('"'));
         if batchable {
-            let input = files.join("\n") + "\n";
-            let command = process::git_command(
-                self.location(),
-                &args(&["hash-object", "--no-filters", "--stdin-paths"]),
-            )?;
-            let o = process::run_with_input_for(
-                command,
-                input.as_bytes(),
-                process::remaining_timeout()?,
-                8 * 1024 * 1024,
-            )?;
-            if o.success
-                && o.stdout
-                    .split(|b| *b == b'\n')
-                    .filter(|l| !l.is_empty())
-                    .count()
-                    == files.len()
-            {
-                o.stdout.hash(&mut hash);
-                return Ok(hash.finish());
+            // Batches stay under the 8 MiB stdin limit; their outputs hash in path order.
+            let mut batched = hash.clone();
+            let mut complete = true;
+            for chunk in path_batches(&files, UNTRACKED_HASH_BATCH_BYTES) {
+                let input = chunk.join("\n") + "\n";
+                let command = process::git_command(
+                    self.location(),
+                    &args(&["hash-object", "--no-filters", "--stdin-paths"]),
+                )?;
+                let o = process::run_with_input_for(
+                    command,
+                    input.as_bytes(),
+                    process::remaining_timeout()?,
+                    8 * 1024 * 1024,
+                )?;
+                if !o.success
+                    || o.stdout
+                        .split(|b| *b == b'\n')
+                        .filter(|l| !l.is_empty())
+                        .count()
+                        != chunk.len()
+                {
+                    complete = false;
+                    break;
+                }
+                o.stdout.hash(&mut batched);
+            }
+            if complete {
+                return Ok(batched.finish());
             }
         }
         for path in files {

@@ -5,6 +5,63 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Ignored sets up to these limits are pinned by content. Larger ones (typically
+/// build output) are pinned by their path list only: reading metadata for
+/// hundreds of thousands of uncached files takes tens of seconds.
+const IGNORED_CONTENT_MAX_FILES: usize = 5_000;
+const IGNORED_CONTENT_MAX_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Every ignored file below a worktree, streamed so the list has no output cap.
+fn ignored_paths(view: &Repository) -> Result<Vec<String>> {
+    let mut stream = crate::stream::GitStream::git(
+        view.location(),
+        &process::args(&[
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "-z",
+        ]),
+        b'\0',
+        64 * 1024,
+    )?;
+    let mut names = vec![];
+    while let Some(record) = stream.next()? {
+        if !record.is_empty() {
+            names.push(process::text(record)?);
+        }
+    }
+    Ok(names)
+}
+
+/// Review evidence for ignored files and whether it covers their content.
+fn ignored_evidence(view: &Repository, names: &[&str]) -> Result<(u64, bool)> {
+    use std::hash::{Hash, Hasher};
+    let small = names.len() <= IGNORED_CONTENT_MAX_FILES
+        && match view.location() {
+            // Sizes are only known natively; remote sets are bounded by count alone.
+            RepositoryLocation::Native { path } => {
+                let root = std::path::Path::new(path);
+                names
+                    .iter()
+                    .map(|name| std::fs::symlink_metadata(root.join(name)).map_or(0, |m| m.len()))
+                    .try_fold(0u64, |total, size| {
+                        total
+                            .checked_add(size)
+                            .filter(|total| *total <= IGNORED_CONTENT_MAX_BYTES)
+                    })
+                    .is_some()
+            }
+            _ => true,
+        };
+    if small {
+        return Ok((view.untracked_content_hash(names)?, true));
+    }
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    names.hash(&mut hash);
+    Ok((hash.finish(), false))
+}
+
 pub(crate) fn same_location(a: &RepositoryLocation, b: &RepositoryLocation) -> bool {
     fn native(path: &str) -> String {
         let canonical = std::fs::canonicalize(path).ok();
@@ -350,21 +407,10 @@ impl Repository {
                     target.branch.as_deref().unwrap_or("(detached)")
                 );
                 if request.action == "remove" {
-                    // Normal removal can delete ignored files too. Hash in a batch.
-                    let ignored = view.check(&[
-                        "ls-files",
-                        "--others",
-                        "--ignored",
-                        "--exclude-standard",
-                        "-z",
-                    ])?;
-                    let names = process::text(ignored.stdout)?;
-                    let names: Vec<&str> =
-                        names.split('\0').filter(|name| !name.is_empty()).collect();
-                    preview.push_str(&format!(
-                        "\n{} ignored paths may also be removed.",
-                        names.len()
-                    ));
+                    // Normal removal can delete ignored files too. Build output can
+                    // list hundreds of thousands of paths, so stream the names.
+                    let names = ignored_paths(&view)?;
+                    let names: Vec<&str> = names.iter().map(String::as_str).collect();
                     if names.iter().any(|name| name.ends_with('/'))
                         || status
                             .entries
@@ -373,7 +419,17 @@ impl Repository {
                     {
                         return Err(Error::new("unsupportedOperation", "Nested repository contents cannot be safely reviewed for removal. Manage them outside Gitty first."));
                     }
-                    evidence.extend(view.untracked_content_hash(&names)?.to_le_bytes());
+                    let (pin, by_content) = ignored_evidence(&view, &names)?;
+                    evidence.extend(pin.to_le_bytes());
+                    preview.push_str(&format!(
+                        "\n{} ignored paths may also be removed.{}",
+                        names.len(),
+                        if by_content {
+                            ""
+                        } else {
+                            " This large ignored set is pinned by its path list only: added or removed files are detected, edits are not."
+                        }
+                    ));
                 }
             }
         }
@@ -662,6 +718,68 @@ mod tests {
         execute(&service, handle, &remove).unwrap();
         assert!(!target.exists());
         assert!(!git(repo.path(), &["rev-parse", "topic"]).is_empty());
+    }
+
+    #[test]
+    fn worktree_force_removal_reviews_large_untracked_and_ignored_sets() {
+        let repo = init();
+        std::fs::write(repo.path().join("base"), "base").unwrap();
+        commit(repo.path(), "initial");
+        let data = tempfile::tempdir().unwrap();
+        let folders = tempfile::tempdir().unwrap();
+        let mut service = Service::new(data.path().into());
+        let main = open(&mut service, repo.path());
+        let handle = &main.session.handle;
+        let target = folders.path().join("topic");
+        git(
+            repo.path(),
+            &["worktree", "add", "-b", "topic", target.to_str().unwrap()],
+        );
+        let path = service.repo(handle).unwrap().worktrees().unwrap()[1]
+            .path
+            .clone();
+        // Long paths make the 10,500 names exceed the 8 MiB stdin cap of one Git launch
+        // while staying within macOS PATH_MAX (1,024 bytes).
+        let mut deep = target.join("build");
+        for level in 0..3 {
+            deep = deep.join(format!("{level}{}", "d".repeat(240)));
+        }
+        std::fs::create_dir_all(&deep).unwrap();
+        for n in 0..10_500 {
+            std::fs::write(deep.join(format!("{n}{}", "f".repeat(100))), "x").unwrap();
+        }
+        let view = service.repo(handle).unwrap().worktree_view(&path);
+        let status = crate::process::request(|| view.status()).unwrap();
+        assert_eq!(status.entries.len(), 10_500);
+
+        std::fs::write(target.join(".gitignore"), "build/\n").unwrap();
+        git(&target, &["add", ".gitignore"]);
+        git(&target, &["commit", "-m", "ignore build"]);
+        let mut remove = request("remove", &path);
+        remove.force = true;
+        let review =
+            crate::process::request(|| service.repo(handle).unwrap().worktree_review(&remove))
+                .unwrap();
+        assert!(
+            review.preview.contains("10500 ignored paths"),
+            "{}",
+            review.preview
+        );
+        assert!(
+            review.preview.contains("pinned by its path list only"),
+            "{}",
+            review.preview
+        );
+        std::fs::write(deep.join("added"), "new").unwrap();
+        assert_eq!(
+            service
+                .worktree_execute(handle, &remove, &review.token)
+                .unwrap_err()
+                .code,
+            "staleOperation"
+        );
+        execute(&service, handle, &remove).unwrap();
+        assert!(!target.exists());
     }
 
     #[test]

@@ -28,7 +28,9 @@ notifications. Demo management is explicitly unavailable.[^backend][^ui][^tabs]
 
 Create, move, remove (including force), lock/unlock, and prune use captured review
 tokens, revalidated under the shared repository mutation lock. Removal pins
-content-aware status and ignored content; force needs a separate UI acknowledgement.
+content-aware status and ignored files: by content for small ignored sets, and by
+path list only for large build output (edits there go undetected), which the
+preview states; force needs a separate UI acknowledgement.
 Locks are never implicitly overridden, branches are retained, and main/bare
 targets cannot be managed. Prune previews expiry **now**, including recently missing
 registrations, while retaining locked entries and working folders. Exact command
