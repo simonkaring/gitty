@@ -365,8 +365,18 @@ impl Repository {
     /// status are computed once and shared, instead of once per command. Retries
     /// when refs or HEAD move underneath the read.
     pub fn snapshot(&self) -> Result<RepositorySnapshot> {
+        self.snapshot_with_history(None)
+    }
+    pub fn snapshot_with_history(
+        &self,
+        request: Option<SnapshotHistory>,
+    ) -> Result<RepositorySnapshot> {
+        let mut opening = crate::repository::lock(&self.opening_state)?.take();
         for _ in 0..3 {
-            let state = self.state()?;
+            let state = match opening.take() {
+                Some(state) => state,
+                None => self.state()?,
+            };
             let status = if self.session.bare {
                 RepositoryStatus {
                     entries: vec![],
@@ -382,11 +392,73 @@ impl Repository {
             }
             let operation =
                 self.operation_state_with(&state, (!self.session.bare).then_some(&status))?;
+            let history = if let Some(request) = request
+                .as_ref()
+                .filter(|r| r.fingerprint.as_deref() != Some(&state.fingerprint))
+            {
+                let remap = request
+                    .remap
+                    .as_ref()
+                    .filter(|r| state.session.head.as_deref() == Some(&r.to));
+                let mut keep: std::collections::HashSet<_> = request
+                    .preserve
+                    .iter()
+                    .map(|id| {
+                        remap
+                            .filter(|r| r.from == *id)
+                            .map_or_else(|| id.clone(), |r| r.to.clone())
+                    })
+                    .collect();
+                let mut head = state
+                    .session
+                    .head
+                    .clone()
+                    .filter(|_| request.previous_head != state.session.head);
+                let budget = request.preserve_limit.unwrap_or(400).clamp(200, 20_000);
+                let mut result = self.history_with_state(
+                    None,
+                    200,
+                    crate::dto::HistoryQuery { branch: None },
+                    Some(&state),
+                )?;
+                loop {
+                    for commit in &result.commits {
+                        keep.remove(&commit.id);
+                        if head.as_ref() == Some(&commit.id) {
+                            head = None;
+                        }
+                    }
+                    if result.cursor.is_none()
+                        || !((!keep.is_empty() && result.commits.len() < budget)
+                            || (head.is_some() && result.commits.len() < 2000))
+                    {
+                        break;
+                    }
+                    let page = self.history_with_state(
+                        result.cursor.take(),
+                        200,
+                        crate::dto::HistoryQuery { branch: None },
+                        Some(&state),
+                    )?;
+                    if page.generation != result.generation {
+                        return Err(Error::new(
+                            "staleCursor",
+                            "History generation changed during refresh",
+                        ));
+                    }
+                    result.commits.extend(page.commits);
+                    result.cursor = page.cursor;
+                }
+                Some(result)
+            } else {
+                None
+            };
             if self.state()?.fingerprint == state.fingerprint {
                 return Ok(RepositorySnapshot {
                     state,
                     status,
                     operation,
+                    history,
                 });
             }
         }

@@ -138,6 +138,12 @@ pub struct CommitDetail {
     pub can_edit_message: bool,
     pub edit_disabled_reason: Option<String>,
 }
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitEditEligibility {
+    pub can_edit_message: bool,
+    pub edit_disabled_reason: Option<String>,
+}
 /// The commit that HEAD points at after a successful `repository_create_commit`,
 /// which is the commit Git created unless a post-commit hook moved HEAD again.
 #[derive(Debug, Clone, Serialize)]
@@ -253,7 +259,7 @@ pub struct SearchResult {
     pub commits: Vec<CommitSummary>,
     pub truncated: bool,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RepositoryState {
     pub session: RepositorySession,
     pub refs: Vec<RepositoryRef>,

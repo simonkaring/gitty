@@ -54,7 +54,8 @@ it('scrolls the graph to the working-changes row when it is revealed', async () 
   try {
     await act(async () => { root.render(<ToastProvider value={toasts}><RepositoryPane {...props} /></ToastProvider>); });
     await vi.waitFor(() => expect(host.querySelector(`[data-commit="${WORKING_ID}"]`)).not.toBeNull());
-    expect(mocks.graph.scrollTo).not.toHaveBeenCalled();
+    expect(mocks.graph.scrollTo).toHaveBeenCalledWith(1); // initial HEAD reveal
+    mocks.graph.scrollTo.mockClear();
     await act(async () => { (host.querySelector(`[data-commit="${WORKING_ID}"]`) as HTMLButtonElement).click(); });
     expect(mocks.graph.scrollTo).toHaveBeenCalledExactlyOnceWith(0);
   } finally {

@@ -190,6 +190,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       if (token !== epoch.current) { void close(handle); return; }
       session.current = snapshot.state; setState(snapshot.state); setStatus(snapshot.status); fingerprint.current = snapshot.status.fingerprint; generation.current = snapshot.generation;
       setOperation(activeOperation); operationSig.current = operationContent(activeOperation);
+      jumpTo.current = snapshot.state.session.head;
       installHistory(snapshot.commits, snapshot.cursor); setSelected(snapshot.state.session.head ?? snapshot.commits[0]?.id ?? ''); if (!snapshot.state.session.head && snapshot.status.entries.length) { setSelected(WORKING_ID); setInspectorOpen(true); } setRevision(value => value + 1); setStateRevision(value => value + 1);
       // A remote host must stay visible in the tab title: two tabs can show the same
       // repository name from different machines.
@@ -214,6 +215,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       if (session.current?.session.handle !== current.session.handle) throw new Error('Repository session changed.');
     }
     const token = epoch.current; lock.current = true;
+    const startedNavigation = navigation.current;
     try {
       const handle = current.session.handle;
       const snapshot = await readNativeSnapshot(handle, {
@@ -240,6 +242,11 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
         anchor.current = follow(graph.current?.anchor() ?? null);
         generation.current = snapshot.generation;
         installHistory(snapshot.commits, snapshot.cursor);
+        if (!mutationLock.current && !replace && updated.session.head && updated.session.head !== current.session.head && selectedRef.current === current.session.head && navigation.current === startedNavigation) {
+          setSelected(updated.session.head);
+          jumpTo.current = updated.session.head;
+          anchor.current = null;
+        }
       }
       if (workingChanged && !anchor.current) anchor.current = follow(graph.current?.anchor() ?? null);
       session.current = updated;

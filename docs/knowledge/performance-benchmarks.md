@@ -33,6 +33,12 @@ Tauri commands inside the per-request deadline, counts Git launches with the
 test-only spawn counter, and records raw `git` floors for status and the first
 200 history entries. It covers native reads only: no IPC, React rendering, WSL
 or SSH.[^backend][^harness]
+`tabOpenTotal` includes open plus the combined snapshot/history read, including
+automatic paging to HEAD (up to 2,000 rows). `historyFirstPage` remains exactly the
+standalone 200-row history request, so these scenarios measure different scopes.[^harness]
+`snapshotHistoryRefresh` measures changed refs while retaining a near-top target;
+`commitEditEligibility` measures the deferred containment check separately from
+`commitDetail`, so moving work off the rendering path is not reported as eliminating it.[^harness]
 
 `npm run bench:apps` (macOS) quits both apps, launches each through
 LaunchServices with the repository argument (`app_launch_path` for Gitty,

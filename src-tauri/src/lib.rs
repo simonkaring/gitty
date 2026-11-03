@@ -270,8 +270,16 @@ async fn repository_operation_state(
 async fn repository_snapshot(
     state: tauri::State<'_, Shared>,
     handle: String,
+    history: Option<SnapshotHistory>,
 ) -> Result<RepositorySnapshot> {
-    with_service(state, move |s| s.repo(&handle)?.snapshot()).await
+    with_service(state, move |s| {
+        let repo = s.repo(&handle)?;
+        match history {
+            Some(history) => repo.snapshot_with_history(Some(history)),
+            None => repo.snapshot(),
+        }
+    })
+    .await
 }
 #[tauri::command]
 async fn repository_branch_relation(
@@ -446,6 +454,17 @@ async fn repository_commit(
     oid: String,
 ) -> Result<CommitDetail> {
     with_service(state, move |s| s.repo(&handle)?.commit(&oid)).await
+}
+#[tauri::command]
+async fn repository_commit_edit_eligibility(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    oid: String,
+) -> Result<CommitEditEligibility> {
+    with_service(state, move |s| {
+        s.repo(&handle)?.commit_edit_eligibility(&oid)
+    })
+    .await
 }
 #[tauri::command]
 async fn repository_status(
@@ -783,6 +802,7 @@ pub fn run() {
             repository_set_git_identity,
             repository_history,
             repository_commit,
+            repository_commit_edit_eligibility,
             repository_status,
             repository_diff_files,
             repository_diff,

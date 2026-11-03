@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { CommitDetail, DiffFile, FileDiff, RepositorySession } from '../model/repository';
+import type { CommitDetail, CommitEditEligibility, DiffFile, FileDiff, RepositorySession } from '../model/repository';
 import { errorMessage, inspectorSpec, native } from '../model/native';
 import { AlertTriangle, ArrowUpRight, Check, ChevronDown, Copy, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, GitMerge, Info, Pencil, X } from 'lucide-react';
 import type { ActiveDiffState } from './WorkingChanges';
@@ -68,6 +68,7 @@ export function NativeInspector({
   authorAvatarMode?: AuthorAvatarMode;
 }) {
   const [detail, setDetail] = useState<CommitDetail | null>(null);
+  const [eligibility, setEligibility] = useState<{ scope: string; verdict: CommitEditEligibility } | null>(null);
   const [parent, setParent] = useState('');
   const [files, setFiles] = useState<DiffFile[]>([]);
   const [path, setPath] = useState('');
@@ -116,6 +117,18 @@ export function NativeInspector({
   /** The selection last handed to the backend, to tell a changed selection (debounced) from a refetch of the same one. */
   const dispatched = useRef<{ handle: string; selected: string } | null>(null);
   const scope = JSON.stringify([selected, spec, revision, retry]);
+  const eligibilityScope = JSON.stringify([session.handle, session.head, session.headRef, selected, revision, retry]);
+  const hasEditMessage = !!onEditMessage;
+
+  useEffect(() => {
+    let live = true;
+    setEligibility(null);
+    if (!hasEditMessage || selected !== session.head || !session.headRef || detail?.id !== selected || busy || filesScope !== scope) return;
+    native<CommitEditEligibility>('repository_commit_edit_eligibility', { handle: session.handle, oid: selected })
+      .then(verdict => { if (live) setEligibility({ scope: eligibilityScope, verdict }); })
+      .catch(error => { if (live) setEligibility({ scope: eligibilityScope, verdict: { canEditMessage: false, editDisabledReason: `Editing is unavailable because eligibility could not be checked: ${errorMessage(error)}` } }); });
+    return () => { live = false; };
+  }, [eligibilityScope, session.handle, session.head, session.headRef, selected, detail, busy, hasEditMessage, filesScope, scope]);
 
   useEffect(() => {
     let live = true;
@@ -240,9 +253,12 @@ export function NativeInspector({
   // Editing is offered only for the current, loaded HEAD: a commit that is not HEAD, a detail still
   // being refetched, or one the backend refused is never editable, and eligibility is re-read on every revision.
   const loaded = !!detail && !stale && !error && detail.id === selected;
-  const editable = loaded && isHead && !!session.headRef && detail.canEditMessage === true;
+  const verdict = eligibility?.scope === eligibilityScope ? eligibility.verdict : null;
+  const editable = loaded && isHead && !!session.headRef && verdict?.canEditMessage === true;
   const canStartEditing = editable && !writeBlocked && !savingMessage && !!onEditMessage;
-  const editNote = loaded && isHead && !editable ? detail.editDisabledReason ?? null : null;
+  const editNote = loaded && isHead && hasEditMessage && !editable
+    ? !session.headRef ? 'Message editing requires a checked-out branch.' : verdict?.editDisabledReason ?? 'Checking message-edit eligibility…'
+    : null;
   const draftMessage = commitMessage({ subject: subjectDraft, body: bodyDraft });
   const draftChanged = !!editor && draftMessage !== editor.original;
   /** Why the open editor cannot be saved right now; its draft is kept either way. */
@@ -250,7 +266,7 @@ export function NativeInspector({
     if (!editor) return '';
     if (session.head !== editor.oid || session.headRef !== editor.headRef || selected !== editor.oid) return 'HEAD changed after editing started, so this draft can no longer be saved to that commit. Copy it, cancel, and edit the current commit.';
     if (!loaded) return 'Reloading commit details…';
-    if (!editable) return detail?.editDisabledReason ?? 'This commit message can no longer be edited.';
+    if (!editable) return editNote ?? 'This commit message can no longer be edited.';
     if (writeBlocked) return 'Another repository write is running, or a failed refresh is blocking writes.';
     return '';
   })();

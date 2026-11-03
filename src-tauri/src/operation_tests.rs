@@ -2919,6 +2919,136 @@ fn snapshot_matches_the_separate_reads_and_sees_a_conflict() {
     assert!(conflicted.status.entries.iter().any(|e| e.conflicted));
 }
 
+/// A future-dated unmerged branch sorts before the checked-out branch's HEAD.
+fn add_history_ahead_of_head(f: &Fixture, count: usize) -> Vec<String> {
+    use std::io::Write;
+    let head = git(f.dir.path(), &["rev-parse", "HEAD"]);
+    let mut input = String::new();
+    for index in 0..count {
+        input.push_str(&format!("commit refs/heads/feature\ncommitter Test <test@example.com> {} +0000\ndata 7\nfeature\n{}\n", 2_000_000_000 + index, if index == 0 { format!("from {head}\n") } else { String::new() }));
+    }
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(f.dir.path())
+        .args(["fast-import", "--quiet"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+    git(f.dir.path(), &["rev-list", "--date-order", "--all"])
+        .lines()
+        .map(String::from)
+        .collect()
+}
+
+#[test]
+fn snapshot_history_rechecks_opening_refs_and_loads_head_beyond_first_page() {
+    let f = Fixture::new();
+    // The opening state predates this ref: final verification must discard its
+    // otherwise internally consistent one-commit history and start again.
+    let ids = add_history_ahead_of_head(&f, 300);
+    let snapshot = f
+        .repo
+        .snapshot_with_history(Some(SnapshotHistory::default()))
+        .unwrap();
+    let page = snapshot.history.unwrap();
+    assert_eq!(page.commits.len(), 301);
+    assert_eq!(page.commits[0].id, ids[0]);
+    assert_eq!(
+        page.commits.last().unwrap().id,
+        snapshot.state.session.head.unwrap()
+    );
+    assert!(page.cursor.is_none());
+    let unchanged = f
+        .repo
+        .snapshot_with_history(Some(SnapshotHistory {
+            fingerprint: Some(snapshot.state.fingerprint),
+            ..Default::default()
+        }))
+        .unwrap();
+    assert!(unchanged.history.is_none());
+}
+
+#[test]
+fn snapshot_history_bounds_head_and_orphans_but_preserves_requested_depth() {
+    let f = Fixture::new();
+    let ids = add_history_ahead_of_head(&f, 2200);
+    let initial = f
+        .repo
+        .snapshot_with_history(Some(SnapshotHistory::default()))
+        .unwrap();
+    assert_eq!(initial.history.as_ref().unwrap().commits.len(), 2000);
+    assert!(initial.history.as_ref().unwrap().cursor.is_some());
+    let head = initial.state.session.head.clone();
+    let shallow = f
+        .repo
+        .snapshot_with_history(Some(SnapshotHistory {
+            previous_head: head.clone(),
+            preserve: vec![ids[12].clone()],
+            preserve_limit: Some(412),
+            ..Default::default()
+        }))
+        .unwrap();
+    assert_eq!(shallow.history.unwrap().commits.len(), 200);
+    let deep = f
+        .repo
+        .snapshot_with_history(Some(SnapshotHistory {
+            previous_head: head.clone(),
+            preserve: vec![ids[1500].clone()],
+            preserve_limit: Some(1900),
+            ..Default::default()
+        }))
+        .unwrap();
+    assert_eq!(deep.history.unwrap().commits.len(), 1600);
+    let orphan = f
+        .repo
+        .snapshot_with_history(Some(SnapshotHistory {
+            previous_head: head,
+            preserve: vec!["f".repeat(40)],
+            preserve_limit: Some(400),
+            ..Default::default()
+        }))
+        .unwrap();
+    assert_eq!(orphan.history.unwrap().commits.len(), 400);
+    // A moved HEAD is sought again even though the previous HEAD was loaded.
+    git(f.dir.path(), &["update-ref", "refs/heads/main", &ids[300]]);
+    let moved = f
+        .repo
+        .snapshot_with_history(Some(SnapshotHistory {
+            previous_head: initial.state.session.head,
+            ..Default::default()
+        }))
+        .unwrap();
+    assert_eq!(moved.history.unwrap().commits.len(), 400);
+    git(f.dir.path(), &["update-ref", "refs/heads/main", &ids[0]]);
+    for (to, expected) in [(&ids[0], 200), (&ids[1], 400)] {
+        let remapped = f
+            .repo
+            .snapshot_with_history(Some(SnapshotHistory {
+                previous_head: Some(ids[300].clone()),
+                preserve: vec![ids.last().unwrap().clone()],
+                preserve_limit: Some(400),
+                remap: Some(SnapshotRemap {
+                    from: ids.last().unwrap().clone(),
+                    to: to.clone(),
+                }),
+                ..Default::default()
+            }))
+            .unwrap();
+        assert_eq!(
+            remapped.history.unwrap().commits.len(),
+            expected,
+            "only remap to confirmed HEAD"
+        );
+    }
+}
+
 #[test]
 fn snapshot_of_a_bare_repository_has_an_empty_status() {
     let dir = tempfile::tempdir().unwrap();

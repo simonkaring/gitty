@@ -27,7 +27,7 @@ execFileSync('cargo', ['test', '--release', '--manifest-path', 'src-tauri/Cargo.
 });
 
 const report = JSON.parse(await readFile(out, 'utf8'));
-const scenarios = ['tabOpenTotal', 'open', 'snapshotRefresh', 'state', 'status', 'historyFirstPage', 'history5000', 'commitDetail', 'commitFiles', 'search', 'rawGitStatus', 'rawGitFirst200'];
+const scenarios = ['tabOpenTotal', 'open', 'snapshotRefresh', 'snapshotHistoryRefresh', 'state', 'status', 'historyFirstPage', 'history5000', 'commitDetail', 'commitEditEligibility', 'commitFiles', 'search', 'rawGitStatus', 'rawGitFirst200'];
 const cell = result => result?.error ? 'error' : result ? `${ms(median(result.millis))} (${result.spawns})` : null;
 console.log(`\nMedian wall time (Git processes launched)\n`);
 console.log(table(['Scenario', ...report.map(repo => basename(repo.path))], scenarios.map(name => [name, ...report.map(repo => cell(repo.results?.[name]))])));
