@@ -30,6 +30,8 @@ sources:
     resource: ../../src/components/NativeWorkspace.tsx
   - id: controls
     resource: ../../src/components/WindowControls.tsx
+  - id: watcher
+    resource: ../../src-tauri/src/watcher.rs
 ---
 
 # Native and WSL boundaries
@@ -64,6 +66,14 @@ Native macOS Git caches its PATH-selected executable once, bypassing only Apple'
 commands and stream finalization wake on exit/reader notifications, with 25 ms
 deadline/cancellation/output checks rather than sleep-polling. Descendant-held
 pipes remain deadline-bound; tree termination and reaping are retained.[^process][^contract]
+
+Only native sessions get a filesystem watcher (`notify`: FSEvents, inotify,
+ReadDirectoryChangesW). WSL and SSH report it unsupported and keep polling; a
+WSL path seen through `\\wsl$` would need Windows-side notification of a Linux
+filesystem, which is not attempted. Watcher setup failure (such as Linux inotify
+limits) also falls back to polling. Only the macOS FSEvents path has been
+exercised by the real-repository tests; inotify and Windows behavior are
+implemented but unverified at runtime.[^watcher]
 
 WSL is a separate execution environment, not a Windows path alias. Distribution
 browsing and operation detection require Linux tools; conflict filesystem access
@@ -143,6 +153,7 @@ The [backend contract](../../src-tauri/BACKEND.md#read-semantics) and
 [^wsl-tests]: Real Ubuntu temporary-repository scan, snapshot and mutation checks.
 [^contract]: Filesystem, editor, and process-lifecycle platform limits.
 [^readme]: User-facing platform prerequisites and pending runtime checks.
+[^watcher]: `Watchers::start` location gate and `unavailable` fallback.
 [^windows]: Window decoration setup and layout IPC.
 [^linux-window]: GTK button layout observation and Linux icons.
 [^workspace]: Platform-gated header controls and layout subscription.

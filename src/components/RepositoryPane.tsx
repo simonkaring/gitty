@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus, GitCommitHorizontal, Globe2, Laptop, LocateFixed, RefreshCw, ScrollText, Search, Tag, Upload, X, ZoomIn, ZoomOut } from 'lucide-react';
 import type { PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
@@ -25,7 +26,7 @@ import { Segmented, Toast } from './ui';
 import { locationLabel, sessionKey } from '../model/tabs';
 import { useSettings } from '../model/settings';
 import { SCALES, useScale } from '../model/scale';
-import { AUTO_FETCH_CHECK, autoFetchDue, backgroundFetchAllowed, isFetchingAction, routineRefreshInterval, type FetchStatus } from '../model/autoFetch';
+import { AUTO_FETCH_CHECK, autoFetchDue, backgroundFetchAllowed, createChangeRefresher, isFetchingAction, routineRefreshInterval, watchSupported, type FetchStatus, type WatchStatus } from '../model/autoFetch';
 import { DEFAULT_PULL_MODE, branchPushRequest, remoteSuccessMessage, needsPublish, type RemoteActionRequest, type SyncInfo } from '../model/remote';
 import { branchDeleteTargets, branchDeleteMessage, type BranchDeleteScope } from '../model/branchDelete';
 import type { BranchDeleteExecution, BranchDeleteRequest, BranchDeleteResult, BranchDeleteTargetResult } from '../model/operations';
@@ -448,11 +449,38 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     lastFetchAttempt.current = null; lastRefresh.current = 0; setFetchStatus({ kind: 'idle' });
     if (handle) autoFetch();
   }, [handle, autoFetch]);
+  /** True while the native watcher reports this session's changes; polling is then only a safety net. */
+  const watching = useRef(false);
+  useEffect(() => {
+    watching.current = false;
+    if (!handle || isDemoHandle(handle) || !watchSupported(session.current?.session.location.kind ?? location.kind)) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    const changes = createChangeRefresher({
+      visible: () => !document.hidden && activeRef.current,
+      busy: () => lock.current || mutationLock.current,
+      run: () => { lastRefresh.current = Date.now(); return refresh(); },
+    });
+    const visibility = () => changes.flush();
+    document.addEventListener('visibilitychange', visibility);
+    void (async () => {
+      try {
+        // Subscribe before watching so no change between the two is missed.
+        const stop = await listen<{ handle: string }>('repository_changed', event => { if (event.payload.handle === handle) changes.request(); });
+        if (disposed) { stop(); return; }
+        unlisten = stop;
+        const watch = await native<WatchStatus>('repository_watch', { handle });
+        // One catch-up read covers changes between the opening snapshot and the watch.
+        if (!disposed && watch?.active === true) { watching.current = true; changes.request(); }
+      } catch { /* The routine poll keeps running. */ }
+    })();
+    return () => { disposed = true; watching.current = false; changes.dispose(); unlisten?.(); document.removeEventListener('visibilitychange', visibility); };
+  }, [handle, location.kind, refresh]);
   useEffect(() => {
     const timer = setInterval(() => {
       if (document.hidden || !activeRef.current) return;
       const elapsed = Date.now() - lastRefresh.current;
-      if (elapsed < routineRefreshInterval(session.current?.session.location.kind ?? 'native')) return;
+      if (elapsed < routineRefreshInterval(session.current?.session.location.kind ?? 'native', watching.current)) return;
       lastRefresh.current = Date.now();
       void refresh();
     }, 5000);

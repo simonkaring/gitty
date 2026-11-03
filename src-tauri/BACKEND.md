@@ -17,6 +17,7 @@ Ordinary index/commit writes use these commands:
 - `repository_open_path({handle, path: string}) -> void`
 - `repository_reveal_path({handle, path: string}) -> void`
 - `repository_snapshot({handle, history?}) -> {state, status, operation, history}` (a read; see Read semantics)
+- `repository_watch({handle}) -> {active: boolean, reason: string | null, message: string | null}` (see [Change events](#change-events))
 - `repository_stage_hunk({handle, path: string, hunkIndex: number, fingerprint: string, lineIndices?: number[]}) -> void`
 - `repository_unstage_hunk({handle, path: string, hunkIndex: number, fingerprint: string, lineIndices?: number[]}) -> void`
 - `repository_create_commit({handle, message: string, identity?: {name: string, email: string}}) -> {oid: string}`
@@ -236,6 +237,42 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
 - The folder picker uses `rfd`'s native asynchronous dialog. WSL discovery decodes
   UTF-16 output; browsing invokes Linux `find` directly, NUL-delimited, one directory
   level at a time. WSL requires Windows and Linux Git, `env`, and GNU `find`.
+
+## Change events
+
+`repository_watch({handle})` starts one filesystem watcher for a native session
+(idempotent) and returns `{active: true}`. WSL and SSH sessions return
+`{active: false, reason: "unsupportedLocation"}`; a platform watcher that cannot
+be created or registered (an inotify watch/instance limit, a vanished path) returns
+`reason: "unavailable"` with the error text. Either way the frontend keeps polling.
+Unknown or closed handles fail with `invalidHandle`.
+
+- **Scope.** The working tree recursively (not for bare repositories), plus the
+  Git directory and the common directory when they are outside it, so a linked
+  worktree also sees shared refs, `packed-refs` and other worktrees' metadata.
+- **Event.** `repository_changed` with payload `{handle}`. It means "something
+  Gitty shows may have changed"; the frontend re-reads through the normal
+  snapshot path, so all coherence checks still apply. Delivery is best-effort.
+- **Coalescing.** A batch closes after 300 ms without events or 2 s after its
+  first event, so continuous churn reports at most every ~2 s. At most 8,192
+  queued events per session; overflow, notifier errors and rescan requests
+  are reported as a change.
+- **Filtering** drops only what cannot change displayed state: anything under
+  `objects/`, `*.lock` files inside Git directories (their completion renames
+  onto a watched target), access-only notifications, and working-tree paths
+  that `git check-ignore -z --stdin` (read environment; tracked files are never
+  ignored) reports as ignored. A batch of more than 4,096 distinct working paths,
+  a non-UTF-8 path, or a failed ignore check counts as a change.
+- **No refresh loop.** Gitty's reads run with `GIT_OPTIONAL_LOCKS=0`,
+  `core.untrackedCache=false` and `core.fsmonitor=false`, so status/diff never
+  rewrite the index; history spools and stdin files live in the system temp
+  directory. `watcher::tests::snapshot_reads_do_not_report_changes` checks this on
+  a dirty repository. A Gitty write emits a follow-up event after its explicit
+  refresh, which is one extra read, not a loop.
+- **Lifecycle.** Setup and teardown never hold the session registry or watcher
+  map lock. `repository_close` stops the session's watcher; a watch racing a
+  close is stopped and reports `invalidHandle`. Closing the window stops all
+  watchers. Sessions are capped at 32, so watchers are too.
 
 ## SSH repositories
 

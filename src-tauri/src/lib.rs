@@ -30,6 +30,7 @@ mod repository;
 mod ssh;
 mod stash;
 mod stream;
+mod watcher;
 mod worktree_files;
 mod worktrees;
 mod wsl;
@@ -423,8 +424,29 @@ async fn repository_open(
     with_service(state, move |s| s.open(location)).await
 }
 #[tauri::command]
-async fn repository_close(state: tauri::State<'_, Shared>, handle: String) -> Result<()> {
-    with_service(state, move |s| s.close(&handle)).await
+async fn repository_close(
+    state: tauri::State<'_, Shared>,
+    watchers: tauri::State<'_, Arc<watcher::Watchers>>,
+    handle: String,
+) -> Result<()> {
+    let watchers = watchers.inner().clone();
+    with_service(state, move |s| {
+        let closed = s.close(&handle);
+        watchers.stop(&handle);
+        closed
+    })
+    .await
+}
+/// Starts emitting `repository_changed` for a native session; idempotent. WSL and
+/// SSH sessions, and platform watcher failures, report inactive so the caller polls.
+#[tauri::command]
+async fn repository_watch(
+    state: tauri::State<'_, Shared>,
+    watchers: tauri::State<'_, Arc<watcher::Watchers>>,
+    handle: String,
+) -> Result<watcher::WatchStatus> {
+    let watchers = watchers.inner().clone();
+    with_service(state, move |s| watchers.start(s, &handle)).await
 }
 #[tauri::command]
 async fn repository_recent(state: tauri::State<'_, Shared>) -> Result<Vec<RepositoryLocation>> {
@@ -766,6 +788,15 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             process::set_ssh_control_dir(data_dir.join("ssh"));
             app.manage(Arc::new(Service::new(data_dir)));
+            let changed = app.handle().clone();
+            app.manage(Arc::new(watcher::Watchers::new(move |handle| {
+                let _ = changed.emit(
+                    "repository_changed",
+                    watcher::RepositoryChanged {
+                        handle: handle.into(),
+                    },
+                );
+            })));
             let handle = app.handle().clone();
             process::set_git_log(move |log| {
                 let _ = handle.emit("git_command", log);
@@ -784,6 +815,9 @@ pub fn run() {
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                 window.state::<Shared>().cancel_all_clones();
+                if let Some(watchers) = window.try_state::<Arc<watcher::Watchers>>() {
+                    watchers.stop_all();
+                }
                 if let Some(askpass) = window.try_state::<Arc<askpass::AskpassRegistry>>() {
                     askpass.cancel_all();
                     askpass.cleanup();
@@ -820,6 +854,7 @@ pub fn run() {
             repository_pick_clone_parent,
             repository_open,
             repository_close,
+            repository_watch,
             repository_recent,
             repository_state,
             repository_git_identity,
