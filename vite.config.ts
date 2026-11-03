@@ -12,6 +12,15 @@ export default defineConfig({
     },
   },
   envPrefix: ['VITE_', 'TAURI_ENV_*'],
-  build: { target: 'es2022' },
+  build: {
+    target: 'es2022',
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (/node_modules\/(react|react-dom|scheduler)\//.test(id)) return 'vendor-react';
+        },
+      },
+    },
+  },
   test: { include: ['src/**/*.test.{ts,tsx}'] },
 });

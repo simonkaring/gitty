@@ -33,6 +33,25 @@ pub struct RepositorySnapshot {
     pub state: crate::dto::RepositoryState,
     pub status: crate::dto::RepositoryStatus,
     pub operation: OperationState,
+    pub history: Option<crate::dto::HistoryPage>,
+}
+
+/// A bounded automatic refresh, not an explicit full-history reveal.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotHistory {
+    pub fingerprint: Option<String>,
+    pub previous_head: Option<String>,
+    #[serde(default)]
+    pub preserve: Vec<String>,
+    pub preserve_limit: Option<usize>,
+    pub remap: Option<SnapshotRemap>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SnapshotRemap {
+    pub from: String,
+    pub to: String,
 }
 
 #[derive(Debug, Deserialize)]

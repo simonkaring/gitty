@@ -7,8 +7,47 @@ export const AUTO_FETCH_CHECK = 30 * 1000;
  * slower there instead of continuously spawning processes over the network. */
 export const SSH_REFRESH_INTERVAL = 30 * 1000;
 
-export function routineRefreshInterval(locationKind: string): number {
-  return locationKind === 'ssh' ? SSH_REFRESH_INTERVAL : 5000;
+/** With a filesystem watcher, `repository_changed` drives refresh and polling is
+ * only a safety net for missed events. */
+export const WATCHED_REFRESH_INTERVAL = 60 * 1000;
+
+export function routineRefreshInterval(locationKind: string, watching = false): number {
+  if (locationKind === 'ssh') return SSH_REFRESH_INTERVAL;
+  return watching ? WATCHED_REFRESH_INTERVAL : 5000;
+}
+
+/** Result of `repository_watch`; only native sessions can be watched. */
+export interface WatchStatus { active: boolean; reason?: string | null; message?: string | null }
+
+export const watchSupported = (locationKind: string) => locationKind === 'native';
+
+/** Turns `repository_changed` events into refreshes. An event while the tab or
+ * window is hidden stays pending until `flush` (on visibility/activation); one
+ * arriving during a read or write retries after it finishes, so a change made
+ * mid-refresh is never dropped, and any number of events collapse into one run. */
+export function createChangeRefresher({ visible, busy, run, retryMs = 250 }: {
+  visible: () => boolean;
+  busy: () => boolean;
+  run: () => Promise<unknown>;
+  retryMs?: number;
+}) {
+  let pending = false;
+  let running = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let disposed = false;
+  const flush = () => {
+    if (disposed || !pending || running || timer || !visible()) return;
+    if (busy()) { timer = setTimeout(() => { timer = null; flush(); }, retryMs); return; }
+    pending = false; running = true;
+    void run().catch(() => {}).finally(() => { running = false; flush(); });
+  };
+  return {
+    request() { pending = true; flush(); },
+    flush,
+    /** An independent refresh is starting now; later events must remain pending. */
+    clear() { pending = false; if (timer) clearTimeout(timer); timer = null; },
+    dispose() { disposed = true; if (timer) clearTimeout(timer); timer = null; },
+  };
 }
 
 /** Background fetch stays off for SSH: an explicit fetch, pull or push, or opening

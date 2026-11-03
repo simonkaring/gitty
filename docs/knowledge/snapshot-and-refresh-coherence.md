@@ -20,14 +20,22 @@ sources:
     resource: ../../src/components/RepositoryPane.tsx
   - id: working
     resource: ../../src/components/WorkingChanges.tsx
+  - id: watcher
+    resource: ../../src-tauri/src/watcher.rs
+  - id: policy
+    resource: ../../src/model/autoFetch.ts
 ---
 
 # Snapshot and refresh coherence
 
-`Repository::snapshot` shares state/status with operation-state construction,
+`Repository::snapshot_with_history` shares state/status with operation-state construction,
 checks HEAD/ref agreement, and rechecks the state fingerprint. It retries up to
 three times before `unstable`. This is a best-effort read across external
-changes, not a transactional filesystem snapshot.[^snapshot][^contract]
+changes, not a transactional filesystem snapshot. Its first read may consume the
+server-owned opening state, still verified at the end.[^snapshot][^contract]
+Expired history cursors and history errors accompanied by changed state restart
+from a fresh `state()` within that same three-attempt budget. The client also
+retries snapshot HEAD/status mismatches before publishing fresh or reused history.[^snapshot][^loader]
 Operation preflight builds its reviewed fingerprint from the same request-local
 state used for HEAD/ref validation. Index and all-ref fingerprint reads run
 concurrently; neither is omitted, and post-write operation/HEAD reads remain.[^snapshot]
@@ -35,7 +43,8 @@ concurrently; neither is omitted, and post-write operation/HEAD reads remain.[^s
 History generations pin concrete commit IDs and stream a walk with a replay
 spool. A cursor belongs to that walk; its generation is opaque, not a state
 fingerprint. In `readNativeSnapshot`, unchanged state reuses loaded history;
-a changed state triggers a walk bracketed by a live state check. Mixed
+a changed state requests a walk from the snapshot's starting-state tips, covered by
+the same final state check and returned in one IPC. Mixed
 generations, nonadvancing cursors, and inconsistent ancestry are rejected before
 publication.[^history][^loader]
 
@@ -58,8 +67,14 @@ only while that OID is the refreshed HEAD. Otherwise an unreachable old tip or
 inspector-only orphan could cause a full-history scan. Session checks prevent
 superseded asynchronous reads from publishing.[^loader][^tests]
 Even a previously loaded tip can become unreachable after reset/rebase. Automatic
-keep-visible therefore stops after the previous loaded prefix (at least 200 rows)
-plus one page; selection/inspection survives, and explicit reveal remains separate.[^loader][^tests]
+keep-visible stops at the deepest retained target's previous index plus 400 rows
+(at least 400, backend cap 20,000), and stops earlier once targets are found. It no
+longer reloads every previously loaded row on each ref change. Initial open/HEAD
+movement seeks HEAD up to 2,000 rows; the cursor remains available for older history.
+Selection/inspection survives, and explicit reveal remains separate.[^loader][^tests]
+Initial open scrolls to HEAD. A read-only refresh follows a moved HEAD only when
+the reader was still on the old HEAD and did not navigate during the read;
+write completion retains its existing confirmed-outcome navigation guards.[^pane]
 The pane defers its initial open to a cancellable microtask, so development
 StrictMode's synchronous effect replay does not launch a discarded session.
 Closing a pane still invalidates in-flight reads and closes late-opened handles.[^pane]
@@ -67,6 +82,20 @@ Closing a pane still invalidates in-flight reads and closes late-opened handles.
 After a branch-deletion result, the pane removes deleted or unverified target OIDs from its
 automatic selection/anchor keep-visible candidates before refreshing. Returned
 history remains intact, and explicit reveal/paging behavior is unchanged.[^pane-refresh]
+
+What triggers a routine refresh depends on the session. Native sessions call
+`repository_watch` once a handle exists; while it reports active, the pane
+refreshes on `repository_changed` for its handle, on focus, on activation, and
+on a 60-second safety-net poll. Otherwise (WSL, a failed watcher) it polls every
+five seconds; SSH every 30. Events only schedule `refresh()`, never bypass it:
+an event arriving during a read or write retries after it, a hidden tab or
+window keeps it pending, and bursts collapse into one read. An activation refresh
+clears events it covers before starting, retaining any event received during that
+read; activation while busy keeps a refresh pending. The backend coalesces
+(300 ms quiet, 2 s maximum) and drops only object-store, Git-directory lock,
+access-only and Git-ignored working-path events. Gitty's own optional-lock-free
+reads do not write the index, so they do not trigger events; a real-repository
+test guards that.[^watcher][^policy]
 
 `RepositoryPane` coordinates reads with write completion. File/index-only
 mutations refresh status, falling back to full refresh if HEAD/ref moved;
@@ -103,5 +132,10 @@ Related: [mutation safeguards](git-mutation-safeguards.md),
 [^tests]: Scripted snapshot race and keep-visible regressions.
 [^contract]: Read limitations and fingerprint coverage.
 [^pane-refresh]: Deletion-specific exclusion passed to `readNativeSnapshot`.
+[^watcher]: `Watchers::start`, event classification, the coalescing worker, and its
+  real-repository tests (edit, ref change, bursts, ignored paths, own reads, close, linked worktree).
+[^policy]: `routineRefreshInterval` and `createChangeRefresher`, with
+  [autoFetch.test.ts](../../src/model/autoFetch.test.ts) and
+  [RepositoryPane.watch.test.tsx](../../src/components/RepositoryPane.watch.test.tsx) (mocked IPC/events).
 [^working]: [WorkingChanges](../../src/components/WorkingChanges.tsx) and the
   “stable staging updates” regressions in [WorkingChanges.test.ts](../../src/components/WorkingChanges.test.ts).

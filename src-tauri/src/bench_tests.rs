@@ -88,14 +88,27 @@ fn bench_repository(path: &str, iterations: usize) -> Result<serde_json::Value> 
         measure(iterations, || {
             let handle = service.open(location())?.session.handle;
             let repo = service.repo(&handle)?;
-            repo.snapshot()?;
-            repo.history(None, 200, HistoryQuery::default())?;
+            repo.snapshot_with_history(Some(crate::operation_dto::SnapshotHistory::default()))?;
             service.close(&handle)
         }),
     );
     record(
         "snapshotRefresh",
         measure(iterations, || repo.snapshot().map(drop)),
+    );
+    record(
+        "snapshotHistoryRefresh",
+        measure(iterations, || {
+            // Changed refs with a near-top selection/viewport, even if the user
+            // previously loaded 5,000 rows: retention is target-driven now.
+            repo.snapshot_with_history(Some(crate::operation_dto::SnapshotHistory {
+                previous_head: head.clone(),
+                preserve: head.iter().cloned().collect(),
+                preserve_limit: Some(400),
+                ..Default::default()
+            }))
+            .map(drop)
+        }),
     );
     record("state", measure(iterations, || repo.state().map(drop)));
     if !bare {
@@ -123,6 +136,10 @@ fn bench_repository(path: &str, iterations: usize) -> Result<serde_json::Value> 
         record(
             "commitDetail",
             measure(iterations, || repo.commit(head).map(drop)),
+        );
+        record(
+            "commitEditEligibility",
+            measure(iterations, || repo.commit_edit_eligibility(head).map(drop)),
         );
         record(
             "commitFiles",

@@ -2,7 +2,7 @@
 use crate::{dto::*, process};
 use std::{
     io::{BufRead, BufReader, Read},
-    process::{Child, Command, Stdio},
+    process::{Command, ExitStatus, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver},
@@ -35,7 +35,11 @@ pub fn revision_input(revisions: &[String]) -> Result<Vec<u8>> {
 }
 
 pub struct GitStream {
-    child: Child,
+    child: process::ChildWait,
+    completion: Receiver<process::ProcessEvent>,
+    exit: Option<std::io::Result<ExitStatus>>,
+    stderr_ready: bool,
+    reader_done: Receiver<()>,
     receiver: Option<Receiver<Result<Option<Vec<u8>>>>>,
     reader: Option<JoinHandle<()>>,
     stderr: Option<JoinHandle<std::io::Result<Vec<u8>>>>,
@@ -43,8 +47,6 @@ pub struct GitStream {
     finished: bool,
     allow_difference_exit: bool,
     cancel: Option<Arc<AtomicBool>>,
-    #[cfg(windows)]
-    job: process::ProcessJob,
 }
 impl GitStream {
     pub fn git(
@@ -103,19 +105,13 @@ impl GitStream {
             .spawn()
             .map_err(|e| Error::new("processStart", e.to_string()))?;
         process::note_spawn();
-        #[cfg(windows)]
-        let job = match process::ProcessJob::attach(&child) {
-            Ok(job) => job,
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(e);
-            }
-        };
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
+        let (completed, completion) = mpsc::channel();
+        let child = process::ChildWait::new(child, completed.clone())?;
         // One queued record plus one being read: history uses <= 128 bytes per record.
         let (sender, receiver) = mpsc::sync_channel(1);
+        let (reader_completed, reader_done) = mpsc::channel();
         let reader = thread::spawn(move || {
             let mut input = BufReader::new(stdout);
             loop {
@@ -142,12 +138,21 @@ impl GitStream {
                     break;
                 }
             }
+            let _ = reader_completed.send(());
         });
         let overflow = Arc::new(AtomicBool::new(false));
         let flag = overflow.clone();
-        let stderr = thread::spawn(move || process::capture(stderr, flag));
+        let stderr = thread::spawn(move || {
+            let result = process::capture(stderr, flag);
+            let _ = completed.send(process::ProcessEvent::Captured);
+            result
+        });
         Ok(Self {
             child,
+            completion,
+            exit: None,
+            stderr_ready: false,
+            reader_done,
             receiver: Some(receiver),
             reader: Some(reader),
             stderr: Some(stderr),
@@ -155,8 +160,6 @@ impl GitStream {
             finished: false,
             allow_difference_exit: false,
             cancel: None,
-            #[cfg(windows)]
-            job,
         })
     }
     /// Makes `next` fail with the `cancelled` error as soon as `flag` is set, even
@@ -202,38 +205,49 @@ impl GitStream {
                 Ok(Err(error)) => return Err(error),
                 Ok(Ok(None)) => {
                     // EOF is not success until Git's exit status and stderr have been collected.
-                    let mut nap = Duration::from_millis(1);
                     loop {
                         self.check_cancelled()?;
+                        if self.overflow.load(Ordering::Relaxed) {
+                            return Err(Error::new("outputLimit", "Git stderr exceeded 32 MiB"));
+                        }
                         if Instant::now() >= deadline {
                             return Err(Error::new("timeout", "Timed out finalizing Git stream"));
                         }
-                        if self.stderr.as_ref().is_some_and(|r| r.is_finished()) {
-                            if let Some(status) = self.child.try_wait()? {
-                                let stderr =
-                                    self.stderr.take().unwrap().join().map_err(|_| {
-                                        Error::new("process", "Git stderr reader failed")
-                                    })??;
-                                self.finished = true;
-                                if self.overflow.load(Ordering::Relaxed) {
-                                    return Err(Error::new(
-                                        "outputLimit",
-                                        "Git stderr exceeded 32 MiB",
-                                    ));
-                                }
-                                if !status.success()
-                                    && !(self.allow_difference_exit && status.code() == Some(1))
-                                {
-                                    return Err(Error::new(
-                                        "git",
-                                        String::from_utf8_lossy(&stderr).trim().to_string(),
-                                    ));
-                                }
-                                return Ok(None);
+                        if self.stderr_ready && self.exit.is_some() {
+                            let status = self.exit.take().unwrap()?;
+                            self.child.reap();
+                            let stderr =
+                                self.stderr.take().unwrap().join().map_err(|_| {
+                                    Error::new("process", "Git stderr reader failed")
+                                })??;
+                            self.finished = true;
+                            if self.overflow.load(Ordering::Relaxed) {
+                                return Err(Error::new(
+                                    "outputLimit",
+                                    "Git stderr exceeded 32 MiB",
+                                ));
+                            }
+                            if !status.success()
+                                && !(self.allow_difference_exit && status.code() == Some(1))
+                            {
+                                return Err(Error::new(
+                                    "git",
+                                    String::from_utf8_lossy(&stderr).trim().to_string(),
+                                ));
+                            }
+                            return Ok(None);
+                        }
+                        match self.completion.recv_timeout(process::WAIT_CHECK_INTERVAL) {
+                            Ok(process::ProcessEvent::Exited(status)) => self.exit = Some(status),
+                            Ok(process::ProcessEvent::Captured) => self.stderr_ready = true,
+                            Err(mpsc::RecvTimeoutError::Timeout) => {}
+                            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                                return Err(Error::new(
+                                    "process",
+                                    "Git stream waiter ended unexpectedly",
+                                ));
                             }
                         }
-                        thread::sleep(nap);
-                        nap = (nap * 2).min(Duration::from_millis(10));
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
@@ -249,20 +263,34 @@ impl Drop for GitStream {
         // Disconnect first, so a producer blocked by backpressure can leave its send().
         self.receiver.take();
         if !self.finished {
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(-(self.child.id() as i32), libc::SIGKILL);
+            self.child.kill();
+            self.child.reap();
+            // Escaped descendants can retain stdout/stderr despite the group kill.
+            // Only abnormal cleanup may detach readers, after a bounded grace.
+            let deadline = Instant::now() + process::READER_SHUTDOWN_TIMEOUT;
+            let _ = self
+                .reader_done
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()));
+            while !self.stderr_ready {
+                match self
+                    .completion
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                {
+                    Ok(process::ProcessEvent::Captured) => self.stderr_ready = true,
+                    Ok(process::ProcessEvent::Exited(_)) => {}
+                    Err(_) => break,
+                }
             }
-            #[cfg(windows)]
-            self.job.kill();
-            let _ = self.child.kill();
-            let _ = self.child.wait();
         }
         if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
+            if self.finished || reader.is_finished() {
+                let _ = reader.join();
+            }
         }
         if let Some(stderr) = self.stderr.take() {
-            let _ = stderr.join();
+            if self.finished || stderr.is_finished() {
+                let _ = stderr.join();
+            }
         }
     }
 }
@@ -270,6 +298,124 @@ impl Drop for GitStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(unix)]
+    fn paused_small_git_walk_pins_its_pid_and_never_kills_after_reap() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        assert!(Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(dir.path())
+            .status()
+            .unwrap()
+            .success());
+        let mut import = Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(["fast-import", "--quiet"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut input = import.stdin.take().unwrap();
+        for n in 0..200 {
+            writeln!(
+                input,
+                "commit refs/heads/main\ncommitter A <a@example.test> {} +0000\ndata 1\nx\n",
+                1700000000 + n
+            )
+            .unwrap();
+        }
+        drop(input);
+        assert!(import.wait().unwrap().success());
+        let location = RepositoryLocation::Native {
+            path: dir.path().to_str().unwrap().into(),
+        };
+        for reap_first in [false, true] {
+            // The bounded reader pauses after two records, but all 200 IDs fit in
+            // the kernel pipe. Git exits before the consumer finishes the walk.
+            let mut stream = GitStream::git(
+                &location,
+                &process::args(&["rev-list", "--all"]),
+                b'\n',
+                128,
+            )
+            .unwrap();
+            loop {
+                if let process::ProcessEvent::Exited(status) = stream
+                    .completion
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                {
+                    assert!(status.unwrap().success());
+                    break;
+                }
+            }
+            assert!(!stream.finished);
+            let id = stream.child.id();
+            let attempts = stream.child.kill_attempts();
+            // Observe again without reaping: the paused walk still reserves PID.
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            assert_eq!(
+                unsafe {
+                    libc::waitid(
+                        libc::P_PID,
+                        id as libc::id_t,
+                        &mut info,
+                        libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+                    )
+                },
+                0
+            );
+            assert_eq!(unsafe { info.si_pid() }, id as i32);
+            if reap_first {
+                stream.child.reap();
+            }
+            drop(stream);
+            assert_eq!(attempts.load(Ordering::Relaxed), usize::from(!reap_first));
+            assert_eq!(unsafe { libc::kill(id as i32, 0) }, -1);
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn dropping_a_stream_bounds_joins_for_escaped_pipe_holders() {
+        if Command::new("python3").arg("--version").output().is_err() {
+            return;
+        }
+        let mut command = Command::new("sh");
+        command.args(["-c", "python3 -c 'import os,time; os.setsid(); print(\"ready\", flush=True); time.sleep(3)' & wait"]);
+        let mut stream = GitStream::spawn(command, Stdio::null(), b'\n', 128).unwrap();
+        assert_eq!(stream.next().unwrap().unwrap(), b"ready");
+        let start = Instant::now();
+        drop(stream);
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "escaped descendant must not block stream drop"
+        );
+    }
+    #[test]
+    #[cfg(unix)]
+    fn eof_waits_for_exit_and_cancellation_still_interrupts_finalization() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exec 1>&-; sleep 0.1; exit 7"]);
+        let mut stream = GitStream::spawn(command, Stdio::null(), b'\n', 128).unwrap();
+        assert_eq!(stream.next().unwrap_err().code, "git");
+        let mut command = Command::new("sh");
+        command.args(["-c", "exec 1>&-; sleep 60"]);
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut stream = GitStream::spawn(command, Stdio::null(), b'\n', 128)
+            .unwrap()
+            .with_cancel(flag.clone());
+        let canceller = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            flag.store(true, Ordering::Relaxed);
+        });
+        assert_eq!(stream.next().unwrap_err().code, "cancelled");
+        canceller.join().unwrap();
+        let id = stream.child.id();
+        drop(stream);
+        assert_eq!(unsafe { libc::kill(id as i32, 0) }, -1);
+    }
     #[test]
     fn git_exit_errors_are_not_mistaken_for_empty_history() {
         let mut command = Command::new("git");

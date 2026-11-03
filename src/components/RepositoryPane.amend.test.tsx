@@ -57,6 +57,7 @@ beforeEach(() => {
         return { ...found, body: `Subject ${found.id}\n\nBody`, canEditMessage: found.id === repo.head, editDisabledReason: found.id === repo.head ? null : 'Only HEAD.' };
       }
       case 'repository_diff_files': return [];
+      case 'repository_commit_edit_eligibility': return { canEditMessage: args.oid === repo.head, editDisabledReason: args.oid === repo.head ? null : 'Only HEAD.' };
       case 'repository_amend_commit': return repo.amend();
       default: return undefined;
     }
@@ -92,8 +93,19 @@ async function mount() {
   };
   await vi.waitFor(() => expect(selected()).toBe('h1'));
   mocks.invoke.mockClear();
+  mocks.graph.scrollTo.mockClear();
   return api;
 }
+
+it('follows an externally moved HEAD on refresh when the reader was still following HEAD', async () => {
+  const t = await mount();
+  try {
+    setHead('h2');
+    window.dispatchEvent(new Event('focus'));
+    await vi.waitFor(() => expect(t.selected()).toBe('h2'));
+    expect(mocks.graph.scrollTo).toHaveBeenCalledWith(0);
+  } finally { await t.cleanup(); }
+});
 
 it('follows an amended HEAD in one page: remaps the walk and scroll anchor, then selects and reveals the new commit', async () => {
   const t = await mount();

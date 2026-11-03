@@ -37,6 +37,12 @@ afterEach(async () => { await act(async () => root.unmount()); container.remove(
 async function mount() {
   await act(async () => root.render(<StartPage onOpen={() => {}} onClone={onClone} cloneBusy={false} />));
   await click('Clone');
+  // The browser is lazy-loaded: wait for it to request and finish its first page.
+  await vi.waitFor(() => {
+    expect(mocks.native).toHaveBeenCalledWith('provider_repositories', expect.anything());
+    expect(container.textContent).not.toContain('Loading repositories…');
+  });
+  await act(async () => {});
 }
 async function click(text: string) {
   const button = [...container.querySelectorAll('button')].find(value => value.textContent === text);

@@ -4,9 +4,10 @@ use crate::dto::{Error, RepositoryLocation, Result};
 use std::{
     io::{Read, Seek, SeekFrom, Write},
     path::PathBuf,
-    process::{Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
+        mpsc::{self, Sender},
         Arc, OnceLock,
     },
     thread,
@@ -15,6 +16,233 @@ use std::{
 
 const MAX_OUTPUT: usize = 32 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const WAIT_CHECK_INTERVAL: Duration = Duration::from_millis(25);
+pub(crate) const READER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// Keep PATH-selected wrappers intact. Only Apple's native xcrun shim is bypassed;
+/// Git for Windows, WSL and SSH must retain their own executable/environment setup.
+pub(crate) fn native_git_program() -> &'static std::ffi::OsStr {
+    #[cfg(target_os = "macos")]
+    {
+        static GIT: OnceLock<PathBuf> = OnceLock::new();
+        GIT.get_or_init(|| {
+            resolve_native_git(std::env::var_os("PATH").as_deref(), || {
+                let mut command = Command::new("/usr/bin/xcrun");
+                command.args(["--find", "git"]);
+                let output = run_for(command, Duration::from_secs(5)).ok()?;
+                if !output.success {
+                    return None;
+                }
+                let path = PathBuf::from(text(output.stdout).ok()?.trim());
+                Some(path)
+            })
+        })
+        .as_os_str()
+    }
+    #[cfg(not(target_os = "macos"))]
+    std::ffi::OsStr::new("git")
+}
+
+#[cfg(target_os = "macos")]
+fn executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_native_git(
+    path: Option<&std::ffi::OsStr>,
+    find_real: impl FnOnce() -> Option<PathBuf>,
+) -> PathBuf {
+    let fallback = || PathBuf::from("git");
+    let Some(path) = path else {
+        return fallback();
+    };
+    let Some(selected) = std::env::split_paths(path)
+        .map(|p| p.join("git"))
+        .find(|p| executable(p))
+    else {
+        return fallback();
+    };
+    let Ok(canonical) = selected.canonicalize() else {
+        return fallback();
+    };
+    if canonical != std::path::Path::new("/usr/bin/git") {
+        // Preserve a symlink/wrapper's argv[0], rather than selecting its target.
+        return if selected.is_absolute() {
+            selected
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(selected))
+                .unwrap_or_else(|_| fallback())
+        };
+    }
+    find_real()
+        .filter(|real| {
+            real.is_absolute()
+                && executable(real)
+                && real.canonicalize().is_ok_and(|p| p != canonical)
+        })
+        .unwrap_or_else(fallback)
+}
+
+pub(crate) enum ProcessEvent {
+    Exited(std::io::Result<ExitStatus>),
+    Captured,
+}
+
+#[cfg(unix)]
+struct UnixChild {
+    child: Child,
+    reaped: bool,
+    #[cfg(test)]
+    kill_attempts: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// Observe exit without reaping on Unix: the zombie reserves the PID/PGID until
+/// the owner finishes cleanup. Killing and reaping serialize on the same mutex.
+/// Reader completion shares the channel so inherited pipes remain deadline-bound.
+pub(crate) struct ChildWait {
+    id: u32,
+    waiter: Option<thread::JoinHandle<()>>,
+    #[cfg(unix)]
+    unix: Arc<std::sync::Mutex<UnixChild>>,
+    #[cfg(windows)]
+    job: ProcessJob,
+}
+impl ChildWait {
+    pub(crate) fn new(child: Child, sender: Sender<ProcessEvent>) -> Result<Self> {
+        #[cfg(not(unix))]
+        let mut child = child;
+        #[cfg(windows)]
+        let job = match ProcessJob::attach(&child) {
+            Ok(job) => job,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e);
+            }
+        };
+        let id = child.id();
+        #[cfg(unix)]
+        let unix = Arc::new(std::sync::Mutex::new(UnixChild {
+            child,
+            reaped: false,
+            #[cfg(test)]
+            kill_attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }));
+        #[cfg(unix)]
+        let observed = unix.clone();
+        let waiter = thread::spawn(move || {
+            #[cfg(unix)]
+            let status = {
+                let status = observe_exit(id);
+                // An external reaper/SIGCHLD policy can remove ownership. Never
+                // signal a numeric group after waitid reports that it is gone.
+                if status
+                    .as_ref()
+                    .err()
+                    .is_some_and(|e| e.raw_os_error() == Some(libc::ECHILD))
+                {
+                    observed.lock().unwrap().reaped = true;
+                }
+                status
+            };
+            #[cfg(not(unix))]
+            let status = child.wait();
+            #[cfg(not(unix))]
+            if status.is_err() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            let _ = sender.send(ProcessEvent::Exited(status));
+        });
+        Ok(Self {
+            id,
+            waiter: Some(waiter),
+            #[cfg(unix)]
+            unix,
+            #[cfg(windows)]
+            job,
+        })
+    }
+    #[cfg(test)]
+    pub(crate) fn id(&self) -> u32 {
+        self.id
+    }
+    pub(crate) fn kill(&self) {
+        #[cfg(unix)]
+        {
+            let state = self.unix.lock().unwrap();
+            if !state.reaped {
+                #[cfg(test)]
+                state.kill_attempts.fetch_add(1, Ordering::Relaxed);
+                unsafe {
+                    libc::kill(-(self.id as i32), libc::SIGKILL);
+                }
+            }
+        }
+        #[cfg(windows)]
+        self.job.kill();
+    }
+    pub(crate) fn reap(&mut self) {
+        if let Some(waiter) = self.waiter.take() {
+            let _ = waiter.join();
+            #[cfg(unix)]
+            {
+                let mut state = self.unix.lock().unwrap();
+                if !state.reaped {
+                    let _ = state.child.wait();
+                    // Disable numeric signaling before releasing the mutex,
+                    // including when wait() reports lost child ownership.
+                    state.reaped = true;
+                }
+            }
+        }
+    }
+    #[cfg(all(test, unix))]
+    pub(crate) fn kill_attempts(&self) -> Arc<std::sync::atomic::AtomicUsize> {
+        self.unix.lock().unwrap().kill_attempts.clone()
+    }
+}
+
+#[cfg(unix)]
+fn observe_exit(id: u32) -> std::io::Result<ExitStatus> {
+    use std::os::unix::process::ExitStatusExt;
+    loop {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                id as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        if result == 0 {
+            let code = unsafe { info.si_status() };
+            let raw = match info.si_code {
+                libc::CLD_EXITED => code << 8,
+                libc::CLD_KILLED => code,
+                libc::CLD_DUMPED => code | 0x80,
+                _ => return Err(std::io::Error::other("Unexpected child exit notification")),
+            };
+            return Ok(ExitStatus::from_raw(raw));
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+impl Drop for ChildWait {
+    fn drop(&mut self) {
+        if self.waiter.is_some() {
+            self.kill();
+            self.reap();
+        }
+    }
+}
 /// Index mutations run outside the read request budget: hooks and signing are
 /// interactive-speed work, and an abandoned mutation cannot be reasoned about.
 pub const MUTATION_TIMEOUT: Duration = Duration::from_secs(120);
@@ -707,30 +935,32 @@ fn run_with_stdin_budget(
         .map_err(|e| Error::new("processStart", e.to_string()))?;
     let spawn_time = launched.elapsed();
     note_spawn();
-    #[cfg(windows)]
-    let job = match ProcessJob::attach(&child) {
-        Ok(job) => job,
-        Err(e) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(e);
-        }
-    };
     let overflow = Arc::new(AtomicBool::new(false));
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let a = overflow.clone();
     let b = overflow.clone();
-    let out = thread::spawn(move || capture(stdout, a));
-    let err = thread::spawn(move || capture(stderr, b));
+    let (sender, receiver) = mpsc::channel();
+    let mut child = ChildWait::new(child, sender.clone())?;
+    let out_sender = sender.clone();
+    let out = thread::spawn(move || {
+        let result = capture(stdout, a);
+        let _ = out_sender.send(ProcessEvent::Captured);
+        result
+    });
+    let err = thread::spawn(move || {
+        let result = capture(stderr, b);
+        let _ = sender.send(ProcessEvent::Captured);
+        result
+    });
     let start = Instant::now();
     let budget = Arc::new(PromptClock::default());
     for clock in &clocks {
         clock.observe(&budget);
     }
     let mut failure = None;
-    let mut exited = None;
-    let mut nap = Duration::from_millis(1);
+    let mut exited: Option<std::io::Result<ExitStatus>> = None;
+    let mut captured = 0;
     let status = loop {
         let paused = budget.elapsed();
         let cancelled = clocks
@@ -769,39 +999,44 @@ fn run_with_stdin_budget(
                     },
                 )
             });
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(-(child.id() as i32), libc::SIGKILL);
-            }
-            #[cfg(windows)]
-            job.kill();
-            let _ = child.kill();
-            break child.wait();
+            child.kill();
+            child.reap();
+            break Ok(None);
         }
-        if let Some(status) = exited {
-            if out.is_finished() && err.is_finished() {
-                break Ok(status);
-            }
-            thread::sleep(nap);
-            nap = (nap * 2).min(Duration::from_millis(10));
-            continue;
+        if exited.is_some() && captured == 2 {
+            child.reap();
+            break exited.take().unwrap().map(Some);
         }
-        match child.try_wait() {
-            Ok(Some(s)) => {
-                exited = Some(s);
-            }
-            // ponytail: polling with backoff (1ms -> 10ms); a waiter thread would remove it
-            Ok(None) => {
-                thread::sleep(nap);
-                nap = (nap * 2).min(Duration::from_millis(10));
-            }
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break Err(e);
+        match receiver.recv_timeout(WAIT_CHECK_INTERVAL) {
+            Ok(ProcessEvent::Exited(status)) => exited = Some(status),
+            Ok(ProcessEvent::Captured) => captured += 1,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                child.kill();
+                child.reap();
+                break Err(std::io::Error::other("Process waiter ended unexpectedly"));
             }
         }
     };
+    if failure.is_some() || status.is_err() {
+        // Normal completion always joins both readers. After a kill, an escaped
+        // descendant may still own a pipe: allow cleanup a bounded grace period,
+        // then detach only readers that remain blocked rather than hang the caller.
+        let deadline = Instant::now() + READER_SHUTDOWN_TIMEOUT;
+        while captured < 2 {
+            match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(ProcessEvent::Captured) => captured += 1,
+                Ok(ProcessEvent::Exited(_)) => {}
+                Err(_) => break,
+            }
+        }
+        for reader in [out, err] {
+            if reader.is_finished() {
+                let _ = reader.join();
+            }
+        }
+        return Err(failure.unwrap_or_else(|| status.err().unwrap().into()));
+    }
     let stdout = out
         .join()
         .map_err(|_| Error::new("process", "Output reader failed"))??;
@@ -814,7 +1049,7 @@ fn run_with_stdin_budget(
     if overflow.load(Ordering::Relaxed) {
         return Err(Error::new("outputLimit", "Command output exceeded 32 MiB"));
     }
-    let status = status?;
+    let status = status?.expect("successful wait has an exit status");
     if trace {
         // Program only: command arguments/environments may contain credentials.
         eprintln!(
@@ -1024,7 +1259,7 @@ fn command_inner(
     vars.extend(extra_env.iter().cloned());
     let cmd = match location {
         RepositoryLocation::Native { .. } => {
-            let mut c = Command::new("git");
+            let mut c = Command::new(native_git_program());
             c.args(&git_args);
             // Repository/index/object-store overrides must not redirect this
             // session. Honor native configuration-file selectors, including
@@ -1147,6 +1382,127 @@ pub fn validate_distribution(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn native_git_resolution_preserves_path_choice_and_fails_closed() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let custom = dir.path().join("git");
+        std::fs::write(&custom, b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&custom, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            resolve_native_git(Some(dir.path().as_os_str()), || panic!(
+                "custom Git must not invoke xcrun"
+            )),
+            custom
+        );
+        assert_eq!(resolve_native_git(None, || panic!()), PathBuf::from("git"));
+        assert_eq!(
+            resolve_native_git(Some(std::ffi::OsStr::new("/nonexistent")), || panic!()),
+            PathBuf::from("git")
+        );
+        let shim = tempfile::tempdir().unwrap();
+        symlink("/usr/bin/git", shim.path().join("git")).unwrap();
+        for real in [
+            None,
+            Some(PathBuf::from("relative")),
+            Some(PathBuf::from("/usr/bin/git")),
+            Some(dir.path().join("absent")),
+        ] {
+            assert_eq!(
+                resolve_native_git(Some(shim.path().as_os_str()), || real),
+                PathBuf::from("git")
+            );
+        }
+        assert_eq!(
+            resolve_native_git(Some(shim.path().as_os_str()), || Some(custom.clone())),
+            custom
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn child_exit_notification_wakes_without_a_timer_tick() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 7"]);
+        let (sender, receiver) = mpsc::channel();
+        let mut waiter = ChildWait::new(command.spawn().unwrap(), sender).unwrap();
+        match receiver.recv_timeout(Duration::from_secs(5)).unwrap() {
+            ProcessEvent::Exited(status) => assert_eq!(status.unwrap().code(), Some(7)),
+            _ => panic!("unexpected reader event"),
+        }
+        let attempts = waiter.kill_attempts();
+        // Notification is non-reaping: even an exited child still owns its PID.
+        assert_eq!(observe_exit(waiter.id()).unwrap().code(), Some(7));
+        waiter.reap();
+        waiter.kill();
+        assert_eq!(
+            attempts.load(Ordering::Relaxed),
+            0,
+            "never signal a reaped PID/PGID"
+        );
+        assert_eq!(unsafe { libc::kill(waiter.id() as i32, 0) }, -1);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unix_exit_notification_preserves_signal_status() {
+        use std::os::unix::process::{CommandExt, ExitStatusExt};
+        let mut command = Command::new("sleep");
+        command.arg("60").process_group(0);
+        let (sender, receiver) = mpsc::channel();
+        let mut waiter = ChildWait::new(command.spawn().unwrap(), sender).unwrap();
+        waiter.kill();
+        match receiver.recv_timeout(Duration::from_secs(5)).unwrap() {
+            ProcessEvent::Exited(status) => {
+                assert_eq!(status.unwrap().signal(), Some(libc::SIGKILL))
+            }
+            _ => panic!("unexpected reader event"),
+        }
+        let attempts = waiter.kill_attempts();
+        waiter.reap();
+        waiter.kill();
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn timeout_does_not_join_pipes_held_by_an_escaped_descendant_forever() {
+        if Command::new("python3").arg("--version").output().is_err() {
+            return;
+        }
+        let mut command = Command::new("sh");
+        command.args(["-c", "python3 -c 'import os,time; os.setsid(); print(\"ready\", flush=True); time.sleep(3)' & wait"]);
+        let start = Instant::now();
+        let error = run_for(command, Duration::from_secs(1)).err().unwrap();
+        assert_eq!(error.code, "timeout");
+        assert!(
+            start.elapsed() < Duration::from_millis(2500),
+            "escaped pipe must not extend the deadline through join()"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn exited_child_with_inherited_pipes_remains_deadline_bound() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 5 & exit 0"]);
+        let start = Instant::now();
+        let error = run_for(command, Duration::from_millis(50)).err().unwrap();
+        assert_eq!(error.code, "timeout");
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn overflow_kills_and_reaps_a_running_producer() {
+        let start = Instant::now();
+        let error = run_for(Command::new("yes"), Duration::from_secs(10))
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "outputLimit");
+        assert!(start.elapsed() < Duration::from_secs(5));
+    }
     #[test]
     #[cfg(unix)]
     fn ssh_encoded_envelope_survives_sh_and_tcsh_with_binary_stdin() {

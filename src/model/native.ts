@@ -72,12 +72,13 @@ export function validateHistory(commits: CommitSummary[]) {
   }
 }
 
-/** One `repository_snapshot` call reads state, status and operation state together
- * (the backend retries until they agree). A generation is opaque, not a state
- * fingerprint: when history has to be walked, bracket the walk with a live state
- * read and only publish once refs agree. */
+/** One `repository_snapshot` reads state/status/operation and target-bounded history.
+ * The backend pins history to the starting state's tips, rechecks state after paging,
+ * and retries before publication. Unchanged state reuses the previous opaque generation. */
 export async function readNativeSnapshot(handle: string, options: {
   previous?: Pick<NativeSnapshot, 'state' | 'commits' | 'cursor' | 'generation'>;
+   /** Restart history, seeking known anchors up to max(400, deepest anchor index + 400). */
+  forceHistory?: boolean;
   /** Automatic keep-visible candidates (selection, scroll anchor). With `previous`, only IDs that were
    * actually in the previous history are kept: an ID outside it, such as an inspector-only orphan, can never
    * be found by walking and would otherwise make every refresh read the entire history. */
@@ -90,6 +91,8 @@ export async function readNativeSnapshot(handle: string, options: {
   remap?: { from: string; to: string };
   current?: () => boolean;
   invoke?: typeof native;
+  /** Time to produce the first history page of a fresh walk, excluding snapshot reads. */
+  onFirstHistoryPage?: (millis: number) => void;
 } = {}): Promise<NativeSnapshot> {
   const invoke = options.invoke ?? native;
   const check = () => { if (options.current && !options.current()) throw new Error('Repository request superseded.'); };
@@ -97,28 +100,41 @@ export async function readNativeSnapshot(handle: string, options: {
     check(); const result = await invoke<T>(command, { handle, ...args }); check(); return result;
   };
   for (let attempt = 0; attempt < 3; attempt++) {
-    const { state: before, status, operation } = await call<RepositorySnapshot>('repository_snapshot');
-    if (options.previous && before.fingerprint === options.previous.state.fingerprint) {
+    const known = options.previous && new Map(options.previous.commits.map((commit, index) => [commit.id, index]));
+    const excluded = new Set(options.excludeKeepVisible ?? []);
+    const preserve = (options.preserve ?? []).filter(id => id && id !== WORKING_ID && (!known || known.has(id)) && !excluded.has(id));
+    const preserveLimit = Math.max(400, ...preserve.map(id => (known?.get(id) ?? 0) + 400));
+    const { state: before, status, operation, history } = await call<RepositorySnapshot>('repository_snapshot', {
+      history: { fingerprint: options.forceHistory ? undefined : options.previous?.state.fingerprint, previousHead: options.previous?.state.session.head, preserve, preserveLimit, remap: options.remap },
+    });
+    if (status.head !== before.session.head || status.headRef !== before.session.headRef) continue;
+    if (options.previous && !options.forceHistory && before.fingerprint === options.previous.state.fingerprint) {
       validateHistory(options.previous.commits);
       return { state: before, status, operation, commits: options.previous.commits, cursor: options.previous.cursor, generation: options.previous.generation };
     }
+    if (history) {
+      validateHistory(history.commits);
+      if (history.firstPageMillis !== undefined) options.onFirstHistoryPage?.(history.firstPageMillis);
+      return { state: before, status, operation, commits: history.commits, cursor: history.cursor, generation: history.generation };
+    }
+    if (history === null) throw new Error('Repository omitted changed history. Refresh to retry.');
+    // Compatibility with older/native mocked snapshot providers. Current native and
+    // demo backends return the already-verified history in the snapshot itself.
     let commits: CommitSummary[] = [];
     let cursor: string | null = null;
     let generation = '';
-    const known = options.previous && new Set(options.previous.commits.map(commit => commit.id));
     const remap = options.remap && before.session.head === options.remap.to ? options.remap : undefined;
-    const excluded = new Set(options.excludeKeepVisible ?? []);
-    const keep = new Set((options.preserve ?? [])
-      .filter(id => id && id !== WORKING_ID && (!known || known.has(id)))
-      .filter(id => !excluded.has(id))
+    const keep = new Set(preserve
       .map(id => remap && id === remap.from ? remap.to : id));
-    const count = Math.max(200, options.previous?.commits.length ?? 0);
+    const count = 200;
     // Keep-visible is best effort, not explicit reveal. A reset/rebase may orphan
     // even an ID in the previous history; never scan an unbounded walk while a
     // write waits for its reconciliation refresh to finish.
-    const keepVisibleBudget = count + 200;
+    const keepVisibleBudget = preserveLimit;
     do {
+      const pageStarted = performance.now();
       const page: HistoryPage = await call<HistoryPage>('repository_history', { cursor, limit: 200, query: {} });
+      if (!cursor) options.onFirstHistoryPage?.(performance.now() - pageStarted);
       if (generation && page.generation !== generation) throw new Error('History generation changed during refresh. Retry.');
       if (cursor && cursor === page.cursor) throw new Error('History cursor did not advance. Refresh and retry.');
       generation = page.generation;

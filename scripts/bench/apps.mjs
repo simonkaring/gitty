@@ -47,13 +47,11 @@ const isolatedGitty = (args['gitty-profile'] ?? 'isolated') === 'isolated';
 /** Copy of Gitty with a separate bundle identifier, and so separate WebKit storage. */
 function isolatedCopy(source) {
   const target = join(dir, 'Gitty Bench.app');
-  const executable = 'Contents/MacOS/gitty';
-  if (!existsSync(join(target, executable)) || statSync(join(target, executable)).mtimeMs < statSync(join(source, executable)).mtimeMs) {
-    execFileSync('rm', ['-rf', target]);
-    execFileSync('ditto', [source, target]);
-    execFileSync('plutil', ['-replace', 'CFBundleIdentifier', '-string', 'app.gitty.desktop.bench', join(target, 'Contents/Info.plist')]);
-    execFileSync('codesign', ['--force', '--deep', '--sign', '-', target], { stdio: 'ignore' });
-  }
+  // Refreshed on every run: codesign rewrites the copy, so timestamps can't tell builds apart.
+  execFileSync('rm', ['-rf', target]);
+  execFileSync('ditto', [source, target]);
+  execFileSync('plutil', ['-replace', 'CFBundleIdentifier', '-string', 'app.gitty.desktop.bench', join(target, 'Contents/Info.plist')]);
+  execFileSync('codesign', ['--force', '--deep', '--sign', '-', target], { stdio: 'ignore' });
   return realpathSync(target);
 }
 
@@ -133,6 +131,11 @@ async function measure(app, repo) {
   for (let i = 0; i < 200 && !pid; i++) { [pid] = pidsOf(app); if (!pid) await sleep(25); }
   if (!pid) throw new Error(`${app.name} did not start`);
   const visual = probeJson('watch', pid, epoch, timeout, settle, threshold);
+  // Without window captures only the first window is known; never report it as completion.
+  if (!visual.captures) {
+    console.warn(`  ! no window captures${visual.error ? `: ${visual.error}` : ''} — grant Screen Recording to the terminal (or ${probe}) to measure visual completion`);
+    visual.completeMs = null;
+  }
   const launchCpuNs = family(pid).cpuNs;
   await sleep(5000);
   const loaded = family(pid);
@@ -145,6 +148,7 @@ async function measure(app, repo) {
     timedOut: visual.timedOut,
     changes: visual.changes,
     captures: visual.captures,
+    captureError: visual.error ?? null,
     launchCpuMs: launchCpuNs / 1e6,
     footprint: loaded.footprint,
     footprintAfterIdle: idle.footprint,

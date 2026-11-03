@@ -6,6 +6,7 @@ pub mod editor;
 mod clone;
 mod clone_dto;
 mod commit;
+mod commit_graph;
 mod conflicts;
 mod credentials;
 mod diff;
@@ -29,6 +30,7 @@ mod repository;
 mod ssh;
 mod stash;
 mod stream;
+mod watcher;
 mod worktree_files;
 mod worktrees;
 mod wsl;
@@ -43,6 +45,27 @@ use tauri::{Emitter, Manager};
 
 type Shared = Arc<Service>;
 type Accounts = Arc<provider_accounts::AccountStore>;
+
+#[tauri::command]
+async fn repository_commit_graph_status(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+) -> Result<commit_graph::CommitGraphStatus> {
+    with_service(state, move |s| s.repo(&handle)?.commit_graph_status()).await
+}
+#[tauri::command]
+async fn repository_write_commit_graph(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+) -> Result<ActionOutput> {
+    with_service(state, move |s| {
+        s.write_commit_graph(&handle)?;
+        Ok(ActionOutput {
+            output: String::new(),
+        })
+    })
+    .await
+}
 
 #[tauri::command]
 async fn repository_worktrees(
@@ -270,8 +293,16 @@ async fn repository_operation_state(
 async fn repository_snapshot(
     state: tauri::State<'_, Shared>,
     handle: String,
+    history: Option<SnapshotHistory>,
 ) -> Result<RepositorySnapshot> {
-    with_service(state, move |s| s.repo(&handle)?.snapshot()).await
+    with_service(state, move |s| {
+        let repo = s.repo(&handle)?;
+        match history {
+            Some(history) => repo.snapshot_with_history(Some(history)),
+            None => repo.snapshot(),
+        }
+    })
+    .await
 }
 #[tauri::command]
 async fn repository_branch_relation(
@@ -393,8 +424,29 @@ async fn repository_open(
     with_service(state, move |s| s.open(location)).await
 }
 #[tauri::command]
-async fn repository_close(state: tauri::State<'_, Shared>, handle: String) -> Result<()> {
-    with_service(state, move |s| s.close(&handle)).await
+async fn repository_close(
+    state: tauri::State<'_, Shared>,
+    watchers: tauri::State<'_, Arc<watcher::Watchers>>,
+    handle: String,
+) -> Result<()> {
+    let watchers = watchers.inner().clone();
+    with_service(state, move |s| {
+        let closed = s.close(&handle);
+        watchers.stop(&handle);
+        closed
+    })
+    .await
+}
+/// Starts emitting `repository_changed` for a native session; idempotent. WSL and
+/// SSH sessions, and platform watcher failures, report inactive so the caller polls.
+#[tauri::command]
+async fn repository_watch(
+    state: tauri::State<'_, Shared>,
+    watchers: tauri::State<'_, Arc<watcher::Watchers>>,
+    handle: String,
+) -> Result<watcher::WatchStatus> {
+    let watchers = watchers.inner().clone();
+    with_service(state, move |s| watchers.start(s, &handle)).await
 }
 #[tauri::command]
 async fn repository_recent(state: tauri::State<'_, Shared>) -> Result<Vec<RepositoryLocation>> {
@@ -446,6 +498,17 @@ async fn repository_commit(
     oid: String,
 ) -> Result<CommitDetail> {
     with_service(state, move |s| s.repo(&handle)?.commit(&oid)).await
+}
+#[tauri::command]
+async fn repository_commit_edit_eligibility(
+    state: tauri::State<'_, Shared>,
+    handle: String,
+    oid: String,
+) -> Result<CommitEditEligibility> {
+    with_service(state, move |s| {
+        s.repo(&handle)?.commit_edit_eligibility(&oid)
+    })
+    .await
 }
 #[tauri::command]
 async fn repository_status(
@@ -650,7 +713,7 @@ struct BackendInfo {
 #[tauri::command]
 async fn backend_info() -> Result<BackendInfo> {
     blocking(|| {
-        let mut c = std::process::Command::new("git");
+        let mut c = std::process::Command::new(process::native_git_program());
         c.arg("--version");
         Ok(BackendInfo {
             platform: std::env::consts::OS,
@@ -725,6 +788,15 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             process::set_ssh_control_dir(data_dir.join("ssh"));
             app.manage(Arc::new(Service::new(data_dir)));
+            let changed = app.handle().clone();
+            app.manage(Arc::new(watcher::Watchers::new(move |handle| {
+                let _ = changed.emit(
+                    "repository_changed",
+                    watcher::RepositoryChanged {
+                        handle: handle.into(),
+                    },
+                );
+            })));
             let handle = app.handle().clone();
             process::set_git_log(move |log| {
                 let _ = handle.emit("git_command", log);
@@ -743,6 +815,10 @@ pub fn run() {
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                 window.state::<Shared>().cancel_all_clones();
+                window.state::<Shared>().cancel_all_commit_graphs();
+                if let Some(watchers) = window.try_state::<Arc<watcher::Watchers>>() {
+                    watchers.stop_all();
+                }
                 if let Some(askpass) = window.try_state::<Arc<askpass::AskpassRegistry>>() {
                     askpass.cancel_all();
                     askpass.cleanup();
@@ -754,6 +830,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            repository_commit_graph_status,
+            repository_write_commit_graph,
             repository_worktrees,
             repository_worktree_review,
             repository_worktree_execute,
@@ -777,12 +855,14 @@ pub fn run() {
             repository_pick_clone_parent,
             repository_open,
             repository_close,
+            repository_watch,
             repository_recent,
             repository_state,
             repository_git_identity,
             repository_set_git_identity,
             repository_history,
             repository_commit,
+            repository_commit_edit_eligibility,
             repository_status,
             repository_diff_files,
             repository_diff,

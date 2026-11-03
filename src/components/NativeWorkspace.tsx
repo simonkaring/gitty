@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useReducer, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps, type CSSProperties } from 'react';
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { FolderOpen, Palette, PanelLeft, PanelRight, Settings as SettingsIcon, Sparkles } from 'lucide-react';
-import { CommandPalette, type PaletteCommand } from './CommandPalette';
+import type { PaletteCommand } from './CommandPalette';
+import { CommandPalette, SettingsDialog, preloadLazyDialogs } from './lazyDialogs';
 import { useSettings } from '../model/settings';
 import type { RepositoryLocation } from '../model/repository';
 import { StartPage } from './Welcome';
 import { Brand, CommandSearchButton, INSPECTOR_MAX_WIDTH, INSPECTOR_MIN_WIDTH, usePaneWidth } from './WorkspaceControls';
-import { SettingsButton, SettingsDialog } from './Settings';
+import { SettingsButton } from './SettingsButton';
 import { Toast, ToastProvider, ToastRegion } from './ui';
 import { RepositoryPane } from './RepositoryPane';
 import { RepositoryTabs, type RepositoryTabSummary } from './RepositoryTabs';
@@ -18,6 +19,15 @@ import { cloneReducer, type CloneProgress, type CloneRequest } from '../model/cl
 import { ErrorBoundary } from './ErrorBoundary';
 import { DEFAULT_BUTTON_LAYOUT, parseWindowButtonLayout, WindowControls, WindowResizeHandles } from './WindowControls';
 import { NARROW_PANE_MAX_WIDTH, setPaneOpen, settleSidePanes, type SidePane } from '../model/paneLayout';
+
+/** Settings content loads the first time it opens and then stays mounted, like the
+ * eagerly rendered dialog it replaces (it renders nothing while closed). */
+function SettingsHost(props: ComponentProps<typeof SettingsDialog>) {
+  const { isSettingsOpen } = useSettings();
+  const [opened, setOpened] = useState(false);
+  if (isSettingsOpen && !opened) setOpened(true);
+  return opened ? <SettingsDialog {...props} /> : null;
+}
 
 /** A repository named on the command line opens once per app run, not again after leaving the demo. */
 let launchPathHandled = false;
@@ -41,6 +51,14 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
   // never matched `activeId` and stayed permanently hidden. Routing every
   // transition through one reducer call removes that whole class of bug.
   const [{ tabs, activeId, notice: pendingNotice }, dispatch] = useReducer(tabsReducer, demo, initialTabsState);
+  // A restored tab only mounts its RepositoryPane (native session, snapshot,
+  // history stream, polling) once it has been active in this app run; after
+  // that it stays mounted so switching back keeps its state. The set is derived
+  // during render (React re-renders before commit), so the pane mounts already
+  // active and no effect, StrictMode replay or stale render opens a session for
+  // an inactive tab.
+  const [loadedIds, setLoadedIds] = useState<ReadonlySet<string>>(() => new Set());
+  if (activeId && !loadedIds.has(activeId)) setLoadedIds(new Set(loadedIds).add(activeId));
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 1000);
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 900);
   // Below this width both side panes would squeeze the history past its branch and
@@ -76,6 +94,10 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
     };
     window.addEventListener('keydown', keyboard);
     return () => window.removeEventListener('keydown', keyboard);
+  }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(preloadLazyDialogs, 2000);
+    return () => window.clearTimeout(timer);
   }, []);
   const [clone, dispatchClone] = useReducer(cloneReducer, { status: 'idle' });
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -190,7 +212,7 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
     {clone.status === 'error' && <Toast tone="error" onDismiss={() => dispatchClone({ type: 'dismiss' })}>Clone failed: {clone.message}</Toast>}
     {!tabs.length ? startPage()
       : tabs.map(tab => <div key={tab.id} id={`tabpanel-${tab.id}`} role="tabpanel" aria-labelledby={`tab-${tab.id}`} hidden={tab.id !== activeId} className="tab-pane-host">
-        <ErrorBoundary label="This repository view hit an error">{!tab.location ? startPage(tab.id) : <RepositoryPane tabId={tab.id} location={tab.location} active={tab.id === activeId}
+        <ErrorBoundary label="This repository view hit an error">{!tab.location ? startPage(tab.id) : !loadedIds.has(tab.id) && tab.id !== activeId ? null : <RepositoryPane tabId={tab.id} location={tab.location} active={tab.id === activeId}
           sidebarOpen={sidebarOpen} inspectorOpen={inspectorOpen} inspectorWidth={inspectorWidth} sidebarWidth={sidebarWidth}
           setInspectorWidth={setInspectorWidth} setSidebarWidth={setSidebarWidth} setInspectorOpen={setInspectorPane}
           onIdentity={handleIdentity} onBusyChange={handleBusyChange} onMeta={handleMeta}
@@ -198,7 +220,7 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
           paletteOpen={paletteOpen} onOpenPalette={() => setPaletteOpen(true)} onClosePalette={() => setPaletteOpen(false)} workspaceCommands={workspaceCommands} />}</ErrorBoundary>
       </div>)}
     {!activeTab?.location && paletteOpen && <CommandPalette commands={workspaceCommands} onClose={() => setPaletteOpen(false)} />}
-    <SettingsDialog demo={demo} onToggleDemo={onToggleDemo ? requestDemo : undefined} demoBusy={anyBusy} />
+    <SettingsHost demo={demo} onToggleDemo={onToggleDemo ? requestDemo : undefined} demoBusy={anyBusy} />
     <ToastRegion onMount={setToastRoot} />
   </div></ToastProvider>;
 }

@@ -16,7 +16,7 @@ export const DEMO_REPOS = [
 ];
 export const demoLocation = (name: string): RepositoryLocation => ({ kind: 'native', path: `~/Developer/${name}` });
 
-interface DemoRepo { name: string; commits: Commit[]; refs: { name: string; commitId: string; kind: 'local' | 'remote' | 'tag' }[]; head: string; files: DemoFile[]; ahead: number }
+interface DemoRepo { name: string; commits: Commit[]; refs: { name: string; commitId: string; kind: 'local' | 'remote' | 'tag' }[]; head: string; files: DemoFile[]; ahead: number; commitGraph?: boolean }
 const repos = new Map<string, DemoRepo>();
 
 function repo(handle: unknown): DemoRepo {
@@ -64,10 +64,31 @@ export async function demoInvoke(command: string, args: Record<string, unknown>)
       return state(load(match.name));
     }
     case 'repository_state': return state(r());
+    case 'repository_commit_graph_status': return r().commitGraph ? 'present' : 'missing';
+    case 'repository_write_commit_graph': {
+      const repository = r();
+      await new Promise(resolve => setTimeout(resolve, 400));
+      repository.commitGraph = true;
+      return { output: '' };
+    }
     case 'repository_worktrees': { const session = state(r()).session; return [{ path: session.root, head: session.head, branch: session.headRef, bare: false, main: true, locked: null, prunable: null }]; }
     case 'repository_worktree_review': case 'repository_worktree_execute': return unsupported('worktree management');
     case 'repository_operation_state': return demoOperation;
-    case 'repository_snapshot': return { state: state(r()), status: demoStatus(r().files, r().head), operation: demoOperation };
+    case 'repository_snapshot': {
+      const current = state(r());
+      const request = args.history as import('./repository').SnapshotHistory | undefined;
+      const { commits, head } = r();
+      const remap = request?.remap?.to === head ? request.remap : undefined;
+      const keep = new Set((request?.preserve ?? []).map(id => id === remap?.from ? remap.to : id));
+      let seekHead = request?.previousHead !== head;
+      let end = 0;
+      do {
+        for (const commit of commits.slice(end, end + 200)) { keep.delete(commit.id); if (commit.id === head) seekHead = false; }
+        end = Math.min(end + 200, commits.length);
+      } while (end < commits.length && ((keep.size > 0 && end < Math.min(20_000, request?.preserveLimit ?? 400)) || (seekHead && end < 2000)));
+      return { state: current, status: demoStatus(r().files, r().head), operation: demoOperation,
+        history: request && request.fingerprint !== current.fingerprint ? { commits: commits.slice(0, end).map(seconds), cursor: end < commits.length ? `${head}:${end}` : null, generation: head, shallow: false } : null };
+    }
     case 'repository_branch_relation': return [1, 0];
     case 'repository_status': return demoStatus(r().files, r().head);
     case 'repository_history': {
@@ -81,6 +102,7 @@ export async function demoInvoke(command: string, args: Record<string, unknown>)
       if (!commit) throw { code: 'not_found', message: 'Commit not found in the demo history.' };
       return { ...seconds(commit), body: commit.body, canEditMessage: false, editDisabledReason: 'Editing commit messages is not available in the demo workspace; it simulates staging and committing only.' } satisfies CommitDetail;
     }
+    case 'repository_commit_edit_eligibility': return { canEditMessage: false, editDisabledReason: 'Editing commit messages is not available in the demo workspace; it simulates staging and committing only.' };
     case 'repository_diff_files': {
       const spec = args.spec as DiffSpec;
       if (spec.kind === 'commit' || spec.kind === 'compare') return commitFiles(r(), spec).map(file => ({ path: file.path, oldPath: null, status: statusCode(file), additions: file.additions, deletions: file.deletions, binary: false }) satisfies DiffFile);

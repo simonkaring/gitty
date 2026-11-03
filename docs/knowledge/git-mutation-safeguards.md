@@ -64,6 +64,12 @@ Ordinary writes reject unsupported operation/conflict states and respect Git's
 locks, hooks, and signing. The common-directory mutation lock serializes Gitty
 sessions, including linked worktrees; it cannot serialize external Git.[^writes][^locking]
 
+Explicit [history acceleration](history-acceleration.md) writes only object-store
+commit-graph metadata, so it uses an independent common-directory job guard rather
+than the ref/index/worktree mutation lock. Git's commit-graph lock protects external
+writers. Its pane progress flag permits ordinary writes and tab closure; closing
+the session/window cancels the local process tree.[^contract]
+
 Freshness checks depend on the action: amend checks HEAD/ref/status, discard
 checks reviewed status, hunk/line staging checks the displayed diff, and graph
 actions/conflict resolution check their own expectations. Do not turn UI
@@ -77,6 +83,11 @@ Discard deliberately destroys selected unstaged content; tracked files restore
 from the index. Message-only amend preserves the old tree; ordinary amend folds
 in staged content. Remote-tracking refs are local evidence, not proof of the
 remote's current state.[^contract][^hunk-tests]
+
+Commit details render independently of message-edit eligibility. The inspector
+requests the separate verdict only for loaded HEAD, keeps editing disabled while
+unknown/loading/failed, and ignores stale results. Writes still revalidate all
+expectations and remote containment under the mutation lock.[^contract][^writes]
 
 Branch drops in the graph/sidebar capture the dragged ref as merge source and
 the receiving local branch as explicit destination. Local and remote-tracking

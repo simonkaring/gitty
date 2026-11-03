@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { AUTO_FETCH_INTERVAL, SSH_REFRESH_INTERVAL, autoFetchDue, backgroundFetchAllowed, describeFetchStatus, isFetchingAction, relativeTime, routineRefreshInterval } from './autoFetch';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AUTO_FETCH_INTERVAL, SSH_REFRESH_INTERVAL, WATCHED_REFRESH_INTERVAL, createChangeRefresher, watchSupported, autoFetchDue, backgroundFetchAllowed, describeFetchStatus, isFetchingAction, relativeTime, routineRefreshInterval } from './autoFetch';
 
 describe('auto-fetch scheduling', () => {
   it('fetches immediately on first check, then once per interval', () => {
@@ -38,5 +38,87 @@ describe('SSH cadence', () => {
     expect(backgroundFetchAllowed('native')).toBe(true);
     expect(backgroundFetchAllowed('wsl')).toBe(true);
     expect(backgroundFetchAllowed('ssh')).toBe(false);
+  });
+});
+
+describe('watched refresh policy', () => {
+  it('keeps the five-second poll unless a native watcher is active', () => {
+    expect(routineRefreshInterval('native', false)).toBe(5000);
+    expect(routineRefreshInterval('native', true)).toBe(WATCHED_REFRESH_INTERVAL);
+    expect(WATCHED_REFRESH_INTERVAL).toBeGreaterThanOrEqual(30000);
+    expect(routineRefreshInterval('ssh', false)).toBe(SSH_REFRESH_INTERVAL);
+    expect(watchSupported('native')).toBe(true);
+    expect(watchSupported('wsl')).toBe(false);
+    expect(watchSupported('ssh')).toBe(false);
+  });
+});
+
+describe('change events', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+  function setup() {
+    const flags = { visible: true, busy: false };
+    let finish: () => void = () => {};
+    const run = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    const refresher = createChangeRefresher({ visible: () => flags.visible, busy: () => flags.busy, run });
+    return { flags, run, refresher, finish: async () => { finish(); await vi.advanceTimersByTimeAsync(0); } };
+  }
+  it('refreshes once per event and coalesces events during a refresh', async () => {
+    const { run, refresher, finish } = setup();
+    refresher.request();
+    expect(run).toHaveBeenCalledTimes(1);
+    refresher.request(); refresher.request();
+    expect(run).toHaveBeenCalledTimes(1);
+    await finish();
+    expect(run).toHaveBeenCalledTimes(2);
+    await finish();
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+  it('retries after a read or write in flight instead of dropping the event', async () => {
+    const { flags, run, refresher } = setup();
+    flags.busy = true;
+    refresher.request();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(run).not.toHaveBeenCalled();
+    flags.busy = false;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+  it('waits for a hidden tab or window to become visible', async () => {
+    const { flags, run, refresher } = setup();
+    flags.visible = false;
+    refresher.request();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(run).not.toHaveBeenCalled();
+    flags.visible = true;
+    refresher.flush();
+    expect(run).toHaveBeenCalledTimes(1);
+    refresher.flush();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+  it('stops after disposal', async () => {
+    const { flags, run, refresher } = setup();
+    flags.busy = true;
+    refresher.request();
+    refresher.dispose();
+    flags.busy = false;
+    await vi.advanceTimersByTimeAsync(1000);
+    refresher.request();
+    expect(run).not.toHaveBeenCalled();
+  });
+  it('clears events covered by activation but keeps events arriving during that refresh', async () => {
+    const { flags, run, refresher } = setup();
+    flags.visible = false;
+    refresher.request();
+    flags.visible = true;
+    refresher.clear();
+    refresher.flush();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(run).not.toHaveBeenCalled();
+    flags.busy = true;
+    refresher.request();
+    flags.busy = false;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(run).toHaveBeenCalledOnce();
   });
 });

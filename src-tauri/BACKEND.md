@@ -16,7 +16,8 @@ Ordinary index/commit writes use these commands:
 - `repository_ignore_path({handle, path: string}) -> void`
 - `repository_open_path({handle, path: string}) -> void`
 - `repository_reveal_path({handle, path: string}) -> void`
-- `repository_snapshot({handle}) -> {state, status, operation}` (a read; see Read semantics)
+- `repository_snapshot({handle, history?}) -> {state, status, operation, history}` (a read; see Read semantics)
+- `repository_watch({handle}) -> {active: boolean, reason: string | null, message: string | null}` (see [Change events](#change-events))
 - `repository_stage_hunk({handle, path: string, hunkIndex: number, fingerprint: string, lineIndices?: number[]}) -> void`
 - `repository_unstage_hunk({handle, path: string, hunkIndex: number, fingerprint: string, lineIndices?: number[]}) -> void`
 - `repository_create_commit({handle, message: string, identity?: {name: string, email: string}}) -> {oid: string}`
@@ -24,14 +25,15 @@ Ordinary index/commit writes use these commands:
 - `repository_git_identity({handle}) -> {local: {name: string | null, email: string | null}, effective: {name: string | null, email: string | null}}`
 - `repository_set_git_identity({handle, identity: {name: string, email: string}, expectedLocal: {name: string | null, email: string | null}}) -> RepositoryGitIdentity`
 
-`repository_commit({handle, oid})` remains a read. Its `CommitDetail` gains two fields:
-`canEditMessage: boolean` and `editDisabledReason: string | null` (camelCase on the wire).
-They are the eligibility verdict for editing that commit's message in place, and they
-carry no authority: the write re-checks everything it relies on.
+`repository_commit({handle, oid})` resolves and reads only the commit object. Its legacy
+`canEditMessage: false` / `editDisabledReason: null` fields mean **unchecked**, not permission.
+`repository_commit_edit_eligibility({handle, oid}) -> {canEditMessage, editDisabledReason}`
+provides the separate read-only verdict. The inspector requests it after HEAD details
+render, only when message editing is available, and ignores superseded responses.
+Unknown/loading/failed eligibility never enables editing. The verdict carries no
+authority: the write re-checks everything it relies on.
 
-Eligibility is read-only and checked cheapest-first, so a commit that is not HEAD costs
-one extra Git process. The commit is parsed first, so a failure while checking can never
-hide the commit itself:
+Eligibility is read-only and checked cheapest-first, independently of commit detail:
 
 1. A bare repository is not editable.
 2. Only the commit HEAD resolves to is editable; any other commit is disabled with a
@@ -46,11 +48,13 @@ hide the commit itself:
    succeed; a failed query is an error, never "not pushed").
 
 Eligibility never fails open. Any error while checking (an operation in progress, a
-failed Git command, an unresolved HEAD) is returned as a normal detail with
+failed Git command, an unresolved HEAD) is returned as a disabled verdict with
 `canEditMessage: false` and a readable `editDisabledReason` such as "Editing is
 unavailable because eligibility could not be checked: …". Remote-tracking refs are local
 data: they only prove what the last fetch saw, never what the remote has now, and the
 reason text says so. The demo backend returns `canEditMessage: false` for every commit.
+An invalid requested revision can reject the eligibility command; the inspector
+also keeps editing disabled on that error.
 When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage_hunk`, only the specified 0-based lines within the hunk are staged/unstaged using a selectively generated forward patch (and `--reverse` for unstaging), validating bounds and changed line kinds while preserving all working files and other index entries.
 
 ## Read semantics
@@ -112,13 +116,16 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   Branch reachability, date, and literal-path filters are ANDed with every match type.
   Git streams the filtered commits once in topological order; textual fields are
   OR-matched in the backend and matching IDs are deduplicated by that single walk.
+  Each commit is one NUL-framed stream record, containing its ID, single-line author
+  name/email headers and full message. This avoids four cross-thread handoffs per
+  scanned commit without changing literal/Unicode matching or structural filters.
   Results are capped at 500, with a 501st match setting `truncated`. A scan that cannot
   finish within the request budget returns a timeout rather than incomplete results.
   Result summaries are hydrated with `cat-file --batch` in chunks of at most 200 IDs
   (the same strict-framing reader as history pages), preserving scan order: a full
   500-result search launches about nine processes in total instead of roughly three
   per result. Search needs only `CommitSummary`, so it does not run the per-commit
-  message-edit eligibility check that `repository_commit` does.
+  message-edit eligibility check (which is now a separate lazy command).
   **Cancellation:** a session runs at most one search. `repository_search` registers a
   cancel flag at start and cancels the session's previous in-flight search, which then
   fails with `{code: "cancelled", message: "Search superseded"}` (clients treat it as
@@ -159,11 +166,29 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   state (whose fingerprint covers both) instead of once per command, and the four
   operation pseudo-refs (`MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`,
   `REBASE_HEAD`) resolve in one `cat-file --batch-check` instead of four processes.
-  State is read again at the end: if its fingerprint moved, or HEAD disagrees between
+  The first snapshot may reuse the server-owned opening state as its starting point;
+  it is consumed once, never accepted as an unverified cache. State is read again at
+  the end: if its fingerprint moved, or HEAD disagrees between
   state and status, the read restarts, and after three attempts fails with `unstable`.
   `repository_state`, `repository_status` and `repository_operation_state` remain for
-  callers that need only one. The frontend refreshes through the snapshot and walks
-  history only when the state fingerprint changed; after a stage, unstage, hunk,
+  callers that need only one. Optional `history` input is
+  `{fingerprint?, previousHead?, preserve: string[], preserveLimit?: number, remap?: {from, to}}`.
+  When its fingerprint differs, the snapshot starts history from **that starting
+  state's concrete tips**, pages internally, and performs the final state check
+  after history as well. Returned `history` is the aggregated `HistoryPage`; it is
+  null when omitted or unchanged. Its cursor continues the same pinned generation.
+  A cleared/expired walk (`staleCursor`), or a history read failure with changed
+  state (such as a vanished tip), restarts from fresh state within the same three
+  attempts; persistent races end as `unstable`. Other history errors retain their
+  original error. The client retries HEAD/status mismatches before publishing even
+  when it can reuse previously loaded history.
+  The frontend therefore needs one snapshot IPC and no additional state read.
+  On initial open or HEAD movement, it seeks HEAD for up to 2,000 rows. Selection/
+  viewport candidates are sought only until found, within their former index plus
+  400 rows (at least 400, backend cap 20,000), rather than always reloading the whole
+  previously loaded prefix. Ordinary pages remain capped at 200; reaching an
+  automatic bound preserves the cursor for explicit load/reveal.
+  After a stage, unstage, hunk,
   discard or ignore it re-reads `repository_status` alone, since none of them can move
   HEAD or refs. Commit and amend keep the full refresh.
 - The frontend's write lifecycle hands the write's outcome to the refresh
@@ -178,15 +203,22 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   `oid`, so nothing is remapped, and a failed refresh never forces a reveal. The same
   filter stops later refreshes from walking all history for an inspector-only orphan
   (a selected ID that was not in the loaded history). Automatic keep-visible paging
-  is bounded to the previous loaded prefix (at least 200) plus one 200-row page,
+  is bounded to the deepest retained candidate's previous index plus a 400-row margin,
   even when a previously reachable selection becomes orphaned after reset/rebase.
   The orphan remains selected and inspectable. Explicit reveal and paging are
   unchanged. After a successful refresh the selection moves to the new commit only if
   it is the same session, the selection is still the old HEAD, and no user selection
   has happened since the write was submitted (including away and back); compare
   base/target, refs and cherry-pick picks are never touched.
-- Process waits poll with a 1 ms to 10 ms backoff, so a Git command that finishes in a
-  few milliseconds is not charged a fixed 10 ms.
+- Captured commands and stream finalization receive child-exit and reader-completion
+  notifications instead of sleep-polling. A blocking waiter reaps the child; 25 ms
+  checks retain execution/overall prompt deadlines, cancellation and output limits,
+  including when descendants keep pipes open after the child exits. Stream record
+  waits retain their ~10 ms cancellation checks and bounded backpressure.
+- Native macOS Git resolves the user's PATH choice once. Only `/usr/bin/git` (the
+  xcrun shim, including symlinks to it) is replaced with a validated executable from
+  `xcrun --find git`; resolution failure falls back to plain `git`. User-selected
+  wrappers, Git for Windows, Linux, WSL and SSH execution remain unchanged.
 - Root commits compare against the computed empty-tree ID without writing objects.
   Merge comparisons default to first parent; a supplied parent must be an actual
   parent. Explicit comparisons resolve both inputs to commits before diffing.
@@ -210,6 +242,42 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
 - The folder picker uses `rfd`'s native asynchronous dialog. WSL discovery decodes
   UTF-16 output; browsing invokes Linux `find` directly, NUL-delimited, one directory
   level at a time. WSL requires Windows and Linux Git, `env`, and GNU `find`.
+
+## Change events
+
+`repository_watch({handle})` starts one filesystem watcher for a native session
+(idempotent) and returns `{active: true}`. WSL and SSH sessions return
+`{active: false, reason: "unsupportedLocation"}`; a platform watcher that cannot
+be created or registered (an inotify watch/instance limit, a vanished path) returns
+`reason: "unavailable"` with the error text. Either way the frontend keeps polling.
+Unknown or closed handles fail with `invalidHandle`.
+
+- **Scope.** The working tree recursively (not for bare repositories), plus the
+  Git directory and the common directory when they are outside it, so a linked
+  worktree also sees shared refs, `packed-refs` and other worktrees' metadata.
+- **Event.** `repository_changed` with payload `{handle}`. It means "something
+  Gitty shows may have changed"; the frontend re-reads through the normal
+  snapshot path, so all coherence checks still apply. Delivery is best-effort.
+- **Coalescing.** A batch closes after 300 ms without events or 2 s after its
+  first event, so continuous churn reports at most every ~2 s. At most 8,192
+  queued events per session; overflow, notifier errors and rescan requests
+  are reported as a change.
+- **Filtering** drops only what cannot change displayed state: anything under
+  `objects/`, `*.lock` files inside Git directories (their completion renames
+  onto a watched target), access-only notifications, and working-tree paths
+  that `git check-ignore -z --stdin` (read environment; tracked files are never
+  ignored) reports as ignored. A batch of more than 4,096 distinct working paths,
+  a non-UTF-8 path, or a failed ignore check counts as a change.
+- **No refresh loop.** Gitty's reads run with `GIT_OPTIONAL_LOCKS=0`,
+  `core.untrackedCache=false` and `core.fsmonitor=false`, so status/diff never
+  rewrite the index; history spools and stdin files live in the system temp
+  directory. `watcher::tests::snapshot_reads_do_not_report_changes` checks this on
+  a dirty repository. A Gitty write emits a follow-up event after its explicit
+  refresh, which is one extra read, not a loop.
+- **Lifecycle.** Setup and teardown never hold the session registry or watcher
+  map lock. `repository_close` stops the session's watcher; a watch racing a
+  close is stopped and reports `invalidHandle`. Closing the window stops all
+  watchers. Sessions are capped at 32, so watchers are too.
 
 ## SSH repositories
 
@@ -341,6 +409,53 @@ real-Git regressions are in `worktrees.rs`; dialog tests mock IPC. Windows/WSL
 runtime coverage is not implied by host tests.
 
 ## Write semantics
+
+### Explicit history acceleration
+
+- `repository_commit_graph_status({ handle })` returns the string `present`,
+  `missing`, or `disabled`. The read checks effective Boolean `core.commitGraph`
+  first (`false` takes precedence over an existing file), resolves monolithic
+  `objects/info/commit-graph` and split `objects/info/commit-graphs/commit-graph-chain`
+  paths through `git rev-parse --path-format=absolute --git-path`, and checks
+  effective recursive alternates reported by `git count-objects -v` if the primary
+  store has no graph. It does not walk history, validate graph contents/freshness,
+  or report Bloom-filter coverage. File tests execute on the repository's native,
+  WSL, or SSH machine; remote paths are never inspected on the host filesystem.
+- `repository_write_commit_graph({ handle })` returns `ActionOutput { output: "" }`.
+  This explicit, single-attempt write rechecks configuration and refuses
+  `core.commitGraph=false` with `commitGraphDisabled`. It uses `git_mutation_command` and logs
+  `git commit-graph write --reachable --changed-paths --split` through the same
+  activity-log sink as other writes, with a 15-minute subprocess deadline.
+  A separate common-directory job registry rejects overlapping Gitty commit-graph
+  writes with `commitGraphBusy`, including linked-worktree sessions. It never holds
+  `Service::mutate`'s ref/index/worktree lock, so ordinary writes and worktree opens
+  can proceed. Git's own commit-graph lock protects against external writers.
+  Closing the owning session or window cancels the write and kills/reaps its local
+  process tree (including the WSL/SSH transport); remote process cleanup is subject
+  to the transport's disconnect behavior. Preflight reads retain their ordinary
+  bounded read deadlines and check cancellation before launching the long write.
+  Git's default size-tiered split strategy reuses layers for repeated writes;
+  existing layers need not gain filters until Git rewrites them. Only object-store
+  commit-graph metadata is written (including split-chain/layer updates and Git's
+  own lock files). **Refs, index, and working files are untouched**; this action
+  does not run gc, repack, prune objects, fetch, or modify configuration. It does
+  not need a reviewed HEAD/status fingerprint because it cannot overwrite user
+  content or move refs. Bare, linked-worktree, WSL, and SSH repositories are
+  supported; ordinary stage/commit operation-state refusals do not apply.
+  Shallow repositories return `unsupportedShallowCommitGraph` because Git cannot
+  use commit-graphs with shallow boundaries; Gitty does not unshallow or fetch.
+- `snapshot_with_history` reports `firstPageMillis` for the first page of a fresh
+  walk, excluding surrounding snapshot reads. Only the legacy client compatibility
+  path measures first-page IPC duration. Advice requires missing metadata and at
+  least 300 ms, and is dismissed per canonical repository identity. The palette action is available independently
+  of advice eligibility. Advice caches status (including in-flight requests) per
+  session handle until a commit-graph write completes. A lightweight progress flag
+  prevents duplicate pane actions without blocking other writes or tab closure.
+  After success or failure it waits for ordinary writes to settle and refreshes
+  without retrying; acceleration explicitly starts a new history walk
+  even when refs are unchanged, and success is shown only after reconciliation.
+
+### Ordinary staging and commits
 
 This section describes the ordinary staging/commit API. Graph operations and
 targeted conflict resolutions have the additional contract documented below.

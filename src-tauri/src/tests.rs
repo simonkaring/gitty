@@ -2024,7 +2024,7 @@ fn require_unpushed_is_independent_and_rechecks_remote_refs_added_after_the_read
     let head = commit(d.path(), "next");
     let (service, _data, handle) = service_for(d.path());
     let repo = service.repo(&handle).unwrap();
-    let detail = repo.commit(&head).unwrap();
+    let detail = repo.commit_edit_eligibility(&head).unwrap();
     assert!(detail.can_edit_message, "{:?}", detail.edit_disabled_reason);
 
     // A remote-tracking ref appears after the read that enabled editing.
@@ -2047,7 +2047,7 @@ fn require_unpushed_is_independent_and_rechecks_remote_refs_added_after_the_read
         assert_eq!(git(d.path(), &["log", "-1", "--format=%s"]), "next");
     }
     // Each flag is independent: without requireUnpushed the write proceeds.
-    let detail = repo.commit(&head).unwrap();
+    let detail = repo.commit_edit_eligibility(&head).unwrap();
     assert!(!detail.can_edit_message);
     let reason = detail.edit_disabled_reason.unwrap();
     assert!(
@@ -2065,7 +2065,11 @@ fn require_unpushed_is_independent_and_rechecks_remote_refs_added_after_the_read
     };
     let ok = amend_with(&service, &handle, "still local", &reworded.oid, options).unwrap();
     assert_eq!(git(d.path(), &["log", "-1", "--format=%s"]), "still local");
-    assert!(repo.commit(&ok.oid).unwrap().can_edit_message);
+    assert!(
+        repo.commit_edit_eligibility(&ok.oid)
+            .unwrap()
+            .can_edit_message
+    );
     // A stale expectation is refused before any remote check or write.
     let status = repo.status().unwrap();
     git(
@@ -2096,7 +2100,11 @@ fn root_and_merge_heads_can_be_reworded_with_their_parents_and_tree_intact() {
     let root = commit(d.path(), "root");
     let (service, _data, handle) = service_for(d.path());
     let repo = service.repo(&handle).unwrap();
-    assert!(repo.commit(&root).unwrap().can_edit_message);
+    assert!(
+        repo.commit_edit_eligibility(&root)
+            .unwrap()
+            .can_edit_message
+    );
     let tree = git(d.path(), &["rev-parse", "HEAD^{tree}"]);
     let reworded = amend_with(&service, &handle, "new root", &root, MESSAGE_ONLY).unwrap();
     assert_eq!(
@@ -2118,7 +2126,11 @@ fn root_and_merge_heads_can_be_reworded_with_their_parents_and_tree_intact() {
     // Staged work must not leak into the merge commit's tree.
     std::fs::write(d.path().join("extra"), "staged\n").unwrap();
     git(d.path(), &["add", "extra"]);
-    assert!(repo.commit(&merge).unwrap().can_edit_message);
+    assert!(
+        repo.commit_edit_eligibility(&merge)
+            .unwrap()
+            .can_edit_message
+    );
     let reworded = amend_with(&service, &handle, "merge, reworded", &merge, MESSAGE_ONLY).unwrap();
     assert_eq!(git(d.path(), &["rev-parse", "HEAD^{tree}"]), tree);
     assert_eq!(
@@ -2145,8 +2157,14 @@ fn message_edit_eligibility_is_head_first_readable_and_never_fails_open() {
     let head = commit(d.path(), "second");
     let (service, _data, handle) = service_for(d.path());
     let repo = service.repo(&handle).unwrap();
+    let (detail, launches) = crate::process::count_spawns(|| repo.commit(&head));
+    assert_eq!(detail.unwrap().summary.subject, "second");
+    assert_eq!(
+        launches, 2,
+        "commit details must not run eligibility probes"
+    );
     let reason = |id: &str| {
-        let detail = repo.commit(id).unwrap();
+        let detail = repo.commit_edit_eligibility(id).unwrap();
         assert_eq!(
             detail.can_edit_message,
             detail.edit_disabled_reason.is_none()
@@ -2230,7 +2248,7 @@ fn message_edit_eligibility_is_head_first_readable_and_never_fails_open() {
     let detail = bare_service
         .repo(&bare_handle)
         .unwrap()
-        .commit(&head)
+        .commit_edit_eligibility(&head)
         .unwrap();
     assert!(!detail.can_edit_message);
     assert!(detail.edit_disabled_reason.unwrap().contains("bare"));
