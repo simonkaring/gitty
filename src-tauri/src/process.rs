@@ -17,6 +17,7 @@ use std::{
 const MAX_OUTPUT: usize = 32 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const WAIT_CHECK_INTERVAL: Duration = Duration::from_millis(25);
+pub(crate) const READER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Keep PATH-selected wrappers intact. Only Apple's native xcrun shim is bypassed;
 /// Git for Windows, WSL and SSH must retain their own executable/environment setup.
@@ -90,16 +91,29 @@ pub(crate) enum ProcessEvent {
     Captured,
 }
 
-/// The waiter owns and reaps the child; the caller retains tree-kill capability.
+#[cfg(unix)]
+struct UnixChild {
+    child: Child,
+    reaped: bool,
+    #[cfg(test)]
+    kill_attempts: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// Observe exit without reaping on Unix: the zombie reserves the PID/PGID until
+/// the owner finishes cleanup. Killing and reaping serialize on the same mutex.
 /// Reader completion shares the channel so inherited pipes remain deadline-bound.
 pub(crate) struct ChildWait {
     id: u32,
     waiter: Option<thread::JoinHandle<()>>,
+    #[cfg(unix)]
+    unix: Arc<std::sync::Mutex<UnixChild>>,
     #[cfg(windows)]
     job: ProcessJob,
 }
 impl ChildWait {
-    pub(crate) fn new(mut child: Child, sender: Sender<ProcessEvent>) -> Result<Self> {
+    pub(crate) fn new(child: Child, sender: Sender<ProcessEvent>) -> Result<Self> {
+        #[cfg(not(unix))]
+        let mut child = child;
         #[cfg(windows)]
         let job = match ProcessJob::attach(&child) {
             Ok(job) => job,
@@ -110,8 +124,33 @@ impl ChildWait {
             }
         };
         let id = child.id();
+        #[cfg(unix)]
+        let unix = Arc::new(std::sync::Mutex::new(UnixChild {
+            child,
+            reaped: false,
+            #[cfg(test)]
+            kill_attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }));
+        #[cfg(unix)]
+        let observed = unix.clone();
         let waiter = thread::spawn(move || {
+            #[cfg(unix)]
+            let status = {
+                let status = observe_exit(id);
+                // An external reaper/SIGCHLD policy can remove ownership. Never
+                // signal a numeric group after waitid reports that it is gone.
+                if status
+                    .as_ref()
+                    .err()
+                    .is_some_and(|e| e.raw_os_error() == Some(libc::ECHILD))
+                {
+                    observed.lock().unwrap().reaped = true;
+                }
+                status
+            };
+            #[cfg(not(unix))]
             let status = child.wait();
+            #[cfg(not(unix))]
             if status.is_err() {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -121,6 +160,8 @@ impl ChildWait {
         Ok(Self {
             id,
             waiter: Some(waiter),
+            #[cfg(unix)]
+            unix,
             #[cfg(windows)]
             job,
         })
@@ -131,8 +172,15 @@ impl ChildWait {
     }
     pub(crate) fn kill(&self) {
         #[cfg(unix)]
-        unsafe {
-            libc::kill(-(self.id as i32), libc::SIGKILL);
+        {
+            let state = self.unix.lock().unwrap();
+            if !state.reaped {
+                #[cfg(test)]
+                state.kill_attempts.fetch_add(1, Ordering::Relaxed);
+                unsafe {
+                    libc::kill(-(self.id as i32), libc::SIGKILL);
+                }
+            }
         }
         #[cfg(windows)]
         self.job.kill();
@@ -140,6 +188,50 @@ impl ChildWait {
     pub(crate) fn reap(&mut self) {
         if let Some(waiter) = self.waiter.take() {
             let _ = waiter.join();
+            #[cfg(unix)]
+            {
+                let mut state = self.unix.lock().unwrap();
+                if !state.reaped {
+                    let _ = state.child.wait();
+                    // Disable numeric signaling before releasing the mutex,
+                    // including when wait() reports lost child ownership.
+                    state.reaped = true;
+                }
+            }
+        }
+    }
+    #[cfg(all(test, unix))]
+    pub(crate) fn kill_attempts(&self) -> Arc<std::sync::atomic::AtomicUsize> {
+        self.unix.lock().unwrap().kill_attempts.clone()
+    }
+}
+
+#[cfg(unix)]
+fn observe_exit(id: u32) -> std::io::Result<ExitStatus> {
+    use std::os::unix::process::ExitStatusExt;
+    loop {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                id as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        if result == 0 {
+            let code = unsafe { info.si_status() };
+            let raw = match info.si_code {
+                libc::CLD_EXITED => code << 8,
+                libc::CLD_KILLED => code,
+                libc::CLD_DUMPED => code | 0x80,
+                _ => return Err(std::io::Error::other("Unexpected child exit notification")),
+            };
+            return Ok(ExitStatus::from_raw(raw));
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
         }
     }
 }
@@ -926,6 +1018,25 @@ fn run_with_stdin_budget(
             }
         }
     };
+    if failure.is_some() || status.is_err() {
+        // Normal completion always joins both readers. After a kill, an escaped
+        // descendant may still own a pipe: allow cleanup a bounded grace period,
+        // then detach only readers that remain blocked rather than hang the caller.
+        let deadline = Instant::now() + READER_SHUTDOWN_TIMEOUT;
+        while captured < 2 {
+            match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(ProcessEvent::Captured) => captured += 1,
+                Ok(ProcessEvent::Exited(_)) => {}
+                Err(_) => break,
+            }
+        }
+        for reader in [out, err] {
+            if reader.is_finished() {
+                let _ = reader.join();
+            }
+        }
+        return Err(failure.unwrap_or_else(|| status.err().unwrap().into()));
+    }
     let stdout = out
         .join()
         .map_err(|_| Error::new("process", "Output reader failed"))??;
@@ -1318,10 +1429,57 @@ mod tests {
         let mut waiter = ChildWait::new(command.spawn().unwrap(), sender).unwrap();
         match receiver.recv_timeout(Duration::from_secs(5)).unwrap() {
             ProcessEvent::Exited(status) => assert_eq!(status.unwrap().code(), Some(7)),
-            ProcessEvent::Captured => panic!("unexpected reader event"),
+            _ => panic!("unexpected reader event"),
         }
+        let attempts = waiter.kill_attempts();
+        // Notification is non-reaping: even an exited child still owns its PID.
+        assert_eq!(observe_exit(waiter.id()).unwrap().code(), Some(7));
         waiter.reap();
+        waiter.kill();
+        assert_eq!(
+            attempts.load(Ordering::Relaxed),
+            0,
+            "never signal a reaped PID/PGID"
+        );
         assert_eq!(unsafe { libc::kill(waiter.id() as i32, 0) }, -1);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unix_exit_notification_preserves_signal_status() {
+        use std::os::unix::process::{CommandExt, ExitStatusExt};
+        let mut command = Command::new("sleep");
+        command.arg("60").process_group(0);
+        let (sender, receiver) = mpsc::channel();
+        let mut waiter = ChildWait::new(command.spawn().unwrap(), sender).unwrap();
+        waiter.kill();
+        match receiver.recv_timeout(Duration::from_secs(5)).unwrap() {
+            ProcessEvent::Exited(status) => {
+                assert_eq!(status.unwrap().signal(), Some(libc::SIGKILL))
+            }
+            _ => panic!("unexpected reader event"),
+        }
+        let attempts = waiter.kill_attempts();
+        waiter.reap();
+        waiter.kill();
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn timeout_does_not_join_pipes_held_by_an_escaped_descendant_forever() {
+        if Command::new("python3").arg("--version").output().is_err() {
+            return;
+        }
+        let mut command = Command::new("sh");
+        command.args(["-c", "python3 -c 'import os,time; os.setsid(); print(\"ready\", flush=True); time.sleep(3)' & wait"]);
+        let start = Instant::now();
+        let error = run_for(command, Duration::from_secs(1)).err().unwrap();
+        assert_eq!(error.code, "timeout");
+        assert!(
+            start.elapsed() < Duration::from_millis(2500),
+            "escaped pipe must not extend the deadline through join()"
+        );
     }
 
     #[test]

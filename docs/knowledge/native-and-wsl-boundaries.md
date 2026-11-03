@@ -65,7 +65,12 @@ Native macOS Git caches its PATH-selected executable once, bypassing only Apple'
 `git`. Custom wrappers and Windows/WSL/SSH Git selection remain intact. Captured
 commands and stream finalization wake on exit/reader notifications, with 25 ms
 deadline/cancellation/output checks rather than sleep-polling. Descendant-held
-pipes remain deadline-bound; tree termination and reaping are retained.[^process][^contract]
+pipes remain deadline-bound; tree termination and reaping are retained. Unix exit
+notifications use non-reaping `waitid(WNOWAIT)`: the zombie reserves PID/PGID until
+the owner reaps under the same mutex used for group killing, which skips reaped
+children. After abnormal termination, reader cleanup gets a bounded 250 ms grace;
+only still-blocked readers are detached (escaped descendants may retain pipes).
+Normal completion joins readers; Windows job handling is unchanged.[^process][^contract]
 
 Only native sessions get a filesystem watcher (`notify`: FSEvents, inotify,
 ReadDirectoryChangesW). WSL and SSH report it unsupported and keep polling; a

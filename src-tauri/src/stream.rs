@@ -39,6 +39,7 @@ pub struct GitStream {
     completion: Receiver<process::ProcessEvent>,
     exit: Option<std::io::Result<ExitStatus>>,
     stderr_ready: bool,
+    reader_done: Receiver<()>,
     receiver: Option<Receiver<Result<Option<Vec<u8>>>>>,
     reader: Option<JoinHandle<()>>,
     stderr: Option<JoinHandle<std::io::Result<Vec<u8>>>>,
@@ -110,6 +111,7 @@ impl GitStream {
         let child = process::ChildWait::new(child, completed.clone())?;
         // One queued record plus one being read: history uses <= 128 bytes per record.
         let (sender, receiver) = mpsc::sync_channel(1);
+        let (reader_completed, reader_done) = mpsc::channel();
         let reader = thread::spawn(move || {
             let mut input = BufReader::new(stdout);
             loop {
@@ -136,6 +138,7 @@ impl GitStream {
                     break;
                 }
             }
+            let _ = reader_completed.send(());
         });
         let overflow = Arc::new(AtomicBool::new(false));
         let flag = overflow.clone();
@@ -149,6 +152,7 @@ impl GitStream {
             completion,
             exit: None,
             stderr_ready: false,
+            reader_done,
             receiver: Some(receiver),
             reader: Some(reader),
             stderr: Some(stderr),
@@ -261,12 +265,32 @@ impl Drop for GitStream {
         if !self.finished {
             self.child.kill();
             self.child.reap();
+            // Escaped descendants can retain stdout/stderr despite the group kill.
+            // Only abnormal cleanup may detach readers, after a bounded grace.
+            let deadline = Instant::now() + process::READER_SHUTDOWN_TIMEOUT;
+            let _ = self
+                .reader_done
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()));
+            while !self.stderr_ready {
+                match self
+                    .completion
+                    .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                {
+                    Ok(process::ProcessEvent::Captured) => self.stderr_ready = true,
+                    Ok(process::ProcessEvent::Exited(_)) => {}
+                    Err(_) => break,
+                }
+            }
         }
         if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
+            if self.finished || reader.is_finished() {
+                let _ = reader.join();
+            }
         }
         if let Some(stderr) = self.stderr.take() {
-            let _ = stderr.join();
+            if self.finished || stderr.is_finished() {
+                let _ = stderr.join();
+            }
         }
     }
 }
@@ -274,6 +298,101 @@ impl Drop for GitStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(unix)]
+    fn paused_small_git_walk_pins_its_pid_and_never_kills_after_reap() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        assert!(Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(dir.path())
+            .status()
+            .unwrap()
+            .success());
+        let mut import = Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(["fast-import", "--quiet"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut input = import.stdin.take().unwrap();
+        for n in 0..200 {
+            writeln!(
+                input,
+                "commit refs/heads/main\ncommitter A <a@example.test> {} +0000\ndata 1\nx\n",
+                1700000000 + n
+            )
+            .unwrap();
+        }
+        drop(input);
+        assert!(import.wait().unwrap().success());
+        let location = RepositoryLocation::Native {
+            path: dir.path().to_str().unwrap().into(),
+        };
+        for reap_first in [false, true] {
+            // The bounded reader pauses after two records, but all 200 IDs fit in
+            // the kernel pipe. Git exits before the consumer finishes the walk.
+            let mut stream = GitStream::git(
+                &location,
+                &process::args(&["rev-list", "--all"]),
+                b'\n',
+                128,
+            )
+            .unwrap();
+            loop {
+                if let process::ProcessEvent::Exited(status) = stream
+                    .completion
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                {
+                    assert!(status.unwrap().success());
+                    break;
+                }
+            }
+            assert!(!stream.finished);
+            let id = stream.child.id();
+            let attempts = stream.child.kill_attempts();
+            // Observe again without reaping: the paused walk still reserves PID.
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            assert_eq!(
+                unsafe {
+                    libc::waitid(
+                        libc::P_PID,
+                        id as libc::id_t,
+                        &mut info,
+                        libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+                    )
+                },
+                0
+            );
+            assert_eq!(unsafe { info.si_pid() }, id as i32);
+            if reap_first {
+                stream.child.reap();
+            }
+            drop(stream);
+            assert_eq!(attempts.load(Ordering::Relaxed), usize::from(!reap_first));
+            assert_eq!(unsafe { libc::kill(id as i32, 0) }, -1);
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn dropping_a_stream_bounds_joins_for_escaped_pipe_holders() {
+        if Command::new("python3").arg("--version").output().is_err() {
+            return;
+        }
+        let mut command = Command::new("sh");
+        command.args(["-c", "python3 -c 'import os,time; os.setsid(); print(\"ready\", flush=True); time.sleep(3)' & wait"]);
+        let mut stream = GitStream::spawn(command, Stdio::null(), b'\n', 128).unwrap();
+        assert_eq!(stream.next().unwrap().unwrap(), b"ready");
+        let start = Instant::now();
+        drop(stream);
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "escaped descendant must not block stream drop"
+        );
+    }
     #[test]
     #[cfg(unix)]
     fn eof_waits_for_exit_and_cancellation_still_interrupts_finalization() {
