@@ -7,6 +7,13 @@ use crate::{
 };
 use std::{collections::HashSet, process::Command};
 
+// Deterministically expire a snapshot's walk between pages in real-Git tests.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static SNAPSHOT_HISTORY_HOOK: std::cell::RefCell<Option<Box<dyn FnMut(&Repository)>>> =
+        std::cell::RefCell::new(None);
+}
+
 /// Parses NUL-separated `find <git_dir> …` output into paths relative to the Git
 /// directory. Entries outside it, the directory itself, and names that are not
 /// UTF-8 (which no constant metadata name can equal) are ignored.
@@ -416,42 +423,60 @@ impl Repository {
                     .filter(|_| request.previous_head != state.session.head);
                 let budget = request.preserve_limit.unwrap_or(400).clamp(200, 20_000);
                 let started = std::time::Instant::now();
-                let mut result = self.history_with_state(
-                    None,
-                    200,
-                    crate::dto::HistoryQuery { branch: None },
-                    Some(&state),
-                )?;
-                result.first_page_millis = Some(started.elapsed().as_millis() as u64);
-                loop {
-                    for commit in &result.commits {
-                        keep.remove(&commit.id);
-                        if head.as_ref() == Some(&commit.id) {
-                            head = None;
-                        }
-                    }
-                    if result.cursor.is_none()
-                        || !((!keep.is_empty() && result.commits.len() < budget)
-                            || (head.is_some() && result.commits.len() < 2000))
-                    {
-                        break;
-                    }
-                    let page = self.history_with_state(
-                        result.cursor.take(),
+                let read_history = (|| -> Result<crate::dto::HistoryPage> {
+                    let mut result = self.history_with_state(
+                        None,
                         200,
                         crate::dto::HistoryQuery { branch: None },
                         Some(&state),
                     )?;
-                    if page.generation != result.generation {
-                        return Err(Error::new(
-                            "staleCursor",
-                            "History generation changed during refresh",
-                        ));
+                    result.first_page_millis = Some(started.elapsed().as_millis() as u64);
+                    #[cfg(test)]
+                    SNAPSHOT_HISTORY_HOOK.with(|hook| {
+                        if let Some(hook) = hook.borrow_mut().as_mut() {
+                            hook(self);
+                        }
+                    });
+                    loop {
+                        for commit in &result.commits {
+                            keep.remove(&commit.id);
+                            if head.as_ref() == Some(&commit.id) {
+                                head = None;
+                            }
+                        }
+                        if result.cursor.is_none()
+                            || !((!keep.is_empty() && result.commits.len() < budget)
+                                || (head.is_some() && result.commits.len() < 2000))
+                        {
+                            break;
+                        }
+                        let page = self.history_with_state(
+                            result.cursor.take(),
+                            200,
+                            crate::dto::HistoryQuery { branch: None },
+                            Some(&state),
+                        )?;
+                        if page.generation != result.generation {
+                            return Err(Error::new(
+                                "staleCursor",
+                                "History generation changed during refresh",
+                            ));
+                        }
+                        result.commits.extend(page.commits);
+                        result.cursor = page.cursor;
                     }
-                    result.commits.extend(page.commits);
-                    result.cursor = page.cursor;
+                    Ok(result)
+                })();
+                match read_history {
+                    Ok(result) => Some(result),
+                    Err(error)
+                        if error.code == "staleCursor"
+                            || self.state()?.fingerprint != state.fingerprint =>
+                    {
+                        continue
+                    }
+                    Err(error) => return Err(error),
                 }
-                Some(result)
             } else {
                 None
             };

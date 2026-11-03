@@ -41,7 +41,8 @@ it('runs the palette write once, shows progress, and reloads history even when r
   const toasts = document.createElement('div'); document.body.append(toasts);
   const root = createRoot(host);
   const location = { kind: 'native' as const, path: '/repo' };
-  const render = (paletteOpen: boolean) => root.render(<ToastProvider value={toasts}><RepositoryPane tabId="t" location={location} active sidebarOpen inspectorOpen={false} inspectorWidth={400} sidebarWidth={240} setInspectorWidth={() => {}} setSidebarWidth={() => {}} setInspectorOpen={() => {}} onIdentity={() => {}} onBusyChange={() => {}} onMeta={() => {}} paletteOpen={paletteOpen} onClosePalette={() => render(false)} /></ToastProvider>);
+  const busy = vi.fn();
+  const render = (paletteOpen: boolean) => root.render(<ToastProvider value={toasts}><RepositoryPane tabId="t" location={location} active sidebarOpen inspectorOpen={false} inspectorWidth={400} sidebarWidth={240} setInspectorWidth={() => {}} setSidebarWidth={() => {}} setInspectorOpen={() => {}} onIdentity={() => {}} onBusyChange={busy} onMeta={() => {}} paletteOpen={paletteOpen} onClosePalette={() => render(false)} /></ToastProvider>);
   try {
     render(true);
     const command = await vi.waitFor(() => {
@@ -51,8 +52,10 @@ it('runs the palette write once, shows progress, and reloads history even when r
     command.click();
     await vi.waitFor(() => expect(toasts.textContent).toContain('Speeding up history'), { timeout: 5000 });
     expect(mocks.invoke.mock.calls.filter(([command]) => command === 'repository_write_commit_graph')).toHaveLength(1);
+    expect(busy).not.toHaveBeenCalledWith('t', true);
     finish({ output: '' });
     await vi.waitFor(() => expect(toasts.textContent).toContain('History accelerated'), { timeout: 5000 });
     expect(mocks.invoke.mock.calls.filter(([command]) => command === 'repository_history')).toHaveLength(2);
+    await vi.waitFor(() => expect(mocks.invoke.mock.calls.filter(([command]) => command === 'repository_commit_graph_status')).toHaveLength(2));
   } finally { root.unmount(); host.remove(); toasts.remove(); }
 });

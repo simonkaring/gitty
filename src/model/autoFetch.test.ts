@@ -106,4 +106,19 @@ describe('change events', () => {
     refresher.request();
     expect(run).not.toHaveBeenCalled();
   });
+  it('clears events covered by activation but keeps events arriving during that refresh', async () => {
+    const { flags, run, refresher } = setup();
+    flags.visible = false;
+    refresher.request();
+    flags.visible = true;
+    refresher.clear();
+    refresher.flush();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(run).not.toHaveBeenCalled();
+    flags.busy = true;
+    refresher.request();
+    flags.busy = false;
+    await vi.advanceTimersByTimeAsync(250);
+    expect(run).toHaveBeenCalledOnce();
+  });
 });

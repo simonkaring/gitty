@@ -20,6 +20,22 @@ const snap = (head = 'a', bare = false) => ({ state: state(head, bare), status: 
 const previous: NativeSnapshot = { state: state(), status: status(), operation, commits: [commit('a')], cursor: null, generation: 'old-walk' };
 
 describe('native snapshot IPC integration', () => {
+  it('retries mismatched snapshot HEAD before publishing fresh or reused history', async () => {
+    for (const reuse of [false, true]) {
+      const mock = scripted([
+        ['repository_snapshot', { ...snap(), status: status('raced'), history: page([commit('a')]) }],
+        ['repository_snapshot', { ...snap(), history: page([commit('a')]) }],
+      ]);
+      const result = await readNativeSnapshot('session', { ...mock, previous: reuse ? previous : undefined });
+      expect(result.status.head).toBe(result.state.session.head);
+      expect(mock.calls).toHaveBeenCalledTimes(2);
+    }
+  });
+  it('bounds retries for persistently mismatched snapshot HEAD', async () => {
+    const invoke = vi.fn().mockResolvedValue({ ...snap(), status: status('raced'), history: page([commit('a')]) });
+    await expect(readNativeSnapshot('session', { invoke })).rejects.toThrow('Repository kept changing');
+    expect(invoke).toHaveBeenCalledTimes(3);
+  });
   it('publishes backend-verified history without another IPC or state read', async () => {
     const commits = [commit('feature'), commit('a')];
     const mock = scripted([['repository_snapshot', { ...snap(), history: page(commits, 'older') }]]);

@@ -815,6 +815,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
                 window.state::<Shared>().cancel_all_clones();
+                window.state::<Shared>().cancel_all_commit_graphs();
                 if let Some(watchers) = window.try_state::<Arc<watcher::Watchers>>() {
                     watchers.stop_all();
                 }

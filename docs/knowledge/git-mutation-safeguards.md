@@ -64,6 +64,12 @@ Ordinary writes reject unsupported operation/conflict states and respect Git's
 locks, hooks, and signing. The common-directory mutation lock serializes Gitty
 sessions, including linked worktrees; it cannot serialize external Git.[^writes][^locking]
 
+Explicit [history acceleration](history-acceleration.md) writes only object-store
+commit-graph metadata, so it uses an independent common-directory job guard rather
+than the ref/index/worktree mutation lock. Git's commit-graph lock protects external
+writers. Its pane progress flag permits ordinary writes and tab closure; closing
+the session/window cancels the local process tree.[^contract]
+
 Freshness checks depend on the action: amend checks HEAD/ref/status, discard
 checks reviewed status, hunk/line staging checks the displayed diff, and graph
 actions/conflict resolution check their own expectations. Do not turn UI

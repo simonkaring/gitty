@@ -3050,6 +3050,71 @@ fn snapshot_history_bounds_head_and_orphans_but_preserves_requested_depth() {
 }
 
 #[test]
+fn snapshot_history_retries_expired_walks_and_bounds_repeated_expiry() {
+    use crate::operations::SNAPSHOT_HISTORY_HOOK;
+    let f = Fixture::new();
+    let ids = add_history_ahead_of_head(&f, 300);
+    // Consume the opening cache so each attempt exercises a multi-page walk.
+    f.repo.snapshot().unwrap();
+    for failures in [1, 3] {
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let count = calls.clone();
+        SNAPSHOT_HISTORY_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |repo| {
+                let attempt = count.get();
+                count.set(attempt + 1);
+                if attempt < failures {
+                    repo.history(None, 200, HistoryQuery { branch: None })
+                        .unwrap();
+                }
+            }))
+        });
+        let result = f
+            .repo
+            .snapshot_with_history(Some(SnapshotHistory::default()));
+        SNAPSHOT_HISTORY_HOOK.with(|hook| hook.borrow_mut().take());
+        if failures == 1 {
+            let page = result.unwrap().history.unwrap();
+            assert_eq!(calls.get(), 2);
+            assert_eq!(
+                page.commits
+                    .iter()
+                    .map(|c| c.id.clone())
+                    .collect::<Vec<_>>(),
+                ids
+            );
+        } else {
+            assert_eq!(result.unwrap_err().code, "unstable");
+            assert_eq!(calls.get(), 3);
+        }
+    }
+}
+
+#[test]
+fn snapshot_history_retries_a_deleted_tip_from_opening_state() {
+    let f = Fixture::new();
+    // Simulate an opening-state tip whose ref and object vanished before walking.
+    let mut opening = f.repo.state().unwrap();
+    opening.refs.push(RepositoryRef {
+        name: "gone".into(),
+        full_name: "refs/heads/gone".into(),
+        commit_id: "f".repeat(40),
+        kind: "local".into(),
+    });
+    opening.fingerprint = "expired-opening-state".into();
+    *f.repo.opening_state.lock().unwrap() = Some(opening);
+    let snapshot = f
+        .repo
+        .snapshot_with_history(Some(SnapshotHistory::default()))
+        .unwrap();
+    assert_eq!(
+        snapshot.state.fingerprint,
+        f.repo.state().unwrap().fingerprint
+    );
+    assert_eq!(snapshot.history.unwrap().commits.len(), 1);
+}
+
+#[test]
 fn snapshot_of_a_bare_repository_has_an_empty_status() {
     let dir = tempfile::tempdir().unwrap();
     git(dir.path(), &["init", "--bare", "-b", "main"]);

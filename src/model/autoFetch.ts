@@ -44,6 +44,8 @@ export function createChangeRefresher({ visible, busy, run, retryMs = 250 }: {
   return {
     request() { pending = true; flush(); },
     flush,
+    /** An independent refresh is starting now; later events must remain pending. */
+    clear() { pending = false; if (timer) clearTimeout(timer); timer = null; },
     dispose() { disposed = true; if (timer) clearTimeout(timer); timer = null; },
   };
 }

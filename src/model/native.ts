@@ -77,7 +77,7 @@ export function validateHistory(commits: CommitSummary[]) {
  * and retries before publication. Unchanged state reuses the previous opaque generation. */
 export async function readNativeSnapshot(handle: string, options: {
   previous?: Pick<NativeSnapshot, 'state' | 'commits' | 'cursor' | 'generation'>;
-  /** Restart history while retaining the previous loaded count and known anchors. */
+   /** Restart history, seeking known anchors up to max(400, deepest anchor index + 400). */
   forceHistory?: boolean;
   /** Automatic keep-visible candidates (selection, scroll anchor). With `previous`, only IDs that were
    * actually in the previous history are kept: an ID outside it, such as an inspector-only orphan, can never
@@ -107,12 +107,12 @@ export async function readNativeSnapshot(handle: string, options: {
     const { state: before, status, operation, history } = await call<RepositorySnapshot>('repository_snapshot', {
       history: { fingerprint: options.forceHistory ? undefined : options.previous?.state.fingerprint, previousHead: options.previous?.state.session.head, preserve, preserveLimit, remap: options.remap },
     });
+    if (status.head !== before.session.head || status.headRef !== before.session.headRef) continue;
     if (options.previous && !options.forceHistory && before.fingerprint === options.previous.state.fingerprint) {
       validateHistory(options.previous.commits);
       return { state: before, status, operation, commits: options.previous.commits, cursor: options.previous.cursor, generation: options.previous.generation };
     }
     if (history) {
-      if (status.head !== before.session.head || status.headRef !== before.session.headRef) throw new Error('Repository returned inconsistent snapshot HEAD. Refresh to retry.');
       validateHistory(history.commits);
       if (history.firstPageMillis !== undefined) options.onFirstHistoryPage?.(history.firstPageMillis);
       return { state: before, status, operation, commits: history.commits, cursor: history.cursor, generation: history.generation };

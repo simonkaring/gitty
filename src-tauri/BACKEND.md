@@ -177,6 +177,11 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   state's concrete tips**, pages internally, and performs the final state check
   after history as well. Returned `history` is the aggregated `HistoryPage`; it is
   null when omitted or unchanged. Its cursor continues the same pinned generation.
+  A cleared/expired walk (`staleCursor`), or a history read failure with changed
+  state (such as a vanished tip), restarts from fresh state within the same three
+  attempts; persistent races end as `unstable`. Other history errors retain their
+  original error. The client retries HEAD/status mismatches before publishing even
+  when it can reuse previously loaded history.
   The frontend therefore needs one snapshot IPC and no additional state read.
   On initial open or HEAD movement, it seeks HEAD for up to 2,000 rows. Selection/
   viewport candidates are sought only until found, within their former index plus
@@ -417,11 +422,18 @@ runtime coverage is not implied by host tests.
   or report Bloom-filter coverage. File tests execute on the repository's native,
   WSL, or SSH machine; remote paths are never inspected on the host filesystem.
 - `repository_write_commit_graph({ handle })` returns `ActionOutput { output: "" }`.
-  This explicit, single-attempt mutation rechecks configuration inside
-  `Service::mutate` and refuses `core.commitGraph=false` with
-  `commitGraphDisabled`. It uses `git_mutation_command` and logs
+  This explicit, single-attempt write rechecks configuration and refuses
+  `core.commitGraph=false` with `commitGraphDisabled`. It uses `git_mutation_command` and logs
   `git commit-graph write --reachable --changed-paths --split` through the same
   activity-log sink as other writes, with a 15-minute subprocess deadline.
+  A separate common-directory job registry rejects overlapping Gitty commit-graph
+  writes with `commitGraphBusy`, including linked-worktree sessions. It never holds
+  `Service::mutate`'s ref/index/worktree lock, so ordinary writes and worktree opens
+  can proceed. Git's own commit-graph lock protects against external writers.
+  Closing the owning session or window cancels the write and kills/reaps its local
+  process tree (including the WSL/SSH transport); remote process cleanup is subject
+  to the transport's disconnect behavior. Preflight reads retain their ordinary
+  bounded read deadlines and check cancellation before launching the long write.
   Git's default size-tiered split strategy reuses layers for repeated writes;
   existing layers need not gain filters until Git rewrites them. Only object-store
   commit-graph metadata is written (including split-chain/layer updates and Git's
@@ -432,11 +444,15 @@ runtime coverage is not implied by host tests.
   supported; ordinary stage/commit operation-state refusals do not apply.
   Shallow repositories return `unsupportedShallowCommitGraph` because Git cannot
   use commit-graphs with shallow boundaries; Gitty does not unshallow or fetch.
-- The client observes first-page history IPC duration independently of snapshot
-  reads. Advice requires missing metadata and at least 300 ms, and is dismissed
-  per canonical repository identity. The palette action is available independently
-  of advice eligibility. The existing mutation lifecycle refreshes after success
-  or failure without retrying; acceleration explicitly starts a new history walk
+- `snapshot_with_history` reports `firstPageMillis` for the first page of a fresh
+  walk, excluding surrounding snapshot reads. Only the legacy client compatibility
+  path measures first-page IPC duration. Advice requires missing metadata and at
+  least 300 ms, and is dismissed per canonical repository identity. The palette action is available independently
+  of advice eligibility. Advice caches status (including in-flight requests) per
+  session handle until a commit-graph write completes. A lightweight progress flag
+  prevents duplicate pane actions without blocking other writes or tab closure.
+  After success or failure it waits for ordinary writes to settle and refreshes
+  without retrying; acceleration explicitly starts a new history walk
   even when refs are unchanged, and success is shown only after reconciliation.
 
 ### Ordinary staging and commits

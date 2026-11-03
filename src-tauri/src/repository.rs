@@ -138,6 +138,7 @@ pub struct Service {
     /// no global lock is ever held across a Git subprocess.
     mutation_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     pub(crate) clone_operations: Mutex<HashMap<String, Arc<crate::clone::CloneControl>>>,
+    pub(crate) commit_graph_jobs: Mutex<crate::commit_graph::Jobs>,
 }
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> Result<MutexGuard<'_, T>> {
     mutex
@@ -152,6 +153,7 @@ impl Service {
             recent_lock: Mutex::new(()),
             mutation_locks: Mutex::new(HashMap::new()),
             clone_operations: Mutex::new(HashMap::new()),
+            commit_graph_jobs: Mutex::new(crate::commit_graph::Jobs::default()),
         }
     }
     pub fn recent(&self) -> Result<Vec<RepositoryLocation>> {
@@ -390,8 +392,8 @@ impl Service {
         Ok(())
     }
     /// Distinct repositories must not share a lock; linked worktrees must.
-    fn mutation_lock(&self, repo: &Repository) -> Result<Arc<Mutex<()>>> {
-        let key = match &repo.session.location {
+    pub(crate) fn repository_key(repo: &Repository) -> String {
+        match &repo.session.location {
             RepositoryLocation::Native { .. } => format!("native\0{}", repo.session.common_dir),
             RepositoryLocation::Wsl { distribution, .. } => {
                 format!("wsl\0{distribution}\0{}", repo.session.common_dir)
@@ -406,7 +408,10 @@ impl Service {
                 port.map(|p| p.to_string()).unwrap_or_default(),
                 repo.session.common_dir
             ),
-        };
+        }
+    }
+    fn mutation_lock(&self, repo: &Repository) -> Result<Arc<Mutex<()>>> {
+        let key = Self::repository_key(repo);
         let mut locks = lock(&self.mutation_locks)?;
         if locks.len() > 64 {
             // Only locks nobody is waiting on or holding can be forgotten.
@@ -541,6 +546,7 @@ impl Service {
     }
     pub fn close(&self, handle: &str) -> Result<()> {
         let removed = lock(&self.repositories)?.remove(handle);
+        self.cancel_commit_graph(handle);
         // Reaping pinned streams must never hold the registry lock. In-flight
         // requests retain their Arc and may finish; subsequent lookups fail. A
         // search would otherwise keep scanning for a session nobody can read.

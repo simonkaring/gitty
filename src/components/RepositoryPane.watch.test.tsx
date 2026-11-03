@@ -65,6 +65,9 @@ async function mount() {
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
   await vi.waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('repository_watch', { handle: 'real-1' }));
   await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+  return async (active: boolean) => {
+    await act(async () => { root.render(<ToastProvider value={toasts}><RepositoryPane {...props} active={active} /></ToastProvider>); });
+  };
 }
 
 it('refreshes on change events and polls only as a safety net while watching', async () => {
@@ -89,4 +92,19 @@ it('keeps the five-second poll when the watcher is unavailable', async () => {
   const opened = snapshots();
   await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
   expect(snapshots()).toBeGreaterThanOrEqual(opened + 3);
+});
+
+it('consumes inactive-tab events with activation instead of refreshing again on visibility', async () => {
+  mocks.watch = { active: true };
+  const activate = await mount();
+  const opened = snapshots();
+  await activate(false);
+  await changed('real-1');
+  expect(snapshots()).toBe(opened);
+  await activate(true);
+  expect(snapshots()).toBe(opened + 1);
+  await act(async () => { document.dispatchEvent(new Event('visibilitychange')); await vi.advanceTimersByTimeAsync(1000); });
+  expect(snapshots()).toBe(opened + 1);
+  await changed('real-1');
+  expect(snapshots()).toBe(opened + 2);
 });

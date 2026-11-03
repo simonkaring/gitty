@@ -84,6 +84,9 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   const [notice, setNotice] = useState('');
   const [firstHistoryPageMs, setFirstHistoryPageMs] = useState(0);
   const [commitGraphBusy, setCommitGraphBusy] = useState(false);
+  const commitGraphLock = useRef(false);
+  const [commitGraphRevision, setCommitGraphRevision] = useState(0);
+  const changeRefresher = useRef<ReturnType<typeof createChangeRefresher> | null>(null);
   // Notices are transient toasts; errors stay until dismissed.
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 6000); return () => clearTimeout(timer); }, [notice]);
   const [revision, setRevision] = useState(0);
@@ -178,6 +181,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     if (mutationLock.current) return;
     const token = ++epoch.current; revealToken.current++; setBusy(true); setError(''); lock.current = true;
     const old = session.current; session.current = null; setState(null); setStatus(null); installHistory([], null); setBase(''); setTarget(''); setSelected(''); setActiveDiff(null); setFolderOpen({});
+    commitGraphLock.current = false; setCommitGraphBusy(false);
     setOperation(null); setActionContext(null); setMenuTarget(null); setPublishInfo(null); setDeleteBranch(null); setOriginReset(null); setConflictPath(null); setPrSource(null); setPickOrder([]); blockedRef.current = false; setMutationBlocked(false);
     if (old) void close(old.session.handle);
     let opened: RepositoryState | null = null;
@@ -291,7 +295,12 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   // operation state until the next successful write happens in it.
   const wasActive = useRef(active);
   useEffect(() => {
-    if (active && !wasActive.current) void refresh().then(() => autoFetchRef.current());
+    if (active && !wasActive.current) {
+      if (!lock.current && !mutationLock.current) {
+        changeRefresher.current?.clear();
+        void refresh().then(() => autoFetchRef.current());
+      } else changeRefresher.current?.request();
+    }
     wasActive.current = active;
   }, [active, refresh]);
   async function mutate(mutation: RepositoryMutation): Promise<MutationOutcome> {
@@ -420,14 +429,24 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     } finally { if (holdsLock && isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
   }
   async function speedUpHistory() {
-    if (commitGraphBusy || mutationLock.current || blockedRef.current) return;
     const handle = session.current?.session.handle;
-    setCommitGraphBusy(true);
+    if (!handle || commitGraphLock.current) return;
+    const token = epoch.current;
+    const isCurrent = () => token === epoch.current && session.current?.session.handle === handle;
+    commitGraphLock.current = true; setCommitGraphBusy(true); setActionError('');
     try {
-      await remoteWrite('repository_write_commit_graph', {}, { reloadHistory: true });
-      if (session.current?.session.handle === handle) setNotice('History accelerated with a commit-graph. Refs and working files are unchanged.');
-    } catch { /* The existing mutation lifecycle owns errors and reconciliation. */ }
-    finally { setCommitGraphBusy(false); }
+      const outcome = await remoteAndRefresh(handle, 'repository_write_commit_graph', {}, async () => {
+        // The long write owns no pane mutation lock. Reconcile once ordinary
+        // writes settle, then use the normal read lock for a fresh history walk.
+        while ((lock.current || mutationLock.current) && isCurrent()) await new Promise(resolve => setTimeout(resolve, 25));
+        if (isCurrent()) await refresh(true, undefined, [], true);
+      }, isCurrent);
+      if (!isCurrent()) return;
+      if (outcome.error || outcome.refreshError) setActionError([outcome.error, outcome.refreshError && `Refresh failed: ${outcome.refreshError}`].filter(Boolean).join('\n'));
+      else setNotice('History accelerated with a commit-graph. Refs and working files are unchanged.');
+    } finally {
+      if (isCurrent()) { commitGraphLock.current = false; setCommitGraphBusy(false); setCommitGraphRevision(value => value + 1); }
+    }
   }
   /** The last routine refresh, so an SSH session polls on its own slower cadence. */
   const lastRefresh = useRef(0);
@@ -461,6 +480,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       busy: () => lock.current || mutationLock.current,
       run: () => { lastRefresh.current = Date.now(); return refresh(); },
     });
+    changeRefresher.current = changes;
     const visibility = () => changes.flush();
     document.addEventListener('visibilitychange', visibility);
     void (async () => {
@@ -474,7 +494,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
         if (!disposed && watch?.active === true) { watching.current = true; changes.request(); }
       } catch { /* The routine poll keeps running. */ }
     })();
-    return () => { disposed = true; watching.current = false; changes.dispose(); unlisten?.(); document.removeEventListener('visibilitychange', visibility); };
+    return () => { disposed = true; watching.current = false; changeRefresher.current = null; changes.dispose(); unlisten?.(); document.removeEventListener('visibilitychange', visibility); };
   }, [handle, location.kind, refresh]);
   useEffect(() => {
     const timer = setInterval(() => {
@@ -678,7 +698,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     const writeBlocked = mutationBusy || mutationBlocked;
     const { head, headRef } = state.session;
     const repo: PaletteCommand[] = [
-      commitGraphCommand(() => void speedUpHistory(), writeBlocked || commitGraphBusy),
+      commitGraphCommand(() => void speedUpHistory(), !state || commitGraphBusy),
       { id: 'fetch', group: 'Repository', label: 'Fetch', icon: <RefreshCw size={15} />, disabled: writeBlocked, run: () => void runMenuRemote({ kind: 'fetch' }) },
       { id: 'pull', group: 'Repository', label: 'Pull', icon: <Download size={15} />, disabled: writeBlocked || !headRef, run: () => void runMenuRemote({ kind: 'pull', pullMode: DEFAULT_PULL_MODE }) },
       { id: 'push', group: 'Repository', label: 'Push', icon: <Upload size={15} />, disabled: writeBlocked || !headRef, run: () => { if (headRef) void pushFromMenu(headRef); } },
@@ -708,7 +728,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       fetchStatus={fetchStatus}
       notify={setNotice} />}
     {active && <>
-      {state && !state.session.shallow && !commitGraphBusy && <CommitGraphNotice key={state.session.handle} handle={state.session.handle} repositoryKey={sessionKey(location, state.session)} active={active} firstPageMs={firstHistoryPageMs} busy={mutationBusy || mutationBlocked} onRun={() => void speedUpHistory()} />}
+      {state && !state.session.shallow && <CommitGraphNotice key={state.session.handle} handle={state.session.handle} repositoryKey={sessionKey(location, state.session)} active={active} firstPageMs={firstHistoryPageMs} busy={commitGraphBusy} revision={commitGraphRevision} onRun={() => void speedUpHistory()} />}
       {commitGraphBusy && <Toast tone="progress">Speeding up history… Writing commit-graph and changed-path filters.</Toast>}
       {actionError && <Toast tone="error" onDismiss={() => setActionError('')}>{actionError}</Toast>}
       {error && <Toast tone="error" action={<button className="secondary-button" disabled={busy} onClick={() => state ? void refresh() : void open()}>Retry</button>}>{error}</Toast>}

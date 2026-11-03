@@ -37,3 +37,30 @@ it('offers an accessible action, persists dismissal on remount, and does not rea
     expect(mocks.invoke).not.toHaveBeenCalled();
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
+
+it('caches the in-flight status across activations until a write or session change', async () => {
+  const host = document.createElement('div'); document.body.append(host);
+  const root = createRoot(host);
+  let resolve!: (value: string) => void;
+  mocks.invoke.mockImplementationOnce(() => new Promise<string>(done => { resolve = done; }));
+  const render = (active: boolean, handle = 'one', revision = 0) => act(async () => {
+    root.render(<ToastProvider value={host}><CommitGraphNotice handle={handle} repositoryKey="native:/cache" active={active} revision={revision} firstPageMs={350} busy={false} onRun={() => {}} /></ToastProvider>);
+  });
+  try {
+    await render(true);
+    await render(false);
+    await render(true);
+    expect(mocks.invoke).toHaveBeenCalledOnce();
+    await act(async () => resolve('missing'));
+    expect(host.textContent).toContain('History loads faster');
+    await render(false);
+    await render(true);
+    expect(mocks.invoke).toHaveBeenCalledOnce();
+    mocks.invoke.mockResolvedValue('present');
+    await render(true, 'one', 1);
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
+    expect(host.textContent).not.toContain('History loads faster');
+    await render(true, 'two', 1);
+    expect(mocks.invoke).toHaveBeenCalledTimes(3);
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});

@@ -33,6 +33,9 @@ checks HEAD/ref agreement, and rechecks the state fingerprint. It retries up to
 three times before `unstable`. This is a best-effort read across external
 changes, not a transactional filesystem snapshot. Its first read may consume the
 server-owned opening state, still verified at the end.[^snapshot][^contract]
+Expired history cursors and history errors accompanied by changed state restart
+from a fresh `state()` within that same three-attempt budget. The client also
+retries snapshot HEAD/status mismatches before publishing fresh or reused history.[^snapshot][^loader]
 Operation preflight builds its reviewed fingerprint from the same request-local
 state used for HEAD/ref validation. Index and all-ref fingerprint reads run
 concurrently; neither is omitted, and post-write operation/HEAD reads remain.[^snapshot]
@@ -86,7 +89,9 @@ refreshes on `repository_changed` for its handle, on focus, on activation, and
 on a 60-second safety-net poll. Otherwise (WSL, a failed watcher) it polls every
 five seconds; SSH every 30. Events only schedule `refresh()`, never bypass it:
 an event arriving during a read or write retries after it, a hidden tab or
-window keeps it pending, and bursts collapse into one read. The backend coalesces
+window keeps it pending, and bursts collapse into one read. An activation refresh
+clears events it covers before starting, retaining any event received during that
+read; activation while busy keeps a refresh pending. The backend coalesces
 (300 ms quiet, 2 s maximum) and drops only object-store, Git-directory lock,
 access-only and Git-ignored working-path events. Gitty's own optional-lock-free
 reads do not write the index, so they do not trigger events; a real-repository
