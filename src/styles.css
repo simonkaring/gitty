@@ -2530,7 +2530,7 @@ button[data-danger='true']:hover:not(:disabled) {
   font-size: var(--fs-lg);
 }
 .native-inspector .commit-message-body {
-  margin: 8px 16px 0;
+  margin: 8px 0 0;
   padding: 8px 12px;
 }
 .native-inspector .commit-message-body h2 {
