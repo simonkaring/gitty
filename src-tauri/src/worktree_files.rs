@@ -154,9 +154,72 @@ fn reveal(path: &Path) -> Result<()> {
 }
 #[cfg(not(any(target_os = "macos", windows)))]
 fn reveal(path: &Path) -> Result<()> {
-    // ponytail: no portable "select this file" on Linux, so open its folder
+    if show_items(path).is_some() {
+        return Ok(());
+    }
+    // shortcut: desktops without the freedesktop FileManager1 interface, or without
+    // gdbus, get the containing folder instead of the selected file. Revisit if a
+    // mainstream file manager stops answering ShowItems and users notice the folder.
     let folder = path.parent().unwrap_or(path);
     open::that_detached(folder).map_err(|e| Error::new("openExternal", e.to_string()))
+}
+
+/// Asks the desktop file manager to select `path` through the freedesktop
+/// `org.freedesktop.FileManager1.ShowItems` interface. `None` when no file manager
+/// answers, so the caller can fall back to opening the folder.
+#[cfg(not(any(target_os = "macos", windows)))]
+fn show_items(path: &Path) -> Option<()> {
+    let status = Command::new("gdbus")
+        .arg("call")
+        .args(show_items_args(path))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .ok()?;
+    status.success().then_some(())
+}
+
+/// Arguments after `gdbus call`. The short timeout bounds a stuck file manager to a
+/// pause before the folder fallback instead of the 25s D-Bus default; it stays long
+/// enough for a not-yet-running file manager to start.
+#[cfg(not(any(target_os = "macos", windows)))]
+fn show_items_args(path: &Path) -> Vec<String> {
+    [
+        "--timeout",
+        "5",
+        "--session",
+        "--dest",
+        "org.freedesktop.FileManager1",
+        "--object-path",
+        "/org/freedesktop/FileManager1",
+        "--method",
+        "org.freedesktop.FileManager1.ShowItems",
+    ]
+    .map(String::from)
+    .into_iter()
+    .chain([format!("['{}']", file_uri(path)), String::from("''")])
+    .collect()
+}
+
+/// `file://` URI with everything outside the unreserved set and `/` percent-encoded,
+/// so a file name cannot be read as GVariant syntax or a URI delimiter.
+#[cfg(not(any(target_os = "macos", windows)))]
+fn file_uri(path: &Path) -> String {
+    use std::fmt::Write as _;
+    use std::os::unix::ffi::OsStrExt;
+    let mut uri = String::from("file://");
+    for byte in path.as_os_str().as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                uri.push(*byte as char)
+            }
+            // Writing into a String cannot fail.
+            other => {
+                let _ = write!(uri, "%{other:02X}");
+            }
+        }
+    }
+    uri
 }
 
 impl Repository {
@@ -247,6 +310,41 @@ mod tests {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
             assert!(check_launchable(&path).is_err(), "an executable");
         }
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    #[test]
+    fn file_uris_escape_gvariant_and_uri_delimiters() {
+        assert_eq!(
+            file_uri(Path::new("/tmp/repo/a b'c,d.txt")),
+            "file:///tmp/repo/a%20b%27c%2Cd.txt"
+        );
+        assert_eq!(
+            file_uri(Path::new("/tmp/ünïcode")),
+            "file:///tmp/%C3%BCn%C3%AFcode"
+        );
+        assert_eq!(file_uri(Path::new("/tmp/100%\\")), "file:///tmp/100%25%5C");
+    }
+
+    #[cfg(not(any(target_os = "macos", windows)))]
+    #[test]
+    fn show_items_arguments_name_the_file_manager_and_bound_the_wait() {
+        assert_eq!(
+            show_items_args(Path::new("/tmp/repo/a b'c.txt")),
+            vec![
+                "--timeout",
+                "5",
+                "--session",
+                "--dest",
+                "org.freedesktop.FileManager1",
+                "--object-path",
+                "/org/freedesktop/FileManager1",
+                "--method",
+                "org.freedesktop.FileManager1.ShowItems",
+                "['file:///tmp/repo/a%20b%27c.txt']",
+                "''",
+            ]
+        );
     }
 
     #[test]

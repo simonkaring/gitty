@@ -68,7 +68,8 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
   useEffect(() => {
     let live = true;
     native<RepositoryLocation[]>('repository_recent').then(v => { if (live) setRecent(Array.isArray(v) ? v : []); }).catch(e => { if (live) { setRecent([]); setError(errorMessage(e)); } });
-    // ponytail: WSL is optional; an unavailable host just hides the WSL view.
+    // shortcut: a WSL error only hides the WSL view, so an installed but unreachable
+    // host has no explanation. Revisit if users report a missing WSL entry.
     native<WslDistribution[]>('wsl_distributions').then(v => { if (live && v.length) { setDistributions(v); setDistribution(v[0].name); } }).catch(() => {});
     return () => { live = false; request.current++; sshProbeRequest.current++; sshBrowseRequest.current++; };
   }, []);

@@ -9,7 +9,7 @@ export function applyScale(percent: number) {
   // Native webview zoom behaves like browser zoom (no extra scrollbars); CSS zoom is the browser-preview fallback.
   if (isTauri()) void getCurrentWebview().setZoom(percent / 100).catch(() => {});
   else { document.documentElement.style.zoom = String(percent / 100); document.documentElement.style.setProperty('--zoom', String(percent / 100)); }
-  try { localStorage.setItem(KEY, String(percent)); } catch { /* ponytail: session-only if storage is unavailable */ }
+  try { localStorage.setItem(KEY, String(percent)); } catch { /* shortcut: zoom is session-only without storage; revisit if it must survive a restart in a webview that lacks localStorage */ }
 }
 
 export function loadScale(): number {

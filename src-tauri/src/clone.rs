@@ -592,7 +592,9 @@ fn rename_noreplace(from: &Path, to: &Path) -> Result<()> {
 /// and FUSE mounts answer EINVAL, ENOTSUP or ENOSYS) must not cost the user the
 /// finished clone, so it gets a plain rename after an absence check.
 /// shortcut: that path is not atomic, a directory created in the gap is replaced
-/// if empty; only filesystems that cannot refuse atomically take it.
+/// if empty; only filesystems that cannot refuse atomically take it. Revisit if a
+/// clone is ever reported to replace a directory the user created, or when adding
+/// another non-atomic fallback.
 #[cfg(unix)]
 fn noreplace_failed(error: std::io::Error, from: &Path, to: &Path) -> Result<()> {
     if error.kind() == std::io::ErrorKind::AlreadyExists {

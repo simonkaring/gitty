@@ -587,8 +587,10 @@ targeted conflict resolutions have the additional contract documented below.
   (`openRefused`) anything that is not a regular file, any file with an execute bit on
   Unix, and extensions that are programs or launchers (`app`, `bat`, `cmd`, `command`,
   `exe`, `jar`, `lnk`, `msi`, `ps1`, `scr`, `sh`, `vbs` and similar). Reveal selects the
-  file in Finder (`open -R`) or Explorer (`/select,`), and opens the containing folder on
-  other platforms. They take no mutation lock. All three commands in this and the
+  file in Finder (`open -R`), in Explorer (`/select,`), or through the Linux desktop file
+  manager (`org.freedesktop.FileManager1.ShowItems` via `gdbus`, with the path sent as a
+  percent-encoded `file://` URI), and opens the containing folder when no file manager
+  answers or `gdbus` is unavailable. They take no mutation lock. All three commands in this and the
   previous bullet return `unsupported` for repositories inside WSL.
 - Commit runs `git commit --quiet --file=-`: the staged index only, never `-a`.
   The message must contain non-whitespace, be under 64 KiB and contain no NUL;

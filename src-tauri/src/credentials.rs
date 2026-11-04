@@ -83,7 +83,9 @@ pub fn configure(args: &mut Vec<String>, location: &RepositoryLocation, url: &st
         args.extend([
             "-c".into(),
             format!("credential.helper={}", helper_value(path)),
-            // ponytail: GCM needs the Azure DevOps org from the path; scope this to dev.azure.com.
+            // GCM keys Azure DevOps credentials by organization, which it reads from the
+            // URL path. Scoped to dev.azure.com on purpose: a global useHttpPath would
+            // change the lookup key for every other HTTPS host.
             "-c".into(),
             "credential.https://dev.azure.com.useHttpPath=true".into(),
         ]);
