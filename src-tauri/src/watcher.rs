@@ -133,7 +133,13 @@ impl Watchers {
     }
 
     pub fn stop(&self, handle: &str) {
-        let removed = self.sessions.lock().ok().and_then(|mut s| s.remove(handle));
+        // A poisoned registry still has to release its watchers: silently keeping
+        // one alive would leave a thread reporting for a closed handle.
+        let removed = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(handle);
         drop(removed);
     }
 
@@ -141,8 +147,10 @@ impl Watchers {
         let removed: Vec<_> = self
             .sessions
             .lock()
-            .map(|mut s| s.drain().map(|(_, v)| v).collect())
-            .unwrap_or_default();
+            .unwrap_or_else(|e| e.into_inner())
+            .drain()
+            .map(|(_, v)| v)
+            .collect();
         drop(removed);
     }
 
@@ -303,7 +311,12 @@ impl Roots {
                 let mut parts = Vec::new();
                 for component in rel.components() {
                     match component {
-                        Component::Normal(name) => parts.push(name.to_str()?.to_string()),
+                        // A non-UTF-8 name cannot be matched against ignore rules,
+                        // so it counts as a change rather than disappearing.
+                        Component::Normal(name) => match name.to_str() {
+                            Some(name) => parts.push(name.to_string()),
+                            None => return Some(Change::Refresh),
+                        },
                         _ => return Some(Change::Refresh),
                     }
                 }
@@ -685,6 +698,14 @@ mod tests {
             roots.event(Err(notify::Error::generic("lost"))),
             vec![Change::Refresh]
         );
+
+        // A name that is not valid UTF-8 must still report a change.
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let odd = Path::new("/w/repo").join(std::ffi::OsStr::from_bytes(b"caf\xe9.txt"));
+            assert_eq!(roots.path(&odd), Some(Change::Refresh));
+        }
 
         let mut bare = session.clone();
         bare.bare = true;

@@ -109,7 +109,7 @@ export async function readNativeSnapshot(handle: string, options: {
     });
     if (status.head !== before.session.head || status.headRef !== before.session.headRef) continue;
     if (options.previous && !options.forceHistory && before.fingerprint === options.previous.state.fingerprint) {
-      validateHistory(options.previous.commits);
+      // Reused history was validated when it arrived and cannot have changed since.
       return { state: before, status, operation, commits: options.previous.commits, cursor: options.previous.cursor, generation: options.previous.generation };
     }
     if (history) {

@@ -406,7 +406,14 @@ impl Repository {
             })
         };
         let (diff, bytes) = snapshot()?;
-        let action = diff.hunk_action.as_ref().unwrap();
+        // Never panic while holding the mutation lock: a poisoned lock would fail
+        // every later write for this repository. A missing action is a stale diff.
+        let action = diff.hunk_action.as_ref().ok_or_else(|| {
+            Error::new(
+                "unsupportedHunk",
+                "Select a complete hunk from a current diff.",
+            )
+        })?;
         if let Some(reason) = &action.reason {
             return Err(Error::new("unsupportedHunk", reason));
         }

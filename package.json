@@ -17,6 +17,7 @@
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "bench:fixtures": "node scripts/bench/fixtures.mjs",
     "bench:backend": "node scripts/bench/backend.mjs",
+    "bench:compare": "node scripts/bench/compare.mjs",
     "bench:apps": "node scripts/bench/apps.mjs"
   },
   "dependencies": {
