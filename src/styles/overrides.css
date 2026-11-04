@@ -1,0 +1,204 @@
+/* ==========================================================================
+   Responsive and accessibility overrides (keep last)
+   ========================================================================== */
+@media (max-height: 560px) {
+  .working-files-list {
+    min-height: 56px;
+  }
+}
+@media (max-width: 1400px) {
+  .history-body {
+    --visible-author-width: 0px;
+  }
+}
+@media (max-width: 1100px) {
+  /* Keep the sidebar in the layout: overlaying it would paint over the history's
+     branch and graph columns. The history pane shrinks and scrolls instead. */
+  .sidebar {
+    width: min(var(--sidebar-width), 40vw);
+    border-right: 1px solid var(--border);
+  }
+  .sidebar + .pane-resizer {
+    display: none;
+  }
+  .native-inspector,
+  .inspector,
+  .working-inspector,
+  .working-inspector-sidebar {
+    width: min(var(--inspector-width), 42vw) !important;
+  }
+  .native-actions > .secondary-button {
+    padding-inline: 12px;
+  }
+  .skeleton-sidebar {
+    display: none;
+  }
+  .palette-trigger {
+    min-width: 0;
+  }
+  .palette-trigger span {
+    display: none;
+  }
+}
+@media (max-width: 800px) {
+  .repository-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .toolbar-center {
+    flex-wrap: wrap;
+    order: -1;
+  }
+  /* The inspector stays in the layout too; only its width is clamped. */
+  .inspector,
+  .native-inspector,
+  .working-inspector,
+  .working-inspector-sidebar {
+    border-left: 1px solid var(--border);
+  }
+  .pane-resizer {
+    display: none;
+  }
+  .titlebar {
+    height: auto;
+    min-height: 56px;
+    padding-inline: 12px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .brand .badge {
+    display: none;
+  }
+  .native-actions {
+    gap: 4px;
+  }
+  .native-actions > .text-button {
+    display: none;
+  }
+  .statusbar .version {
+    display: none;
+  }
+  .workflow-status,
+.workflow-alert {
+    flex-shrink: 0;
+  }
+  .welcome-graph {
+    display: none;
+  }
+}
+@media (max-width: 700px) {
+  .conflict-versions {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 680px) {
+  .settings-layout {
+    grid-template-columns: 1fr;
+  }
+  .settings-layout > nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-layout > nav button {
+    width: auto;
+    margin: 0;
+  }
+  .settings-content {
+    padding: 16px;
+  }
+  .settings-pair,
+  .theme-color-grid,
+  .settings-shortcuts {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 540px) {
+  .history-body {
+    --visible-hash-width: 0px;
+  }
+  .brand {
+    font-size: var(--fs-xl);
+  }
+  .native-shell .titlebar .native-actions {
+    flex: 1 1 100%;
+    justify-content: space-between;
+  }
+  .commit-refs > .ref-pill {
+    max-width: 95px;
+  }
+  .history-bottom {
+    padding-inline: 12px;
+  }
+  .statusbar {
+    padding-inline: 12px;
+  }
+  .composer-footer .primary-button {
+    width: 100%;
+  }
+  .workflow-alert {
+    padding-inline: 16px;
+  }
+  .start-page {
+    padding: 12px;
+  }
+  .start-body {
+    grid-template-columns: 1fr;
+  }
+  .start-nav {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.error-boundary {
+  display: grid;
+  gap: var(--sp-2, 8px);
+  justify-items: start;
+  margin: var(--sp-4, 16px);
+  padding: var(--sp-3, 12px) var(--sp-4, 16px);
+  border: 1px solid color-mix(in srgb, var(--red) 40%, transparent);
+  border-radius: var(--r-sm);
+  background: var(--red-wash);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+.error-boundary p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* history listbox roving focus */
+.row-control-active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.commit-refs:has(.row-control-active) {
+  z-index: 4;
+}
+.commit-refs:has(.row-control-active) .ref-stack {
+  display: flex;
+}
+.commit-refs > .ref-pill.row-control-active {
+  flex-shrink: 0;
+  max-width: none;
+}
+.commit-refs > .ref-pill.row-control-active .ref-pill-name {
+  overflow: visible;
+}
+.graph-action-button.row-control-active {
+  opacity: 1;
+}

@@ -43,9 +43,17 @@ impl ActiveMutationGuard<'_> {
 
 impl<'a> Drop for ActiveMutationGuard<'a> {
     fn drop(&mut self) {
-        let mut active = self.registry.active_mutations.lock().unwrap();
+        let mut active = self
+            .registry
+            .active_mutations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         active.remove(&self.token);
-        let mut reqs = self.registry.requests.lock().unwrap();
+        let mut reqs = self
+            .registry
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         reqs.retain(|_, request| {
             if request.token != self.token {
                 return true;
@@ -68,10 +76,15 @@ impl EditorRegistry {
     }
 
     pub fn cancel_all(&self) {
-        for mutation in self.active_mutations.lock().unwrap().values() {
+        for mutation in self
+            .active_mutations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+        {
             mutation.budget.cancel();
         }
-        let mut reqs = self.requests.lock().unwrap();
+        let mut reqs = self.requests.lock().unwrap_or_else(|e| e.into_inner());
         for (_, request) in reqs.drain() {
             let _ = request.sender.send(None);
         }
@@ -90,7 +103,12 @@ impl EditorRegistry {
     }
 
     pub fn reply(&self, request_id: usize, content: Option<String>) -> Result<(), String> {
-        if let Some(request) = self.requests.lock().unwrap().remove(&request_id) {
+        if let Some(request) = self
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&request_id)
+        {
             let _ = request.sender.send(content);
             Ok(())
         } else {
@@ -109,16 +127,19 @@ impl EditorRegistry {
         plan: Option<Vec<RebaseStep>>,
     ) -> ActiveMutationGuard<'_> {
         let token = format!("{}:{}", self.token, uuid::Uuid::new_v4());
-        self.active_mutations.lock().unwrap().insert(
-            token.clone(),
-            ActiveMutation {
-                git_dir: fs::canonicalize(git_dir).unwrap_or_else(|_| PathBuf::from(git_dir)),
-                common_dir: fs::canonicalize(common_dir)
-                    .unwrap_or_else(|_| PathBuf::from(common_dir)),
-                plan,
-                budget: crate::process::PromptScope::new(&token),
-            },
-        );
+        self.active_mutations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                token.clone(),
+                ActiveMutation {
+                    git_dir: fs::canonicalize(git_dir).unwrap_or_else(|_| PathBuf::from(git_dir)),
+                    common_dir: fs::canonicalize(common_dir)
+                        .unwrap_or_else(|_| PathBuf::from(common_dir)),
+                    plan,
+                    budget: crate::process::PromptScope::new(&token),
+                },
+            );
         ActiveMutationGuard {
             registry: self,
             token,
@@ -268,7 +289,10 @@ fn handle_connection_within<F, E>(
     // Authenticate against this specific mutation, not another repository's
     // concurrently running rebase.
     let (expected_git_dir, expected_common_dir, plan) = {
-        let active = registry.active_mutations.lock().unwrap();
+        let active = registry
+            .active_mutations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         match active.get(&request_token) {
             Some(m) => (m.git_dir.clone(), m.common_dir.clone(), m.plan.clone()),
             None => {
@@ -376,18 +400,25 @@ fn handle_connection_within<F, E>(
 
     let (tx, rx) = std::sync::mpsc::channel();
     {
-        let active = registry.active_mutations.lock().unwrap();
+        let active = registry
+            .active_mutations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if !active.contains_key(&request_token) {
             let _ = stream.write_all(b"0");
             return;
         }
-        registry.requests.lock().unwrap().insert(
-            request_id,
-            PendingRequest {
-                token: request_token.clone(),
-                sender: tx,
-            },
-        );
+        registry
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                request_id,
+                PendingRequest {
+                    token: request_token.clone(),
+                    sender: tx,
+                },
+            );
     }
 
     let _wait = crate::process::prompt_wait(&request_token);
@@ -419,7 +450,11 @@ fn handle_connection_within<F, E>(
         let _ = stream.write_all(b"0");
     }
 
-    registry.requests.lock().unwrap().remove(&request_id);
+    registry
+        .requests
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&request_id);
 }
 
 /// Only transform the exact pick list produced by Git. Never accept executable
@@ -666,19 +701,38 @@ pub mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         {
             let guard = registry.start_mutation("/tmp/git", "/tmp/common");
-            registry.requests.lock().unwrap().insert(
-                1,
-                PendingRequest {
-                    token: guard.token().into(),
-                    sender: tx,
-                },
+            registry
+                .requests
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(
+                    1,
+                    PendingRequest {
+                        token: guard.token().into(),
+                        sender: tx,
+                    },
+                );
+            assert_eq!(
+                registry
+                    .active_mutations
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .len(),
+                1
             );
-            assert_eq!(registry.active_mutations.lock().unwrap().len(), 1);
         }
 
-        assert!(registry.active_mutations.lock().unwrap().is_empty());
+        assert!(registry
+            .active_mutations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty());
         assert_eq!(rx.recv().unwrap(), None);
-        assert!(registry.requests.lock().unwrap().is_empty());
+        assert!(registry
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty());
     }
 
     #[test]
@@ -688,24 +742,43 @@ pub mod tests {
         let second = registry.start_mutation("/tmp/two", "/tmp/two");
         let (tx1, rx1) = std::sync::mpsc::channel();
         let (tx2, rx2) = std::sync::mpsc::channel();
-        registry.requests.lock().unwrap().insert(
-            1,
-            PendingRequest {
-                token: first.token().into(),
-                sender: tx1,
-            },
-        );
-        registry.requests.lock().unwrap().insert(
-            2,
-            PendingRequest {
-                token: second.token().into(),
-                sender: tx2,
-            },
-        );
+        registry
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                1,
+                PendingRequest {
+                    token: first.token().into(),
+                    sender: tx1,
+                },
+            );
+        registry
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                2,
+                PendingRequest {
+                    token: second.token().into(),
+                    sender: tx2,
+                },
+            );
         drop(first);
         assert_eq!(rx1.recv().unwrap(), None);
-        assert!(registry.requests.lock().unwrap().contains_key(&2));
-        assert_eq!(registry.active_mutations.lock().unwrap().len(), 1);
+        assert!(registry
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&2));
+        assert_eq!(
+            registry
+                .active_mutations
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .len(),
+            1
+        );
         drop(second);
         assert_eq!(rx2.recv().unwrap(), None);
     }
@@ -789,7 +862,7 @@ pub mod tests {
         registry
             .requests
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .remove(&req_id)
             .unwrap()
             .sender
@@ -811,7 +884,7 @@ pub mod tests {
         registry
             .requests
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .remove(&req_id)
             .unwrap()
             .sender
@@ -837,7 +910,7 @@ pub mod tests {
         registry
             .requests
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .remove(&req_id)
             .unwrap()
             .sender

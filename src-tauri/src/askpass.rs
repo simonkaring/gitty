@@ -79,9 +79,13 @@ impl Drop for AskpassGuard<'_> {
         self.registry
             .active_tokens
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .remove(&self.token);
-        let mut pending = self.registry.requests.lock().unwrap();
+        let mut pending = self
+            .registry
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         pending.retain(|_, prompt| {
             if prompt.token != self.token {
                 return true;
@@ -123,7 +127,7 @@ impl AskpassRegistry {
         let token = uuid::Uuid::new_v4().to_string();
         self.active_tokens
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(token.clone(), context);
         AskpassGuard {
             registry: self,
@@ -133,10 +137,15 @@ impl AskpassRegistry {
     }
 
     pub fn cancel_all(&self) {
-        for (_, pending) in self.requests.lock().unwrap().drain() {
+        for (_, pending) in self
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain()
+        {
             let _ = pending.reply.send(None);
         }
-        let mut active = self.active_tokens.lock().unwrap();
+        let mut active = self.active_tokens.lock().unwrap_or_else(|e| e.into_inner());
         for token in active.keys() {
             crate::process::cancel_prompt_scope(token);
         }
@@ -197,17 +206,24 @@ fn handle_connection<F, E>(
     let (tx, rx) = std::sync::mpsc::channel();
     let context = {
         // Revalidate under the lock: the operation may have ended while reading.
-        let active = registry.active_tokens.lock().unwrap();
+        let active = registry
+            .active_tokens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let Some(context) = active.get(supplied).cloned() else {
             return;
         };
-        registry.requests.lock().unwrap().insert(
-            request_id,
-            PendingPrompt {
-                token: supplied.to_string(),
-                reply: tx,
-            },
-        );
+        registry
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                request_id,
+                PendingPrompt {
+                    token: supplied.to_string(),
+                    reply: tx,
+                },
+            );
         context
     };
 
@@ -225,12 +241,19 @@ fn handle_connection<F, E>(
         let _ = writer.write_all(&encode_response(None));
     }
 
-    registry.requests.lock().unwrap().remove(&request_id);
+    registry
+        .requests
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&request_id);
 }
 
 impl AskpassRegistry {
     fn accepts(&self, supplied: &str) -> bool {
-        self.active_tokens.lock().unwrap().contains_key(supplied)
+        self.active_tokens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(supplied)
     }
 }
 
@@ -297,7 +320,12 @@ pub fn repository_provide_password(
     request_id: usize,
     password: Option<String>,
 ) -> Result<(), String> {
-    if let Some(tx) = registry.requests.lock().unwrap().remove(&request_id) {
+    if let Some(tx) = registry
+        .requests
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&request_id)
+    {
         let _ = tx.reply.send(password);
         Ok(())
     } else {
@@ -447,7 +475,11 @@ mod tests {
         server.join().unwrap();
         assert!(reply.is_empty());
         assert!(prompts.try_recv().is_err());
-        assert!(registry.requests.lock().unwrap().is_empty());
+        assert!(registry
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty());
     }
 
     #[test]
@@ -495,7 +527,7 @@ mod tests {
         registry
             .requests
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .remove(&id)
             .unwrap()
             .reply
@@ -531,10 +563,18 @@ mod tests {
                 .map(|(_, value)| value.clone())
                 .expect("interactive native actions pass an askpass token");
             assert_eq!(token, guard.token());
-            assert!(registry.active_tokens.lock().unwrap().contains_key(&token));
+            assert!(registry
+                .active_tokens
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(&token));
             token
         };
-        assert!(!registry.active_tokens.lock().unwrap().contains_key(&token));
+        assert!(!registry
+            .active_tokens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&token));
         assert!(!registry.accepts(&token));
     }
 
@@ -620,7 +660,7 @@ mod tests {
             registry
                 .requests
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .remove(&id)
                 .unwrap()
                 .reply
@@ -662,11 +702,15 @@ mod tests {
             assert!(registry
                 .active_tokens
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .contains_key(guard.token()));
             guard.token().to_string()
         };
-        assert!(!registry.active_tokens.lock().unwrap().contains_key(&token));
+        assert!(!registry
+            .active_tokens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&token));
         let mapped = wsl_env_mapping(Some("CUSTOM/p:GITTY_ASKPASS_TOKEN/w"));
         assert!(mapped.starts_with("CUSTOM/p:"));
         assert_eq!(mapped.matches("GITTY_ASKPASS_TOKEN").count(), 1);

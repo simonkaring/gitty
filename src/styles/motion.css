@@ -1,0 +1,853 @@
+/* ==========================================================================
+   Responsive
+   ========================================================================== */
+/* ==========================================================================
+   Shell polish: segmented toolbar, toast region, animated sidebar groups
+   ========================================================================== */
+@keyframes tab-underline {
+  from {
+    transform: scaleX(0.2);
+    opacity: 0;
+  }
+}
+@keyframes pulse-dot {
+  50% {
+    transform: scale(0.6);
+    opacity: 0.5;
+  }
+}
+
+.repository-toolbar button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* Toasts: transient notices float instead of pushing the layout. */
+.toast-region {
+  position: fixed;
+  left: 16px;
+  bottom: 40px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 8px;
+  width: min(400px, calc(100vw - 32px));
+  pointer-events: none;
+}
+.toast-region:empty {
+  display: none;
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.96);
+  }
+}
+
+.worktree-row .ref-item > span { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; }
+.worktree-name, .worktree-row small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.worktree-row small { color: var(--muted); font-size: var(--fs-2xs); }
+.worktree-prune { margin: 6px 0 4px 6px; font-size: var(--fs-2xs); }
+.worktree-path, .worktree-preview { overflow-wrap: anywhere; white-space: pre-wrap; }
+.worktree-preview { max-height: 240px; overflow: auto; font-size: var(--fs-xs); }
+
+/* Sidebar: groups animate open, rows slide on hover, current branch is highlighted. */
+.reference-group::details-content {
+  block-size: 0;
+  overflow: clip;
+  transition:
+    block-size var(--dur-med) var(--ease-out),
+    content-visibility var(--dur-med) allow-discrete;
+}
+.reference-group[open]::details-content {
+  block-size: auto;
+}
+.reference-group[open] > summary .count {
+  color: var(--text);
+}
+.ref-action-row:hover .ref-item > span:first-of-type {
+  transform: translateX(2px);
+}
+.ref-action-row.current {
+  background: var(--selected);
+}
+.ref-action-row.current .ref-item {
+  color: var(--text);
+}
+.ref-item .current-branch-check {
+  color: var(--accent-text);
+  transform-origin: 50% 100%;
+}
+/* Hover: the check hops, lands with a squash, and settles with a wiggle. */
+.ref-action-row:hover .current-branch-check,
+.ref-pill[data-current='true']:hover svg.lucide-check {
+  animation: check-hop 520ms ease-out;
+}
+.ref-pill[data-current='true'] svg.lucide-check {
+  transform-origin: 50% 100%;
+}
+@keyframes check-hop {
+  30% { transform: translateY(-3px) rotate(-12deg); }
+  55% { transform: scale(1.2, 0.75); }
+  75% { transform: translateY(-1px) rotate(6deg); }
+}
+/* ==========================================================================
+   Graph polish: lane-tinted rows, HEAD pulse, fresh-commit entrance, ref pills
+   ========================================================================== */
+.commit-row.fresh {
+  animation: row-in 600ms var(--ease-out) both;
+}
+.commit-row.fresh::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--branch-color, var(--accent)) 28%, transparent), transparent 70%);
+  animation: row-flash 1.2s ease-out forwards;
+}
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
+@keyframes row-flash {
+  to {
+    opacity: 0;
+  }
+}
+/* ==========================================================================
+   Animated icons and micro-interactions (lucide SVGs + state attributes)
+   ========================================================================== */
+/* Any check that appears draws itself in. */
+svg.lucide-check path,
+svg.lucide-circle-check path,
+svg.lucide-check-circle path {
+  stroke-dasharray: 30;
+  stroke-dashoffset: 0;
+  animation: draw-in 420ms var(--ease-out) both;
+}
+@keyframes draw-in {
+  from {
+    stroke-dashoffset: 30;
+  }
+}
+.icon-button svg.lucide-check,
+.done-check {
+  color: var(--green);
+  animation: pop var(--dur-slow) var(--ease-spring);
+}
+@keyframes pop {
+  from {
+    transform: scale(0.4);
+  }
+}
+/* Brand mark draws in on launch. */
+.brand-icon svg path,
+.brand-icon svg circle {
+  stroke-dasharray: 1;
+  animation: draw-brand 900ms var(--ease-out) both;
+}
+.brand-icon svg :nth-child(2) {
+  animation-delay: 120ms;
+}
+.brand-icon svg :nth-child(3) {
+  animation-delay: 240ms;
+}
+.brand-icon svg :nth-child(4) {
+  animation-delay: 360ms;
+}
+@keyframes draw-brand {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+/* Pull nudges down, push nudges up; both bob while in flight. */
+.sync-button svg {
+  transition: transform var(--dur-med) var(--ease-spring);
+}
+.sync-button.pull:hover:not(:disabled) svg {
+  transform: translateY(2px);
+}
+.sync-button.push:hover:not(:disabled) svg {
+  transform: translateY(-2px);
+}
+.sync-button.pull[data-pending='true'] svg {
+  animation: bob-down 900ms ease-in-out infinite;
+}
+.sync-button.push[data-pending='true'] svg {
+  animation: bob-up 900ms ease-in-out infinite;
+}
+@keyframes bob-down {
+  0%,
+  100% {
+    transform: translateY(-2px);
+    opacity: 0.6;
+  }
+  50% {
+    transform: translateY(2px);
+    opacity: 1;
+  }
+}
+@keyframes bob-up {
+  0%,
+  100% {
+    transform: translateY(2px);
+    opacity: 0.6;
+  }
+  50% {
+    transform: translateY(-2px);
+    opacity: 1;
+  }
+}
+.refresh-button svg,
+svg.lucide-refresh-cw {
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+.refresh-button:hover:not(:disabled) svg {
+  transform: rotate(90deg);
+}
+.refresh-button[data-pending='true'] svg {
+  animation: spin 0.9s linear infinite;
+}
+/* Chevrons follow their disclosure state. */
+svg.lucide-chevron-down {
+  transition: transform var(--dur-med) var(--ease-spring);
+}
+[aria-haspopup][aria-expanded='true'] > svg.lucide-chevron-down {
+  transform: rotate(180deg);
+}
+/* Settings gear turns, close crosses twist, help bounces. */
+svg.lucide-settings,
+svg.lucide-x,
+svg.lucide-circle-help,
+svg.lucide-plus {
+  transition: transform var(--dur-slow) var(--ease-spring);
+}
+button:hover:not(:disabled) > svg.lucide-settings {
+  transform: rotate(60deg);
+}
+button:hover:not(:disabled) > svg.lucide-x {
+  transform: rotate(90deg);
+}
+button:hover:not(:disabled) > svg.lucide-plus {
+  transform: rotate(90deg) scale(1.1);
+}
+button:hover:not(:disabled) > svg.lucide-circle-help {
+  transform: translateY(-1px) rotate(-8deg);
+}
+/* Panel toggles: the divider slides toward the panel's edge when closed. */
+svg.lucide-panel-left path,
+svg.lucide-panel-right path {
+  transition: transform var(--dur-med) var(--ease-spring);
+}
+[aria-pressed='false'] > svg.lucide-panel-left path {
+  transform: translateX(-3px);
+}
+[aria-pressed='false'] > svg.lucide-panel-right path {
+  transform: translateX(3px);
+}
+/* Copy icon lifts on hover. */
+button:hover:not(:disabled) > svg.lucide-copy {
+  transform: translate(-1px, -1px);
+}
+svg.lucide-copy {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+/* Tactile press for every button. */
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+button {
+  transition:
+    background-color var(--dur-fast) ease,
+    color var(--dur-fast) ease,
+    border-color var(--dur-fast) ease,
+    transform var(--dur-fast) var(--ease-out);
+}
+/* Commit button: a light sweep invites the click; the icon turns while writing. */
+.commit-button {
+  position: relative;
+  overflow: hidden;
+}
+.commit-button:not(:disabled)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 30%, color-mix(in srgb, white 35%, transparent) 50%, transparent 70%);
+  transform: translateX(-100%);
+  pointer-events: none;
+}
+.commit-button:not(:disabled):hover::after {
+  animation: sweep 900ms var(--ease-out);
+}
+@keyframes sweep {
+  to {
+    transform: translateX(100%);
+  }
+}
+.commit-button[data-working='true'] svg {
+  animation: spin 1s linear infinite;
+}
+/* Working files slide in when they appear or move between groups. */
+@keyframes file-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+}
+/* Dialogs rise in. */
+dialog[open] {
+  animation: dialog-in var(--dur-slow) var(--ease-out);
+}
+dialog[open]::backdrop {
+  animation: fade-in var(--dur-med) ease;
+}
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+/* ==========================================================================
+   Welcome, loading skeletons, empty states
+   ========================================================================== */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+.welcome-mark {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  color: var(--accent-text);
+  background: linear-gradient(145deg, var(--accent-wash), var(--raised));
+  box-shadow: var(--shadow-raised);
+}
+.start-page {
+  position: relative;
+  flex: 1;
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  padding: 32px;
+  overflow: auto;
+  background: radial-gradient(ellipse 60% 70% at 88% 30%, var(--accent-wash), transparent 70%);
+}
+.start-card {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: min(880px, 100%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--raised) 92%, transparent);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-raised);
+  overflow: hidden;
+  animation: rise-in 500ms var(--ease-out) both;
+}
+.start-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 24px;
+  border-bottom: 1px solid var(--border);
+}
+.start-header h1 {
+  font-size: var(--fs-xl);
+  letter-spacing: -0.02em;
+}
+.start-header p {
+  margin: 4px 0 0;
+  color: var(--secondary);
+  font-size: var(--fs-sm);
+}
+.start-body {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  min-height: 380px;
+}
+.start-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 12px;
+  border-right: 1px solid var(--border);
+  background: var(--sidebar);
+}
+.start-nav > .primary-button {
+  min-height: var(--h-control);
+}
+.start-nav [role='tablist'] {
+  display: grid;
+  gap: 2px;
+}
+.start-nav [role='tab'] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--h-control);
+  padding: 0 12px;
+  border-radius: var(--r-sm);
+  color: var(--secondary);
+  font-size: var(--fs-sm);
+  text-align: left;
+}
+.start-nav [role='tab'][aria-selected='true'] {
+  background: var(--selected);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.start-demo {
+  margin-top: auto;
+  align-self: flex-start;
+}
+.start-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  max-height: min(520px, 60dvh);
+  padding: 16px;
+  overflow: auto;
+}
+.start-panel > * {
+  margin: 0;
+}
+.start-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.start-filter {
+  flex-shrink: 0;
+}
+.start-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.start-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 12px;
+  border-radius: var(--r-md);
+  text-align: left;
+}
+.start-item > svg {
+  color: var(--muted);
+}
+.start-item:is(:hover, :focus-visible) > svg {
+  color: var(--accent-text);
+}
+.start-item > span:not(.badge) {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+.start-item strong {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.start-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: var(--fs-2xs);
+  color: var(--muted);
+}
+.start-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.path-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--h-control);
+  padding: 0 4px 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+}
+.path-picker code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--secondary);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+}
+.welcome-graph {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: min(240px, 16vw);
+  height: 100%;
+  opacity: 0.4;
+  mask-image: linear-gradient(transparent, black 20%, black 70%, transparent);
+  pointer-events: none;
+}
+.welcome-graph path {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 700;
+  animation: draw-graph 2.4s var(--ease-out) both;
+}
+.welcome-graph circle {
+  stroke: var(--bg);
+  stroke-width: 3;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: node-in 500ms var(--ease-spring) both;
+}
+@keyframes draw-graph {
+  from {
+    stroke-dashoffset: 700;
+  }
+}
+@keyframes node-in {
+  from {
+    opacity: 0;
+    transform: scale(0);
+  }
+}
+
+.skeleton,
+.skeleton-node {
+  display: block;
+  height: 10px;
+  border-radius: var(--r-pill);
+  background: var(--subtle);
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+@keyframes skeleton-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+.repo-skeleton {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.skeleton-sidebar {
+  width: var(--sidebar-width);
+  flex-shrink: 0;
+  display: grid;
+  align-content: start;
+  gap: var(--sp-4);
+  padding: var(--sp-5) var(--sp-4);
+  border-right: 1px solid var(--border);
+  background: var(--sidebar);
+}
+.skeleton-history {
+  flex: 1;
+  min-width: 0;
+  padding: var(--sp-4) 0;
+}
+.skeleton-history > p {
+  display: flex;
+  gap: var(--sp-2);
+  margin: 0 var(--sp-5) var(--sp-4);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.skeleton-history > p strong {
+  color: var(--text);
+}
+.skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  height: 36px;
+  padding: 0 var(--sp-5);
+  animation: rise-in 500ms var(--ease-out) both;
+}
+.skeleton-row .skeleton:last-child {
+  margin-left: auto;
+}
+.skeleton-node {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  background: var(--border-strong);
+}
+
+/* While the next commit loads the previous one stays in place. It only dims if the load runs long,
+   so quick row-to-row switches show no flicker at all (snaps back when data lands; reduced motion skips it). */
+.native-inspector .inspector-content[data-stale] {
+  animation: inspector-stale var(--dur-med) ease 150ms both;
+}
+@keyframes inspector-stale {
+  to {
+    opacity: 0.55;
+  }
+}
+
+/* First-load placeholders reuse the real markup with transparent text, so line heights match
+   exactly and nothing shifts when data lands. They stay invisible for --dur-fast so fast loads never flash. */
+.native-inspector .skeleton-text {
+  color: transparent;
+  user-select: none;
+  background: linear-gradient(var(--subtle), var(--subtle)) center / 100% 10px no-repeat;
+}
+.native-inspector h2.skeleton-text {
+  background-size: 100% 14px;
+}
+.native-inspector .avatar.skeleton-text,
+.native-inspector .file-status.skeleton-text {
+  background: var(--subtle);
+}
+.native-inspector .skeleton,
+.native-inspector .skeleton-text {
+  animation:
+    fade-in var(--dur-med) ease var(--dur-fast) both,
+    skeleton-pulse 1.4s ease-in-out var(--dur-fast) infinite;
+}
+
+/* Loading diffs show a pulsing hunk silhouette under the status text. */
+.diff-placeholder[role='status']::after {
+  content: '';
+  display: block;
+  height: 120px;
+  margin-top: var(--sp-3);
+  border-radius: var(--r-md);
+  background:
+    linear-gradient(var(--subtle), var(--subtle)) 0 0 / 60% 10px no-repeat,
+    linear-gradient(var(--subtle), var(--subtle)) 0 26px / 85% 10px no-repeat,
+    linear-gradient(var(--green-wash), var(--green-wash)) 0 52px / 70% 10px no-repeat,
+    linear-gradient(var(--red-wash), var(--red-wash)) 0 78px / 45% 10px no-repeat,
+    linear-gradient(var(--subtle), var(--subtle)) 0 104px / 75% 10px no-repeat;
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+.empty-state {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: var(--sp-2);
+  min-height: 60%;
+  padding: var(--sp-6);
+  text-align: center;
+  color: var(--secondary);
+  animation: rise-in 500ms var(--ease-out) both;
+}
+.empty-state svg {
+  width: 48px;
+  height: 48px;
+  padding: 12px;
+  border-radius: 50%;
+  color: var(--accent-text);
+  background: var(--accent-wash);
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent-wash) 45%, transparent);
+}
+.empty-state h2 {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-lg);
+  color: var(--text);
+}
+.empty-state p {
+  margin: 0;
+  max-width: 42ch;
+  font-size: var(--fs-sm);
+}
+.empty-state.compact {
+  min-height: 0;
+  padding: 16px;
+  gap: 4px;
+  border: 1px dashed var(--border);
+  border-radius: var(--r-md);
+  animation: none;
+}
+/* ==========================================================================
+   Command palette
+   ========================================================================== */
+.palette-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: var(--h-compact);
+  min-width: 220px;
+  padding: 0 6px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  background: var(--bg);
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  box-shadow: var(--edge-highlight);
+}
+.palette-trigger:hover:not(:disabled) {
+  color: var(--secondary);
+  border-color: var(--border-strong);
+  background: var(--bg);
+}
+.palette-trigger kbd {
+  margin-left: auto;
+  gap: 1px;
+  display: inline-flex;
+  border-radius: var(--r-pill);
+  padding: 0 8px;
+  height: 20px;
+  font-size: var(--fs-2xs);
+}
+.command-palette {
+  width: min(640px, calc(100vw - 32px));
+  margin-top: 14vh;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--raised) 94%, transparent);
+  backdrop-filter: blur(20px) saturate(1.4);
+  box-shadow: var(--shadow-raised), 0 32px 80px -12px var(--shadow-color);
+}
+.command-palette::backdrop {
+  backdrop-filter: blur(2px);
+}
+.palette-search {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+.palette-search input {
+  flex: 1;
+  min-height: 52px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: var(--fs-lg);
+  outline: none !important;
+}
+.palette-results {
+  max-height: min(420px, 55vh);
+  overflow: auto;
+  padding: 6px;
+  scroll-padding: 28px 0 6px;
+}
+.palette-group {
+  padding: 12px 12px 4px;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+.palette-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: var(--r-md);
+  color: var(--secondary);
+  font-size: var(--fs-md);
+  cursor: pointer;
+}
+.palette-item[aria-selected='true'] {
+  background: var(--accent-wash);
+  color: var(--text);
+}
+.palette-item[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: default;
+}
+.palette-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-sm);
+  background: var(--subtle);
+  color: var(--muted);
+  transition:
+    background-color var(--dur-fast),
+    color var(--dur-fast),
+    transform var(--dur-med) var(--ease-spring);
+}
+.palette-item[aria-selected='true'] .palette-icon {
+  background: var(--accent-text);
+  color: var(--button-foreground);
+  transform: scale(1.06);
+}
+.palette-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-label mark {
+  background: none;
+  color: var(--accent-text);
+  font-weight: 650;
+}
+.palette-hint {
+  font-family: var(--mono);
+  font-size: var(--fs-2xs);
+  color: var(--muted);
+}
+.palette-enter {
+  color: var(--muted);
+  animation: pop var(--dur-med) var(--ease-spring);
+}
+.palette-empty {
+  margin: 0;
+  padding: var(--sp-6) var(--sp-4);
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+.toast::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--accent);
+}
+.toast[data-tone='error'] {
+  background: color-mix(in srgb, var(--red-wash) 94%, var(--raised));
+  border-color: color-mix(in srgb, var(--red) 40%, transparent);
+}
+.toast[data-tone='error']::before {
+  background: var(--red);
+}
+.toast-body {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  align-self: center;
+  overflow-wrap: anywhere;
+}
+.toast-body span {
+  color: var(--secondary);
+}
+.toast-body progress {
+  width: 100%;
+}
+.toast > .secondary-button {
+  min-height: var(--h-compact);
+  align-self: center;
+}
+

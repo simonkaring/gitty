@@ -721,7 +721,7 @@ fn app_window_button_layout(app: tauri::AppHandle) -> String {
         .state::<linux::WindowButtonLayout>()
         .0
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .clone();
     #[cfg(not(target_os = "linux"))]
     {

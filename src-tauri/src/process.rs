@@ -144,7 +144,7 @@ impl ChildWait {
                     .err()
                     .is_some_and(|e| e.raw_os_error() == Some(libc::ECHILD))
                 {
-                    observed.lock().unwrap().reaped = true;
+                    observed.lock().unwrap_or_else(|e| e.into_inner()).reaped = true;
                 }
                 status
             };
@@ -173,7 +173,7 @@ impl ChildWait {
     pub(crate) fn kill(&self) {
         #[cfg(unix)]
         {
-            let state = self.unix.lock().unwrap();
+            let state = self.unix.lock().unwrap_or_else(|e| e.into_inner());
             if !state.reaped {
                 #[cfg(test)]
                 state.kill_attempts.fetch_add(1, Ordering::Relaxed);
@@ -190,7 +190,7 @@ impl ChildWait {
             let _ = waiter.join();
             #[cfg(unix)]
             {
-                let mut state = self.unix.lock().unwrap();
+                let mut state = self.unix.lock().unwrap_or_else(|e| e.into_inner());
                 if !state.reaped {
                     let _ = state.child.wait();
                     // Disable numeric signaling before releasing the mutex,
@@ -202,7 +202,11 @@ impl ChildWait {
     }
     #[cfg(all(test, unix))]
     pub(crate) fn kill_attempts(&self) -> Arc<std::sync::atomic::AtomicUsize> {
-        self.unix.lock().unwrap().kill_attempts.clone()
+        self.unix
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .kill_attempts
+            .clone()
     }
 }
 
@@ -279,7 +283,7 @@ impl PromptScope {
         let clock = Arc::new(PromptClock::default());
         prompt_clocks()
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(token.into(), Arc::downgrade(&clock));
         Self {
             token: token.into(),
@@ -293,14 +297,17 @@ impl PromptScope {
 impl Drop for PromptScope {
     fn drop(&mut self) {
         self.cancel();
-        prompt_clocks().lock().unwrap().remove(&self.token);
+        prompt_clocks()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.token);
     }
 }
 pub(crate) struct PromptWait(Arc<PromptClock>);
 pub(crate) fn cancel_prompt_scope(token: &str) {
     if let Some(clock) = prompt_clocks()
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .get(token)
         .and_then(std::sync::Weak::upgrade)
     {
@@ -308,7 +315,11 @@ pub(crate) fn cancel_prompt_scope(token: &str) {
     }
 }
 pub(crate) fn prompt_wait(token: &str) -> Option<PromptWait> {
-    let clock = prompt_clocks().lock().unwrap().get(token)?.upgrade()?;
+    let clock = prompt_clocks()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(token)?
+        .upgrade()?;
     clock.begin_wait();
     Some(PromptWait(clock))
 }
@@ -319,7 +330,7 @@ impl Drop for PromptWait {
 }
 impl PromptClock {
     fn begin_wait(&self) {
-        let mut time = self.time.lock().unwrap();
+        let mut time = self.time.lock().unwrap_or_else(|e| e.into_inner());
         if time.waits == 0 {
             time.since = Some(Instant::now());
             time.observers.retain(|observer| {
@@ -334,7 +345,7 @@ impl PromptClock {
         time.waits += 1;
     }
     fn end_wait(&self) {
-        let mut time = self.time.lock().unwrap();
+        let mut time = self.time.lock().unwrap_or_else(|e| e.into_inner());
         time.waits -= 1;
         if time.waits == 0 {
             if let Some(since) = time.since.take() {
@@ -354,7 +365,7 @@ impl PromptClock {
     /// token waits, starting now, not historical wait credit from an earlier
     /// command or launch. Budget clocks never subscribe to another budget clock.
     fn observe(&self, budget: &Arc<PromptClock>) {
-        let mut time = self.time.lock().unwrap();
+        let mut time = self.time.lock().unwrap_or_else(|e| e.into_inner());
         time.observers
             .retain(|observer| observer.strong_count() > 0);
         if time.waits > 0 {
@@ -363,7 +374,7 @@ impl PromptClock {
         time.observers.push(Arc::downgrade(budget));
     }
     fn elapsed(&self) -> Duration {
-        let time = self.time.lock().unwrap();
+        let time = self.time.lock().unwrap_or_else(|e| e.into_inner());
         time.elapsed + time.since.map(|since| since.elapsed()).unwrap_or_default()
     }
 }
@@ -909,7 +920,7 @@ fn run_with_stdin_budget(
         .filter_map(|token| {
             prompt_clocks()
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .get(&token)
                 .and_then(std::sync::Weak::upgrade)
         })
@@ -1690,14 +1701,15 @@ mod tests {
     fn prompt_budget_starts_fresh_and_combines_overlapping_scoped_waits() {
         let first = Arc::new(PromptClock::default());
         let second = Arc::new(PromptClock::default());
-        first.time.lock().unwrap().elapsed = Duration::from_secs(90);
+        first.time.lock().unwrap_or_else(|e| e.into_inner()).elapsed = Duration::from_secs(90);
         first.begin_wait();
-        first.time.lock().unwrap().since = Some(Instant::now() - Duration::from_secs(10));
+        first.time.lock().unwrap_or_else(|e| e.into_inner()).since =
+            Some(Instant::now() - Duration::from_secs(10));
         let observed = Instant::now();
         let budget = Arc::new(PromptClock::default());
         first.observe(&budget);
         {
-            let time = budget.time.lock().unwrap();
+            let time = budget.time.lock().unwrap_or_else(|e| e.into_inner());
             assert_eq!(time.elapsed, Duration::ZERO);
             assert_eq!(time.waits, 1);
             assert!(
@@ -1708,14 +1720,31 @@ mod tests {
         second.observe(&budget);
         second.begin_wait();
         second.begin_wait(); // nested prompts on one token remain one interval
-        assert_eq!(budget.time.lock().unwrap().waits, 2);
+        assert_eq!(
+            budget.time.lock().unwrap_or_else(|e| e.into_inner()).waits,
+            2
+        );
         first.end_wait();
-        assert_eq!(budget.time.lock().unwrap().waits, 1);
+        assert_eq!(
+            budget.time.lock().unwrap_or_else(|e| e.into_inner()).waits,
+            1
+        );
         second.end_wait();
-        assert_eq!(budget.time.lock().unwrap().waits, 1);
+        assert_eq!(
+            budget.time.lock().unwrap_or_else(|e| e.into_inner()).waits,
+            1
+        );
         second.end_wait();
-        assert_eq!(budget.time.lock().unwrap().waits, 0);
-        assert!(budget.time.lock().unwrap().since.is_none());
+        assert_eq!(
+            budget.time.lock().unwrap_or_else(|e| e.into_inner()).waits,
+            0
+        );
+        assert!(budget
+            .time
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .since
+            .is_none());
     }
     #[test]
     fn non_utf8_metadata_is_never_lossily_aliased() {
