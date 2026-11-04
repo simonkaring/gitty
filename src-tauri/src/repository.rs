@@ -647,18 +647,14 @@ impl Repository {
             Box::new(move || string(location, values).map(Some))
                 as Box<dyn FnOnce() -> Result<Option<String>> + Send + '_>
         };
-        let [head, head_ref, shallow, raw, remotes]: [Result<Option<String>>; 5] =
+        let [shallow, raw, remotes]: [Result<Option<String>>; 3] =
             process::parallel(vec![
-                Box::new(|| optional(location, &["rev-parse", "--verify", "HEAD^{commit}"])),
-                Box::new(|| optional(location, &["symbolic-ref", "-q", "HEAD"])),
                 required(&["rev-parse", "--is-shallow-repository"]),
-                required(&["for-each-ref", "--format=%(refname)%00%(objecttype)%00%(objectname)%00%(*objecttype)%00%(*objectname)", "refs/heads", "refs/remotes", "refs/tags"]),
+                required(&["for-each-ref", "--format=%(refname)%00%(objecttype)%00%(objectname)%00%(*objecttype)%00%(*objectname)%00%(HEAD)", "refs/heads", "refs/remotes", "refs/tags"]),
                 required(&["remote"]),
             ])
             .try_into()
             .unwrap_or_else(|_| unreachable!());
-        session.head = head?;
-        session.head_ref = head_ref?;
         session.shallow = shallow?.unwrap_or_default() == "true";
         let raw = raw?.unwrap_or_default();
         let remotes: Vec<String> = remotes?
@@ -687,9 +683,12 @@ impl Repository {
             None
         };
         let mut refs = vec![];
+        // `%(HEAD)` marks the checked-out branch, so one listing supplies the
+        // reference set and HEAD instead of separate symbolic-ref/rev-parse probes.
+        let mut attached: Option<(String, String)> = None;
         for line in raw.lines().filter(|s| !s.is_empty()) {
             let f: Vec<_> = line.split('\0').collect();
-            if f.len() != 5 {
+            if f.len() != 6 {
                 return Err(Error::new("gitParse", "Malformed reference record"));
             }
             let id = if f[1] == "commit" {
@@ -697,10 +696,9 @@ impl Repository {
             } else if f[3] == "commit" {
                 f[4].to_string()
             } else {
-                match resolve(self.location(), f[0]) {
-                    Ok(id) => id,
-                    Err(_) => continue,
-                }
+                // Not a commit and not a tag that peels to one: it cannot be a
+                // history row, so it is skipped without a per-ref `rev-parse`.
+                continue;
             };
             let (prefix, kind) = if f[0].starts_with("refs/heads/") {
                 ("refs/heads/", "local")
@@ -709,12 +707,28 @@ impl Repository {
             } else {
                 ("refs/tags/", "tag")
             };
+            if f[5] == "*" {
+                attached = Some((f[0].to_string(), id.clone()));
+            }
             refs.push(RepositoryRef {
                 name: f[0].trim_start_matches(prefix).into(),
                 full_name: f[0].into(),
                 commit_id: id,
                 kind: kind.into(),
             });
+        }
+        match attached {
+            Some((head_ref, head)) => {
+                session.head_ref = Some(head_ref);
+                session.head = Some(head);
+            }
+            None => {
+                // Detached HEAD, an unborn branch, or a symbolic HEAD outside the
+                // listed namespaces: ask Git for the pair directly.
+                session.head_ref = optional(self.location(), &["symbolic-ref", "-q", "HEAD"])?;
+                session.head =
+                    optional(self.location(), &["rev-parse", "--verify", "HEAD^{commit}"])?;
+            }
         }
         let fingerprint = fingerprint((
             &raw,

@@ -34,7 +34,11 @@ three times before `unstable`. This is a best-effort read across external
 changes, not a transactional filesystem snapshot. Its first read may consume the
 server-owned opening state, still verified at the end.[^snapshot][^contract]
 Expired history cursors and history errors accompanied by changed state restart
-from a fresh `state()` within that same three-attempt budget. The client also
+from a fresh `state()` within that same three-attempt budget.
+The state read itself derives HEAD and the checked-out ref from the same
+`for-each-ref` listing (`%(HEAD)`), and only falls back to separate
+`symbolic-ref`/`rev-parse` probes for a detached or unborn HEAD; refs that do
+not peel to a commit are skipped instead of resolved one by one.[^snapshot] The client also
 retries snapshot HEAD/status mismatches before publishing fresh or reused history.[^snapshot][^loader]
 Operation preflight builds its reviewed fingerprint from the same request-local
 state used for HEAD/ref validation. Index and all-ref fingerprint reads run

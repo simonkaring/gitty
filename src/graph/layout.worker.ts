@@ -9,10 +9,10 @@ self.onmessage = (event: MessageEvent<{ generation: number; reset: boolean; comm
     const layout = appendHistory(state, commits);
     const firstRow = reset ? 0 : knownRows;
     const firstEdge = reset ? 0 : knownEdges;
-    const resolved = state.edges.slice(0, firstEdge).flatMap((edge, index) => {
-      const target = state.positions.get(edge.to);
-      return target && target.row >= firstRow ? [{ index, toRow: target.row, toLane: target.lane }] : [];
-    });
+    // The append reports exactly the prior edges it re-pointed; nothing scans
+    // or allocates the full edge list again.
+    const resolved = state.lastResolved.filter(index => index < firstEdge)
+      .map(index => ({ index, toRow: state.edges[index].toRow, toLane: state.edges[index].toLane }));
     const edgeMaxTo = buildEdgeIndex(layout.edges);
     (self as unknown as { postMessage: (message: unknown, transfer: Transferable[]) => void })
       .postMessage({ generation, firstRow, firstEdge, nodes: layout.nodes.slice(firstRow), edges: layout.edges.slice(firstEdge), resolved, laneCount: layout.laneCount, edgeMaxTo }, [edgeMaxTo.buffer as ArrayBuffer]);

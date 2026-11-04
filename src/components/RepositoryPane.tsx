@@ -91,6 +91,8 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   // Notices are transient toasts; errors stay until dismissed.
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(''), 6000); return () => clearTimeout(timer); }, [notice]);
   const [revision, setRevision] = useState(0);
+  /** Forces the reveal/layout effect to run when the commits array itself is unchanged. */
+  const [revealTick, setRevealTick] = useState(0);
   /** Bumps only when the repository state fingerprint (refs/HEAD) changes or a session opens; working-tree status
    * changes move `revision` but must not re-run history search. */
   const [stateRevision, setStateRevision] = useState(0);
@@ -103,6 +105,13 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   useEffect(() => setSplit(settings.diffView === 'split'), [settings.diffView]);
   const [mutationBusy, setMutationBusy] = useState(false);
   const mutationLock = useRef(false);
+  /** Single owner of the read/write handshake: wait for an in-flight read, then hold
+   * exclusive mutation ownership until the write and its required refresh settle. */
+  async function waitForReads(isCurrent: () => boolean) {
+    while (lock.current && isCurrent()) await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  function beginMutation() { mutationLock.current = true; setMutationBusy(true); }
+  function endMutation(isCurrent: () => boolean) { if (isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
   const [operation, setOperation] = useState<OperationState | null>(null);
   const operationSig = useRef('');
   const [actionContext, setActionContext] = useState<ActionContext | null>(null);
@@ -311,25 +320,25 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   async function mutate(mutation: RepositoryMutation): Promise<MutationOutcome> {
     const current = session.current;
     if (!current || mutationLock.current || blockedRef.current) return { error: 'Repository mutations are blocked. Wait for the operation or refresh successfully.' };
-    mutationLock.current = true; setMutationBusy(true);
+    beginMutation();
     const token = epoch.current;
     const isCurrent = () => token === epoch.current && session.current?.session.handle === current.session.handle;
     try {
       // Let an already-running read finish, then exclude polling/paging until the
       // write AND its required refresh complete. No dropped post-write reloads.
-      while (lock.current && isCurrent()) await new Promise(resolve => setTimeout(resolve, 25));
+      await waitForReads(isCurrent);
       const outcome = await writeAndRefresh(current.session.handle, mutation, written => {
         if (mutation.kind === 'amend') return refresh(true, written.oid && !written.error ? { from: mutation.expectedHead, to: written.oid } : undefined);
         return mutation.kind === 'commit' ? refresh(true) : refreshStatus();
       }, isCurrent);
       if (outcome.refreshError && isCurrent()) { blockedRef.current = true; setMutationBlocked(true); }
       return outcome;
-    } finally { if (isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
+    } finally { endMutation(isCurrent); }
   }
   /** Selects and reveals the amended HEAD. Not a user navigation: it must not advance the navigation counter. */
   function followAmendedHead(id: string) {
     if (!history.current.some(commit => commit.id === id)) return;
-    setSelected(id); jumpTo.current = id; setCommits(items => [...items]);
+    setSelected(id); jumpTo.current = id; setRevealTick(value => value + 1);
   }
   /** Rewrites the message of the commit the inspector's editor was opened on, which must still be HEAD on the
    * same branch. It never retargets: any mismatch is an explicit error and the draft stays with the editor. */
@@ -353,16 +362,16 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     if (!current || mutationLock.current || blockedRef.current) throw new Error('Repository mutations are blocked. Refresh successfully before retrying.');
     const token = epoch.current;
     const isCurrent = () => epoch.current === token && session.current?.session.handle === current.session.handle;
-    mutationLock.current = true; setMutationBusy(true);
+    beginMutation();
     try {
-      while (lock.current && isCurrent()) await new Promise(resolve => setTimeout(resolve, 25));
+      await waitForReads(isCurrent);
       if (!isCurrent()) throw new Error('Repository session changed.');
       const outcome = await operationAndRefresh(current.session.handle, command, args, () => refresh(true), isCurrent);
       if (outcome.superseded) throw new Error('Repository session changed.');
       if (outcome.notice) setNotice(outcome.notice);
       if (outcome.refreshError) { blockedRef.current = true; setMutationBlocked(true); }
       if (outcome.error || outcome.refreshError) throw new Error([outcome.error, outcome.refreshError && `Refresh failed: ${outcome.refreshError}. Further writes are blocked until refresh succeeds.`].filter(Boolean).join('\n'));
-    } finally { if (isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
+    } finally { endMutation(isCurrent); }
   }
   async function switchBranch(ref: string) {
     const current = session.current;
@@ -403,13 +412,13 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     const fetching = command === 'repository_remote_action' && isFetchingAction(args.action);
     // Background fetch only moves remote-tracking refs: it must not block local writes such as switching branches.
     const holdsLock = !options.quiet;
-    if (holdsLock) { mutationLock.current = true; setMutationBusy(true); }
+    if (holdsLock) beginMutation();
     // Background fetch reports through the toolbar's fetch status instead of
     // clearing or replacing an error banner the user has not dismissed yet.
     if (!options.quiet) setActionError('');
     if (fetching) { lastFetchAttempt.current = Date.now(); setFetchStatus({ kind: 'fetching', since: Date.now() }); }
     try {
-      while (lock.current && isCurrent()) await new Promise(resolve => setTimeout(resolve, 25));
+      await waitForReads(isCurrent);
       if (!isCurrent()) throw new Error('Repository session changed.');
       const outcome = await remoteAndRefresh(current.session.handle, command, args, () => refresh(true, undefined, [], options.reloadHistory), isCurrent);
       if (outcome.superseded) throw new Error('Repository session changed.');
@@ -431,7 +440,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
         if (fetching) setFetchStatus(previous => previous.kind === 'fetching' ? { kind: 'failed', at: Date.now(), message: errorMessage(e) } : previous);
       }
       throw e;
-    } finally { if (holdsLock && isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
+    } finally { if (holdsLock) endMutation(isCurrent); }
   }
   async function speedUpHistory() {
     const handle = session.current?.session.handle;
@@ -550,7 +559,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     if (history.current.some(commit => commit.id === id)) {
       setSelected(id);
       jumpTo.current = id;
-      setCommits(items => [...items]);
+      setRevealTick(value => value + 1);
     } else {
       void load(id);
     }
@@ -560,14 +569,17 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     if (!handle) return;
     setWorkingDisclosure(current => ({ handle, value: update(current?.handle === handle ? current.value : DEFAULT_WORKING_DISCLOSURE) }));
   }
+  const baseGraphCommits = useMemo(() => commits.map(graphCommit), [commits]);
   const graphCommits = useMemo(() => {
-    const list = commits.map(graphCommit);
-    // Never attach live working status to a different pinned HEAD.
-    if (status?.entries.length && status.head === state?.session.head && status.headRef === state?.session.headRef) list.unshift(graphCommit({ id: WORKING_ID, parents: status.head ? [status.head] : [], subject: `Working changes · ${status.entries.length} paths`, author: 'Working tree', email: '', timestamp: 0 }));
-    return list;
-  }, [commits, status, state?.session.head, state?.session.headRef]);
+    // Never attach live working status to a different pinned HEAD. Only the working
+    // row is rebuilt when status changes; loaded history is not remapped again.
+    if (status?.entries.length && status.head === state?.session.head && status.headRef === state?.session.headRef) {
+      return [graphCommit({ id: WORKING_ID, parents: status.head ? [status.head] : [], subject: `Working changes · ${status.entries.length} paths`, author: 'Working tree', email: '', timestamp: 0 }), ...baseGraphCommits];
+    }
+    return baseGraphCommits;
+  }, [baseGraphCommits, status?.entries.length, status?.head, status?.headRef, state?.session.head, state?.session.headRef]);
   const { layout, count: layoutCount, error: layoutError } = useGraphLayout(graphCommits);
-  useLayoutEffect(() => { if (anchor.current && graphCommits.slice(0, layoutCount).some(commit => commit.id === anchor.current?.id)) { graph.current?.restore(anchor.current); anchor.current = null; } if (jumpTo.current) { const row = graphCommits.slice(0, layoutCount).findIndex(commit => commit.id === jumpTo.current); if (row >= 0) { graph.current?.scrollTo(row); jumpTo.current = null; } } }, [graphCommits, layoutCount]);
+  useLayoutEffect(() => { if (anchor.current && graphCommits.slice(0, layoutCount).some(commit => commit.id === anchor.current?.id)) { graph.current?.restore(anchor.current); anchor.current = null; } if (jumpTo.current) { const row = graphCommits.slice(0, layoutCount).findIndex(commit => commit.id === jumpTo.current); if (row >= 0) { graph.current?.scrollTo(row); jumpTo.current = null; } } }, [graphCommits, layoutCount, revealTick]);
   const filtering = !!(text || branch || since || until || path);
   useEffect(() => { setSearchView('results'); }, [text, branch, since, until, path]);
   function clearFilters() { setText(''); setBranch(''); setSince(''); setUntil(''); setPath(''); }
@@ -650,12 +662,12 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     if (!current || mutationLock.current || blockedRef.current) throw new Error('Repository mutations are blocked. Refresh successfully before retrying.');
     const token = epoch.current;
     const isCurrent = () => token === epoch.current && session.current?.session.handle === current.session.handle;
-    mutationLock.current = true; setMutationBusy(true);
+    beginMutation();
     let result: Result;
     let writeError: unknown;
     let refreshError = '';
     try {
-      while (lock.current && isCurrent()) await new Promise(resolve => setTimeout(resolve, 25));
+      await waitForReads(isCurrent);
       if (!isCurrent()) throw new Error('Repository session changed.');
       try { result = await native<Result>(command, { handle: current.session.handle, request }); }
       catch (error) {
@@ -670,7 +682,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       catch (error) { refreshError = errorMessage(error); blockedRef.current = true; setMutationBlocked(true); }
       if (writeError && !refreshError) setActionError(errorMessage(writeError));
       return { result, ...(refreshError ? { refreshError } : {}) };
-    } finally { if (isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
+    } finally { endMutation(isCurrent); }
   }
   const deleteBranchesWrite = (request: BranchBatchDeleteRequest): Promise<BranchBatchDeleteExecution> => branchDeleteWrite<BranchBatchDeleteResult>(
     'repository_delete_branches', request,
