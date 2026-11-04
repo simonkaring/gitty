@@ -26,7 +26,7 @@ async function renderMenu(state: RepositoryState, target: MenuTarget, onOperatio
   const host = document.createElement('div');
   const root = createRoot(host);
   const renderTarget = async (target: MenuTarget) => {
-    await act(async () => { root.render(<GraphContextMenu target={target} state={state} busy={false} onOperation={onOperation} onSwitchBranch={noop} onShowDetails={noop} onSetBase={noop} onSetTarget={noop} onCompare={noop} onPullRequest={noop} onRemoteAction={noop} onPush={noop} onCopy={noop} onDeleteBranch={noop} onClose={noop} />); });
+    await act(async () => { root.render(<GraphContextMenu target={target} state={state} busy={false} onOperation={onOperation} onSwitchBranch={noop} onShowDetails={noop} onSetBase={noop} onSetTarget={noop} onCompare={noop} onPullRequest={noop} onRemoteAction={noop} onPush={noop} onResetToOrigin={noop} onCopy={noop} onDeleteBranch={noop} onClose={noop} />); });
   };
   await renderTarget(target);
   return { root, renderTarget, menuItems: () => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')] };

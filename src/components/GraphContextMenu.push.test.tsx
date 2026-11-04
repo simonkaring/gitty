@@ -24,7 +24,7 @@ async function renderMenu(state: RepositoryState, onPush: (ref: string) => void,
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const host = document.createElement('div');
   const root = createRoot(host);
-  await act(async () => { root.render(<GraphContextMenu target={target} state={state} busy={busy} onOperation={noop} onSwitchBranch={noop} onShowDetails={noop} onSetBase={noop} onSetTarget={noop} onCompare={noop} onPullRequest={noop} onRemoteAction={noop} onPush={onPush} onCopy={noop} onDeleteBranch={noop} onClose={noop} />); });
+  await act(async () => { root.render(<GraphContextMenu target={target} state={state} busy={busy} onOperation={noop} onSwitchBranch={noop} onShowDetails={noop} onSetBase={noop} onSetTarget={noop} onCompare={noop} onPullRequest={noop} onRemoteAction={noop} onPush={onPush} onResetToOrigin={noop} onCopy={noop} onDeleteBranch={noop} onClose={noop} />); });
   return { host, root, menuItems: () => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')] };
 }
 

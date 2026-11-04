@@ -877,6 +877,15 @@ exactly-full final page is reported truncated); Bitbucket when the envelope has 
   repository opens, when its tab or the window regains focus, and on a 30-second
   check, at most once per five minutes. Explicit fetch and pull reset that clock.
   Background fetch failures appear as a toolbar fetch status, not an error banner.
+- `RemoteAction::Pull` accepts optional `target`, a local branch other than the
+  checked-out one (the checked-out branch returns `invalidRequest`). One fetch then
+  updates `refs/remotes/<remote>/<branch>` (forced, as for any pull) and the target
+  branch with an unforced `refs/heads/<branch>:refs/heads/<target>` refspec, so Git
+  itself refuses non-fast-forwards and branches checked out in any worktree. HEAD, the
+  index and working files are never touched, no private pull ref is used, and
+  `pullMode` is ignored. An unchanged target adds an `Already up to date.` line to the
+  output. The branch menu sends `remote: "origin"`, `branch` and `target` as the same
+  name and only for a local branch with a same-named origin counterpart.
 - Pull (`RemoteAction::Pull`) no longer requires an entirely clean worktree.
   Fast-forward and merge pulls preserve existing working changes whenever Git can
   safely carry them, while `--no-overwrite-ignore` and Git's untracked collision
@@ -1048,13 +1057,18 @@ shape. Nothing is rolled back or retried automatically.
   Stash Apply/Pop accept optional `restoreIndex` (IPC default `false`); the stash
   dialog enables it by default and provides a checkbox to opt out.
 - `resetToOrigin` accepts an explicit `branch: refs/remotes/origin/<name>` and
-  `expectedOriginOid`. It requires the checked-out same-named local branch with
-  an existing HEAD, no operation and no unresolved conflicts. The ordinary
+  `expectedOriginOid`. It requires an existing same-named local branch, a checked-out
+  branch (not detached) with an existing HEAD, no operation and no unresolved
+  conflicts. The ordinary
   expected HEAD/ref/operation fingerprint checks pin the reviewed refs, index and
   working content under the mutation lock; the origin ref must still equal the
-  supplied OID. It runs `git reset --hard --no-recurse-submodules <expectedOriginOid> --`, moving only the
+  supplied OID. When that local branch is checked out it runs
+  `git reset --hard --no-recurse-submodules <expectedOriginOid> --`, moving only the
   current local branch and restoring its index/tracked worktree (including removal
-  of staged additions). This deliberately discards tracked work after UI
+  of staged additions). When it is another branch it runs
+  `git branch --force --no-track -- <name> <expectedOriginOid>`: only that ref moves,
+  HEAD, index and working files are untouched, and Git refuses a branch checked out
+  in a linked worktree. The checked-out path deliberately discards tracked work after UI
   confirmation. Untracked and ignored paths are retained; `protect_untracked`
   rejects target-tree obstructions before writing. No clean, fetch, push, tracking
   configuration change or recursive submodule reset is performed. Local origin

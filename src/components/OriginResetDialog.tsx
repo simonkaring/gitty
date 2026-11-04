@@ -6,7 +6,7 @@ import type { OperationRequest } from '../model/operations';
 import type { RepositorySnapshot } from '../model/repository';
 import type { OperationWrite } from './OperationDialog';
 
-interface Review { request: OperationRequest; localCommits: number; changedFiles: number }
+interface Review { request: OperationRequest; localCommits: number; changedFiles: number; current: boolean }
 
 export function OriginResetDialog({ handle, branch, busy, onWrite, onClose, onComplete }: {
   handle: string; branch: string; busy: boolean; onWrite: OperationWrite; onClose: () => void; onComplete: () => void;
@@ -24,10 +24,14 @@ export function OriginResetDialog({ handle, branch, busy, onWrite, onClose, onCo
       const snapshot = await native<RepositorySnapshot>('repository_snapshot', { handle });
       const tip = snapshot.state.refs.find(ref => ref.fullName === branch && ref.kind === 'remote');
       if (!tip) throw new Error('The origin branch no longer exists. Refresh the repository.');
-      const [localCommits] = await native<[number, number]>('repository_branch_relation', { handle, first: snapshot.state.session.head, second: tip.commitId });
+      const localRef = branch.replace(/^refs\/remotes\/origin\//, 'refs/heads/');
+      const current = snapshot.state.session.headRef === localRef;
+      const first = current ? snapshot.state.session.head : snapshot.state.refs.find(ref => ref.fullName === localRef)?.commitId;
+      if (!first) throw new Error('The local branch no longer exists. Refresh the repository.');
+      const [localCommits] = await native<[number, number]>('repository_branch_relation', { handle, first, second: tip.commitId });
       const request = await captureOperation(handle, { kind: 'resetToOrigin', branch, expectedOriginOid: tip.commitId });
       if (request.expectedOperation !== snapshot.operation.fingerprint) throw new Error('Repository changed during review. Review again.');
-      if (live.current) setReview({ request, localCommits, changedFiles: snapshot.status.entries.filter(entry => !entry.untracked).length });
+      if (live.current) setReview({ request, localCommits, current, changedFiles: snapshot.status.entries.filter(entry => !entry.untracked).length });
     } catch (e) { if (live.current) setError(errorMessage(e)); }
     finally { inFlight.current = false; if (live.current) setPending(false); }
   }
@@ -47,10 +51,12 @@ export function OriginResetDialog({ handle, branch, busy, onWrite, onClose, onCo
     <button autoFocus className="secondary-button" disabled={pending && !!review} onClick={close}>Cancel</button>
     {review ? <button className="danger-button" disabled={pending || busy} onClick={() => void execute()}>{pending ? 'Resetting…' : 'Reset branch'}</button> : <button className="secondary-button" disabled={pending || busy} onClick={() => void capture()}>{pending ? 'Reviewing…' : 'Review again'}</button>}
   </>}>
-    <p className="alert" data-tone="red">This moves the local branch to origin and discards all staged and unstaged tracked changes. Discarded working changes cannot be recovered through Gitty.</p>
+    {review && !review.current
+      ? <p className="alert" data-tone="red">This moves the local branch to origin. The checked-out branch and your working files are not touched.</p>
+      : <p className="alert" data-tone="red">This moves the local branch to origin and discards all staged and unstaged tracked changes. Discarded working changes cannot be recovered through Gitty.</p>}
     {review && <>
       <p><strong>{review.localCommits}</strong> {review.localCommits === 1 ? 'commit will' : 'commits will'} be removed from this local branch.</p>
-      <p><strong>{review.changedFiles}</strong> changed tracked {review.changedFiles === 1 ? 'file' : 'files'} will be reset.</p>
+      {review.current && <p><strong>{review.changedFiles}</strong> changed tracked {review.changedFiles === 1 ? 'file' : 'files'} will be reset.</p>}
       <p>Destination: <strong>origin/{name}</strong> at <code>{review.request.action.kind === 'resetToOrigin' && review.request.action.expectedOriginOid.slice(0, 12)}</code>.</p>
     </>}
     <p className="muted">Uses the locally fetched origin tip. No fetch or push is performed. Untracked and ignored files are preserved; reset is refused if they would be overwritten.</p>

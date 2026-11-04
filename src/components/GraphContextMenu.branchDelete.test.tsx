@@ -20,17 +20,15 @@ const makeState = (headRef = 'refs/heads/main', handle = 'handle'): RepositorySt
 it('offers keyboard-accessible origin reset only for the checked-out counterpart with commits or tracked work', async () => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   nativeCall.mockResolvedValue([1, 1]);
-  const host = document.createElement('div'); const root = createRoot(host); const onSwitch = vi.fn();
+  const host = document.createElement('div'); const root = createRoot(host); const onReset = vi.fn();
   const originTarget = { ...target, context: { oid: 'origin-tip', ref: 'refs/remotes/origin/topic' } };
-  const render = (state: RepositoryState, hasTrackedChanges = false) => <GraphContextMenu target={originTarget} state={state} busy={false} hasTrackedChanges={hasTrackedChanges} onOperation={noop} onSwitchBranch={onSwitch} onShowDetails={noop} onSetBase={noop} onSetTarget={noop} onCompare={noop} onPullRequest={noop} onRemoteAction={noop} onPush={noop} onCopy={noop} onDeleteBranch={noop} onClose={noop} />;
-  const reset = () => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent?.startsWith('Reset local branch'));
+  const render = (state: RepositoryState, hasTrackedChanges = false) => <GraphContextMenu target={originTarget} state={state} busy={false} hasTrackedChanges={hasTrackedChanges} onOperation={noop} onSwitchBranch={noop} onShowDetails={noop} onSetBase={noop} onSetTarget={noop} onCompare={noop} onPullRequest={noop} onRemoteAction={noop} onPush={noop} onResetToOrigin={onReset} onCopy={noop} onDeleteBranch={noop} onClose={noop} />;
+  const reset = () => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent?.startsWith('Reset topic'));
   try {
-    await act(async () => root.render(render(makeState())));
-    expect(reset()).toBeUndefined();
-    const state = makeState('refs/heads/topic');
-    await act(async () => root.render(render(state)));
+    await act(async () => root.render(render(makeState('refs/heads/topic', 'handle'))));
     await act(async () => reset()!.click());
-    expect(onSwitch).toHaveBeenCalledWith('refs/remotes/origin/topic');
+    expect(onReset).toHaveBeenCalledWith('refs/remotes/origin/topic');
+    const state = makeState('refs/heads/topic');
     state.refs[2].commitId = state.session.head!;
     await act(async () => root.render(render(state)));
     expect(reset()).toBeUndefined();
@@ -47,7 +45,7 @@ it('offers explicit local, origin, and both scopes and disables current-local de
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   nativeCall.mockResolvedValue([1, 1]);
   const host = document.createElement('div'); const root = createRoot(host); const onDelete = vi.fn();
-  const render = (state: RepositoryState) => <GraphContextMenu target={target} state={state} busy={false} onOperation={noop} onSwitchBranch={noop} onShowDetails={noop} onSetBase={noop} onSetTarget={noop} onCompare={noop} onPullRequest={noop} onRemoteAction={noop} onPush={noop} onCopy={noop} onDeleteBranch={onDelete} onClose={noop} />;
+  const render = (state: RepositoryState) => <GraphContextMenu target={target} state={state} busy={false} onOperation={noop} onSwitchBranch={noop} onShowDetails={noop} onSetBase={noop} onSetTarget={noop} onCompare={noop} onPullRequest={noop} onRemoteAction={noop} onPush={noop} onResetToOrigin={noop} onCopy={noop} onDeleteBranch={onDelete} onClose={noop} />;
   try {
     await act(async () => { root.render(render(makeState())); });
     const local = [...host.querySelectorAll('button')].find(button => button.textContent?.startsWith('Delete local branch')) as HTMLButtonElement;

@@ -262,6 +262,55 @@ fn remote_fetch_counts_fast_forward_pull_and_push() {
 }
 
 #[test]
+fn pull_target_fast_forwards_another_branch_without_touching_the_checkout() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    let base = f.git(&["rev-parse", "HEAD"]);
+    let peer = f.peer(bare.path());
+    peer.git(&["switch", "-c", "topic"]);
+    peer.write("incoming", "from peer");
+    let incoming = peer.commit("incoming");
+    peer.git(&["push", "origin", "topic"]);
+    f.git(&["branch", "topic"]);
+    f.write("file", "dirty\n");
+    let pull = json!({"kind":"pull", "remote":"origin", "branch":"topic", "target":"topic"});
+    let output = f.remote(pull.clone()).unwrap().output;
+    assert!(!output.contains("Already up to date."), "{output}");
+    assert_eq!(f.git(&["rev-parse", "topic"]), incoming);
+    assert_eq!(f.git(&["rev-parse", "origin/topic"]), incoming);
+    assert_eq!(f.git(&["symbolic-ref", "HEAD"]), "refs/heads/main");
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), base);
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("file")).unwrap(),
+        "dirty\n"
+    );
+    assert!(f
+        .remote(pull.clone())
+        .unwrap()
+        .output
+        .contains("Already up to date."));
+
+    let diverged = f.git(&[
+        "commit-tree",
+        "HEAD^{tree}",
+        "-p",
+        &base,
+        "-m",
+        "local only",
+    ]);
+    f.git(&["update-ref", "refs/heads/topic", &diverged]);
+    peer.write("more", "again");
+    peer.commit("more");
+    peer.git(&["push", "origin", "topic"]);
+    assert_eq!(f.remote(pull).unwrap_err().code, "git");
+    assert_eq!(f.git(&["rev-parse", "topic"]), diverged);
+
+    let checked_out = json!({"kind":"pull", "remote":"origin", "branch":"main", "target":"main"});
+    assert_eq!(f.remote(checked_out).unwrap_err().code, "invalidRequest");
+}
+
+#[test]
 #[cfg(unix)]
 fn remote_pull_integrates_private_fetched_oid_despite_fetch_head_and_tracking_race() {
     use std::os::unix::fs::PermissionsExt;

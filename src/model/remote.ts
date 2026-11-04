@@ -8,7 +8,7 @@ export type PullMode = 'ffOnly' | 'merge' | 'rebase';
 export type RemoteActionRequest =
   | { kind: 'fetch'; remote?: string; branch?: string }
   | { kind: 'backgroundFetch'; remote?: string }
-  | { kind: 'pull'; remote?: string; branch?: string; pullMode?: PullMode }
+  | { kind: 'pull'; remote?: string; branch?: string; pullMode?: PullMode; target?: string }
   | { kind: 'push'; remote?: string; branch?: string; source?: string; setUpstream?: boolean };
 export interface RemoteActionResult { output: string }
 export interface StashEntry { oid: string; selector: string; message: string }
@@ -90,6 +90,7 @@ export function remoteSuccessMessage(action: RemoteActionRequest, output: string
   if (/^Already up[- ]to[- ]date\.?\s*$/im.test(output) || /^Current branch .+ is up to date\.\s*$/m.test(output)) {
     return 'Already up to date. Nothing to pull.';
   }
+  if (action.target) return `Fast-forwarded ${action.target}${action.remote ? ` from ${action.remote}${action.branch ? `/${action.branch}` : ''}` : ''}.`;
   return `Pulled updates${action.remote ? ` from ${action.remote}${action.branch ? `/${action.branch}` : ''}` : ''}.`;
 }
 

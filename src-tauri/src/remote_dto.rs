@@ -34,6 +34,9 @@ pub enum RemoteAction {
     Pull {
         remote: Option<String>,
         branch: Option<String>,
+        /// Local branch to fast-forward without checking it out. Omit to pull
+        /// into the checked-out branch.
+        target: Option<String>,
         #[serde(default)]
         pull_mode: PullMode,
     },

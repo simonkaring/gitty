@@ -2731,6 +2731,51 @@ fn operations_reset_origin_discards_local_commits_and_tracked_work_only() {
 }
 
 #[test]
+fn operations_reset_origin_moves_another_branch_without_touching_the_checkout() {
+    let f = Fixture::new();
+    let base = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["switch", "-c", "topic"]);
+    f.write("file", "topic work\n");
+    let local = f.commit("topic work");
+    f.git(&["switch", "main"]);
+    f.git(&["update-ref", "refs/remotes/origin/topic", &base]);
+    f.write("file", "dirty\n");
+    f.write("untracked", "keep\n");
+    f.run(GitAction::ResetToOrigin {
+        branch: "refs/remotes/origin/topic".into(),
+        expected_origin_oid: base.clone(),
+    })
+    .unwrap();
+    assert_eq!(f.git(&["rev-parse", "topic"]), base);
+    assert_eq!(f.git(&["symbolic-ref", "HEAD"]), "refs/heads/main");
+    for (path, content) in [("file", "dirty\n"), ("untracked", "keep\n")] {
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join(path)).unwrap(),
+            content
+        );
+    }
+
+    f.git(&["update-ref", "refs/remotes/origin/topic", &local]);
+    let linked = tempfile::tempdir().unwrap();
+    f.git(&[
+        "worktree",
+        "add",
+        linked.path().join("linked").to_str().unwrap(),
+        "topic",
+    ]);
+    assert_eq!(
+        f.run(GitAction::ResetToOrigin {
+            branch: "refs/remotes/origin/topic".into(),
+            expected_origin_oid: local,
+        })
+        .unwrap_err()
+        .code,
+        "git"
+    );
+    assert_eq!(f.git(&["rev-parse", "topic"]), base);
+}
+
+#[test]
 fn operations_reset_origin_rejects_stale_reviews_and_invalid_targets() {
     let f = Fixture::new();
     let origin = f.git(&["rev-parse", "HEAD"]);

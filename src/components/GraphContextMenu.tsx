@@ -8,12 +8,13 @@ import type { BranchDeleteScope } from '../model/branchDelete';
 
 export interface MenuTarget { context: ActionContext; x: number; y: number; trigger: HTMLElement }
 
-export function GraphContextMenu({ target, state, busy, hasTrackedChanges = false, onOperation, onSwitchBranch, onShowDetails, onSetBase, onSetTarget, onCompare, onPullRequest, onRemoteAction, onPush, onCopy, onDeleteBranch, onClose }: {
+export function GraphContextMenu({ target, state, busy, hasTrackedChanges = false, onOperation, onSwitchBranch, onShowDetails, onSetBase, onSetTarget, onCompare, onPullRequest, onRemoteAction, onPush, onResetToOrigin, onCopy, onDeleteBranch, onClose }: {
   target: MenuTarget; state: RepositoryState; busy: boolean;
   hasTrackedChanges?: boolean;
   onOperation: (context: ActionContext) => void; onSwitchBranch: (ref: string) => void; onShowDetails: (oid: string) => void;
   onSetBase: (oid: string) => void; onSetTarget: (oid: string) => void; onCompare: (oid: string) => void;
   onPullRequest: (ref: string) => void; onRemoteAction: (action: RemoteActionRequest) => void; onPush: (ref: string) => void;
+  onResetToOrigin: (originRef: string) => void;
   onCopy: (value: string, label: string) => void; onClose: () => void;
   onDeleteBranch: (fullName: string, scope: BranchDeleteScope) => void;
 }) {
@@ -45,6 +46,13 @@ export function GraphContextMenu({ target, state, busy, hasTrackedChanges = fals
   const originRef = ref?.kind === 'local' ? `refs/remotes/origin/${ref.name}` : ref?.fullName;
   const localRef = ref?.kind === 'remote' ? `refs/heads/${ref.fullName.slice('refs/remotes/origin/'.length)}` : ref?.fullName;
   const demo = isDemoHandle(state.session.handle);
+  const originBranch = ref?.kind === 'local' ? ref.name : ref?.kind === 'remote' && ref.fullName.startsWith('refs/remotes/origin/') && ref.fullName !== 'refs/remotes/origin/HEAD' ? ref.fullName.slice('refs/remotes/origin/'.length) : undefined;
+  const localOid = state.refs.find(value => value.fullName === localRef)?.commitId;
+  const originOid = state.refs.find(value => value.fullName === originRef)?.commitId;
+  const paired = !!originBranch && !!localOid && !!originOid;
+  const syncCurrent = state.session.headRef === localRef;
+  const showPull = paired && (!syncCurrent || ref?.kind === 'remote');
+  const showReset = paired && (syncCurrent ? originOid !== state.session.head || hasTrackedChanges : localOid !== originOid);
   const tracking = ref?.kind === 'remote' ? [...state.remotes].sort((a, b) => b.length - a.length).find(remote => ref.fullName.startsWith(`refs/remotes/${remote}/`)) : undefined;
   // Remote-tracking refs are merge sources only; destinations remain local branches.
   function operation(kind: NonNullable<ActionContext['initial']>, destination?: string, sourceRef?: string) { onOperation({ ...context, ...(destination ? { destination } : {}), ...(sourceRef ? { ref: sourceRef } : {}), initial: kind }); }
@@ -60,6 +68,13 @@ export function GraphContextMenu({ target, state, busy, hasTrackedChanges = fals
     {tracking && <><button role="menuitem" disabled={busy} onClick={() => onRemoteAction({ kind: 'fetch', remote: tracking, branch: ref!.fullName.slice(`refs/remotes/${tracking}/`.length) })}>Fetch this remote branch</button><div className="menu-divider" role="separator" /></>}
     {ref?.kind === 'local' && !current && <button role="menuitem" disabled={busy} onClick={() => onSwitchBranch(ref.fullName)}>Switch to {ref.name}</button>}
     {branchPush && ref && <><button role="menuitem" disabled={busy} onClick={() => onPush(ref.fullName)}>Push {ref.name} to origin</button><div className="menu-divider" role="separator" /></>}
+    {(showPull || showReset) && <>
+      {showPull && (syncCurrent
+        ? (Object.keys(PULL_MODE_LABELS) as PullMode[]).map(mode => <button key={mode} role="menuitem" disabled={busy || demo} title={demo ? 'Pull is unavailable in the demo.' : undefined} onClick={() => onRemoteAction({ kind: 'pull', remote: 'origin', branch: originBranch, pullMode: mode })}>{PULL_MODE_LABELS[mode]}{mode === DEFAULT_PULL_MODE && ' (default)'}</button>)
+        : <button role="menuitem" disabled={busy || demo} title={demo ? 'Pull is unavailable in the demo.' : undefined} onClick={() => onRemoteAction({ kind: 'pull', remote: 'origin', branch: originBranch, target: originBranch })}>Pull {originBranch} from origin (fast-forward only)</button>)}
+      {showReset && <button role="menuitem" disabled={busy || demo} title={demo ? 'Reset is unavailable in the demo.' : undefined} onClick={() => onResetToOrigin(originRef!)}>Reset {originBranch} to origin/{originBranch}…</button>}
+      <div className="menu-divider" role="separator" />
+    </>}
     {!current && (ref?.kind === 'local' || context.oid !== state.session.head) && <>{ref?.kind === 'local' && state.session.headRef && relation && <>{relation[0] > 0 ? <button role="menuitem" onClick={() => operation('merge', state.session.headRef!, ref.fullName)}>Merge {ref.name} into {headName}… · {relation[0]} commit{relation[0] === 1 ? '' : 's'} to bring in</button> : <button role="menuitem" disabled>{ref.name} already includes {headName}</button>}{relation[1] > 0 ? <button role="menuitem" onClick={() => operation('merge', ref.fullName, state.session.headRef!)}>Merge {headName} into {ref.name}… · {relation[1]} commit{relation[1] === 1 ? '' : 's'} to bring in</button> : <button role="menuitem" disabled>{headName} already includes {ref.name}</button>}</>}{ref?.kind === 'remote' && state.session.headRef && relation && (relation[0] > 0 ? <button role="menuitem" onClick={() => operation('merge', state.session.headRef!, ref.fullName)}>Merge {ref.name} into {headName}… · {relation[0]} commit{relation[0] === 1 ? '' : 's'} to bring in</button> : <button role="menuitem" disabled>{ref.name} has no commits to bring into {headName}</button>)}<button role="menuitem" onClick={() => operation('rebase')}>Rebase current onto this…</button><button role="menuitem" onClick={() => operation('cherryPick')}>Cherry-pick {ref ? 'tip commit' : 'commit'}…</button></>}
     <button role="menuitem" onClick={() => operation('createBranch')}>Create branch here…</button>
     <button role="menuitem" onClick={() => operation('createTag')}>Create tag here…</button>
@@ -70,7 +85,6 @@ export function GraphContextMenu({ target, state, busy, hasTrackedChanges = fals
       {hasOriginCounterpart && <button role="menuitem" disabled={busy || demo || current} title={current ? 'Switch to another branch first.' : demo ? 'Branch deletion is unavailable in the demo.' : undefined} onClick={() => onDeleteBranch(localRef!, 'both')}>Delete local and origin branches…{current ? ' (current branch)' : demo ? ' (unavailable in demo)' : ''}</button>}
     </>}
     {ref?.kind === 'remote' && ref.fullName.startsWith('refs/remotes/origin/') && ref.fullName !== 'refs/remotes/origin/HEAD' && <>
-      {state.session.headRef === localRef && (ref.commitId !== state.session.head || hasTrackedChanges) && <button role="menuitem" disabled={busy || demo} onClick={() => onSwitchBranch(ref.fullName)}>Reset local branch to {ref.name}…</button>}
       {hasLocalCounterpart && <button role="menuitem" disabled={busy || demo || state.session.headRef === localRef} title={state.session.headRef === localRef ? 'Switch to another branch first.' : demo ? 'Branch deletion is unavailable in the demo.' : undefined} onClick={() => onDeleteBranch(localRef!, 'local')}>Delete local branch…{state.session.headRef === localRef ? ' (current branch)' : ''}</button>}
       <button role="menuitem" disabled={busy || demo} title={demo ? 'Branch deletion is unavailable in the demo.' : undefined} onClick={() => onDeleteBranch(ref.fullName, 'origin')}>Delete branch on origin…</button>
       {hasLocalCounterpart && <button role="menuitem" disabled={busy || demo || state.session.headRef === localRef} title={state.session.headRef === localRef ? 'Switch to another branch first.' : demo ? 'Branch deletion is unavailable in the demo.' : undefined} onClick={() => onDeleteBranch(localRef!, 'both')}>Delete local and origin branches…{state.session.headRef === localRef ? ' (current branch)' : ''}</button>}

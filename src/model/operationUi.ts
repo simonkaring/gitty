@@ -20,7 +20,7 @@ export function actionReason(action: GitAction, session: RepositorySession, oper
   if (!session.headRef) return 'Check out a local branch first.';
   if (action.kind === 'resetToOrigin') {
     if (operation.conflicts.length) return 'Resolve existing conflicts before resetting the branch.';
-    return action.branch.startsWith('refs/remotes/origin/') && action.branch !== 'refs/remotes/origin/HEAD' && action.branch.replace(/^refs\/remotes\/origin\//, 'refs/heads/') === session.headRef && !!action.expectedOriginOid ? '' : 'Reset requires the checked-out same-named local branch and an origin tip.';
+    return action.branch.startsWith('refs/remotes/origin/') && action.branch !== 'refs/remotes/origin/HEAD' && !!action.expectedOriginOid ? '' : 'Reset requires an origin branch and its tip.';
   }
   if (action.kind === 'merge' && action.destination?.startsWith('refs/') && !action.destination.startsWith('refs/heads/')) return 'Merges must target a local branch.';
   if (action.kind === 'merge' && action.message !== undefined) {

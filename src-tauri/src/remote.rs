@@ -215,10 +215,11 @@ impl Repository {
             ));
         }
         let info = self.sync_info_with_counts(false)?;
-        // A named push source supplies its own upstream configuration; every
-        // other action follows the checked-out branch.
+        // A named push source or pull target supplies its own upstream
+        // configuration; every other action follows the checked-out branch.
         let source_branch = match &action {
             RemoteAction::Push { source, .. } => source.as_deref().or(info.branch.as_deref()),
+            RemoteAction::Pull { target, .. } => target.as_deref().or(info.branch.as_deref()),
             _ => info.branch.as_deref(),
         };
         let configured_remote = source_branch
@@ -401,6 +402,60 @@ impl Repository {
                     &format!("refs/heads/{source}:refs/heads/{destination}"),
                 ]));
                 network_result(self.write(&a, &env, &[], 0)?, wsl && interactive)
+            }
+            RemoteAction::Pull {
+                target: Some(target),
+                ..
+            } => {
+                self.remote_branch_name(target)?;
+                if info.branch.as_deref() == Some(target.as_str()) {
+                    return Err(Error::new(
+                        "invalidRequest",
+                        "Pull the checked-out branch without choosing a target branch.",
+                    ));
+                }
+                let local_ref = format!("refs/heads/{target}");
+                let before = resolve(self.location(), &local_ref)?;
+                let branch = branch.or(tracking_branch).ok_or_else(|| {
+                    Error::new(
+                        "noUpstream",
+                        "Configure an upstream or explicitly choose a remote branch to pull.",
+                    )
+                })?;
+                self.remote_branch_name(branch)?;
+                let (mut fetch, env) = network();
+                fetch.extend(args(&[
+                    "fetch",
+                    "--no-all",
+                    "--no-recurse-submodules",
+                    "--no-tags",
+                    "--no-prune",
+                    "--no-prune-tags",
+                    "--no-write-fetch-head",
+                    "--refmap=",
+                    "--",
+                    &remote,
+                    &format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}"),
+                    // No `+`: Git itself refuses anything but a fast-forward, and
+                    // refuses a branch checked out in any worktree.
+                    &format!("refs/heads/{branch}:{local_ref}"),
+                ]));
+                let mut fetched = self
+                    .write(&fetch, &env, &[], 0)
+                    .and_then(|output| network_result(output, wsl && interactive))?;
+                let after = resolve(self.location(), &local_ref).map_err(|error| {
+                    Error::new(
+                        "mutationUnverified",
+                        format!("Fetch completed, but {local_ref} could not be read: {} Refresh before another action.", error.message),
+                    )
+                })?;
+                if after == before {
+                    if !fetched.output.is_empty() {
+                        fetched.output.push('\n');
+                    }
+                    fetched.output.push_str("Already up to date.");
+                }
+                Ok(fetched)
             }
             RemoteAction::Pull { pull_mode, .. } => {
                 let current = info.branch.as_ref().ok_or_else(|| {

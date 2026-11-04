@@ -170,13 +170,17 @@ targets go out as one leased non-atomic push with per-ref porcelain outcomes.
 See the [batch contract](../../src-tauri/BACKEND.md#batch-branch-deletion) and the
 `batch_*` regressions in `branch_delete_tests.rs`.[^branch-delete][^branch-delete-ui][^branch-folder-dialog]
 
-Origin reset is an explicitly confirmed destructive graph action for the
-checked-out same-named local branch. Review shows the fetched tip, local-only
-commit count and tracked change count. Execution pins HEAD/ref, operation/content
-fingerprint and origin OID; it discards staged/unstaged tracked work, while
-untracked/ignored target obstructions are refused before `reset --hard`. It does
-not fetch or push, and failures require refresh and an explicit new review rather
-than retry. See `operations_reset_origin_*` real-Git regressions and the dialog
+Origin reset is an explicitly confirmed destructive graph action for a same-named
+local branch, offered from both the local and origin branch menus. Review shows the
+fetched tip, local-only commit count and (for the checked-out branch) tracked change
+count. Execution pins HEAD/ref, operation/content fingerprint and origin OID. On the
+checked-out branch it discards staged/unstaged tracked work, while untracked/ignored
+target obstructions are refused before `reset --hard`; for any other branch only that
+ref moves (`branch --force`) and the checkout is untouched. It does not fetch or push,
+and failures require refresh and an explicit new review rather than retry. A branch
+menu can also fast-forward a non-checked-out branch from origin with
+`RemoteAction::Pull { target }`, which fetches and lets Git refuse anything but a
+fast-forward; see the [backend contract](../../src-tauri/BACKEND.md). See `operations_reset_origin_*` real-Git regressions and the dialog
 tests for source-backed entry points.[^operations][^operation-tests][^origin-reset-dialog]
 
 Untracked obstruction checks summarize ignored/untracked directories, then refine

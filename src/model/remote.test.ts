@@ -81,6 +81,8 @@ describe('success notifications', () => {
     expect(remoteSuccessMessage({ kind: 'pull' }, 'Updating 5c3d0d8..a77d0d8\nFast-forward')).toBe('Pulled updates.');
     expect(remoteSuccessMessage({ kind: 'pull', remote: 'origin', branch: 'main' }, '')).toBe('Pulled updates from origin/main.');
     expect(remoteSuccessMessage({ kind: 'pull' }, 'From example.com\nAlready up to date.\n')).toBe('Already up to date. Nothing to pull.');
+    expect(remoteSuccessMessage({ kind: 'pull', remote: 'origin', branch: 'topic', target: 'topic' }, 'From example.com')).toBe('Fast-forwarded topic from origin/topic.');
+    expect(remoteSuccessMessage({ kind: 'pull', remote: 'origin', branch: 'topic', target: 'topic' }, 'From example.com\nAlready up to date.')).toBe('Already up to date. Nothing to pull.');
     expect(remoteSuccessMessage({ kind: 'pull', pullMode: 'rebase' }, 'Current branch feat/branch-actions is up to date.')).toBe('Already up to date. Nothing to pull.');
   });
 

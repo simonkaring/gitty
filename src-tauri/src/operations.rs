@@ -1075,12 +1075,16 @@ impl Repository {
                     })?;
                 self.valid_name(name, "heads")?;
                 let local_ref = format!("refs/heads/{name}");
-                if state.session.head_ref.as_deref() != Some(local_ref.as_str())
-                    || state.session.head.is_none()
-                {
+                if state.session.head_ref.is_none() || state.session.head.is_none() {
                     return Err(Error::new(
                         "invalidReference",
-                        "Reset requires the checked-out same-named local branch.",
+                        "Reset requires a checked-out local branch.",
+                    ));
+                }
+                if !state.refs.iter().any(|r| r.full_name == local_ref) {
+                    return Err(Error::new(
+                        "invalidReference",
+                        "Reset requires an existing same-named local branch.",
                     ));
                 }
                 let target = state
@@ -1101,14 +1105,28 @@ impl Repository {
                         "The origin tip changed. Refresh and review the reset again.",
                     ));
                 }
-                self.protect_untracked(std::slice::from_ref(&expected_origin_oid))?;
-                a.extend(args(&[
-                    "reset",
-                    "--hard",
-                    "--no-recurse-submodules",
-                    &expected_origin_oid,
-                    "--",
-                ]));
+                if state.session.head_ref.as_deref() == Some(local_ref.as_str()) {
+                    self.protect_untracked(std::slice::from_ref(&expected_origin_oid))?;
+                    a.extend(args(&[
+                        "reset",
+                        "--hard",
+                        "--no-recurse-submodules",
+                        &expected_origin_oid,
+                        "--",
+                    ]));
+                } else {
+                    // Another branch: only its ref moves; HEAD, index and working
+                    // files stay untouched. Git still refuses a branch checked out
+                    // in a linked worktree.
+                    a.extend(args(&[
+                        "branch",
+                        "--force",
+                        "--no-track",
+                        "--",
+                        name,
+                        &expected_origin_oid,
+                    ]));
+                }
             }
             GitAction::Merge {
                 source,

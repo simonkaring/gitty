@@ -47,6 +47,23 @@ it('warns with reviewed counts, focuses Cancel, and never writes on cancellation
     expect(t.onClose).toHaveBeenCalledOnce(); expect(t.onWrite).not.toHaveBeenCalled();
   } finally { await t.cleanup(); }
 });
+it('reviews a branch that is not checked out without claiming working changes are reset', async () => {
+  const other: RepositoryState = { ...state, session: { ...state.session, head: 'main-tip', headRef: 'refs/heads/main' }, refs: [...state.refs, { name: 'feature/topic', fullName: 'refs/heads/feature/topic', kind: 'local', commitId: 'topic-tip' }] };
+  invoke.mockImplementation(async (command: string) => {
+    if (command === 'repository_snapshot') return { state: other, operation, status: { entries: [{ path: 'tracked', untracked: false }] }, history: null };
+    if (command === 'repository_state') return other;
+    if (command === 'repository_operation_state') return operation;
+    if (command === 'repository_branch_relation') return [3, 0];
+    throw new Error(command);
+  });
+  const t = await mount();
+  try {
+    expect(t.host.textContent).toContain('3 commits will be removed');
+    expect(t.host.textContent).toContain('working files are not touched');
+    expect(t.host.textContent).not.toContain('changed tracked');
+    expect(invoke).toHaveBeenCalledWith('repository_branch_relation', { handle: 'h', first: 'topic-tip', second: 'origin-tip' });
+  } finally { await t.cleanup(); }
+});
 it('submits the captured reset request once, only after confirmation', async () => {
   const t = await mount();
   try {
