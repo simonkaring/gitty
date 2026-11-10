@@ -174,9 +174,16 @@ fn verification_uri(provider: Provider, uri: &str) -> Result<String> {
     let allowed = match provider {
         Provider::Github => url.host_str() == Some("github.com"),
         Provider::Gitlab => url.host_str() == Some("gitlab.com"),
+        // Entra answers with login.microsoft.com/device (or the login.microsoftonline.com
+        // variant), and consumer accounts with www.microsoft.com/link.
         Provider::AzureDevops => matches!(
             url.host_str(),
-            Some("microsoft.com" | "www.microsoft.com" | "login.microsoftonline.com")
+            Some(
+                "microsoft.com"
+                    | "www.microsoft.com"
+                    | "login.microsoft.com"
+                    | "login.microsoftonline.com"
+            )
         ),
         Provider::Bitbucket => false,
     };
@@ -363,6 +370,26 @@ mod tests {
     #[test]
     fn sign_in_validates_urls_and_never_exposes_secrets() {
         assert!(verification_uri(Provider::Github, "https://github.com/login/device").is_ok());
+        for url in [
+            "https://login.microsoft.com/device",
+            "https://login.microsoftonline.com/organizations/oauth2/deviceauth",
+            "https://www.microsoft.com/link",
+        ] {
+            assert!(
+                verification_uri(Provider::AzureDevops, url).is_ok(),
+                "{url}"
+            );
+        }
+        for url in [
+            "https://login.microsoft.com.evil.test/device",
+            "http://login.microsoft.com/device",
+            "https://login.microsoft.com:8443/device",
+        ] {
+            assert!(
+                verification_uri(Provider::AzureDevops, url).is_err(),
+                "{url}"
+            );
+        }
         for url in [
             "https://github.com.evil.test",
             "http://github.com",
