@@ -177,38 +177,55 @@ impl AccountStore {
         if !accounts.iter().any(|account| account.id == id) {
             return Err(Error::new("invalidAccount", "Account not found"));
         }
-        match Self::key(id)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => (),
-            Err(_) => {
-                return Err(Error::new(
-                    "credentialStore",
-                    "Could not remove the stored credential",
-                ))
-            }
-        }
+        // Remove the account before its token: if the metadata write fails, the
+        // pair must stay intact. Deleting the token first would leave a listed
+        // account that nothing can authenticate, and `connect` refuses to replace
+        // an existing provider account, so it could not be reconnected.
         accounts.retain(|account| account.id != id);
-        self.save(&accounts)
+        self.save(&accounts)?;
+        match Self::key(id)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(_) => Err(Error::new(
+                "credentialStore",
+                "The account was disconnected, but its saved token could not be removed from the system credential store.",
+            )),
+        }
     }
 
     pub fn credential(&self, id: &str) -> Result<(ProviderAccount, String)> {
-        let _guard = self
-            .lock
-            .lock()
-            .map_err(|_| Error::new("worker", "Account lock poisoned"))?;
-        let account = self
-            .read()?
-            .into_iter()
-            .find(|account| account.id == id)
-            .ok_or_else(|| Error::new("invalidAccount", "Account not found"))?;
-        let token = Self::key(id)?.get_password().map_err(|_| {
-            Error::new(
-                "credentialStore",
-                "Stored credential is missing; reconnect this account",
-            )
-        })?;
-        if account.oauth {
-            let (access, updated) = crate::provider_oauth::access_token(account.provider, &token)?;
-            if let Some(updated) = updated {
+        // Only the local reads and writes hold the lock. A token refresh can take
+        // as long as the provider's HTTP timeout and must not block calls for
+        // other accounts (listing, connecting, another account's request).
+        let (account, token) = {
+            let _guard = self
+                .lock
+                .lock()
+                .map_err(|_| Error::new("worker", "Account lock poisoned"))?;
+            let account = self
+                .read()?
+                .into_iter()
+                .find(|account| account.id == id)
+                .ok_or_else(|| Error::new("invalidAccount", "Account not found"))?;
+            let token = Self::key(id)?.get_password().map_err(|_| {
+                Error::new(
+                    "credentialStore",
+                    "Stored credential is missing; reconnect this account",
+                )
+            })?;
+            (account, token)
+        };
+        if !account.oauth {
+            return Ok((account, token));
+        }
+        let (access, updated) = crate::provider_oauth::access_token(account.provider, &token)?;
+        if let Some(updated) = updated {
+            let _guard = self
+                .lock
+                .lock()
+                .map_err(|_| Error::new("worker", "Account lock poisoned"))?;
+            // A disconnect may have run while the refresh was in flight; never
+            // write a token back for an account that is no longer listed.
+            if self.read()?.iter().any(|account| account.id == id) {
                 Self::key(id)?.set_password(&updated).map_err(|_| {
                     Error::new(
                         "credentialStore",
@@ -216,10 +233,8 @@ impl AccountStore {
                     )
                 })?;
             }
-            Ok((account, access))
-        } else {
-            Ok((account, token))
         }
+        Ok((account, access))
     }
 }
 

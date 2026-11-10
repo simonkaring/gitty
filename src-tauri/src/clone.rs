@@ -361,8 +361,14 @@ fn clone_repository(
             if let Err(error) =
                 publish_completed_clone(&control, &request.parent, &temporary, &destination)
             {
-                cleanup_owned(&request.parent, &temporary);
-                return Err(error);
+                // A cancel during publication discards the clone; any other
+                // failure keeps it, because throwing away a finished download
+                // costs the user the whole transfer.
+                if error.code == "cancelled" {
+                    cleanup_owned(&request.parent, &temporary);
+                    return Err(error);
+                }
+                return Err(keep_completed_clone(error, &temporary));
             }
             match request.parent {
                 RepositoryLocation::Native { .. } => {
@@ -401,6 +407,17 @@ fn clone_repository(
 
 fn cancelled_error() -> Error {
     Error::new("cancelled", "Repository clone was cancelled")
+}
+
+/// Publication can fail after a successful clone, for example when the
+/// destination appeared during the download (another window won the same name).
+/// The kept copy is named in the error so the download is not lost.
+fn keep_completed_clone(mut error: Error, temporary: &str) -> Error {
+    error.message = format!(
+        "{} The finished clone was kept at {temporary}; move it into place or clone to a different name.",
+        error.message
+    );
+    error
 }
 
 fn publish_completed_clone(
@@ -1149,6 +1166,16 @@ mod tests {
         assert!(!published_temporary.exists());
         assert!(published_destination.exists());
         assert!(!publishing.request_cancel());
+    }
+
+    #[test]
+    fn a_failed_publication_names_the_kept_clone() {
+        let error = keep_completed_clone(
+            Error::new("destinationExists", "The destination already exists."),
+            "/tmp/parent/.gitty-clone-1",
+        );
+        assert_eq!(error.code, "destinationExists");
+        assert!(error.message.contains("/tmp/parent/.gitty-clone-1"));
     }
 
     #[test]

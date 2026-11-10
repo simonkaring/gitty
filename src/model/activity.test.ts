@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   clearActivityLog,
   getActivityLog,
@@ -56,6 +56,22 @@ describe('activity log', () => {
     expect(push).toMatchObject({ status: 'error', error: 'Git exited with code 1' });
     expect(push.command).not.toContain('secret');
     expect(fetch.stdin).toBeUndefined();
+  });
+
+  it('files overlapping git commands by completion, with monotonic timestamps', () => {
+    clearActivityLog();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      recordGitCommand({ command: 'git fetch -- origin', stdin: null, success: true, code: 0, millis: 900 });
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.100Z'));
+      recordGitCommand({ command: 'git push -- origin main', stdin: null, success: true, code: 0, millis: 20 });
+      const [fetch, push] = getActivityLog();
+      expect(push.timestamp - fetch.timestamp).toBe(100);
+      expect(fetch.durationMs).toBe(900);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps stdin paths and commit messages whole', () => {

@@ -579,7 +579,10 @@ targeted conflict resolutions have the additional contract documented below.
   untracked (otherwise ignoring it would do nothing). It is append-only, adding a
   newline first when the file lacks one, and goes through a `cap-std` directory handle,
   so a `.gitignore` symlink cannot lead outside the worktree. Names containing a line
-  break are refused. It runs under the mutation lock.
+  break are refused. It runs under the mutation lock. Status is read again for that
+  path afterwards: a `.gitignore` in a subdirectory overrides the root one, so a line
+  that has no effect is removed again and the request fails with `invalidRequest`,
+  naming `git check-ignore -v` for the rule that wins, leaving the file byte-identical.
 - `repository_open_path` and `repository_reveal_path` take a repository-relative path,
   validate it like a write, canonicalize it and require it to stay inside the worktree
   once symlinks are resolved (`invalidPath` otherwise, `notFound` when it is missing).
@@ -700,9 +703,11 @@ operation IDs are UUIDs, and closing the main window cancels registered clones.
   and publishes it with a no-replace rename only after success. A filesystem
   that cannot do a no-replace rename (EINVAL, ENOTSUP or ENOSYS, as on some
   network or FUSE mounts) gets a plain rename after an absence check, so a
-  finished clone is never deleted for that reason. Failure, timeout,
-  and cancellation remove only that owned temporary directory; an existing or
-  concurrently created destination is never overwritten or deleted.
+  finished clone is never deleted for that reason. A failed clone, a timeout, and a
+  cancellation accepted before publication remove only that owned temporary directory;
+  a publication failure after a successful clone keeps the finished copy and names its
+  path in the error, since the download itself succeeded. An existing or concurrently
+  created destination is never overwritten or deleted.
 - Progress records and total progress output are bounded and updates are throttled.
   Cancellation and publication use one atomic lifecycle transition: cancellation
   accepted before publication prevents the destination rename and cleans the owned
@@ -726,7 +731,11 @@ and Microsoft Entra work/school accounts support public-client device authorizat
 GitHub, GitLab.com and Microsoft Entra use publisher app-registration client IDs
 embedded in the build. These IDs are public-client identifiers, not secrets. Only request IDs, user codes, approved
 verification URLs and timing information cross IPC. Device codes stay in Rust;
-tokens are saved only after account verification and refresh before API use.
+tokens are saved only after account verification and refresh before API use. The
+refresh runs without the account lock, so one account's slow provider call does not
+block account listing or another account's request. Disconnect saves the metadata
+list before deleting the credential, so a failed write leaves a usable pair instead
+of a listed account that nothing can authenticate and `connect` refuses to replace.
 
 Provider accounts authorize provider APIs and explicitly selected native HTTPS
 clones. They do not change authentication for later fetch/pull/push operations.

@@ -32,7 +32,8 @@ A stored `gravatar` value is preserved, including values saved under the old
 default; storage does not distinguish those from an explicit choice. An object that predates the
 `authorAvatarMode` key never opted in and migrates to the `initials` default,
 and a missing graph toggle migrates to off, without resetting other
-preferences. Demo and desktop workspaces use the same frontend settings
+preferences. Unknown keys are ignored on read and preserved through a save, so a
+blob written by a newer build (one added preference) does not reset the rest. Demo and desktop workspaces use the same frontend settings
 provider.[^settings][^controls]
 
 When enabled, visible, laid-out commit rows render 22px `AuthorAvatar`

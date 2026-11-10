@@ -231,12 +231,7 @@ impl Repository {
     pub(crate) fn ignore_path(&self, path: &str) -> Result<()> {
         unsupported_location(self)?;
         let path = validate_mutation_path(path)?;
-        let tracked_or_unknown = !self
-            .status_entries()?
-            .entries
-            .iter()
-            .any(|e| e.untracked && e.path.strip_suffix('/').unwrap_or(&e.path) == path);
-        if tracked_or_unknown {
+        if !self.is_untracked(&path)? {
             return Err(Error::new(
                 "invalidRequest",
                 format!("{path} is not an untracked file, so ignoring it would have no effect."),
@@ -258,8 +253,43 @@ impl Repository {
         } else {
             "\n"
         };
-        file.write_all(format!("{separator}{pattern}\n").as_bytes())?;
+        let line = format!("{separator}{pattern}\n");
+        file.write_all(line.as_bytes())?;
+        drop(file);
+        // A `.gitignore` in a subdirectory overrides the root one, so a correct line
+        // here can still have no effect (a nested `!file` re-includes the path).
+        // Verify against the same untracked rows the list shows, and put the file
+        // back so a refused request changes nothing.
+        if self.is_untracked(&path)? {
+            if let Ok(current) = dir.read(".gitignore") {
+                if current.len() == existing.len() + line.len()
+                    && current.ends_with(line.as_bytes())
+                {
+                    if existing.is_empty() {
+                        let _ = dir.remove_file(".gitignore");
+                    } else {
+                        dir.write(".gitignore", &existing)?;
+                    }
+                }
+            }
+            return Err(Error::new(
+                "invalidRequest",
+                format!(
+                    "{path} is still not ignored: a .gitignore in a subdirectory overrides the line added to the root one. Run `git check-ignore -v -- {path}` to see the rule that wins."
+                ),
+            ));
+        }
         Ok(())
+    }
+
+    /// Whether Git still reports this path as untracked, which is the row the
+    /// working-changes list shows and therefore the effect `ignore` must have.
+    fn is_untracked(&self, path: &str) -> Result<bool> {
+        Ok(self
+            .status_entries_at(Some(path))?
+            .entries
+            .iter()
+            .any(|e| e.untracked && e.path.strip_suffix('/').unwrap_or(&e.path) == path))
     }
 }
 

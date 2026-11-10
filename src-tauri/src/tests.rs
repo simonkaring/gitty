@@ -3291,6 +3291,24 @@ fn ignore_path_keeps_existing_content_and_adds_the_missing_newline() {
 }
 
 #[test]
+fn ignore_path_reports_a_rule_that_a_subdirectory_gitignore_overrides() {
+    let d = init();
+    std::fs::write(d.path().join("tracked"), "base\n").unwrap();
+    commit(d.path(), "base");
+    std::fs::create_dir(d.path().join("sub")).unwrap();
+    // A deeper file wins over the root one, so `/sub/keep.txt` there cannot ignore it.
+    std::fs::write(d.path().join("sub/.gitignore"), "*\n!keep.txt\n").unwrap();
+    std::fs::write(d.path().join("sub/keep.txt"), "x\n").unwrap();
+    let (service, _data, handle) = service_for(d.path());
+    let error = service.ignore_path(&handle, "sub/keep.txt").unwrap_err();
+    assert_eq!(error.code, "invalidRequest");
+    assert!(error.message.contains("sub/keep.txt"));
+    // The refused request leaves no line behind, and the file is still untracked.
+    assert!(!d.path().join(".gitignore").exists());
+    assert!(untracked(d.path()).contains(&"sub/keep.txt".to_string()));
+}
+
+#[test]
 fn ignore_path_escapes_names_so_only_that_file_is_ignored() {
     let d = init();
     std::fs::write(d.path().join("tracked"), "base\n").unwrap();

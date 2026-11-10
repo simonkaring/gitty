@@ -49,7 +49,12 @@ Requests have fixed provider origins, bounded responses and no redirects. Pagina
 links do not become arbitrary credential-bearing requests.[^discovery][^browser]
 
 Discovery/clone IPC exposes account metadata and credential-free clone URLs, not tokens. Tokens live in the
-OS credential store, with existing OAuth refresh applied on lookup. Selecting a
+OS credential store, with existing OAuth refresh applied on lookup. The refresh runs
+without the account lock, so a slow provider call delays only that request, and a
+refresh that finishes after a disconnect does not write a token back. Disconnect
+removes the account from the metadata list before deleting its token, so a failed
+write leaves a usable pair instead of a listed account nothing can authenticate.
+Selecting a
 repository adds its account ID to the clone request. Native HTTPS clones inject a
 repository-URL-scoped Authorization header via process-local Git config, disable
 helper/prompt fallback and redirects, and redact tokens from progress/errors.
@@ -61,7 +66,10 @@ WSL, SSH, Bitbucket and self-hosted accounts use neither this browser nor its to
 injection. URL cloning still supports configured Git/SSH credentials and WSL helper
 authentication. Existing cancellation, temporary-directory ownership and no-replace
 publication guards (with a checked plain rename on filesystems that lack a no-replace
-rename) are shared by both clone paths. The shared child waiter kills/reaps the
+rename) are shared by both clone paths. A publication failure after a successful
+clone keeps the finished copy and names it in the error; only a failed, timed-out or
+cancelled clone deletes its owned temporary directory, so a lost race for the
+destination name never costs a finished download.[^clone] The shared child waiter kills/reaps the
 local process tree; abnormal pipe-reader cleanup is bounded even when an escaped
 descendant keeps a pipe open.[^entry][^clone][^contract]
 

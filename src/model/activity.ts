@@ -184,7 +184,10 @@ export interface GitCommandEvent { command: string; stdin: string | null; succes
 export function recordGitCommand({ command, stdin, success, code, millis }: GitCommandEvent): void {
   append({
     id: nextId++,
-    timestamp: Date.now() - millis,
+    // Filed when it is recorded: `Date.now() - millis` would place an entry behind a
+    // command that started later but finished first, so the log would show neither
+    // start order nor finish order. The duration is kept in `durationMs`.
+    timestamp: Date.now(),
     command: scrubUrls(command),
     args: '',
     ...(stdin ? { stdin: clip(scrubUrls(stdin)) } : {}),

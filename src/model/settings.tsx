@@ -44,7 +44,9 @@ export function validateSettings(value: unknown): Settings {
   const s = value as Settings;
   if (s.version !== 1) throw new Error('Unsupported settings version.');
   if (typeof s.graphAuthorAvatars !== 'boolean') throw new Error('Invalid graph avatar preference.');
-  if (Object.keys(s).some(k => !Object.hasOwn(DEFAULT_SETTINGS, k)) || !['fixed', 'system'].includes(s.themeMode) || !['unified', 'split'].includes(s.diffView) || !['initials', 'gravatar'].includes(s.authorAvatarMode) || typeof s.diffWrap !== 'boolean' || !Number.isInteger(s.fontSize) || s.fontSize < 11 || s.fontSize > 22 || !MONO_FONTS.includes(s.monoFont as typeof MONO_FONTS[number]) || !Array.isArray(s.customThemes) || s.customThemes.length > MAX_CUSTOM_THEMES) throw new Error('Invalid preference values.');
+  // Unknown keys are ignored rather than rejected: a blob written by a newer build
+  // (one added preference) must not make this build discard every other preference.
+  if (!['fixed', 'system'].includes(s.themeMode) || !['unified', 'split'].includes(s.diffView) || !['initials', 'gravatar'].includes(s.authorAvatarMode) || typeof s.diffWrap !== 'boolean' || !Number.isInteger(s.fontSize) || s.fontSize < 11 || s.fontSize > 22 || !MONO_FONTS.includes(s.monoFont as typeof MONO_FONTS[number]) || !Array.isArray(s.customThemes) || s.customThemes.length > MAX_CUSTOM_THEMES) throw new Error('Invalid preference values.');
   const customThemes = s.customThemes.map(validateTheme);
   if (!Array.isArray(s.commitProfiles) || s.commitProfiles.length > MAX_COMMIT_PROFILES) throw new Error('Invalid commit profiles.');
   const commitProfiles = s.commitProfiles.map(validateCommitProfile);
@@ -68,14 +70,11 @@ export function readSettings(storage: PreferenceStorage): { settings: Settings; 
     const saved = storage.getItem(SETTINGS_KEY);
     if (saved !== null) {
       const parsed = JSON.parse(saved);
-      if (parsed && typeof parsed === 'object') {
-        if (!('historyColumns' in parsed)) parsed.historyColumns = DEFAULT_HISTORY_COLUMNS;
-        if (!('commitProfiles' in parsed)) parsed.commitProfiles = [];
-        if (!('repositoryCommitProfiles' in parsed)) parsed.repositoryCommitProfiles = {};
-        // Privacy default: a stored object without the key never opted in to Gravatar, so it gets the new initials default; an explicit stored 'gravatar' is preserved.
-        if (!('authorAvatarMode' in parsed)) parsed.authorAvatarMode = DEFAULT_SETTINGS.authorAvatarMode;
-        if (!('graphAuthorAvatars' in parsed)) parsed.graphAuthorAvatars = DEFAULT_SETTINGS.graphAuthorAvatars;
-      }
+      // Backfill every missing preference from its default in one place, so adding a
+      // preference needs no second edit here. A stored object without the key never
+      // opted in to a non-default value (Gravatar, for example), so it gets the
+      // default; an explicit stored value is preserved.
+      if (parsed && typeof parsed === 'object') for (const [key, fallback] of Object.entries(DEFAULT_SETTINGS)) if (!(key in parsed)) parsed[key] = fallback;
       return { settings: validateSettings(parsed), error: null };
     }
     const legacy = storage.getItem('gitty:theme');
