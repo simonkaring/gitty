@@ -391,6 +391,38 @@ fn working_file_previews_with_thousands_of_unrelated_changes() {
 }
 
 #[test]
+fn normalized_line_endings_report_status_without_an_empty_preview() {
+    let d = init();
+    git(d.path(), &["config", "core.autocrlf", "true"]);
+    std::fs::write(d.path().join("line-endings.txt"), "first\r\nsecond\r\n").unwrap();
+    commit(d.path(), "line endings");
+    std::fs::write(d.path().join("line-endings.txt"), "first\nsecond\n").unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let mut service = Service::new(data.path().into());
+    let state = open(&mut service, d.path());
+    let repo = service.repo(&state.session.handle).unwrap();
+    assert_eq!(repo.status().unwrap().entries[0].worktree_status, "M");
+    let error = repo
+        .diff(&DiffSpec::Unstaged, "line-endings.txt")
+        .unwrap_err();
+    assert_eq!(error.code, "noPatch");
+    assert!(error.message.contains("normalizes line endings"));
+    assert_eq!(
+        repo.diff(&DiffSpec::Staged, "line-endings.txt")
+            .unwrap_err()
+            .code,
+        "fileNotInDiff"
+    );
+    std::fs::write(d.path().join("untracked.txt"), "new\n").unwrap();
+    assert_eq!(
+        repo.diff(&DiffSpec::Unstaged, "untracked.txt")
+            .unwrap_err()
+            .code,
+        "fileNotInDiff"
+    );
+}
+
+#[test]
 fn rename_binary_mode_and_unstaged_diff() {
     let d = init();
     std::fs::write(d.path().join("old\tname"), "first\nsecond\nthird\n").unwrap();

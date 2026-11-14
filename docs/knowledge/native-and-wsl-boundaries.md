@@ -105,6 +105,9 @@ askpass registry is available, the helper-UI fallback (`credential.interactive=t
 remains. Background fetch stays noninteractive. This is
 implemented capability, not a claim of successful Windows/WSL runtime
 verification.[^remote][^askpass][^readme]
+With the bridge, SSH batch mode is disabled so Git can invoke askpass for
+passphrases; strict host-key checking remains enabled. Background and fallback
+SSH behavior stays noninteractive.
 
 Native interactive actions (fetch/pull/push, origin branch deletion, URL clone) also
 hold a per-operation scoped askpass token, not the app token, so prompts end with
@@ -140,9 +143,6 @@ Inspect `command_inner`, `remote_action`, `wsl_executable_path`, and
 `wsl_network_bridge_uses_scoped_token_and_linux_executable_path` test checks
 argument/token construction, not real interop execution.[^bridge-test]
 
-Open verification point: `network_args_wsl` sets `SSH_ASKPASS` but inherits
-`core.sshCommand=ssh -oBatchMode=yes …` from `network_args(false, None)`.
-Do not infer interactive SSH passphrase support from that environment variable.
 The `allow_credential_helper_ui` comment now describes only the WSL fallback
 branch (no registry, or `wslpath` translation failed).[^remote]
 

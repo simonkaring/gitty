@@ -162,10 +162,27 @@ impl Repository {
             path,
         ]));
         let raw = process::text(process::checked(self.location(), &a)?)?;
-        let file = parse_diff_files(&raw)?
+        let file = match parse_diff_files(&raw)?
             .into_iter()
             .find(|file| file.path == path)
-            .ok_or_else(missing)?;
+        {
+            Some(file) => file,
+            None if matches!(spec, DiffSpec::Unstaged | DiffSpec::Conflict)
+                && self
+                    .status_entries_at(Some(path))?
+                    .entries
+                    .iter()
+                    .any(|entry| {
+                        entry.path == path && !entry.untracked && entry.worktree_status != "."
+                    }) =>
+            {
+                return Err(Error::new(
+                    "noPatch",
+                    "Git reports this file as changed but has no diff to preview. This can happen when Git normalizes line endings.",
+                ));
+            }
+            None => return Err(missing()),
+        };
         if !matches!(file.status.as_str(), "A" | "D") {
             return Ok(file);
         }

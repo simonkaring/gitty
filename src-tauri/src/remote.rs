@@ -743,13 +743,14 @@ pub(crate) fn network_args_wsl(
     registry: &crate::askpass::AskpassRegistry,
     token: &str,
 ) -> (Vec<String>, Vec<(String, String)>) {
-    let (mut args, mut env) = network_args(false, None);
-    env.retain(|(key, _)| key != "GCM_INTERACTIVE");
+    let (mut args, mut env) = network_args(true, None);
     args.extend(crate::process::args(&[
         "-c",
         "credential.interactive=true",
         "-c",
         &format!("core.askPass={executable}"),
+        "-c",
+        "core.sshCommand=ssh -oBatchMode=no -oStrictHostKeyChecking=yes",
     ]));
     env.extend([
         ("GIT_ASKPASS".into(), executable.into()),

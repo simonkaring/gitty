@@ -20,6 +20,9 @@ fn wsl_network_bridge_uses_scoped_token_and_linux_executable_path() {
         .iter()
         .any(|arg| arg == "core.askPass=/mnt/c/Program Files/Gitty/gitty.exe"));
     assert!(args.iter().any(|arg| arg == "credential.interactive=true"));
+    assert!(args
+        .iter()
+        .any(|arg| arg == "core.sshCommand=ssh -oBatchMode=no -oStrictHostKeyChecking=yes"));
     assert!(env
         .iter()
         .any(|(key, value)| key == "GITTY_ASKPASS_TOKEN" && value == guard.token()));

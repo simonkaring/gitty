@@ -239,6 +239,9 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   read complete repository status. The selected index entries are checked before
   and after actionable patch reads, and hunk tokens still fingerprint original
   patch bytes and index entries. Commit/comparison file-list behavior is unchanged.
+  For unstaged/conflict previews only, a tracked worktree change with no raw diff
+  entry returns `noPatch` with an explanation (often line-ending normalization);
+  staged and untracked membership errors retain their normal behavior.
 - Recent repositories are stored in app-data `recent-repositories.json`, capped
   at 20 and replaced atomically. No repository files are written. The list never
   blocks opening: a damaged file is replaced by the next open, and a file that
