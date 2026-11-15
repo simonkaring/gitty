@@ -5,7 +5,7 @@
 //! handshake deadline, and (in the callers) byte limits on what is read.
 use std::io::{self, BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -151,6 +151,20 @@ pub(crate) fn write_helper_script(path: &Path, contents: &str) -> io::Result<()>
     }
     file.persist(path).map_err(|e| e.error)?;
     Ok(())
+}
+
+/// Binds a loopback listener and installs a fresh `<prefix><uuid>` helper script
+/// for `mode`. A unique, exclusively created file avoids overwriting another
+/// process's script (or following a pre-existing symlink in the temp directory).
+pub(crate) fn bind_helper(prefix: &str, mode: &str) -> io::Result<(TcpListener, u16, PathBuf)> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    let tmp_dir = std::env::temp_dir();
+    remove_stale_helpers(&tmp_dir, prefix, STALE_HELPER_AGE);
+    let extension = if cfg!(windows) { "bat" } else { "sh" };
+    let script_path = tmp_dir.join(format!("{prefix}{}.{extension}", uuid::Uuid::new_v4()));
+    write_helper_script(&script_path, &helper_script(mode)?)?;
+    Ok((listener, port, script_path))
 }
 
 /// Puts back a helper script that vanished while the app kept running: another

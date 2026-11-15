@@ -1,10 +1,9 @@
 use crate::{
-    clone_dto::{CloneProgress, CloneRequest},
+    clone_dto::CloneProgress,
     dto::{self, *},
     events::{EventEnvelope, EventQueue},
-    mutate,
-    operation_dto::*,
-    process,
+    mutate, process,
+    protocol::{self, parse_params},
     repository::Service,
     watcher::Watchers,
 };
@@ -26,25 +25,6 @@ pub struct PortableReview {
     pub preview: Option<String>,
 }
 
-const REVIEWABLE_METHODS: &[&str] = &[
-    "repository_stage",
-    "repository_unstage",
-    "repository_discard",
-    "repository_stage_hunk",
-    "repository_unstage_hunk",
-    "repository_create_commit",
-    "repository_amend_commit",
-    "repository_resolve_conflict",
-    "repository_run_operation",
-    "repository_delete_branch",
-    "repository_delete_branches",
-    "repository_worktree_execute",
-    "repository_stash_action",
-    "repository_remote_action",
-    "repository_write_commit_graph",
-    "repository_ignore_path",
-];
-
 /// Restricted, non-interactive repository API for the local agent CLI.
 pub struct AgentService {
     service: Service,
@@ -56,92 +36,8 @@ pub struct AgentService {
     editor: Option<Arc<crate::editor::EditorRegistry>>,
 }
 
-fn agent_fields<'a>(
-    value: &'a serde_json::Value,
-    allowed: &[&str],
-) -> Result<&'a serde_json::Map<String, serde_json::Value>> {
-    let fields = value
-        .as_object()
-        .ok_or_else(|| dto::Error::new("invalidRequest", "params must be an object"))?;
-    if fields.keys().any(|key| !allowed.contains(&key.as_str())) {
-        return Err(dto::Error::new(
-            "invalidRequest",
-            "params contains an unknown field",
-        ));
-    }
-    Ok(fields)
-}
-
-fn agent_string(fields: &serde_json::Map<String, serde_json::Value>, key: &str) -> Result<String> {
-    fields
-        .get(key)
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| dto::Error::new("invalidRequest", format!("{key} must be a string")))
-}
-
-fn agent_optional_string(
-    fields: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-) -> Result<Option<String>> {
-    match fields.get(key) {
-        None | Some(serde_json::Value::Null) => Ok(None),
-        Some(serde_json::Value::String(value)) => Ok(Some(value.clone())),
-        _ => Err(dto::Error::new(
-            "invalidRequest",
-            format!("{key} must be a string or null"),
-        )),
-    }
-}
-
-fn agent_optional_bool(
-    fields: &serde_json::Map<String, serde_json::Value>,
-    key: &str,
-) -> Result<bool> {
-    match fields.get(key) {
-        None => Ok(false),
-        Some(serde_json::Value::Bool(value)) => Ok(*value),
-        _ => Err(dto::Error::new(
-            "invalidRequest",
-            format!("{key} must be a boolean when provided"),
-        )),
-    }
-}
-
 fn agent_value(value: impl serde::Serialize) -> Result<serde_json::Value> {
     serde_json::to_value(value).map_err(|error| dto::Error::new("serialization", error.to_string()))
-}
-
-fn agent_location(value: &serde_json::Value) -> Result<dto::RepositoryLocation> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| dto::Error::new("invalidRequest", "location must be an object"))?;
-    let kind = object
-        .get("kind")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| dto::Error::new("invalidRequest", "location.kind is required"))?;
-    let allowed: &[&str] = match kind {
-        "native" => &["kind", "path"],
-        "wsl" => &["kind", "distribution", "path"],
-        "ssh" => &["kind", "host", "port", "user", "path"],
-        _ => return Err(dto::Error::new("invalidRequest", "unknown location kind")),
-    };
-    agent_fields(value, allowed)?;
-    let required: &[&str] = match kind {
-        "native" | "wsl" => &["path"],
-        "ssh" => &["host", "path"],
-        _ => unreachable!(),
-    };
-    if required.iter().any(|key| !object.contains_key(*key))
-        || (kind == "wsl" && !object.contains_key("distribution"))
-    {
-        return Err(dto::Error::new(
-            "invalidRequest",
-            "location is missing required fields",
-        ));
-    }
-    serde_json::from_value(value.clone())
-        .map_err(|_| dto::Error::new("invalidRequest", "location is invalid"))
 }
 
 impl AgentService {
@@ -303,18 +199,10 @@ impl AgentService {
         method: &str,
         params: serde_json::Value,
     ) -> Result<PortableReview> {
-        if !REVIEWABLE_METHODS.contains(&method) {
-            return Err(dto::Error::new(
-                "unsupportedOperation",
-                "This action does not have a portable review form",
-            ));
-        }
-        let params = crate::protocol::validate_portable_params(method, params)?;
+        let params = protocol::validate_portable_params(method, params)?;
         let repo = self.service.repo(handle)?;
         let status = repo.status()?;
         let session = &repo.session;
-        let mut reviewed_method = method.to_string();
-        let params = params;
         let mut worktree_token = None;
         let mut preview = None;
         if method == "repository_worktree_execute" {
@@ -334,11 +222,10 @@ impl AgentService {
                     "worktree review returned no token",
                 ));
             }
-            reviewed_method = "repository_worktree_execute".into();
         }
         Ok(PortableReview {
             version: 1,
-            method: reviewed_method,
+            method: method.to_string(),
             location: session.location.clone(),
             root: session.root.clone(),
             common_dir: session.common_dir.clone(),
@@ -356,10 +243,10 @@ impl AgentService {
     }
 
     fn execute_review_inner(&self, review: PortableReview) -> Result<serde_json::Value> {
-        if review.version != 1 || !REVIEWABLE_METHODS.contains(&review.method.as_str()) {
+        if review.version != 1 {
             return Err(dto::Error::new(
                 "invalidReview",
-                "Unsupported portable review version or action",
+                "Unsupported portable review version",
             ));
         }
         let validated =
@@ -426,34 +313,26 @@ impl AgentService {
                     "This operation requires the desktop host",
                 ));
             }
-            let params = crate::protocol::validate_params(method, params)?;
-            let fields = params
-                .as_object()
-                .expect("validated method params are an object");
-            let handle = || agent_string(fields, "handle");
+            let accounts = || {
+                self.accounts.as_ref().ok_or_else(|| {
+                    dto::Error::new("accountPolicy", "System account access is disabled")
+                })
+            };
+            let handle = |params| parse_params::<protocol::Handle>(params).map(|p| p.handle);
             match method {
                 "repository_open" => {
-                    let location_value = fields
-                        .get("location")
-                        .ok_or_else(|| dto::Error::new("invalidRequest", "location is required"))?;
-                    let location = agent_location(location_value)?;
-                    agent_value(self.service.open(location)?)
+                    let p: protocol::Open = parse_params(params)?;
+                    agent_value(self.service.open(p.location)?)
                 }
                 "repository_close" => {
-                    let handle = handle()?;
+                    let handle = handle(params)?;
                     self.watchers.stop(&handle);
                     self.service.close(&handle)?;
                     Ok(serde_json::Value::Null)
                 }
                 "repository_clone" => {
-                    let operation_id = agent_string(fields, "operationId")?;
-                    let request: CloneRequest = serde_json::from_value(
-                        fields.get("request").cloned().ok_or_else(|| {
-                            dto::Error::new("invalidRequest", "request is required")
-                        })?,
-                    )
-                    .map_err(|_| dto::Error::new("invalidRequest", "clone request is invalid"))?;
-                    let credential = match (&request.account_id, &self.accounts) {
+                    let p: protocol::Clone = parse_params(params)?;
+                    let credential = match (&p.request.account_id, &self.accounts) {
                         (Some(_), None) => {
                             return Err(dto::Error::new(
                                 "accountPolicy",
@@ -461,16 +340,16 @@ impl AgentService {
                             ))
                         }
                         (Some(_), Some(accounts)) => Some(
-                            crate::provider_repositories::clone_credential(accounts, &request)?,
+                            crate::provider_repositories::clone_credential(accounts, &p.request)?,
                         ),
                         (None, _) => None,
                     };
                     let credential = credential.flatten();
                     let events = self.events.clone();
-                    let event_operation_id = operation_id.clone();
+                    let event_operation_id = p.operation_id.clone();
                     agent_value(self.service.clone_repository_with_account(
-                        &operation_id,
-                        request,
+                        &p.operation_id,
+                        p.request,
                         move |progress: CloneProgress| {
                             events.push(
                                 "repository_clone",
@@ -487,21 +366,13 @@ impl AgentService {
                     )?)
                 }
                 "repository_cancel_clone" => {
-                    self.service
-                        .cancel_clone(&agent_string(fields, "operationId")?)?;
+                    let p: protocol::CancelClone = parse_params(params)?;
+                    self.service.cancel_clone(&p.operation_id)?;
                     Ok(serde_json::Value::Null)
                 }
                 "repository_prompt_reply" => {
-                    let kind = agent_string(fields, "kind")?;
-                    let request_id = fields
-                        .get("requestId")
-                        .and_then(serde_json::Value::as_u64)
-                        .and_then(|value| usize::try_from(value).ok())
-                        .ok_or_else(|| {
-                            dto::Error::new("invalidRequest", "requestId must be an integer")
-                        })?;
-                    let response = agent_optional_string(fields, "response")?;
-                    let result = match kind.as_str() {
+                    let p: protocol::PromptReply = parse_params(params)?;
+                    let result = match p.kind.as_str() {
                         "askpass" => self
                             .askpass
                             .as_ref()
@@ -511,7 +382,7 @@ impl AgentService {
                                     "Prompt events are disabled for this CLI session",
                                 )
                             })?
-                            .reply(request_id, response),
+                            .reply(p.request_id, p.response),
                         "editor" => self
                             .editor
                             .as_ref()
@@ -521,7 +392,7 @@ impl AgentService {
                                     "Prompt events are disabled for this CLI session",
                                 )
                             })?
-                            .reply(request_id, response),
+                            .reply(p.request_id, p.response),
                         _ => {
                             return Err(dto::Error::new(
                                 "invalidRequest",
@@ -533,6 +404,7 @@ impl AgentService {
                     Ok(serde_json::Value::Null)
                 }
                 "list_provider_accounts" => {
+                    parse_params::<protocol::Empty>(params)?;
                     let accounts = self.accounts.as_ref().ok_or_else(|| {
                         dto::Error::new(
                             "accountPolicy",
@@ -542,483 +414,290 @@ impl AgentService {
                     agent_value(accounts.list()?)
                 }
                 "provider_connect_token" => {
-                    let accounts = self.accounts.as_ref().ok_or_else(|| {
-                        dto::Error::new("accountPolicy", "System account access is disabled")
-                    })?;
-                    let provider =
-                        serde_json::from_value(fields.get("provider").cloned().unwrap_or_default())
-                            .map_err(|_| {
-                                dto::Error::new("invalidRequest", "provider is invalid")
-                            })?;
-                    agent_value(accounts.connect_token(
-                        provider,
-                        agent_string(fields, "username")?,
-                        agent_string(fields, "token")?,
-                    )?)
+                    let p: protocol::ProviderConnectToken = parse_params(params)?;
+                    agent_value(accounts()?.connect_token(p.provider, p.username, p.token)?)
                 }
                 "provider_oauth_start" => {
-                    if self.accounts.is_none() {
-                        return Err(dto::Error::new(
-                            "accountPolicy",
-                            "System account access is disabled",
-                        ));
-                    }
-                    let provider =
-                        serde_json::from_value(fields.get("provider").cloned().unwrap_or_default())
-                            .map_err(|_| {
-                                dto::Error::new("invalidRequest", "provider is invalid")
-                            })?;
-                    agent_value(self.oauth.start(provider)?)
+                    let p: protocol::ProviderOAuthStart = parse_params(params)?;
+                    accounts()?;
+                    agent_value(self.oauth.start(p.provider)?)
                 }
                 "provider_oauth_poll" => {
-                    let accounts = self.accounts.as_ref().ok_or_else(|| {
-                        dto::Error::new("accountPolicy", "System account access is disabled")
-                    })?;
-                    agent_value(self.oauth.poll(accounts, &agent_string(fields, "id")?)?)
+                    let p: protocol::ProviderOAuthSession = parse_params(params)?;
+                    agent_value(self.oauth.poll(accounts()?, &p.id)?)
                 }
                 "provider_oauth_cancel" => {
-                    if self.accounts.is_none() {
-                        return Err(dto::Error::new(
-                            "accountPolicy",
-                            "System account access is disabled",
-                        ));
-                    }
-                    self.oauth.cancel(&agent_string(fields, "id")?)?;
+                    let p: protocol::ProviderOAuthSession = parse_params(params)?;
+                    accounts()?;
+                    self.oauth.cancel(&p.id)?;
                     Ok(serde_json::Value::Null)
                 }
                 "provider_disconnect" => {
-                    let accounts = self.accounts.as_ref().ok_or_else(|| {
-                        dto::Error::new("accountPolicy", "System account access is disabled")
-                    })?;
-                    accounts.disconnect(&agent_string(fields, "accountId")?)?;
+                    let p: protocol::ProviderDisconnect = parse_params(params)?;
+                    accounts()?.disconnect(&p.account_id)?;
                     Ok(serde_json::Value::Null)
                 }
                 "provider_repositories" => {
-                    let accounts = self.accounts.as_ref().ok_or_else(|| {
-                        dto::Error::new("accountPolicy", "System account access is disabled")
-                    })?;
-                    let organization = agent_optional_string(fields, "organization")?;
-                    let cursor = agent_optional_string(fields, "cursor")?;
+                    let p: protocol::ProviderRepositories = parse_params(params)?;
                     agent_value(crate::provider_repositories::repositories(
-                        accounts,
-                        &agent_string(fields, "accountId")?,
-                        organization.as_deref(),
-                        cursor.as_deref(),
+                        accounts()?,
+                        &p.account_id,
+                        p.organization.as_deref(),
+                        p.cursor.as_deref(),
                     )?)
                 }
                 "provider_organizations" => {
-                    let accounts = self.accounts.as_ref().ok_or_else(|| {
-                        dto::Error::new("accountPolicy", "System account access is disabled")
-                    })?;
+                    let p: protocol::ProviderOrganizations = parse_params(params)?;
                     agent_value(crate::provider_repositories::organizations(
-                        accounts,
-                        &agent_string(fields, "accountId")?,
+                        accounts()?,
+                        &p.account_id,
                     )?)
                 }
                 "provider_pull_requests" => {
-                    let accounts = self.accounts.as_ref().ok_or_else(|| {
-                        dto::Error::new("accountPolicy", "System account access is disabled")
-                    })?;
+                    let p: protocol::ProviderPullRequestsRequest = parse_params(params)?;
                     agent_value(self.service.provider_pull_requests(
-                        accounts,
-                        &agent_string(fields, "handle")?,
-                        &agent_string(fields, "remote")?,
-                        &agent_string(fields, "accountId")?,
+                        accounts()?,
+                        &p.handle,
+                        &p.remote,
+                        &p.account_id,
                     )?)
                 }
                 "provider_create_pull_request" => {
-                    let accounts = self.accounts.as_ref().ok_or_else(|| {
-                        dto::Error::new("accountPolicy", "System account access is disabled")
-                    })?;
-                    let request =
-                        serde_json::from_value(fields.get("request").cloned().ok_or_else(
-                            || dto::Error::new("invalidRequest", "request is required"),
-                        )?)
-                        .map_err(|_| {
-                            dto::Error::new("invalidRequest", "pull request input is invalid")
-                        })?;
+                    let p: protocol::CreateProviderPullRequest = parse_params(params)?;
                     agent_value(self.service.provider_create_pull_request(
-                        accounts,
-                        &agent_string(fields, "handle")?,
-                        &agent_string(fields, "remote")?,
-                        &agent_string(fields, "accountId")?,
-                        request,
+                        accounts()?,
+                        &p.handle,
+                        &p.remote,
+                        &p.account_id,
+                        p.request,
                     )?)
                 }
-                "ssh_test" => {
-                    let target = serde_json::from_value(params.clone())
-                        .map_err(|_| dto::Error::new("invalidRequest", "SSH target is invalid"))?;
-                    agent_value(crate::ssh::test(target)?)
+                "ssh_test" => agent_value(crate::ssh::test(parse_params(params)?)?),
+                "ssh_directories" => agent_value(crate::ssh::directories(parse_params(params)?)?),
+                "wsl_distributions" => {
+                    parse_params::<protocol::Empty>(params)?;
+                    agent_value(crate::wsl::distributions()?)
                 }
-                "ssh_directories" => {
-                    let target = serde_json::from_value(params.clone())
-                        .map_err(|_| dto::Error::new("invalidRequest", "SSH target is invalid"))?;
-                    agent_value(crate::ssh::directories(target)?)
+                "wsl_directories" => {
+                    let p: protocol::WslDirectories = parse_params(params)?;
+                    agent_value(crate::wsl::directories(&p.distribution, &p.path)?)
                 }
-                "wsl_distributions" => agent_value(crate::wsl::distributions()?),
-                "wsl_directories" => agent_value(crate::wsl::directories(
-                    &agent_string(fields, "distribution")?,
-                    &agent_string(fields, "path")?,
-                )?),
-                "repository_state" => agent_value(self.service.repo(&handle()?)?.state()?),
+                "repository_state" => agent_value(self.service.repo(&handle(params)?)?.state()?),
                 "repository_git_identity" => {
-                    agent_value(self.service.repo(&handle()?)?.git_identity()?)
+                    agent_value(self.service.repo(&handle(params)?)?.git_identity()?)
                 }
                 "repository_set_git_identity" => {
-                    let identity =
-                        agent_value(fields.get("identity").cloned().unwrap_or_default())?;
-                    let identity = serde_json::from_value(identity)
-                        .map_err(|_| dto::Error::new("invalidRequest", "identity is invalid"))?;
-                    let expected = fields.get("expectedLocal").cloned().ok_or_else(|| {
-                        dto::Error::new("invalidRequest", "expectedLocal is required")
-                    })?;
-                    let expected = serde_json::from_value(expected).map_err(|_| {
-                        dto::Error::new("invalidRequest", "expectedLocal is invalid")
-                    })?;
-                    agent_value(
-                        self.service
-                            .set_git_identity(&handle()?, &identity, &expected)?,
-                    )
-                }
-                "repository_status" => agent_value(self.service.repo(&handle()?)?.status()?),
-                "repository_operation_state" => {
-                    agent_value(self.service.repo(&handle()?)?.operation_state()?)
-                }
-                "repository_branch_relation" => {
-                    agent_value(self.service.repo(&handle()?)?.branch_relation(
-                        &agent_string(fields, "first")?,
-                        &agent_string(fields, "second")?,
+                    let p: protocol::SetIdentity = parse_params(params)?;
+                    agent_value(self.service.set_git_identity(
+                        &p.handle,
+                        &p.identity,
+                        &p.expected_local,
                     )?)
                 }
+                "repository_status" => agent_value(self.service.repo(&handle(params)?)?.status()?),
+                "repository_operation_state" => {
+                    agent_value(self.service.repo(&handle(params)?)?.operation_state()?)
+                }
+                "repository_branch_relation" => {
+                    let p: protocol::BranchRelation = parse_params(params)?;
+                    agent_value(
+                        self.service
+                            .repo(&p.handle)?
+                            .branch_relation(&p.first, &p.second)?,
+                    )
+                }
                 "repository_search" => {
-                    let query = fields
-                        .get("query")
-                        .cloned()
-                        .ok_or_else(|| dto::Error::new("invalidRequest", "query is required"))?;
-                    let query = serde_json::from_value(query)
-                        .map_err(|_| dto::Error::new("invalidRequest", "query is invalid"))?;
-                    agent_value(self.service.repo(&handle()?)?.search(query)?)
+                    let p: protocol::Search = parse_params(params)?;
+                    agent_value(self.service.repo(&p.handle)?.search(p.query)?)
                 }
                 "repository_cancel_search" => {
-                    self.service.cancel_search(&handle()?)?;
+                    self.service.cancel_search(&handle(params)?)?;
                     Ok(serde_json::Value::Null)
                 }
                 "repository_sync_info" => {
-                    let repo = self.service.repo(&handle()?)?;
-                    match agent_optional_string(fields, "branch")? {
+                    let p: protocol::SyncInfoRequest = parse_params(params)?;
+                    let repo = self.service.repo(&p.handle)?;
+                    match p.branch {
                         Some(branch) => agent_value(repo.sync_info_for(&branch)?),
                         None => agent_value(repo.sync_info()?),
                     }
                 }
-                "repository_worktrees" => agent_value(self.service.repo(&handle()?)?.worktrees()?),
+                "repository_worktrees" => {
+                    agent_value(self.service.repo(&handle(params)?)?.worktrees()?)
+                }
                 "repository_snapshot" => {
-                    let repo = self.service.repo(&handle()?)?;
-                    let history = fields
-                        .get("history")
-                        .cloned()
-                        .filter(|value| !value.is_null())
-                        .map(serde_json::from_value::<SnapshotHistory>)
-                        .transpose()
-                        .map_err(|_| {
-                            dto::Error::new("invalidRequest", "history options are invalid")
-                        })?;
-                    agent_value(match history {
+                    let p: protocol::Snapshot = parse_params(params)?;
+                    let repo = self.service.repo(&p.handle)?;
+                    agent_value(match p.history {
                         Some(history) => repo.snapshot_with_history(Some(history))?,
                         None => repo.snapshot()?,
                     })
                 }
                 "repository_history" => {
-                    let cursor = agent_optional_string(fields, "cursor")?;
-                    let limit = match fields.get("limit") {
-                        Some(value) => value.as_u64().and_then(|n| usize::try_from(n).ok()),
-                        None => Some(200),
-                    }
-                    .ok_or_else(|| dto::Error::new("invalidRequest", "limit must be an integer"))?;
-                    let query = fields
-                        .get("query")
-                        .cloned()
-                        .unwrap_or_else(|| serde_json::json!({}));
-                    let query_fields = agent_fields(&query, &["branch"])?;
-                    let _ = agent_optional_string(query_fields, "branch")?;
-                    let query: dto::HistoryQuery = serde_json::from_value(query)
-                        .map_err(|_| dto::Error::new("invalidRequest", "query is invalid"))?;
-                    agent_value(
-                        self.service
-                            .repo(&handle()?)?
-                            .history(cursor, limit, query)?,
-                    )
+                    let p: protocol::History = parse_params(params)?;
+                    agent_value(self.service.repo(&p.handle)?.history(
+                        p.cursor,
+                        p.limit.unwrap_or(200),
+                        p.query.unwrap_or_default(),
+                    )?)
                 }
-                "repository_commit" => agent_value(
-                    self.service
-                        .repo(&handle()?)?
-                        .commit(&agent_string(fields, "oid")?)?,
-                ),
-                "repository_conflict_file" => agent_value(
-                    self.service
-                        .repo(&handle()?)?
-                        .conflict_file(&agent_string(fields, "path")?)?,
-                ),
+                "repository_commit" => {
+                    let p: protocol::Commit = parse_params(params)?;
+                    agent_value(self.service.repo(&p.handle)?.commit(&p.oid)?)
+                }
+                "repository_conflict_file" => {
+                    let p: protocol::PathRequest = parse_params(params)?;
+                    agent_value(self.service.repo(&p.handle)?.conflict_file(&p.path)?)
+                }
                 "repository_resolve_conflict" => {
-                    let resolution = fields.get("resolution").cloned().ok_or_else(|| {
-                        dto::Error::new("invalidRequest", "resolution is required")
-                    })?;
-                    let resolution = serde_json::from_value(resolution)
-                        .map_err(|_| dto::Error::new("invalidRequest", "resolution is invalid"))?;
+                    let p: protocol::ResolveConflict = parse_params(params)?;
                     self.service.resolve_conflict(
-                        &handle()?,
-                        &agent_string(fields, "path")?,
-                        &agent_string(fields, "fingerprint")?,
-                        resolution,
+                        &p.handle,
+                        &p.path,
+                        &p.fingerprint,
+                        p.resolution,
                     )?;
                     Ok(serde_json::Value::Null)
                 }
-                "repository_commit_edit_eligibility" => agent_value(
-                    self.service
-                        .repo(&handle()?)?
-                        .commit_edit_eligibility(&agent_string(fields, "oid")?)?,
-                ),
-                "repository_commit_graph_status" => {
-                    agent_value(self.service.repo(&handle()?)?.commit_graph_status()?)
-                }
-                "repository_diff_files" => {
-                    let spec =
-                        serde_json::from_value(fields.get("spec").cloned().ok_or_else(|| {
-                            dto::Error::new("invalidRequest", "spec is required")
-                        })?)
-                        .map_err(|_| dto::Error::new("invalidRequest", "spec is invalid"))?;
-                    agent_value(self.service.repo(&handle()?)?.diff_files(&spec)?)
-                }
-                "repository_diff" => {
-                    let spec =
-                        serde_json::from_value(fields.get("spec").cloned().ok_or_else(|| {
-                            dto::Error::new("invalidRequest", "spec is required")
-                        })?)
-                        .map_err(|_| dto::Error::new("invalidRequest", "spec is invalid"))?;
+                "repository_commit_edit_eligibility" => {
+                    let p: protocol::Commit = parse_params(params)?;
                     agent_value(
                         self.service
-                            .repo(&handle()?)?
-                            .diff(&spec, &agent_string(fields, "path")?)?,
+                            .repo(&p.handle)?
+                            .commit_edit_eligibility(&p.oid)?,
                     )
                 }
+                "repository_commit_graph_status" => {
+                    agent_value(self.service.repo(&handle(params)?)?.commit_graph_status()?)
+                }
+                "repository_diff_files" => {
+                    let p: protocol::DiffFiles = parse_params(params)?;
+                    agent_value(self.service.repo(&p.handle)?.diff_files(&p.spec)?)
+                }
+                "repository_diff" => {
+                    let p: protocol::Diff = parse_params(params)?;
+                    agent_value(self.service.repo(&p.handle)?.diff(&p.spec, &p.path)?)
+                }
                 "repository_stage" | "repository_unstage" => {
-                    let paths = fields
-                        .get("paths")
-                        .and_then(serde_json::Value::as_array)
-                        .ok_or_else(|| {
-                            dto::Error::new("invalidRequest", "paths must be an array of strings")
-                        })?
-                        .iter()
-                        .map(|path| {
-                            path.as_str().map(str::to_owned).ok_or_else(|| {
-                                dto::Error::new(
-                                    "invalidRequest",
-                                    "paths must be an array of strings",
-                                )
-                            })
-                        })
-                        .collect::<Result<Vec<_>>>()?;
+                    let p: protocol::Paths = parse_params(params)?;
                     if method == "repository_stage" {
-                        self.service.stage(&handle()?, &paths)?;
+                        self.service.stage(&p.handle, &p.paths)?;
                     } else {
-                        self.service.unstage(&handle()?, &paths)?;
+                        self.service.unstage(&p.handle, &p.paths)?;
                     }
                     Ok(serde_json::Value::Null)
                 }
                 "repository_discard" => {
-                    let paths = fields
-                        .get("paths")
-                        .and_then(serde_json::Value::as_array)
-                        .ok_or_else(|| dto::Error::new("invalidRequest", "paths must be an array"))?
-                        .iter()
-                        .map(|p| {
-                            p.as_str().map(str::to_owned).ok_or_else(|| {
-                                dto::Error::new("invalidRequest", "paths must contain strings")
-                            })
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-                    self.service.discard(
-                        &handle()?,
-                        &paths,
-                        &agent_string(fields, "expectedStatusFingerprint")?,
-                    )?;
+                    let p: protocol::Discard = parse_params(params)?;
+                    self.service
+                        .discard(&p.handle, &p.paths, &p.expected_status_fingerprint)?;
                     Ok(serde_json::Value::Null)
                 }
                 "repository_stage_hunk" | "repository_unstage_hunk" => {
-                    let index = fields
-                        .get("hunkIndex")
-                        .and_then(serde_json::Value::as_u64)
-                        .and_then(|v| usize::try_from(v).ok())
-                        .ok_or_else(|| {
-                            dto::Error::new("invalidRequest", "hunkIndex must be an integer")
-                        })?;
-                    let lines = match fields.get("lineIndices") {
-                        None | Some(serde_json::Value::Null) => None,
-                        Some(serde_json::Value::Array(values)) => Some(
-                            values
-                                .iter()
-                                .map(|value| {
-                                    value
-                                        .as_u64()
-                                        .and_then(|n| usize::try_from(n).ok())
-                                        .ok_or_else(|| {
-                                            dto::Error::new(
-                                                "invalidRequest",
-                                                "lineIndices must contain integers",
-                                            )
-                                        })
-                                })
-                                .collect::<Result<Vec<_>>>()?,
-                        ),
-                        Some(_) => {
-                            return Err(dto::Error::new(
-                                "invalidRequest",
-                                "lineIndices must be an array or null",
-                            ))
-                        }
-                    };
-                    let path = agent_string(fields, "path")?;
-                    let fingerprint = agent_string(fields, "fingerprint")?;
+                    let p: protocol::Hunk = parse_params(params)?;
                     if method == "repository_stage_hunk" {
-                        self.service
-                            .stage_hunk(&handle()?, &path, index, &fingerprint, lines)?;
+                        self.service.stage_hunk(
+                            &p.handle,
+                            &p.path,
+                            p.hunk_index,
+                            &p.fingerprint,
+                            p.line_indices,
+                        )?;
                     } else {
-                        self.service
-                            .unstage_hunk(&handle()?, &path, index, &fingerprint, lines)?;
+                        self.service.unstage_hunk(
+                            &p.handle,
+                            &p.path,
+                            p.hunk_index,
+                            &p.fingerprint,
+                            p.line_indices,
+                        )?;
                     }
                     Ok(serde_json::Value::Null)
                 }
                 "repository_create_commit" => {
-                    let message = agent_string(fields, "message")?;
-                    let identity = fields
-                        .get("identity")
-                        .cloned()
-                        .filter(|value| !value.is_null())
-                        .map(serde_json::from_value::<dto::CommitIdentity>)
-                        .transpose()
-                        .map_err(|_| dto::Error::new("invalidRequest", "identity is invalid"))?;
+                    let p: protocol::CreateCommit = parse_params(params)?;
                     agent_value(self.service.create_commit_with_identity(
-                        &handle()?,
-                        &message,
-                        identity.as_ref(),
+                        &p.handle,
+                        &p.message,
+                        p.identity.as_ref(),
                     )?)
                 }
                 "repository_amend_commit" => {
-                    let message = agent_string(fields, "message")?;
-                    let identity = fields
-                        .get("identity")
-                        .cloned()
-                        .filter(|v| !v.is_null())
-                        .map(serde_json::from_value::<dto::CommitIdentity>)
-                        .transpose()
-                        .map_err(|_| dto::Error::new("invalidRequest", "identity is invalid"))?;
-                    let head_ref = agent_optional_string(fields, "expectedHeadRef")?;
+                    let p: protocol::Amend = parse_params(params)?;
                     let options = mutate::AmendOptions {
-                        message_only: agent_optional_bool(fields, "messageOnly")?,
-                        require_unpushed: agent_optional_bool(fields, "requireUnpushed")?,
+                        message_only: p.message_only.unwrap_or(false),
+                        require_unpushed: p.require_unpushed.unwrap_or(false),
                     };
                     agent_value(self.service.amend_commit_with_identity(
-                        &handle()?,
-                        &message,
-                        identity.as_ref(),
-                        &agent_string(fields, "expectedHead")?,
-                        head_ref.as_deref(),
-                        &agent_string(fields, "expectedStatusFingerprint")?,
+                        &p.handle,
+                        &p.message,
+                        p.identity.as_ref(),
+                        &p.expected_head,
+                        p.expected_head_ref.as_deref(),
+                        &p.expected_status_fingerprint,
                         options,
                     )?)
                 }
                 "repository_worktree_review" => {
-                    let request = fields
-                        .get("request")
-                        .cloned()
-                        .ok_or_else(|| dto::Error::new("invalidRequest", "request is required"))?;
-                    let request = serde_json::from_value(request)
-                        .map_err(|_| dto::Error::new("invalidRequest", "request is invalid"))?;
-                    agent_value(self.service.repo(&handle()?)?.worktree_review(&request)?)
+                    let p: protocol::WorktreeReviewRequest = parse_params(params)?;
+                    agent_value(self.service.repo(&p.handle)?.worktree_review(&p.request)?)
                 }
                 "repository_worktree_execute" => {
-                    let request = fields
-                        .get("request")
-                        .cloned()
-                        .ok_or_else(|| dto::Error::new("invalidRequest", "request is required"))?;
-                    let request = serde_json::from_value(request)
-                        .map_err(|_| dto::Error::new("invalidRequest", "request is invalid"))?;
-                    self.service.worktree_execute(
-                        &handle()?,
-                        &request,
-                        &agent_string(fields, "token")?,
-                    )?;
+                    let p: protocol::WorktreeExecuteRequest = parse_params(params)?;
+                    self.service
+                        .worktree_execute(&p.handle, &p.request, &p.token)?;
                     Ok(serde_json::Value::Null)
                 }
-                "repository_remotes" => agent_value(self.service.repo(&handle()?)?.remotes()?),
-                "repository_stashes" => agent_value(self.service.repo(&handle()?)?.stashes()?),
+                "repository_remotes" => {
+                    agent_value(self.service.repo(&handle(params)?)?.remotes()?)
+                }
+                "repository_stashes" => {
+                    agent_value(self.service.repo(&handle(params)?)?.stashes()?)
+                }
                 "repository_stash_action" => {
-                    let action = fields
-                        .get("action")
-                        .cloned()
-                        .ok_or_else(|| dto::Error::new("invalidRequest", "action is required"))?;
-                    let action = serde_json::from_value(action)
-                        .map_err(|_| dto::Error::new("invalidRequest", "action is invalid"))?;
-                    agent_value(self.service.stash_action(&handle()?, action)?)
+                    let p: protocol::StashActionRequest = parse_params(params)?;
+                    agent_value(self.service.stash_action(&p.handle, p.action)?)
                 }
                 "repository_remote_action" => {
-                    let action = fields
-                        .get("action")
-                        .cloned()
-                        .ok_or_else(|| dto::Error::new("invalidRequest", "action is required"))?;
-                    let action = serde_json::from_value(action)
-                        .map_err(|_| dto::Error::new("invalidRequest", "action is invalid"))?;
+                    let p: protocol::RemoteActionRequest = parse_params(params)?;
                     agent_value(self.service.remote_action(
-                        &handle()?,
-                        action,
+                        &p.handle,
+                        p.action,
                         self.askpass.as_deref(),
                     )?)
                 }
                 "repository_run_operation" => {
-                    let request = fields
-                        .get("request")
-                        .cloned()
-                        .ok_or_else(|| dto::Error::new("invalidRequest", "request is required"))?;
-                    let request = serde_json::from_value(request)
-                        .map_err(|_| dto::Error::new("invalidRequest", "request is invalid"))?;
+                    let p: protocol::Operation = parse_params(params)?;
                     agent_value(self.service.run_operation(
-                        &handle()?,
-                        request,
+                        &p.handle,
+                        p.request,
                         self.editor.as_deref(),
                     )?)
                 }
                 "repository_delete_branch" => {
-                    let request = fields
-                        .get("request")
-                        .cloned()
-                        .ok_or_else(|| dto::Error::new("invalidRequest", "request is required"))?;
-                    let request = serde_json::from_value(request)
-                        .map_err(|_| dto::Error::new("invalidRequest", "request is invalid"))?;
-                    agent_value(self.service.delete_branch(&handle()?, request, None)?)
+                    let p: protocol::BranchDelete = parse_params(params)?;
+                    agent_value(self.service.delete_branch(&p.handle, p.request, None)?)
                 }
                 "repository_delete_branches" => {
-                    let request = fields
-                        .get("request")
-                        .cloned()
-                        .ok_or_else(|| dto::Error::new("invalidRequest", "request is required"))?;
-                    let request = serde_json::from_value(request)
-                        .map_err(|_| dto::Error::new("invalidRequest", "request is invalid"))?;
-                    agent_value(self.service.delete_branches(&handle()?, request, None)?)
+                    let p: protocol::BranchBatchDelete = parse_params(params)?;
+                    agent_value(self.service.delete_branches(&p.handle, p.request, None)?)
                 }
                 "repository_write_commit_graph" => {
-                    self.service.write_commit_graph(&handle()?)?;
+                    self.service.write_commit_graph(&handle(params)?)?;
                     Ok(serde_json::Value::Null)
                 }
                 "repository_ignore_path" => {
-                    self.service
-                        .ignore_path(&handle()?, &agent_string(fields, "path")?)?;
+                    let p: protocol::PathRequest = parse_params(params)?;
+                    self.service.ignore_path(&p.handle, &p.path)?;
                     Ok(serde_json::Value::Null)
                 }
-                "repository_open_path" | "repository_reveal_path" => Err(dto::Error::new(
-                    "desktopOnly",
-                    "This operation requires desktop integration",
+                "repository_watch" => {
+                    agent_value(self.watchers.start(&self.service, &handle(params)?)?)
+                }
+                _ => Err(dto::Error::new(
+                    "unsupportedOperation",
+                    "Unsupported CLI method",
                 )),
-                "repository_watch" => agent_value(self.watchers.start(&self.service, &handle()?)?),
-                _ => unreachable!(),
             }
         })
     }

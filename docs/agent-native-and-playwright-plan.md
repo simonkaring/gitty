@@ -2,7 +2,7 @@
 
 Status: shared `gitty-core` and `gitty-cli` extraction plus most native CLI/stdio
 contracts are implemented. Desktop and browser acceptance remain incomplete;
-the current delivery record below supersedes older status notes.
+the current delivery record below is the status of record.
 
 ## 1. Outcome and scope
 
@@ -46,7 +46,7 @@ Source inspection establishes the following starting points:
   Components also directly use Tauri detection, events, channels, and window APIs.
 - [`package.json`](../package.json) has Vitest/build/Rust checks but no installed
   Playwright test dependency or standard E2E command.
-  Existing [`*.smoke.mjs`](../src/components/native.smoke.mjs) scripts use an
+  Existing [`*.smoke.mjs`](../src/components/tabs.smoke.mjs) scripts use an
   external Playwright installation and simulated Tauri internals.
 - Mutation safeguards are action-specific, not a universal token mechanism.
   Graph operations carry expected state; worktrees have review/execute; discard,
@@ -524,112 +524,3 @@ Do not postpone this vertical slice until every command has CLI parity.
   Those observations remain in the
   [platform checklist](agent-native-platform-verification.md), not implied by the
   implementation or host test passes.
-
-### Historical delivery notes (superseded; not current status)
-
-- Added a source-linked command/host inventory covering every entry in
-  `generate_handler!`, emitted events, clone channel, startup/shutdown, and
-  current CLI/stdio dispositions. Provider/keychain, window, picker, WSL/SSH
-  discovery, prompt replies, and clone progress are explicitly host-only or
-  unsupported; the local mutation lock does not claim to span WSL/SSH hosts.
-- Expanded `AgentService` and capability discovery for status/state/snapshot,
-  search/cancel, identity, diff/history, guarded discard/hunk/amend/conflict/
-  operation/branch/worktree/stash/remote/commit-graph actions. Added a bounded
-  JSON one-shot `request` command, `doctor`, parameter schemas, and explicit
-  desktop/noninteractive policy. Stage remains explicit-path; normal commit
-  consumes the whole index.
-- `serve --stdio` now uses four worker threads and an eight-request bounded
-  queue, correlates out-of-order replies by request ID, handles search cancel
-  inline, returns `serverBusy` on saturation, caps encoded output at 4 MiB, and
-  stops request admission on EOF/broken output, discards queued jobs, cancels
-  active clone/search/prompt work, closes sessions, and joins workers. Tests cover
-  output bounds, queue discard, response IDs before EOF, and broken pipes.
-  Event envelopes, clone progress, and prompt/reply transport remain open;
-  parent-death integration coverage is verified above.
-- Fixed Windows clone argument paths that used a `\\?\` verbatim path Git for
-  Windows could not create; native filesystem paths remain canonical. Worktree
-  lookup now compares canonical/verbatim path aliases. Test fixtures explicitly
-  disable autocrlf, encode Windows paths safely in Git config, use Windows-valid
-  filename variants, and keep large ignored-path fixtures within host path
-  limits. The watcher test permits one conservative `.git/info` metadata event,
-  while still failing on repeated snapshot-triggered refresh loops.
-- Added a rendered real-Git stale-discard scenario: external bytes survive a
-  stale review, a refresh is required, then a fresh explicit discard is checked
-  against raw Git/filesystem state. Fixture state is reset before each test;
-  unique repository roots per test and the remaining P0/P1/P2 matrix are still
-  needed.
-- Added partial-line staging with unrelated pre-staged content and a stale-hunk
-  refusal after external bytes change; assertions inspect both the index and
-  worktree directly with Git/filesystem reads.
-- **Not delivered:** `crates/gitty-core` and a separate CLI package. The engine
-  still lives in the Tauri package and pulls desktop build machinery, so a
-  headless `cargo build` without Tauri/GTK remains unavailable. Provider/account
-  and clone workflows, protocol event envelopes, prompt provenance, remote
-  WSL/SSH CLI parity, release target packaging, broad Playwright scenarios, and
-  process-parent-death coverage are also still open. No native desktop runtime,
-  keychain, SSH server, macOS, or Linux runtime was available here.
-
-### Historical parent review
-
-- Reviewed the CLI dispatcher, frontend host routing, bridge authorization and
-  fixture boundary, harness environment, and shared mutation-lock path. Review
-  findings were returned to Luna and corrected: inherited Git environment
-  overrides, unbounded cross-process lock waiting, credential-bearing traces,
-  flattened one-shot JSON errors, unbounded message-file reads, incomplete
-  preservation assertions, and discarded backend diagnostics.
-- Independently reran on Windows after those corrections: `npm run test:e2e`
-  (one environment-isolation regression and two browser tests), `npm test`
-  (500 tests), `npm run build`, focused `mutation_lock_tests` (three tests),
-  and `git diff --check`; all passed. The full Rust suite was not rerun during
-  parent review; its previously reported failures remain unresolved.
-
-### Historical delivered subset
-
-- Added `gitty-cli` in the existing Tauri crate. One-shot commands include
-  native-local status/history/stage/unstage/commit plus guarded JSON requests;
-  `serve --stdio` offers a wider restricted repository-method set. Requests
-  are strict UTF-8 and capped at 1 MiB, with four active workers, eight queued,
-  and structured domain errors. This is not a desktop-dependency-free engine
-  build or complete protocol parity.
-- Added native common-directory advisory locks around `Service::mutate`. The
-  Windows subprocess lock test verifies exclusion and release; a separate
-  mutation-path test verifies nonblocking `repositoryBusy` and that a contended
-  mutation closure never runs. WSL/SSH locks and races with external Git are not
-  covered by this lock.
-- Added an explicit browser-test host and dev-only authenticated Vite bridge
-  backed by the CLI stdio process. The harness creates a disposable repository
-  with isolated Git config/home and hooks, strips inherited Git/editor/askpass
-  environment overrides, and limits bridge access to that fixture. A Node
-  regression poisons Git directory/index/object/config variables and proves
-  actual fixture writes stay isolated from a decoy repository. Playwright
-  stages and commits through the rendered workspace and independently checks
-  the index, changed HEAD, expected parent, tree, exact file bytes, and preserved
-  untracked content with raw Git. Negative checks cover missing auth, hostile
-  origin, unsupported methods, and out-of-fixture paths. Traces are disabled
-  because they would persist authorization headers; screenshots and bounded
-  backend stderr diagnostics remain.
-- Verification on Windows: `npm test` (73 files / 500 tests), `npm run build`,
-  `npm run check:rust`, `cargo fmt --check`, `npm run test:e2e` (4 browser tests
-  and environment isolation), and `npm run test:rust` (298 passed, 2 ignored;
-  300 lib tests plus 2 desktop helper and 5 CLI tests) passed. The full Rust run
-  initially exposed one Windows nonblocking socket read; explicitly restoring
-  blocking mode on accepted test sockets fixed it. The focused regression and
-  subsequent complete suite passed.
-
-### Historical omissions (recheck against the current checklist above)
-
-- Phase 0 source-linked inventory is present at
-  [`agent-command-matrix.md`](knowledge/agent-command-matrix.md); frontend usage
-  and some setup/event boundaries should continue to be audited as code changes.
-- Phase 1 engine crate extraction, desktop-dependency-free headless build, and
-  WSL/SSH cross-process locks.
-- Phase 2 remaining omissions include an event envelope, clone progress,
-  prompt/reply transport, and portable one-shot review documents. Parent-death
-  integration coverage is verified above. Method schemas are currently
-  capability metadata rather than DTO-derived full schemas.
-- Broader Phase 3–5 host capability/event routing, fixture-isolated browser
-  roots per mutating test, many P0/P1/P2 scenarios, platform packaging, and
-  native runtime evidence.
-- Slices A, F, and G remain outstanding; B, C, D, and E are partial. The E
-  browser slice now covers commit, stale discard, partial-line staging, stale
-  hunk refusal, and bridge security, but not the broader P0/P1 scenario matrix.

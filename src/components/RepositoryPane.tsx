@@ -37,6 +37,8 @@ import { commitGraphCommand } from '../model/commitGraph';
 
 const GROUP_TONE = { staged: 'green', unstaged: 'amber', untracked: 'accent', conflict: 'red' } as const;
 
+const writeFailure = (outcome: { error?: string; refreshError?: string }) => new Error([outcome.error, outcome.refreshError && `Refresh failed: ${outcome.refreshError}. Further writes are blocked until refresh succeeds.`].filter(Boolean).join('\n'));
+
 export interface RepositoryPaneProps {
   tabId: string;
   location: RepositoryLocation;
@@ -111,6 +113,17 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   }
   function beginMutation() { mutationLock.current = true; setMutationBusy(true); }
   function endMutation(isCurrent: () => boolean) { if (isCurrent()) { mutationLock.current = false; setMutationBusy(false); } }
+  /** A failed post-write refresh blocks further writes until a refresh succeeds. */
+  function setBlocked(value: boolean) { blockedRef.current = value; setMutationBlocked(value); }
+  /** Starts one write: null while another write holds the lock or a failed refresh blocks writes. `isCurrent`
+   * turns false once the session or epoch the write began in is replaced. `hold` false takes no lock (background fetch). */
+  function beginWrite(hold = true) {
+    const current = session.current;
+    if (!current || mutationLock.current || blockedRef.current) return null;
+    if (hold) beginMutation();
+    const token = epoch.current;
+    return { current, isCurrent: () => token === epoch.current && session.current?.session.handle === current.session.handle };
+  }
   const [operation, setOperation] = useState<OperationState | null>(null);
   const operationSig = useRef('');
   const [actionContext, setActionContext] = useState<ActionContext | null>(null);
@@ -195,7 +208,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     const token = ++epoch.current; revealToken.current++; setBusy(true); setError(''); lock.current = true;
     const old = session.current; session.current = null; setState(null); setStatus(null); installHistory([], null); setBase(''); setTarget(''); setSelected(''); setActiveDiff(null); setFolderOpen({});
     commitGraphLock.current = false; setCommitGraphBusy(false);
-    setOperation(null); setActionContext(null); setMenuTarget(null); setPublishInfo(null); setDeleteBranch(null); setFolderMenu(null); setDeleteFolder(null); setOriginReset(null); setConflictPath(null); setPrSource(null); setPickOrder([]); blockedRef.current = false; setMutationBlocked(false);
+    setOperation(null); setActionContext(null); setMenuTarget(null); setPublishInfo(null); setDeleteBranch(null); setFolderMenu(null); setDeleteFolder(null); setOriginReset(null); setConflictPath(null); setPrSource(null); setPickOrder([]); setBlocked(false);
     if (old) void close(old.session.handle);
     let opened: RepositoryState | null = null;
     try {
@@ -228,7 +241,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     if (!current) return;
     if (!force && (lock.current || mutationLock.current)) return;
     if (force) {
-      while (lock.current && session.current?.session.handle === current.session.handle) await new Promise(resolve => setTimeout(resolve, 25));
+      await waitForReads(() => session.current?.session.handle === current.session.handle);
       if (session.current?.session.handle !== current.session.handle) throw new Error('Repository session changed.');
     }
     const token = epoch.current; lock.current = true;
@@ -274,7 +287,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       if (changed) setStateRevision(value => value + 1);
       if (changed || workingChanged || operationChanged || force) setRevision(value => value + 1);
       setError('');
-      blockedRef.current = false; setMutationBlocked(false);
+      setBlocked(false);
     } catch (e) { if (token === epoch.current) setError(errorMessage(e)); if (force) throw e; }
     finally { if (token === epoch.current) lock.current = false; }
   }, []);
@@ -284,7 +297,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   const refreshStatus = useCallback(async () => {
     const current = session.current;
     if (!current) return;
-    while (lock.current && session.current?.session.handle === current.session.handle) await new Promise(resolve => setTimeout(resolve, 25));
+    await waitForReads(() => session.current?.session.handle === current.session.handle);
     if (session.current?.session.handle !== current.session.handle) throw new Error('Repository session changed.');
     const token = epoch.current; lock.current = true;
     let moved = false;
@@ -296,7 +309,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
         if (working.fingerprint !== fingerprint.current && !anchor.current) anchor.current = graph.current?.anchor() ?? null;
         fingerprint.current = working.fingerprint;
         setStatus(working); setRevision(value => value + 1);
-        setError(''); blockedRef.current = false; setMutationBlocked(false);
+        setError(''); setBlocked(false);
       }
     } catch (e) { if (token === epoch.current) setError(errorMessage(e)); throw e; }
     finally { if (token === epoch.current) lock.current = false; }
@@ -317,11 +330,9 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     wasActive.current = active;
   }, [active, refresh]);
   async function mutate(mutation: RepositoryMutation): Promise<MutationOutcome> {
-    const current = session.current;
-    if (!current || mutationLock.current || blockedRef.current) return { error: 'Repository mutations are blocked. Wait for the operation or refresh successfully.' };
-    beginMutation();
-    const token = epoch.current;
-    const isCurrent = () => token === epoch.current && session.current?.session.handle === current.session.handle;
+    const write = beginWrite();
+    if (!write) return { error: 'Repository mutations are blocked. Wait for the operation or refresh successfully.' };
+    const { current, isCurrent } = write;
     try {
       // Let an already-running read finish, then exclude polling/paging until the
       // write AND its required refresh complete. No dropped post-write reloads.
@@ -330,7 +341,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
         if (mutation.kind === 'amend') return refresh(true, written.oid && !written.error ? { from: mutation.expectedHead, to: written.oid } : undefined);
         return mutation.kind === 'commit' ? refresh(true) : refreshStatus();
       }, isCurrent);
-      if (outcome.refreshError && isCurrent()) { blockedRef.current = true; setMutationBlocked(true); }
+      if (outcome.refreshError && isCurrent()) setBlocked(true);
       return outcome;
     } finally { endMutation(isCurrent); }
   }
@@ -357,19 +368,17 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     return outcome;
   }
   async function operationWrite(command: string, args: Record<string, unknown>) {
-    const current = session.current;
-    if (!current || mutationLock.current || blockedRef.current) throw new Error('Repository mutations are blocked. Refresh successfully before retrying.');
-    const token = epoch.current;
-    const isCurrent = () => epoch.current === token && session.current?.session.handle === current.session.handle;
-    beginMutation();
+    const write = beginWrite();
+    if (!write) throw new Error('Repository mutations are blocked. Refresh successfully before retrying.');
+    const { current, isCurrent } = write;
     try {
       await waitForReads(isCurrent);
       if (!isCurrent()) throw new Error('Repository session changed.');
       const outcome = await operationAndRefresh(current.session.handle, command, args, () => refresh(true), isCurrent);
       if (outcome.superseded) throw new Error('Repository session changed.');
       if (outcome.notice) setNotice(outcome.notice);
-      if (outcome.refreshError) { blockedRef.current = true; setMutationBlocked(true); }
-      if (outcome.error || outcome.refreshError) throw new Error([outcome.error, outcome.refreshError && `Refresh failed: ${outcome.refreshError}. Further writes are blocked until refresh succeeds.`].filter(Boolean).join('\n'));
+      if (outcome.refreshError) setBlocked(true);
+      if (outcome.error || outcome.refreshError) throw writeFailure(outcome);
     } finally { endMutation(isCurrent); }
   }
   async function switchBranch(ref: string) {
@@ -403,15 +412,13 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
    * IPC contract, which returns Git report text instead of a void result.
    * Callers summarize successful reports for this tab's notifications. */
   async function remoteWrite(command: string, args: Record<string, unknown>, options: { quiet?: boolean; reloadHistory?: boolean } = {}): Promise<string> {
-    const current = session.current;
-    if (!current || mutationLock.current || blockedRef.current) throw new Error('Repository mutations are blocked. Refresh successfully before retrying.');
-    const token = epoch.current;
-    const isCurrent = () => epoch.current === token && session.current?.session.handle === current.session.handle;
-    const kind = (args.action as { kind?: string } | undefined)?.kind;
-    const fetching = command === 'repository_remote_action' && isFetchingAction(args.action);
     // Background fetch only moves remote-tracking refs: it must not block local writes such as switching branches.
     const holdsLock = !options.quiet;
-    if (holdsLock) beginMutation();
+    const write = beginWrite(holdsLock);
+    if (!write) throw new Error('Repository mutations are blocked. Refresh successfully before retrying.');
+    const { current, isCurrent } = write;
+    const kind = (args.action as { kind?: string } | undefined)?.kind;
+    const fetching = command === 'repository_remote_action' && isFetchingAction(args.action);
     // Background fetch reports through the toolbar's fetch status instead of
     // clearing or replacing an error banner the user has not dismissed yet.
     if (!options.quiet) setActionError('');
@@ -428,8 +435,8 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
         else if (kind !== 'pull') setFetchStatus({ kind: 'failed', at: Date.now(), message: outcome.error });
         else setFetchStatus(previous => previous.kind === 'fetching' ? { kind: 'idle' } : previous);
       }
-      if (outcome.refreshError) { blockedRef.current = true; setMutationBlocked(true); }
-      if (outcome.error || outcome.refreshError) throw new Error([outcome.error, outcome.refreshError && `Refresh failed: ${outcome.refreshError}. Further writes are blocked until refresh succeeds.`].filter(Boolean).join('\n'));
+      if (outcome.refreshError) setBlocked(true);
+      if (outcome.error || outcome.refreshError) throw writeFailure(outcome);
       return outcome.output ?? '';
     } catch (e) {
       // A stash/publish dialog can close while its write continues. Keep errors
@@ -657,11 +664,9 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   /** Runs one reviewed branch deletion under the mutation lock, then refreshes. When the write itself throws, `ifWriteFails`
    * reports every target as failed (or unverified), so the dialog never loses what happened. */
   async function branchDeleteWrite<Result>(command: string, request: unknown, ifWriteFails: (failed: (target: 'local' | 'origin') => BranchDeleteTargetResult) => Result, removedOids: (result: Result) => string[]): Promise<{ result: Result; refreshError?: string }> {
-    const current = session.current;
-    if (!current || mutationLock.current || blockedRef.current) throw new Error('Repository mutations are blocked. Refresh successfully before retrying.');
-    const token = epoch.current;
-    const isCurrent = () => token === epoch.current && session.current?.session.handle === current.session.handle;
-    beginMutation();
+    const write = beginWrite();
+    if (!write) throw new Error('Repository mutations are blocked. Refresh successfully before retrying.');
+    const { current, isCurrent } = write;
     let result: Result;
     let writeError: unknown;
     let refreshError = '';
@@ -678,7 +683,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       }
       if (!isCurrent()) throw new Error('Repository session changed.');
       try { await refresh(true, undefined, removedOids(result)); }
-      catch (error) { refreshError = errorMessage(error); blockedRef.current = true; setMutationBlocked(true); }
+      catch (error) { refreshError = errorMessage(error); setBlocked(true); }
       if (writeError && !refreshError) setActionError(errorMessage(writeError));
       return { result, ...(refreshError ? { refreshError } : {}) };
     } finally { endMutation(isCurrent); }
@@ -821,7 +826,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
                 <div className="search-results-container" hidden={searchView !== 'results'}><SearchResults result={result} loading={searchBusy} error={searchError} query={text} refs={state.refs} selected={selected} onSelect={id => { navigation.current++; setSelected(id); setActiveDiff(null); setInspectorOpen(true); }} onReveal={id => { setSearchView('graph'); requestAnimationFrame(() => reveal(id)); }} onRetry={() => setSearchRetry(value => value + 1)} onClear={clearFilters} /></div></>}
               <div className="search-history-container" hidden={filtering && searchView === 'results'}>
               {!graphCommits.length && <div className="empty-state"><GitCommitHorizontal size={28} /><h2>No commits yet</h2><p>This repository has no commits or working changes. Add files, stage them, and make your first commit.</p></div>}
-                <HistoryGraph ref={graph} commits={graphCommits} layout={layout} refs={state.refs} selectedId={selected} head={state.session.head ?? ''} headRef={state.session.headRef} onActions={context => setActionContext(context)} onContextActions={openMenu} onSwitchBranch={ref => void switchBranch(ref)} pickOrder={pickOrder} onTogglePick={pickMode ? id => setPickOrder(order => toggleCommit(order, id)) : undefined} loaded={graphCommits.length} matches={matches} onSelect={id => reveal(id)} onLoadMore={() => void load()} onOpenDetails={() => setInspectorOpen(true)} theme={theme} hasMore={!!cursor} paging={busy} shallow={state.session.shallow} />
+                <HistoryGraph ref={graph} commits={graphCommits} layout={layout} refs={state.refs} selectedId={selected} head={state.session.head ?? ''} headRef={state.session.headRef} onActions={context => setActionContext(context)} onContextActions={openMenu} onSwitchBranch={ref => void switchBranch(ref)} pickOrder={pickOrder} onTogglePick={pickMode ? id => setPickOrder(order => toggleCommit(order, id)) : undefined} matches={matches} onSelect={id => reveal(id)} onLoadMore={() => void load()} onOpenDetails={() => setInspectorOpen(true)} theme={theme} hasMore={!!cursor} paging={busy} shallow={state.session.shallow} />
               </div>
             </section>
           )}

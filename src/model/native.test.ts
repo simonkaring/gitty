@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { appendUnique, graphCommit, hostCapabilities, hostMode, setDemoMode, statusGroups } from './native';
+import { describe, expect, it, vi } from 'vitest';
+import { appendUnique, graphCommit, hostLive, setDemoMode, statusGroups } from './native';
 import type { CommitSummary, StatusEntry } from './repository';
 
 describe('native history adaptation', () => {
@@ -26,12 +26,21 @@ describe('working status categories', () => {
     expect(groups.staged).toEqual([]); expect(groups.unstaged).toEqual([]);
   });
 });
-describe('host capabilities', () => {
-  it('keeps synthetic demo capabilities disabled', () => {
+describe('host liveness (events and cloning)', () => {
+  it('is off for the synthetic demo and on for the desktop', () => {
     setDemoMode(true);
-    expect(hostMode()).toBe('demo');
-    expect(hostCapabilities()).toEqual({ repository: false, events: false, clone: false, nativeWindow: false });
+    expect(hostLive()).toBe(false);
     setDemoMode(false);
+    expect(hostLive()).toBe(true);
+  });
+  it('stays on in the real-backend test host even while demo mode is set', async () => {
+    vi.stubEnv('VITE_GITTY_TEST_MODE', '1');
+    vi.resetModules();
+    const fresh = await import('./native');
+    fresh.setDemoMode(true);
+    expect(fresh.hostLive()).toBe(true);
+    vi.unstubAllEnvs();
+    vi.resetModules();
   });
 });
 

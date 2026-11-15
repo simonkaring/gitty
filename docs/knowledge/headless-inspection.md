@@ -31,8 +31,9 @@ sources:
 `gitty-cli` provides native-local one-shot status/history/stage/unstage/commit,
 guarded JSON requests, doctor/capability discovery, and a version-1
 line-delimited stdio API with structured errors and bounded concurrent dispatch.
-Request DTO validation is shared with published schemas, including nested
-unknown-field rejection. Requests are strict UTF-8 and capped at 1 MiB. With
+Requests deserialize once into the DTOs behind the published schemas, including
+nested unknown-field rejection; an explicit `null` for an optional field means
+omitted, and malformed params fail with one `invalidRequest` error. Requests are strict UTF-8 and capped at 1 MiB. With
 explicit `--accounts-file`, stdio supports provider token/device-OAuth and
 account-backed operations; token input is JSON-only, OAuth does not open its
 verification URL, and account access is disabled by default. SSH discovery uses

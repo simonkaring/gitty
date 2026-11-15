@@ -6,11 +6,6 @@
     min-height: 56px;
   }
 }
-@media (max-width: 1400px) {
-  .history-body {
-    --visible-author-width: 0px;
-  }
-}
 @media (max-width: 1100px) {
   /* Keep the sidebar in the layout: overlaying it would paint over the history's
      branch and graph columns. The history pane shrinks and scrolls instead. */
@@ -22,21 +17,11 @@
     display: none;
   }
   .native-inspector,
-  .inspector,
   .working-inspector,
   .working-inspector-sidebar {
     width: min(var(--inspector-width), 42vw) !important;
   }
-  .native-actions > .secondary-button {
-    padding-inline: 12px;
-  }
   .skeleton-sidebar {
-    display: none;
-  }
-  .palette-trigger {
-    min-width: 0;
-  }
-  .palette-trigger span {
     display: none;
   }
 }
@@ -51,7 +36,6 @@
     order: -1;
   }
   /* The inspector stays in the layout too; only its width is clamped. */
-  .inspector,
   .native-inspector,
   .working-inspector,
   .working-inspector-sidebar {
@@ -73,14 +57,7 @@
   .native-actions {
     gap: 4px;
   }
-  .native-actions > .text-button {
-    display: none;
-  }
-  .statusbar .version {
-    display: none;
-  }
-  .workflow-status,
-.workflow-alert {
+  .workflow-alert {
     flex-shrink: 0;
   }
   .welcome-graph {
@@ -117,9 +94,6 @@
   }
 }
 @media (max-width: 540px) {
-  .history-body {
-    --visible-hash-width: 0px;
-  }
   .brand {
     font-size: var(--fs-xl);
   }

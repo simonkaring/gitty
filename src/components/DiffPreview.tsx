@@ -54,41 +54,29 @@ export function DiffPreview({
   split,
   hunkAction,
   busy = false,
-  unavailable,
   onHunk,
-  selectedLines: controlledSelected,
-  onToggleLine: controlledOnToggle,
 }: {
   diff: FileDiff;
   split: boolean;
   hunkAction?: 'stage_hunk' | 'unstage_hunk';
   busy?: boolean;
-  unavailable?: string;
   onHunk?: (mutation: RepositoryMutation) => void;
-  selectedLines?: Record<number, number[]>;
-  onToggleLine?: (hunkIndex: number, lineIndex: number) => void;
 }) {
-  const reason = hunkAction ? unavailable || (diff.truncated ? 'Hunk actions are unavailable for truncated previews. Use the whole-file buttons or Git.' : diff.binary ? 'Hunk actions are unavailable for binary files. Use the whole-file buttons.' : diff.hunkAction?.reason) || (!diff.hunkAction?.fingerprint ? 'Hunk actions are unavailable for this preview. Use the whole-file buttons or Git.' : undefined) : undefined;
+  const reason = hunkAction ? (diff.truncated ? 'Hunk actions are unavailable for truncated previews. Use the whole-file buttons or Git.' : diff.binary ? 'Hunk actions are unavailable for binary files. Use the whole-file buttons.' : diff.hunkAction?.reason) || (!diff.hunkAction?.fingerprint ? 'Hunk actions are unavailable for this preview. Use the whole-file buttons or Git.' : undefined) : undefined;
   const fingerprint = !reason && diff.hunkAction?.fingerprint;
 
   const diffKey = `${diff.path}:${hunkAction ?? ''}:${fingerprint || ''}`;
   const [currentKey, setCurrentKey] = useState(diffKey);
-  const [internalSelected, setInternalSelected] = useState<Record<number, number[]>>({});
+  const [selected, setSelected] = useState<Record<number, number[]>>({});
 
   if (currentKey !== diffKey) {
     setCurrentKey(diffKey);
-    setInternalSelected({});
+    setSelected({});
   }
-
-  const selected = controlledSelected ?? internalSelected;
 
   const toggleLine = (hunkIndex: number, lineIndex: number) => {
     if (busy || !fingerprint) return;
-    if (controlledOnToggle) {
-      controlledOnToggle(hunkIndex, lineIndex);
-      return;
-    }
-    setInternalSelected(prev => {
+    setSelected(prev => {
       const current = prev[hunkIndex] ?? [];
       const next = current.includes(lineIndex)
         ? current.filter(i => i !== lineIndex)
@@ -383,6 +371,11 @@ export function DiffPreview({
   const activeSplitSide = active && rows[active.row]?.kind === 'split' ? effectiveSide((rows[active.row] as Extract<DiffRow, { kind: 'split' }>).row, active.side) : null;
 
   // ----- Rendering -----
+  function lineToggle(index: number, side: Side | null, number: number | null | undefined, hunkIndex: number, lineIndex: number, isSelected: boolean) {
+    const verb = isSelected ? 'Deselect' : 'Select';
+    return <button type="button" id={`${rowId(index)}${side ? `-${side}` : ''}-toggle`} tabIndex={-1} className="line-select-toggle" aria-pressed={isSelected} disabled={busy} title={`${verb} line for ${actionVerb}`} aria-label={`${verb} line ${number ?? ''} for ${actionVerb}${side ? ` (${side})` : ''}`} onClick={() => { toggleLine(hunkIndex, lineIndex); setActive(index, side ?? 'before', false); }}>{isSelected && <Check size={10} strokeWidth={3} aria-hidden="true" />}</button>;
+  }
+
   function splitCell(item: SplitDiffLine | undefined, side: Side, hunkIndex: number, index: number) {
     const activeCell = active?.row === index && activeSplitSide === side;
     if (!item) return <div id={`${rowId(index)}-${side}`} data-side={side} className={`split-cell split-cell-empty${activeCell ? ' diff-active' : ''}`} aria-hidden="true"><span className="split-gutter" /><span className="split-code" /></div>;
@@ -391,7 +384,7 @@ export function DiffPreview({
     const isSelected = selectable && (selected[hunkIndex] ?? []).includes(lineIndex);
     const number = side === 'before' ? line.oldLine : line.newLine;
     return <div id={`${rowId(index)}-${side}`} data-side={side} className={`split-cell ${line.kind}${isSelected ? ' selected-line' : ''}${activeCell ? ' diff-active' : ''}`}>
-      <span className="split-gutter"><span className="split-line-action">{selectable && <button type="button" id={`${rowId(index)}-${side}-toggle`} tabIndex={-1} className="line-select-toggle" aria-pressed={isSelected} disabled={busy} title={`${isSelected ? 'Deselect' : 'Select'} line for ${actionVerb}`} aria-label={`${isSelected ? 'Deselect' : 'Select'} line ${number ?? ''} for ${actionVerb} (${side})`} onClick={() => { toggleLine(hunkIndex, lineIndex); setActive(index, side, false); }}>{isSelected && <Check size={10} strokeWidth={3} aria-hidden="true" />}</button>}</span><span className="split-line-number">{number ?? ''}</span><span className="split-line-sign" aria-hidden="true">{line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ''}</span></span>
+      <span className="split-gutter"><span className="split-line-action">{selectable && lineToggle(index, side, number, hunkIndex, lineIndex, isSelected)}</span><span className="split-line-number">{number ?? ''}</span><span className="split-line-sign" aria-hidden="true">{line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ''}</span></span>
       <pre className="split-code">{line.content}</pre>
     </div>;
   }
@@ -413,22 +406,13 @@ export function DiffPreview({
           aria-label={`${buttonLabel} ${hunkIndex + 1} in ${diff.path}`}
           onClick={() => {
             if (!busy && fingerprint && onHunk) {
-              if (hasSelection) {
-                onHunk({
-                  kind: hunkAction,
-                  path: diff.path,
-                  hunkIndex,
-                  fingerprint,
-                  lineIndices: [...hunkSelected].sort((a, b) => a - b),
-                });
-              } else {
-                onHunk({
-                  kind: hunkAction,
-                  path: diff.path,
-                  hunkIndex,
-                  fingerprint,
-                });
-              }
+              onHunk({
+                kind: hunkAction,
+                path: diff.path,
+                hunkIndex,
+                fingerprint,
+                ...(hasSelection ? { lineIndices: [...hunkSelected].sort((a, b) => a - b) } : {}),
+              });
             }
           }}
         >
@@ -451,21 +435,7 @@ export function DiffPreview({
     const lineNum = line.kind === 'add' ? line.newLine : line.oldLine;
     return (
       <pre key={index} id={rowId(index)} data-row={index} className={`${line.kind}${isSelected ? ' selected-line' : ''}${activeRow ? ' diff-active' : ''}`}>
-        {selectable && (
-          <button
-            type="button"
-            id={`${rowId(index)}-toggle`}
-            tabIndex={-1}
-            className="line-select-toggle"
-            aria-pressed={isSelected}
-            disabled={busy}
-            title={`${isSelected ? 'Deselect' : 'Select'} line for ${actionVerb}`}
-            aria-label={`${isSelected ? 'Deselect' : 'Select'} line ${lineNum ?? ''} for ${actionVerb}`}
-            onClick={() => { toggleLine(row.hunkIndex, lineIndex); setActive(index, 'before', false); }}
-          >
-            {isSelected && <Check size={10} strokeWidth={3} aria-hidden="true" />}
-          </button>
-        )}
+        {selectable && lineToggle(index, null, lineNum, row.hunkIndex, lineIndex, isSelected)}
         <span className="line-number">{line.oldLine ?? ''}</span>
         <span className="line-number">{line.newLine ?? ''}</span>
         {line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ' '}

@@ -5,7 +5,7 @@ use crate::{
     process::{self, args},
     repository::{fingerprint, resolve, Repository, Service},
 };
-use std::{collections::HashSet, process::Command};
+use std::collections::HashSet;
 
 // Deterministically expire a snapshot's walk between pages in real-Git tests.
 #[cfg(test)]
@@ -183,27 +183,8 @@ impl Repository {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
                 Err(e) => Err(e.into()),
             },
-            RepositoryLocation::Wsl { distribution, .. } => {
-                let mut test = Command::new("wsl.exe");
-                test.args([
-                    "--distribution",
-                    distribution,
-                    "--exec",
-                    "test",
-                    "-e",
-                    &path,
-                ]);
-                let output = process::run(test)?;
-                if output.code == Some(1) {
-                    return Ok(None);
-                }
-                if !output.success {
-                    return Err(self.failed(&output));
-                }
-                self.remote_cat(&path).map(Some)
-            }
-            RepositoryLocation::Ssh { .. } => {
-                let test = process::ssh_exec(self.location(), &[], &args(&["test", "-e", &path]))?;
+            RepositoryLocation::Wsl { .. } | RepositoryLocation::Ssh { .. } => {
+                let test = process::host_command(self.location(), &args(&["test", "-e", &path]))?;
                 let output = process::run(test)?;
                 if output.code == Some(1) {
                     return Ok(None);
@@ -217,23 +198,7 @@ impl Repository {
     }
     /// Reads one backend-constant metadata file on the host that owns it.
     fn remote_cat(&self, path: &str) -> Result<Vec<u8>> {
-        let command = match self.location() {
-            RepositoryLocation::Wsl { distribution, .. } => {
-                process::validate_distribution(distribution)?;
-                let mut cat = Command::new("wsl.exe");
-                cat.args(["--distribution", distribution, "--exec", "cat", "--", path]);
-                cat
-            }
-            RepositoryLocation::Ssh { .. } => {
-                process::ssh_exec(self.location(), &[], &args(&["cat", "--", path]))?
-            }
-            RepositoryLocation::Native { .. } => {
-                return Err(Error::new(
-                    "internalLocation",
-                    "Native metadata is read from disk, not through a remote command.",
-                ))
-            }
-        };
+        let command = process::host_command(self.location(), &args(&["cat", "--", path]))?;
         let output = process::run_for(command, process::CHECK_TIMEOUT)?;
         if !output.success {
             return Err(self.failed(&output));
@@ -241,26 +206,13 @@ impl Repository {
         Ok(output.stdout)
     }
     /// Which metadata paths exist under the Git directory (depth <= 2), from ONE `find` process
-    /// instead of a `test -e` launch per name (~100 ms each through `wsl.exe`).
-    /// `-L` makes symlinks behave as they do for `test -e` and `cat`: followed, and
-    /// dangling links are dropped (`! -type l`). See [`metadata_scan_args`] and
-    /// [`find_outcome_acceptable`] (exit 1 from vanished entries is tolerated).
-    fn wsl_existing_metadata(&self, distribution: &str) -> Result<HashSet<String>> {
-        process::validate_distribution(distribution)?;
-        let mut find = Command::new("wsl.exe");
-        find.args(["--distribution", distribution, "--exec"])
-            .args(metadata_scan_args(&self.session.git_dir));
-        let output = process::run_for(find, process::CHECK_TIMEOUT)?;
-        if !find_outcome_acceptable(output.success, output.code, &output.stdout) {
-            return Err(self.failed(&output));
-        }
-        Ok(find_listing_paths(&self.session.git_dir, &output.stdout))
-    }
-    /// The same single-scan shape over SSH: one connection channel lists every
-    /// candidate, and only names that exist are read.
-    fn ssh_existing_metadata(&self) -> Result<HashSet<String>> {
-        let words: Vec<String> = metadata_scan_args(&self.session.git_dir);
-        let find = process::ssh_exec(self.location(), &[], &words)?;
+    /// instead of a `test -e` launch per name (~100 ms each through `wsl.exe`, a round
+    /// trip each over SSH). `-L` makes symlinks behave as they do for `test -e` and `cat`:
+    /// followed, and dangling links are dropped (`! -type l`). See [`metadata_scan_args`]
+    /// and [`find_outcome_acceptable`] (exit 1 from vanished entries is tolerated).
+    fn remote_existing_metadata(&self) -> Result<HashSet<String>> {
+        let find =
+            process::host_command(self.location(), &metadata_scan_args(&self.session.git_dir))?;
         let output = process::run_for(find, process::CHECK_TIMEOUT)?;
         if !find_outcome_acceptable(output.success, output.code, &output.stdout) {
             return Err(self.failed(&output));
@@ -323,11 +275,10 @@ impl Repository {
         // none). Anything the scan lists, even a directory, still goes to `cat` and
         // fails there exactly as it did after `test -e`.
         let existing = match self.location() {
-            RepositoryLocation::Wsl { distribution, .. } => {
-                Some(self.wsl_existing_metadata(distribution)?)
-            }
-            RepositoryLocation::Ssh { .. } => Some(self.ssh_existing_metadata()?),
             RepositoryLocation::Native { .. } => None,
+            RepositoryLocation::Wsl { .. } | RepositoryLocation::Ssh { .. } => {
+                Some(self.remote_existing_metadata()?)
+            }
         };
         for path in OPERATION_METADATA_PATHS {
             let value = match &existing {
@@ -661,6 +612,37 @@ impl Repository {
         }
         Ok(())
     }
+    /// The current state and operation, refused unless they still match the review.
+    fn reviewed(&self, request: &OperationRequest) -> Result<(RepositoryState, OperationState)> {
+        self.operation_writable()?;
+        let state = self.state()?;
+        let status = self.status()?;
+        let before = self.operation_state_with(&state, Some(&status))?;
+        if request.expected_operation != before.fingerprint
+            || request.expected_head != state.session.head
+            || request.expected_head_ref != state.session.head_ref
+        {
+            return Err(Error::new(
+                "staleOperation",
+                "Repository changed since this action was reviewed. Refresh and review it again.",
+            ));
+        }
+        Ok((state, before))
+    }
+    /// The full local-branch ref a merge destination names.
+    fn merge_destination(&self, destination: &str) -> Result<String> {
+        if destination.starts_with("refs/") && !destination.starts_with("refs/heads/") {
+            return Err(Error::new(
+                "invalidReference",
+                "Merge destinations must be local branches.",
+            ));
+        }
+        let branch = destination
+            .strip_prefix("refs/heads/")
+            .unwrap_or(destination);
+        self.valid_name(branch, "heads")?;
+        Ok(format!("refs/heads/{branch}"))
+    }
     /// True when switching HEAD to `oid` touches a tracked path that has local changes.
     fn switch_overlaps_changes(&self, oid: &str) -> Result<bool> {
         let dirty = self.status_entries()?.entries;
@@ -838,19 +820,7 @@ impl Repository {
         };
         // Validate the captured review and every merge target before saving work.
         // The entire save/merge/restore sequence holds Service's mutation lock.
-        self.operation_writable()?;
-        let state = self.state()?;
-        let status = self.status()?;
-        let before = self.operation_state_with(&state, Some(&status))?;
-        if request.expected_operation != before.fingerprint
-            || request.expected_head != state.session.head
-            || request.expected_head_ref != state.session.head_ref
-        {
-            return Err(Error::new(
-                "staleOperation",
-                "Repository changed since this action was reviewed. Refresh and review it again.",
-            ));
-        }
+        let (state, before) = self.reviewed(&request)?;
         if before.kind != OperationKind::None {
             return Err(Error::new("operationInProgress", before.label));
         }
@@ -866,17 +836,7 @@ impl Repository {
         let source_oid = resolve(self.location(), source)?;
         let source = source.clone();
         let destination_target = if let Some(destination) = destination {
-            if destination.starts_with("refs/") && !destination.starts_with("refs/heads/") {
-                return Err(Error::new(
-                    "invalidReference",
-                    "Merge destinations must be local branches.",
-                ));
-            }
-            let branch = destination
-                .strip_prefix("refs/heads/")
-                .unwrap_or(destination);
-            self.valid_name(branch, "heads")?;
-            let reference = format!("refs/heads/{branch}");
+            let reference = self.merge_destination(destination)?;
             let oid = resolve(self.location(), &reference)?;
             Some((reference, oid))
         } else {
@@ -938,19 +898,7 @@ impl Repository {
         request: OperationRequest,
         editor: Option<&crate::editor::EditorRegistry>,
     ) -> Result<OperationResult> {
-        self.operation_writable()?;
-        let state = self.state()?;
-        let status = self.status()?;
-        let before = self.operation_state_with(&state, Some(&status))?;
-        if request.expected_operation != before.fingerprint
-            || request.expected_head != state.session.head
-            || request.expected_head_ref != state.session.head_ref
-        {
-            return Err(Error::new(
-                "staleOperation",
-                "Repository changed since this action was reviewed. Refresh and review it again.",
-            ));
-        }
+        let (state, before) = self.reviewed(&request)?;
         let control = matches!(
             request.action,
             GitAction::Continue | GitAction::Skip | GitAction::Abort
@@ -1177,20 +1125,11 @@ impl Repository {
                 }
                 let mut effective_destination = state.session.head_ref.clone().unwrap_or_default();
                 if let Some(destination) = destination {
-                    if destination.starts_with("refs/") && !destination.starts_with("refs/heads/") {
-                        return Err(Error::new(
-                            "invalidReference",
-                            "Merge destinations must be local branches.",
-                        ));
-                    }
-                    let branch = destination
-                        .strip_prefix("refs/heads/")
-                        .unwrap_or(&destination);
-                    self.valid_name(branch, "heads")?;
-                    effective_destination = format!("refs/heads/{branch}");
-                    if format!("refs/heads/{branch}")
+                    effective_destination = self.merge_destination(&destination)?;
+                    if effective_destination
                         != state.session.head_ref.as_deref().unwrap_or_default()
                     {
+                        let branch = &effective_destination["refs/heads/".len()..];
                         let destination_oid = resolve(self.location(), &effective_destination)?;
                         let switch = args(&[
                             "switch",

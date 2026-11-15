@@ -18,6 +18,13 @@ pub(crate) struct WorkingSnapshot {
     bytes: Vec<u8>,
 }
 
+/// How `conflict_data` classified the stages and working path.
+struct ConflictFlags {
+    symlink: bool,
+    gitlink: bool,
+    unsupported: bool,
+}
+
 fn text(bytes: &[u8]) -> Option<String> {
     if bytes.contains(&0) {
         None
@@ -132,33 +139,10 @@ impl Repository {
             serde_json::to_vec(&request).map_err(|e| Error::new("encoding", e.to_string()))?;
         input.push(b'\n');
         input.extend_from_slice(bytes);
-        let command = match self.location() {
-            RepositoryLocation::Wsl { distribution, .. } => {
-                let mut command = std::process::Command::new("wsl.exe");
-                command.args([
-                    "--distribution",
-                    distribution,
-                    "--exec",
-                    "python3",
-                    "-c",
-                    REMOTE_FILE,
-                ]);
-                command
-            }
-            // python3 is the helper's only runtime; a host without it keeps the
-            // repository readable but disables conflict editing.
-            RepositoryLocation::Ssh { .. } => process::ssh_exec(
-                self.location(),
-                &[],
-                &process::args(&["python3", "-c", REMOTE_FILE]),
-            )?,
-            RepositoryLocation::Native { .. } => {
-                return Err(Error::new(
-                    "internalLocation",
-                    "Native conflict files are read through capability handles.",
-                ))
-            }
-        };
+        // python3 is the helper's only runtime; a host without it keeps the
+        // repository readable but disables conflict editing.
+        let command =
+            process::host_command(self.location(), &args(&["python3", "-c", REMOTE_FILE]))?;
         let output =
             process::run_with_input_for(command, &input, process::CHECK_TIMEOUT, LIMIT * 6 + 8192)
                 .map_err(|e| {
@@ -391,7 +375,7 @@ impl Repository {
             Ok(())
         }
     }
-    fn conflict_data(&self, path: &str) -> Result<(ConflictFile, WorkingSnapshot)> {
+    fn conflict_data(&self, path: &str) -> Result<(ConflictFile, WorkingSnapshot, ConflictFlags)> {
         self.require_worktree()?;
         self.conflict_path(path)?;
         let raw = self.check_text(&["ls-files", "--unmerged", "-z", "--", path])?;
@@ -500,10 +484,30 @@ impl Repository {
                 .into(),
             },
             working,
+            ConflictFlags {
+                symlink,
+                gitlink,
+                unsupported: unsupported_kind,
+            },
         ))
     }
     pub fn conflict_file(&self, path: &str) -> Result<ConflictFile> {
-        self.conflict_data(path).map(|(file, _)| file)
+        self.conflict_data(path).map(|(file, _, _)| file)
+    }
+    /// Indexes the exact selected side. In particular no UTF-8 decoding, newline
+    /// rewriting, clean filter or binary round-trip occurs.
+    fn index_side(&self, side: &ConflictVersion, path: &str) -> Result<()> {
+        let input = format!("{} {}\t{}\0", side.mode, side.oid, path);
+        let output = self.write(
+            &args(&["update-index", "-z", "--index-info"]),
+            &[],
+            input.as_bytes(),
+            8192,
+        )?;
+        if !output.success {
+            return Err(self.failed(&output));
+        }
+        Ok(())
     }
     pub(crate) fn resolve_conflict(
         &self,
@@ -516,55 +520,27 @@ impl Repository {
         if operation.kind == OperationKind::Unsupported {
             return Err(Error::new("unsupportedOperation", operation.label));
         }
-        let (file, working) = self.conflict_data(path)?;
+        let (file, working, flags) = self.conflict_data(path)?;
         if file.fingerprint != expected {
             return Err(Error::new(
                 "staleConflict",
                 "Index stages or working file changed. Reload the conflict before resolving.",
             ));
         }
-        let symlink = [&file.base, &file.ours, &file.theirs]
-            .into_iter()
-            .flatten()
-            .any(|s| s.mode == "120000");
-        let gitlink = file.ours.as_ref().is_some_and(|s| s.mode == "160000")
-            && file.theirs.as_ref().is_some_and(|s| s.mode == "160000")
-            && [&file.base, &file.ours, &file.theirs]
-                .into_iter()
-                .flatten()
-                .all(|s| s.mode == "160000")
-            && matches!(working.kind.as_str(), "directory" | "missing");
-        if gitlink {
+        if flags.gitlink {
             let side = match resolution {
                 ConflictResolution::Ours => file.ours.unwrap(),
                 ConflictResolution::Theirs => file.theirs.unwrap(),
                 _ => return Err(unsupported("Submodule pointer conflicts require choosing an exact index side. Resolve deletion or worktree changes in Git.")),
             };
-            let input = format!("{} {}\t{}\0", side.mode, side.oid, path);
-            let output = self.write(
-                &args(&["update-index", "-z", "--index-info"]),
-                &[],
-                input.as_bytes(),
-                8192,
-            )?;
-            if !output.success {
-                return Err(self.failed(&output));
-            }
-            return Ok(());
+            return self.index_side(&side, path);
         }
-        if working.kind == "unsupported"
-            || working.kind == "directory"
-            || (working.kind == "symlink" && !symlink)
-            || [&file.base, &file.ours, &file.theirs]
-                .into_iter()
-                .flatten()
-                .any(|s| !matches!(s.mode.as_str(), "100644" | "100755" | "120000"))
-        {
+        if flags.unsupported {
             return Err(unsupported(
                 "Resolve submodule, directory/file and special-file conflicts in Git.",
             ));
         }
-        if symlink
+        if flags.symlink
             && matches!(
                 resolution,
                 ConflictResolution::Text { .. } | ConflictResolution::Working
@@ -601,21 +577,7 @@ impl Repository {
                     side.mode == "100755",
                     side.mode == "120000",
                 )?;
-                // Index the exact selected blob. In particular no UTF-8 decoding,
-                // newline rewriting, clean filter or binary round-trip occurs.
-                let input = format!("{} {}\t{}\0", side.mode, side.oid, path);
-                let output = self
-                    .write(
-                        &args(&["update-index", "-z", "--index-info"]),
-                        &[],
-                        input.as_bytes(),
-                        8192,
-                    )
-                    .map_err(saved_but_unstaged)?;
-                if !output.success {
-                    return Err(saved_but_unstaged(self.failed(&output)));
-                }
-                return Ok(());
+                return self.index_side(&side, path).map_err(saved_but_unstaged);
             }
             ConflictResolution::Text { content } => {
                 if !file.editable || content.contains('\0') {

@@ -61,7 +61,7 @@ it('accepts a remote-tracking branch drop on a local graph pill and rejects a re
     { id: 'remote-tip', parents: [], subject: 'Remote', body: '', author: 'A', email: '', timestamp: 1, branch: 'origin/feature/topic', files: [] },
   ];
   try {
-    await act(async () => root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={refs} selectedId="main-tip" head="main-tip" headRef="refs/heads/main" loaded={2} matches={null} onSelect={() => {}} onActions={onActions} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />));
+    await act(async () => root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={refs} selectedId="main-tip" head="main-tip" headRef="refs/heads/main" matches={null} onSelect={() => {}} onActions={onActions} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />));
     const source = host.querySelector('[data-name="origin/feature/topic"]') as HTMLElement | null;
     const target = host.querySelector('[data-name="main"]') as HTMLElement | null;
     const data = transfer({ [REF_DRAG_TYPE]: 'refs/remotes/origin/feature/topic' });
@@ -98,7 +98,7 @@ it('accepts a branch drop on a non-current graph pill and opens its merge review
   const host = document.createElement('div'), root = createRoot(host), onActions = vi.fn();
   const commits = dropRefs.slice(0, 2).map(ref => ({ id: ref.commitId, parents: [], subject: ref.name, body: '', author: 'A', email: '', timestamp: 1, branch: ref.name, files: [] }));
   try {
-    await act(async () => root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={dropRefs} selectedId="main-tip" head="main-tip" headRef="refs/heads/main" loaded={2} matches={null} onSelect={() => {}} onActions={onActions} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />));
+    await act(async () => root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={dropRefs} selectedId="main-tip" head="main-tip" headRef="refs/heads/main" matches={null} onSelect={() => {}} onActions={onActions} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />));
     const pill = host.querySelector('[data-name="topic"]')!;
     const data = transfer({ [REF_DRAG_TYPE]: 'refs/heads/main' });
     const dragOver = new Event('dragover', { bubbles: true, cancelable: true });
@@ -136,7 +136,7 @@ it('switches graph nodes between dots, initials and Gravatar while preserving wo
     { id: 'b', parents: [], subject: 'B', body: '', author: 'Grace Hopper', email: 'grace@example.com', timestamp: 1, branch: 'topic', files: [] },
   ];
   const layout = { ...layoutHistory(commits), laneCount: 40 };
-  const render = (pending = false) => act(async () => root.render(<HistoryGraph commits={commits} layout={pending ? layoutHistory([]) : layout} refs={[]} selectedId="merge" head="merge" loaded={commits.length} matches={new Set(['merge'])} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />));
+  const render = (pending = false) => act(async () => root.render(<HistoryGraph commits={commits} layout={pending ? layoutHistory([]) : layout} refs={[]} selectedId="merge" head="merge" matches={new Set(['merge'])} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />));
   preferences.graphOnly = true;
   try {
     await render();
@@ -185,7 +185,7 @@ it('renders pending history without drawing nodes the layout worker has not retu
   const host = document.createElement('div');
   const root = createRoot(host);
   try {
-    await act(async () => { root.render(<HistoryGraph commits={[{ id: 'a', parents: [], subject: 'Pending commit', body: '', author: 'Test', email: '', timestamp: 1, branch: 'main', files: [] }]} layout={layoutHistory([])} refs={[]} selectedId="a" head="a" loaded={1} matches={null} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />); });
+    await act(async () => { root.render(<HistoryGraph commits={[{ id: 'a', parents: [], subject: 'Pending commit', body: '', author: 'Test', email: '', timestamp: 1, branch: 'main', files: [] }]} layout={layoutHistory([])} refs={[]} selectedId="a" head="a" matches={null} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />); });
     expect(host.querySelector('[role="option"]')?.textContent).toContain('Pending commit');
     expect(canvas).toHaveBeenCalled();
   } finally {
@@ -229,7 +229,7 @@ it('reveals the working-changes row when it first appears above a scrolled list'
   const host = document.createElement('div'), root = createRoot(host);
   const base: Commit = { id: 'base', parents: [], subject: 'Base', body: '', author: 'A', email: '', timestamp: 1, branch: 'main', files: [] };
   const working: Commit = { id: WORKING_ID, parents: ['base'], subject: 'Working changes · 1 path', body: '', author: 'Working tree', email: '', timestamp: 0, branch: 'main', files: [] };
-  const render = (items: Commit[]) => act(async () => root.render(<HistoryGraph commits={items} layout={layoutHistory(items)} refs={[]} selectedId="base" head="base" loaded={items.length} matches={null} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />));
+  const render = (items: Commit[]) => act(async () => root.render(<HistoryGraph commits={items} layout={layoutHistory(items)} refs={[]} selectedId="base" head="base" matches={null} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />));
   const scrollTo = async (top: number, scroller: HTMLElement) => { scroller.scrollTop = top; await act(async () => { scroller.dispatchEvent(new Event('scroll', { bubbles: true })); }); };
   try {
     await render([base]);
@@ -264,7 +264,7 @@ it('only reallocates the graph canvas backing store when its pixel size changes'
   Object.defineProperty(HTMLCanvasElement.prototype, 'height', { configurable: true, get: originalHeight.get, set(value) { heightAssignments(value); originalHeight.set!.call(this, value); } });
   const host = document.createElement('div'), root = createRoot(host);
   const commits = [{ id: 'a', parents: [], subject: 'A', body: '', author: 'Ada', email: '', timestamp: 1, branch: 'main', files: [] }];
-  const render = (matches: Set<string> | null) => act(async () => root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={[]} selectedId="a" head="a" loaded={1} matches={matches} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />));
+  const render = (matches: Set<string> | null) => act(async () => root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={[]} selectedId="a" head="a" matches={matches} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />));
   try {
     await render(null);
     const widthWrites = widthAssignments.mock.calls.length, heightWrites = heightAssignments.mock.calls.length;
@@ -291,7 +291,7 @@ it.each(['refs/heads/topic', 'refs/remotes/origin/feature/topic'])('branch pill 
   const commits = [{ id: 'tip', parents: [], subject: 'Tip', body: '', author: 'A', email: '', timestamp: 1, branch: 'topic', files: [] }];
   const onSelect = vi.fn(); const onActions = vi.fn(); const onContextActions = vi.fn(); const onSwitchBranch = vi.fn();
   try {
-    await act(async () => { root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={[{ name: 'topic', fullName, kind: fullName.startsWith('refs/heads/') ? 'local' : 'remote', commitId: 'tip' }]} selectedId="tip" head="tip" headRef="refs/heads/main" loaded={1} matches={null} onSelect={onSelect} onActions={onActions} onContextActions={onContextActions} onSwitchBranch={onSwitchBranch} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />); });
+    await act(async () => { root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={[{ name: 'topic', fullName, kind: fullName.startsWith('refs/heads/') ? 'local' : 'remote', commitId: 'tip' }]} selectedId="tip" head="tip" headRef="refs/heads/main" matches={null} onSelect={onSelect} onActions={onActions} onContextActions={onContextActions} onSwitchBranch={onSwitchBranch} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />); });
     const pill = host.querySelector('.ref-pill') as HTMLElement;
     await act(async () => { pill.click(); });
     await act(async () => { pill.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
@@ -354,7 +354,7 @@ it('renders graph nodes without selection halo, HEAD glow, or HEAD center dot', 
           refs={[{ name: 'main', kind: 'local', commitId: 'head-1', fullName: 'refs/heads/main' }]}
           selectedId={selected}
           head="head-1"
-          loaded={commits.length}
+         
           matches={null}
           onSelect={id => { selected = id; }}
           onLoadMore={() => {}}
@@ -386,7 +386,7 @@ it('renders graph nodes without selection halo, HEAD glow, or HEAD center dot', 
           refs={[{ name: 'main', kind: 'local', commitId: 'head-1', fullName: 'refs/heads/main' }]}
           selectedId="c-1"
           head="head-1"
-          loaded={commits.length}
+         
           matches={null}
           onSelect={id => { selected = id; }}
           onLoadMore={() => {}}
@@ -414,7 +414,7 @@ it('gives every mounted history graph unique ids so hidden tabs sharing commits 
   const hosts = [document.createElement('div'), document.createElement('div')];
   const roots = hosts.map(host => { document.body.append(host); return createRoot(host); });
   try {
-    await act(async () => { roots.forEach(root => root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={[]} selectedId="shared" head="shared" loaded={1} matches={null} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />)); });
+    await act(async () => { roots.forEach(root => root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={[]} selectedId="shared" head="shared" matches={null} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />)); });
     const ids = [...document.querySelectorAll('[id]')].map(element => element.id);
     expect(ids.length).toBeGreaterThanOrEqual(4);
     expect(new Set(ids).size).toBe(ids.length);
@@ -445,7 +445,7 @@ async function mountRovingGraph() {
   ];
   const refs = [{ name: 'main', fullName: 'refs/heads/main', kind: 'local' as const, commitId: 'tip' }, { name: 'dev', fullName: 'refs/heads/dev', kind: 'local' as const, commitId: 'tip' }, { name: 'v1', fullName: 'refs/tags/v1', kind: 'tag' as const, commitId: 'tip' }];
   const handlers = { onSelect: vi.fn(), onActions: vi.fn(), onContextActions: vi.fn(), onTogglePick: vi.fn(), onOpenDetails: vi.fn() };
-  const render = (selectedId = 'tip') => act(async () => root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={refs} selectedId={selectedId} head="tip" headRef="refs/heads/main" loaded={commits.length} matches={null} onLoadMore={() => {}} theme={BUILTIN_THEMES[0]} pickOrder={[]} {...handlers} />));
+  const render = (selectedId = 'tip') => act(async () => root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={refs} selectedId={selectedId} head="tip" headRef="refs/heads/main" matches={null} onLoadMore={() => {}} theme={BUILTIN_THEMES[0]} pickOrder={[]} {...handlers} />));
   await render();
   const listbox = host.querySelector('[role="listbox"]') as HTMLElement;
   const key = (init: KeyboardEventInit) => act(async () => { listbox.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })); });

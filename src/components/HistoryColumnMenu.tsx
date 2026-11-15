@@ -4,7 +4,7 @@ import { ArrowDown, ArrowUp, RotateCcw, X } from 'lucide-react';
 import type { HistoryColumnConfig, HistoryColumnId } from '../model/settings';
 import { DEFAULT_HISTORY_COLUMNS } from '../model/settings';
 
-const COLUMN_LABELS: Record<HistoryColumnId, string> = {
+export const COLUMN_LABELS: Record<HistoryColumnId, string> = {
   refs: 'Branch / tag',
   graph: 'Graph',
   message: 'Commit message',

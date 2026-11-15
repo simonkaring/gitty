@@ -1,7 +1,4 @@
 /* ==========================================================================
-   Responsive
-   ========================================================================== */
-/* ==========================================================================
    Shell polish: segmented toolbar, toast region, animated sidebar groups
    ========================================================================== */
 @keyframes tab-underline {
@@ -15,10 +12,6 @@
     transform: scale(0.6);
     opacity: 0.5;
   }
-}
-
-.repository-toolbar button:active:not(:disabled) {
-  transform: scale(0.97);
 }
 
 /* Toasts: transient notices float instead of pushing the layout. */
@@ -119,9 +112,7 @@
    Animated icons and micro-interactions (lucide SVGs + state attributes)
    ========================================================================== */
 /* Any check that appears draws itself in. */
-svg.lucide-check path,
-svg.lucide-circle-check path,
-svg.lucide-check-circle path {
+svg.lucide-check path {
   stroke-dasharray: 30;
   stroke-dashoffset: 0;
   animation: draw-in 420ms var(--ease-out) both;
@@ -216,10 +207,9 @@ svg.lucide-chevron-down {
 [aria-haspopup][aria-expanded='true'] > svg.lucide-chevron-down {
   transform: rotate(180deg);
 }
-/* Settings gear turns, close crosses twist, help bounces. */
+/* Settings gear turns, close crosses twist. */
 svg.lucide-settings,
 svg.lucide-x,
-svg.lucide-circle-help,
 svg.lucide-plus {
   transition: transform var(--dur-slow) var(--ease-spring);
 }
@@ -231,9 +221,6 @@ button:hover:not(:disabled) > svg.lucide-x {
 }
 button:hover:not(:disabled) > svg.lucide-plus {
   transform: rotate(90deg) scale(1.1);
-}
-button:hover:not(:disabled) > svg.lucide-circle-help {
-  transform: translateY(-1px) rotate(-8deg);
 }
 /* Panel toggles: the divider slides toward the panel's edge when closed. */
 svg.lucide-panel-left path,
@@ -287,13 +274,6 @@ button {
 }
 .commit-button[data-working='true'] svg {
   animation: spin 1s linear infinite;
-}
-/* Working files slide in when they appear or move between groups. */
-@keyframes file-in {
-  from {
-    opacity: 0;
-    transform: translateX(-6px);
-  }
 }
 /* Dialogs rise in. */
 dialog[open] {
@@ -407,10 +387,6 @@ dialog[open]::backdrop {
   background: var(--selected);
   color: var(--accent-text);
   font-weight: 600;
-}
-.start-demo {
-  margin-top: auto;
-  align-self: flex-start;
 }
 .start-panel {
   display: flex;
@@ -683,34 +659,6 @@ dialog[open]::backdrop {
 /* ==========================================================================
    Command palette
    ========================================================================== */
-.palette-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-2);
-  min-height: var(--h-compact);
-  min-width: 220px;
-  padding: 0 6px 0 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-pill);
-  background: var(--bg);
-  color: var(--muted);
-  font-size: var(--fs-sm);
-  box-shadow: var(--edge-highlight);
-}
-.palette-trigger:hover:not(:disabled) {
-  color: var(--secondary);
-  border-color: var(--border-strong);
-  background: var(--bg);
-}
-.palette-trigger kbd {
-  margin-left: auto;
-  gap: 1px;
-  display: inline-flex;
-  border-radius: var(--r-pill);
-  padding: 0 8px;
-  height: 20px;
-  font-size: var(--fs-2xs);
-}
 .command-palette {
   width: min(640px, calc(100vw - 32px));
   margin-top: 14vh;

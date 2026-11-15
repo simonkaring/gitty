@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createDemoHistory } from '../model/demo';
-import { appendHistory, buildEdgeIndex, createLayoutState, indexEdges, layoutHistory, visibleEdges } from './layout';
+import { appendHistory, buildEdgeIndex, createLayoutState, indexEdges, layoutHistory, type GraphEdge } from './layout';
+
+/** Complete scan: the oracle for the indexed clipping. */
+const visibleEdges = (edges: readonly GraphEdge[], start: number, end: number) => edges.filter(edge => edge.fromRow < end && edge.toRow >= start);
 
 describe('history topology and lane reservations', () => {
   const history = createDemoHistory();
@@ -51,9 +54,10 @@ describe('history topology and lane reservations', () => {
       const snapshot = structuredClone(previous);
       const result = appendHistory(state, page);
       count += page.length;
-      expect(result).toEqual(layoutHistory(history.commits.slice(0, count)));
+      const indexed = { ...result, edgeMaxTo: buildEdgeIndex(result.edges) };
+      expect(indexed).toEqual(layoutHistory(history.commits.slice(0, count)));
       expect(previous).toEqual(snapshot);
-      previous = result;
+      previous = indexed;
     }
     expect(appendHistory(createLayoutState(), [{ id: 'a', parents: ['b'] }]).edges[0].toRow).toBe(1);
   });
@@ -76,11 +80,9 @@ describe('history topology and lane reservations', () => {
   it('indexed clipping matches the complete scan across merge and unloaded boundaries', () => {
     for (const size of [0, 1, 240, history.commits.length]) {
       const { edges } = layoutHistory(history.commits.slice(0, size));
-      const visible = indexEdges(edges);
-      const workerVisible = indexEdges(edges, buildEdgeIndex(edges));
+      const visible = indexEdges(edges, buildEdgeIndex(edges));
       for (let row = -10; row <= size + 30; row += 17) {
         expect(visible(row, row + 25)).toEqual(visibleEdges(edges, row, row + 25));
-        expect(workerVisible(row, row + 25)).toEqual(visible(row, row + 25));
       }
     }
   });

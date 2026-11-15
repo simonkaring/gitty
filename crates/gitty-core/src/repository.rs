@@ -214,18 +214,15 @@ fn lock_native_common_dir(common_dir: &Path) -> Result<File> {
         .read(true)
         .write(true)
         .open(common_dir.join(".gitty-mutation.lock"))?;
-    match fs2::FileExt::try_lock_exclusive(&file) {
+    match file.try_lock() {
         Ok(()) => {}
-        Err(error)
-            if error.kind() == std::io::ErrorKind::WouldBlock
-                || (cfg!(windows) && error.raw_os_error() == Some(33)) =>
-        {
+        Err(std::fs::TryLockError::WouldBlock) => {
             return Err(Error::new(
                 "repositoryBusy",
                 "Another Gitty process is mutating this repository",
             ))
         }
-        Err(error) => return Err(error.into()),
+        Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
     }
     Ok(file)
 }
@@ -1432,10 +1429,10 @@ mod mutation_lock_tests {
             .write(true)
             .open(directory.path().join(".gitty-mutation.lock"))
             .unwrap();
-        assert!(fs2::FileExt::try_lock_exclusive(&second).is_err());
+        assert!(second.try_lock().is_err());
         std::fs::write(directory.path().join("release"), b"release").unwrap();
         assert!(child.wait().unwrap().success());
-        fs2::FileExt::try_lock_exclusive(&second).unwrap();
+        second.try_lock().unwrap();
     }
 
     #[test]

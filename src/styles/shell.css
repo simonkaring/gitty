@@ -225,10 +225,6 @@ button[data-danger='true']:hover:not(:disabled) {
   align-items: center;
   flex-wrap: wrap;
 }
-.native-actions > strong {
-  flex: 1;
-  overflow-wrap: anywhere;
-}
 .titlebar .native-actions {
   flex-wrap: nowrap;
 }
@@ -611,47 +607,9 @@ button[data-danger='true']:hover:not(:disabled) {
   background: var(--border);
   flex-shrink: 0;
 }
-.repository {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  gap: 8px;
-  text-align: left;
-  padding: 8px 12px;
-  border-radius: var(--r-sm);
-  color: var(--secondary);
-  margin-bottom: 2px;
-}
-.repository > span:not(.repo-active-dot) {
-  min-width: 0;
-  font-size: var(--fs-md);
-  font-weight: 550;
-}
-.repository small {
-  display: block;
-  margin-top: 2px;
-  font-weight: 400;
-  font-size: var(--fs-xs);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--muted);
-}
-.repository.active {
-  background: var(--selected);
-  color: var(--text);
-}
 .current-branch-check {
   position: absolute;
   left: 5px;
-}
-.current-branch-check polyline {
-  stroke-dasharray: 24;
-  animation: branch-check-in 350ms var(--ease-out) both;
-}
-@keyframes branch-check-in {
-  from { stroke-dashoffset: 24; }
-  to { stroke-dashoffset: 0; }
 }
 
 /* Reference tree: section headers in UI type, entries in mono. */
@@ -819,10 +777,6 @@ button[data-danger='true']:hover:not(:disabled) {
   white-space: nowrap;
   transition: transform var(--dur-med) var(--ease-out);
 }
-.ref-item.active {
-  background: var(--selected);
-  color: var(--text);
-}
 .ref-action-row {
   display: flex;
   align-items: center;
@@ -972,6 +926,4 @@ button[data-danger='true']:hover:not(:disabled) {
 .head-button:hover:not(:disabled) {
   color: var(--text);
 }
-
-/* Demo sidebar pieces */
 

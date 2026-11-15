@@ -1,7 +1,7 @@
 export interface GraphCommit { id: string; parents: readonly string[] }
 export interface GraphNode { id: string; row: number; lane: number }
 export interface GraphEdge { from: string; to: string; fromRow: number; toRow: number; fromLane: number; toLane: number; track: number }
-export interface GraphLayout { nodes: GraphNode[]; edges: GraphEdge[]; laneCount: number; edgeMaxTo?: Int32Array }
+export interface GraphLayout { nodes: GraphNode[]; edges: GraphEdge[]; laneCount: number; edgeMaxTo: Int32Array }
 
 /** Mutable, worker-owned state for appending older pages to a pinned walk. */
 export interface LayoutState {
@@ -27,10 +27,12 @@ export function createLayoutState(): LayoutState {
  * No canvas, DOM, dates or branch-name dependencies.
  */
 export function layoutHistory(commits: readonly GraphCommit[]): GraphLayout {
-  return appendHistory(createLayoutState(), commits);
+  const layout = appendHistory(createLayoutState(), commits);
+  return { ...layout, edgeMaxTo: buildEdgeIndex(layout.edges) };
 }
 
-export function appendHistory(state: LayoutState, commits: readonly GraphCommit[]): GraphLayout {
+/** The worker builds the edge index separately (`buildEdgeIndex`) so it can transfer the buffer. */
+export function appendHistory(state: LayoutState, commits: readonly GraphCommit[]): Omit<GraphLayout, 'edgeMaxTo'> {
   const { slots, positions } = state;
   // Copy the containers, not the records: previous snapshots keep their arrays
   // and edge objects, while only edges whose endpoint moved are reallocated.
@@ -93,11 +95,6 @@ export const LANE_WIDTH = 18;
 export const LANE_PADDING = 22;
 export const laneX = (lane: number) => LANE_PADDING + lane * LANE_WIDTH;
 
-/** Viewport-sized rendering, including edges whose endpoints are both offscreen. */
-export function visibleEdges(edges: readonly GraphEdge[], start: number, end: number) {
-  return edges.filter(edge => edge.fromRow < end && edge.toRow >= start);
-}
-
 /** Build the interval pruning index off the main thread alongside lane layout. */
 export function buildEdgeIndex(edges: readonly GraphEdge[]): Int32Array {
   const maxTo = new Int32Array(edges.length * 4 + 1);
@@ -113,45 +110,20 @@ export function buildEdgeIndex(edges: readonly GraphEdge[]): Int32Array {
 
 /** Immutable interval index: skip entire subtrees above/below the viewport while
  * retaining long parent edges whose two endpoints are both offscreen. */
-export function indexEdges(edges: readonly GraphEdge[], edgeMaxTo?: Int32Array) {
-  if (edgeMaxTo) {
-    return (start: number, end: number): GraphEdge[] => {
-      const result: GraphEdge[] = [];
-      function visit(node: number, first: number, last: number) {
-        if (first >= last || edgeMaxTo![node] < start || edges[first].fromRow >= end) return;
-        if (last - first === 1) {
-          if (edges[first].toRow >= start) result.push(edges[first]);
-          return;
-        }
-        const middle = (first + last) >>> 1;
-        visit(node * 2, first, middle);
-        visit(node * 2 + 1, middle, last);
-      }
-      visit(1, 0, edges.length);
-      return result;
-    };
-  }
-  interface IntervalNode { edge: GraphEdge; minFrom: number; maxTo: number; left?: IntervalNode; right?: IntervalNode }
-  // Layout emits source-row order; avoid a full sort for the common path.
-  const ordered = edges.every((edge, i) => i === 0 || edges[i - 1].fromRow <= edge.fromRow);
-  const sorted = ordered ? edges : [...edges].sort((a, b) => a.fromRow - b.fromRow);
-  function build(start: number, end: number): IntervalNode | undefined {
-    if (start >= end) return;
-    const middle = (start + end) >>> 1;
-    const left = build(start, middle), right = build(middle + 1, end);
-    const edge = sorted[middle];
-    return { edge, left, right, minFrom: sorted[start].fromRow, maxTo: Math.max(edge.toRow, left?.maxTo ?? -1, right?.maxTo ?? -1) };
-  }
-  const root = build(0, sorted.length);
+export function indexEdges(edges: readonly GraphEdge[], edgeMaxTo: Int32Array) {
   return (start: number, end: number): GraphEdge[] => {
     const result: GraphEdge[] = [];
-    function visit(node?: IntervalNode) {
-      if (!node || node.maxTo < start || node.minFrom >= end) return;
-      visit(node.left);
-      if (node.edge.fromRow < end && node.edge.toRow >= start) result.push(node.edge);
-      visit(node.right);
+    function visit(node: number, first: number, last: number) {
+      if (first >= last || edgeMaxTo[node] < start || edges[first].fromRow >= end) return;
+      if (last - first === 1) {
+        if (edges[first].toRow >= start) result.push(edges[first]);
+        return;
+      }
+      const middle = (first + last) >>> 1;
+      visit(node * 2, first, middle);
+      visit(node * 2 + 1, middle, last);
     }
-    visit(root);
+    visit(1, 0, edges.length);
     return result;
   };
 }

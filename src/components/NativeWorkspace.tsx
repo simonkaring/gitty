@@ -12,7 +12,7 @@ import { Toast, ToastProvider, ToastRegion } from './ui';
 import { RepositoryPane } from './RepositoryPane';
 import { RepositoryTabs, type RepositoryTabSummary } from './RepositoryTabs';
 import { loadPersistedTabs, locationLabel, savePersistedTabs, tabsReducer, type TabsState } from '../model/tabs';
-import { errorMessage, handleWindowDrag, hostCapabilities, isDesktopHost, native, openCloneProgress, subscribeNative } from '../model/native';
+import { errorMessage, handleWindowDrag, hostLive, isDesktopHost, native, openCloneProgress, subscribeNative } from '../model/native';
 import { DEMO_REPOS, demoLocation } from '../model/demoBackend';
 import { cloneReducer, type CloneRequest } from '../model/clone';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -141,7 +141,7 @@ export function NativeWorkspace({ demo, onToggleDemo, initialLocation, clonePare
   }, [demo, openLocation, notify]);
   const startClone = useCallback((request: CloneRequest, fromTabId?: string) => {
     if (clone.status === 'running' || clone.status === 'cancelling') return;
-    if (!hostCapabilities().clone) { notify('Cloning requires the desktop app.'); return; }
+    if (!hostLive()) { notify('Cloning requires the desktop app.'); return; }
     const operationId = crypto.randomUUID();
     dispatchClone({ type: 'start', operationId, request });
     void (async () => {

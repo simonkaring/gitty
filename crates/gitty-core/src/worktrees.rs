@@ -125,46 +125,18 @@ fn require_new_destination(location: &RepositoryLocation, path: &str) -> Result<
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
             Err(error) => return Err(error.into()),
         },
-        RepositoryLocation::Wsl { distribution, .. } => {
-            if !cfg!(windows) {
-                return Err(Error::new("unsupportedPlatform", "WSL requires Windows"));
-            }
-            let mut command = std::process::Command::new("wsl.exe");
-            command.args([
-                "--distribution",
-                distribution,
-                "--exec",
-                "test",
-                "-e",
-                path,
-                "-o",
-                "-L",
-                path,
-            ]);
-            let output = process::run_for(command, std::time::Duration::from_secs(30))?;
-            match output.code {
-                Some(0) => true,
-                Some(1) => false,
-                _ => return Err(Error::new("io", "Cannot check the WSL destination")),
-            }
-        }
-        RepositoryLocation::Ssh { .. } => {
-            let command = process::ssh_exec(
+        RepositoryLocation::Wsl { .. } | RepositoryLocation::Ssh { .. } => {
+            let command = process::host_command(
                 location,
-                &[],
-                &[
-                    "test".to_string(),
-                    "-e".into(),
-                    path.into(),
-                    "-o".into(),
-                    "-L".into(),
-                    path.into(),
-                ],
+                &process::args(&["test", "-e", path, "-o", "-L", path]),
             )?;
             let output = process::run_for(command, std::time::Duration::from_secs(30))?;
             match output.code {
                 Some(0) => true,
                 Some(1) => false,
+                _ if matches!(location, RepositoryLocation::Wsl { .. }) => {
+                    return Err(Error::new("io", "Cannot check the WSL destination"))
+                }
                 _ => {
                     return Err(Error::new(
                         "io",

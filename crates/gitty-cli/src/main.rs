@@ -35,38 +35,8 @@ struct Response {
     error: Option<Error>,
 }
 
-#[derive(Serialize)]
-struct CliError {
-    code: String,
-    message: String,
-}
-
-impl CliError {
-    fn invalid(message: impl Into<String>) -> Self {
-        Self {
-            code: "invalidRequest".into(),
-            message: message.into(),
-        }
-    }
-
-    fn domain(error: Error) -> Self {
-        Self {
-            code: error.code,
-            message: error.message,
-        }
-    }
-}
-
-impl From<&str> for CliError {
-    fn from(message: &str) -> Self {
-        Self::invalid(message)
-    }
-}
-
-impl From<String> for CliError {
-    fn from(message: String) -> Self {
-        Self::invalid(message)
-    }
+fn invalid(message: impl Into<String>) -> Error {
+    Error::new("invalidRequest", message)
 }
 
 fn call(service: &AgentService, method: &str, params: Value) -> Result<Value, Error> {
@@ -415,44 +385,78 @@ fn serve(service: Arc<AgentService>) -> Result<(), String> {
     serve_lines(lines_rx, io::stdout(), service)
 }
 
-fn repository_location(repo: Option<String>, file: Option<String>) -> Result<Value, CliError> {
+fn repository_location(repo: Option<String>, file: Option<String>) -> Result<Value, Error> {
     match (repo, file) {
         (Some(path), None) => Ok(json!({"kind":"native","path":path})),
         (None, Some(path)) => {
             let location = read_json_file(&path)?;
             if !location.is_object() {
-                return Err(CliError::invalid("location file must contain an object"));
+                return Err(invalid("location file must contain an object"));
             }
             Ok(location)
         }
-        _ => Err(CliError::invalid(
+        _ => Err(invalid(
             "provide exactly one of --repo PATH or --location-file FILE",
         )),
     }
 }
 
-fn open_location(service: &AgentService, location: Value) -> Result<String, CliError> {
-    let state =
-        call(service, "repository_open", json!({"location":location})).map_err(CliError::domain)?;
+fn open_location(service: &AgentService, location: Value) -> Result<String, Error> {
+    let state = call(service, "repository_open", json!({"location":location}))?;
     state["session"]["handle"]
         .as_str()
         .map(str::to_owned)
-        .ok_or_else(|| CliError::invalid("repository_open returned no handle"))
+        .ok_or_else(|| invalid("repository_open returned no handle"))
 }
 
-fn print_json(value: &Value) -> Result<(), CliError> {
+/// Opens the target repository, runs `f` with its handle, and closes the session
+/// whether or not `f` succeeded.
+fn with_handle<T>(
+    service: &AgentService,
+    repo: Option<String>,
+    location_file: Option<String>,
+    f: impl FnOnce(&str) -> Result<T, Error>,
+) -> Result<T, Error> {
+    let handle = open_location(service, repository_location(repo, location_file)?)?;
+    let result = f(&handle);
+    let _ = call(service, "repository_close", json!({"handle":handle}));
+    result
+}
+
+type Target = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+/// Parses `--repo`, `--location-file`, `--method` and `--params-file` (each at most once).
+fn parse_target(args: &[String]) -> Result<Target, Error> {
+    let (mut repo, mut location_file, mut method, mut params_file) = (None, None, None, None);
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--repo" if repo.is_none() => repo = it.next().cloned(),
+            "--location-file" if location_file.is_none() => location_file = it.next().cloned(),
+            "--method" if method.is_none() => method = it.next().cloned(),
+            "--params-file" if params_file.is_none() => params_file = it.next().cloned(),
+            "--json" => {}
+            _ => return Err(invalid(format!("unknown or duplicate argument: {arg}"))),
+        }
+    }
+    Ok((repo, location_file, method, params_file))
+}
+
+fn print_json(value: &Value) -> Result<(), Error> {
     write_bounded_line(
         &mut io::stdout().lock(),
         value,
         MAX_OUTPUT.saturating_sub(1),
     )
-    .map_err(|error| CliError {
-        code: "outputTooLarge".into(),
-        message: error.to_string(),
-    })
+    .map_err(|error| Error::new("outputTooLarge", error.to_string()))
 }
 
-fn run() -> Result<(), CliError> {
+fn run() -> Result<(), Error> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let allow_prompts = if let Some(index) = args.iter().position(|arg| arg == "--allow-prompts") {
         args.remove(index);
@@ -462,7 +466,7 @@ fn run() -> Result<(), CliError> {
     };
     let accounts_file = if let Some(index) = args.iter().position(|arg| arg == "--accounts-file") {
         if index + 1 >= args.len() {
-            return Err(CliError::invalid("--accounts-file requires a path"));
+            return Err(invalid("--accounts-file requires a path"));
         }
         args.remove(index);
         Some(PathBuf::from(args.remove(index)))
@@ -475,33 +479,26 @@ fn run() -> Result<(), CliError> {
             Some("serve" | "capabilities")
         )
     {
-        return Err(CliError::invalid(
+        return Err(invalid(
             "headless policies may only be selected for serve or capabilities",
         ));
     }
-    let data = tempfile::tempdir().map_err(|error| CliError {
-        code: "io".into(),
-        message: error.to_string(),
-    })?;
+    let data = tempfile::tempdir()?;
     let mut service = match accounts_file {
         Some(path) => AgentService::with_system_accounts(data.path().into(), path),
         None => AgentService::new(data.path().into()),
     };
     if allow_prompts {
-        service = service.with_event_prompts().map_err(|error| CliError {
-            code: "promptSetup".into(),
-            message: error.to_string(),
-        })?;
+        service = service
+            .with_event_prompts()
+            .map_err(|error| Error::new("promptSetup", error.to_string()))?;
     }
     match args.first().map(String::as_str) {
         Some("serve") if args.as_slice() == ["serve", "--stdio"] => {
-            serve(Arc::new(service)).map_err(|message| CliError {
-                code: "protocolIo".into(),
-                message,
-            })
+            serve(Arc::new(service)).map_err(|message| Error::new("protocolIo", message))
         }
         Some("capabilities") if args.len() == 1 || args.as_slice() == ["capabilities", "--json"] => {
-            let result = call(&service, "capabilities", json!({})).map_err(CliError::domain)?;
+            let result = call(&service, "capabilities", json!({}))?;
             println!("{}", serde_json::to_string_pretty(&result).unwrap());
             Ok(())
         }
@@ -531,29 +528,16 @@ fn run() -> Result<(), CliError> {
             Ok(())
         }
         Some("request") => {
-            let mut repo = None;
-            let mut location_file = None;
-            let mut method = None;
-            let mut params_file = None;
-            let mut args = args.iter().skip(1);
-            while let Some(arg) = args.next() {
-                match arg.as_str() {
-                    "--repo" if repo.is_none() => repo = args.next().cloned(),
-                    "--location-file" if location_file.is_none() => {
-                        location_file = args.next().cloned()
-                    }
-                    "--method" if method.is_none() => method = args.next().cloned(),
-                    "--params-file" if params_file.is_none() => params_file = args.next().cloned(),
-                    "--json" => {}
-                    _ => return Err(CliError::invalid(format!("unknown or duplicate argument: {arg}"))),
-                }
-            }
-            let method = method.ok_or("--method is required")?;
-            let params_path = params_file.ok_or("--params-file is required (use - for stdin)")?;
+            let (repo, location_file, method, params_file) = parse_target(&args[1..])?;
+            let method = method.ok_or_else(|| invalid("--method is required"))?;
+            let params_path = params_file
+                .ok_or_else(|| invalid("--params-file is required (use - for stdin)"))?;
             let mut params = read_json_file(&params_path)?;
-            let fields = params.as_object_mut().ok_or("params must be a JSON object")?;
+            let fields = params
+                .as_object()
+                .ok_or_else(|| invalid("params must be a JSON object"))?;
             if fields.contains_key("handle") {
-                return Err(CliError::invalid("handle is assigned by the one-shot request"));
+                return Err(invalid("handle is assigned by the one-shot request"));
             }
             let allowed = [
                 "repository_state", "repository_snapshot", "repository_status",
@@ -572,62 +556,45 @@ fn run() -> Result<(), CliError> {
                 "repository_ignore_path", "repository_open_path", "repository_reveal_path",
             ];
             if !allowed.contains(&method.as_str()) {
-                return Err(CliError::invalid("method is not available for one-shot repository requests"));
+                return Err(invalid("method is not available for one-shot repository requests"));
             }
-            let location = repository_location(repo, location_file)?;
-            let handle = open_location(&service, location)?;
-            fields.insert("handle".into(), json!(handle));
-            let result = call(&service, &method, params);
-            let _ = call(&service, "repository_close", json!({"handle":handle}));
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&result.map_err(CliError::domain)?).unwrap()
-            );
+            let result = with_handle(&service, repo, location_file, |handle| {
+                params["handle"] = json!(handle);
+                call(&service, &method, params)
+            })?;
+            println!("{}", serde_json::to_string_pretty(&result).unwrap());
             Ok(())
         }
         Some("review") => {
-            let mut repo = None;
-            let mut location_file = None;
-            let mut method = None;
-            let mut params_file = None;
-            let mut it = args.iter().skip(1);
-            while let Some(arg) = it.next() {
-                match arg.as_str() {
-                    "--repo" if repo.is_none() => repo = it.next().cloned(),
-                    "--location-file" if location_file.is_none() => {
-                        location_file = it.next().cloned()
-                    }
-                    "--method" if method.is_none() => method = it.next().cloned(),
-                    "--params-file" if params_file.is_none() => params_file = it.next().cloned(),
-                    "--json" => {}
-                    _ => return Err(CliError::invalid(format!("unknown or duplicate argument: {arg}"))),
-                }
-            }
-            let location = repository_location(repo, location_file)?;
-            let handle = open_location(&service, location)?;
-            let params = read_json_file(params_file.as_deref().ok_or("--params-file is required")?)?;
-            let review = service
-                .review(
-                    &handle,
-                    method.as_deref().ok_or("--method is required")?,
+            let (repo, location_file, method, params_file) = parse_target(&args[1..])?;
+            let review = with_handle(&service, repo, location_file, |handle| {
+                let params = read_json_file(
+                    params_file
+                        .as_deref()
+                        .ok_or_else(|| invalid("--params-file is required"))?,
+                )?;
+                service.review(
+                    handle,
+                    method
+                        .as_deref()
+                        .ok_or_else(|| invalid("--method is required"))?,
                     params,
                 )
-                .map_err(CliError::domain)?;
-            let _ = call(&service, "repository_close", json!({"handle":handle}));
-            print_json(&serde_json::to_value(review).map_err(|error| CliError {
-                code: "serialization".into(),
-                message: error.to_string(),
-            })?)
+            })?;
+            print_json(
+                &serde_json::to_value(review)
+                    .map_err(|error| Error::new("serialization", error.to_string()))?,
+            )
         }
         Some("execute") => {
             if args.len() < 3 || args.len() > 4 || args.get(1).map(String::as_str) != Some("--review-file") {
-                return Err(CliError::invalid("usage: gitty-cli execute --review-file FILE [--json]"));
+                return Err(invalid("usage: gitty-cli execute --review-file FILE [--json]"));
             }
             let value = read_json_file(&args[2])?;
             let review = serde_json::from_value(value).map_err(|_| {
-                CliError::invalid("review file is invalid or uses an unsupported version")
+                invalid("review file is invalid or uses an unsupported version")
             })?;
-            let result = service.execute_review(review).map_err(CliError::domain)?;
+            let result = service.execute_review(review)?;
             print_json(&result)
         }
         Some("status" | "history" | "stage" | "unstage" | "commit") => {
@@ -647,26 +614,24 @@ fn run() -> Result<(), CliError> {
                     }
                     "--json" if !json_output => json_output = true,
                     "--limit" if command == "history" => {
-                        limit = it.next().ok_or("--limit requires an integer")?
-                            .parse().map_err(|_| CliError::invalid("--limit requires a positive integer"))?;
+                        limit = it.next().ok_or_else(|| invalid("--limit requires an integer"))?
+                            .parse().map_err(|_| invalid("--limit requires a positive integer"))?;
                     }
                     "--path" if matches!(command, "stage" | "unstage") => {
-                        paths.push(it.next().ok_or("--path requires a path")?.clone());
+                        paths.push(it.next().ok_or_else(|| invalid("--path requires a path"))?.clone());
                     }
                     "--message-file" if command == "commit" && message_file.is_none() => {
-                        message_file = Some(it.next().ok_or("--message-file requires a file")?.clone());
+                        message_file = Some(it.next().ok_or_else(|| invalid("--message-file requires a file"))?.clone());
                     }
-                    _ => return Err(CliError::invalid(format!("unknown or duplicate argument: {arg}"))),
+                    _ => return Err(invalid(format!("unknown or duplicate argument: {arg}"))),
                 }
             }
             if matches!(command, "stage" | "unstage") && paths.is_empty() {
-                return Err("at least one explicit --path is required".into());
+                return Err(invalid("at least one explicit --path is required"));
             }
             if command == "commit" && message_file.is_none() {
-                return Err("--message-file is required".into());
+                return Err(invalid("--message-file is required"));
             }
-            let location = repository_location(repo, location_file)?;
-            let handle = open_location(&service, location)?;
             let method = match command {
                 "status" => "repository_status",
                 "history" => "repository_history",
@@ -675,25 +640,25 @@ fn run() -> Result<(), CliError> {
                 "commit" => "repository_create_commit",
                 _ => unreachable!(),
             };
-            let params = match command {
-                "status" => json!({"handle":handle}),
-                "history" => json!({"handle":handle,"limit":limit,"query":{}}),
-                "stage" | "unstage" => json!({"handle":handle,"paths":paths.clone()}),
-                "commit" => json!({
-                    "handle":handle,
-                    "message":read_message_file(message_file.as_deref().unwrap())?
-                }),
-                _ => unreachable!(),
-            };
-            let result = call(&service, method, params);
-            let _ = call(&service, "repository_close", json!({"handle":handle}));
-            let result = result.map_err(CliError::domain)?;
+            let result = with_handle(&service, repo, location_file, |handle| {
+                let params = match command {
+                    "status" => json!({"handle":handle}),
+                    "history" => json!({"handle":handle,"limit":limit,"query":{}}),
+                    "stage" | "unstage" => json!({"handle":handle,"paths":paths.clone()}),
+                    "commit" => json!({
+                        "handle":handle,
+                        "message":read_message_file(message_file.as_deref().unwrap())?
+                    }),
+                    _ => unreachable!(),
+                };
+                call(&service, method, params)
+            })?;
             if json_output {
                 println!("{}", serde_json::to_string_pretty(&result).unwrap());
             } else {
                 match command {
                     "status" => {
-                        let entries = result["entries"].as_array().ok_or("status response has no entries")?;
+                        let entries = result["entries"].as_array().ok_or_else(|| invalid("status response has no entries"))?;
                         if entries.is_empty() {
                             println!("Clean");
                         } else {
@@ -708,7 +673,7 @@ fn run() -> Result<(), CliError> {
                         }
                     }
                     "history" => {
-                        for commit in result["commits"].as_array().ok_or("history response has no commits")? {
+                        for commit in result["commits"].as_array().ok_or_else(|| invalid("history response has no commits"))? {
                             println!(
                                 "{} {}",
                                 commit["id"].as_str().unwrap_or("?"),
@@ -724,12 +689,12 @@ fn run() -> Result<(), CliError> {
             }
             Ok(())
         }
-        _ => Err(CliError::invalid("usage: gitty-cli capabilities | request --repo PATH --method METHOD --params-file FILE [--json] | status --repo PATH [--json] | history --repo PATH [--limit N] [--json] | stage|unstage --repo PATH --path PATH... | commit --repo PATH --message-file FILE [--json] | serve --stdio")),
+        _ => Err(invalid("usage: gitty-cli capabilities | request --repo PATH --method METHOD --params-file FILE [--json] | status --repo PATH [--json] | history --repo PATH [--limit N] [--json] | stage|unstage --repo PATH --path PATH... | commit --repo PATH --message-file FILE [--json] | serve --stdio")),
     }
 }
 
 fn emit_error(
-    error: &CliError,
+    error: &Error,
     json_output: bool,
     stdout: &mut impl Write,
     stderr: &mut impl Write,
@@ -779,59 +744,34 @@ fn main() {
     }
 }
 
-fn read_message_file(path: &str) -> Result<String, CliError> {
+fn read_message_file(path: &str) -> Result<String, Error> {
     const MAX_MESSAGE: u64 = 64 * 1024;
     let file: Box<dyn Read> = if path == "-" {
         Box::new(io::stdin())
     } else {
-        Box::new(std::fs::File::open(path).map_err(|error| CliError {
-            code: "io".into(),
-            message: error.to_string(),
-        })?)
+        Box::new(std::fs::File::open(path)?)
     };
     let mut bytes = Vec::new();
-    file.take(MAX_MESSAGE + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| CliError {
-            code: "io".into(),
-            message: error.to_string(),
-        })?;
+    file.take(MAX_MESSAGE + 1).read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_MESSAGE {
-        return Err(CliError {
-            code: "inputLimit".into(),
-            message: "commit message exceeds 64 KiB".into(),
-        });
+        return Err(Error::new("inputLimit", "commit message exceeds 64 KiB"));
     }
-    String::from_utf8(bytes).map_err(|_| CliError {
-        code: "invalidUtf8".into(),
-        message: "commit message file is not valid UTF-8".into(),
-    })
+    String::from_utf8(bytes)
+        .map_err(|_| Error::new("invalidUtf8", "commit message file is not valid UTF-8"))
 }
 
-fn read_json_file(path: &str) -> Result<Value, CliError> {
+fn read_json_file(path: &str) -> Result<Value, Error> {
     let input: Box<dyn Read> = if path == "-" {
         Box::new(io::stdin())
     } else {
-        Box::new(std::fs::File::open(path).map_err(|error| CliError {
-            code: "io".into(),
-            message: error.to_string(),
-        })?)
+        Box::new(std::fs::File::open(path)?)
     };
     let mut bytes = Vec::new();
-    input
-        .take(MAX_LINE as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| CliError {
-            code: "io".into(),
-            message: error.to_string(),
-        })?;
+    input.take(MAX_LINE as u64 + 1).read_to_end(&mut bytes)?;
     if bytes.len() > MAX_LINE {
-        return Err(CliError {
-            code: "inputLimit".into(),
-            message: "JSON params exceed 1 MiB".into(),
-        });
+        return Err(Error::new("inputLimit", "JSON params exceed 1 MiB"));
     }
-    serde_json::from_slice(&bytes).map_err(|error| CliError::invalid(error.to_string()))
+    serde_json::from_slice(&bytes).map_err(|error| invalid(error.to_string()))
 }
 
 #[cfg(test)]
@@ -887,10 +827,7 @@ mod tests {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         emit_error(
-            &CliError::domain(Error::new(
-                "repositoryBusy",
-                "Another Gitty write is active",
-            )),
+            &Error::new("repositoryBusy", "Another Gitty write is active"),
             true,
             &mut stdout,
             &mut stderr,

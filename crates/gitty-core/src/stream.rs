@@ -87,23 +87,7 @@ impl GitStream {
         Ok(stream)
     }
     fn spawn(mut command: Command, stdin: Stdio, delimiter: u8, max_record: usize) -> Result<Self> {
-        command
-            .stdin(stdin)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            command.process_group(0);
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
-        }
-        let mut child = command
-            .spawn()
-            .map_err(|e| Error::new("processStart", e.to_string()))?;
+        let mut child = process::spawn_piped(&mut command, stdin)?;
         process::note_spawn();
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();

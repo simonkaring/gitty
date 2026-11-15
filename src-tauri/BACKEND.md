@@ -375,9 +375,11 @@ is `-`, and must be valid UTF-8. Stage/unstage require one or more explicit
 paths. Every option is checked; no paths means no write.
 
 `serve --stdio` uses protocol major version 1 with one JSON request/response per
-line, request IDs, strict UTF-8, a 1 MiB request-line cap, parameters validated
-with the same typed DTOs used to publish method schemas (including nested
-unknown-field rejection), and structured `{error:{code,message}}` responses.
+line, request IDs, strict UTF-8, a 1 MiB request-line cap, parameters
+deserialized once into the same typed DTOs used to publish method schemas
+(including nested unknown-field rejection; an explicit `null` for an optional
+field means omitted, and any malformed params object returns one
+`invalidRequest`), and structured `{error:{code,message}}` responses.
 Up to four requests execute concurrently, with eight queued; responses can
 arrive out of order and must be matched by ID. `repository_cancel_search` is
 handled by the reader while searches execute. A full queue returns `serverBusy`.

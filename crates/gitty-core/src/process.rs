@@ -718,6 +718,30 @@ pub(crate) fn ssh_exec(
     cmd.arg(ssh_envelope(&script)?);
     Ok(cmd)
 }
+/// Runs a fixed non-Git program (`test`, `cat`, `find`, `python3`) on the host that
+/// owns a WSL or SSH repository's files. Native files are read in-process instead.
+pub(crate) fn host_command(location: &RepositoryLocation, words: &[String]) -> Result<Command> {
+    match location {
+        RepositoryLocation::Wsl { distribution, .. } => {
+            if !cfg!(windows) {
+                return Err(Error::new(
+                    "unsupportedPlatform",
+                    "WSL is available only on Windows",
+                ));
+            }
+            validate_distribution(distribution)?;
+            let mut c = Command::new("wsl.exe");
+            c.args(["--distribution", distribution, "--exec"])
+                .args(words);
+            Ok(c)
+        }
+        RepositoryLocation::Ssh { .. } => ssh_exec(location, &[], words),
+        RepositoryLocation::Native { .. } => Err(Error::new(
+            "internalLocation",
+            "Native repository files are read in-process, not through a host command.",
+        )),
+    }
+}
 
 #[cfg(windows)]
 pub(crate) struct ProcessJob(windows_sys::Win32::Foundation::HANDLE);
@@ -859,6 +883,73 @@ pub(crate) fn capture(
     }
     Ok(out)
 }
+pub(crate) fn spawn_piped(command: &mut Command, stdin: Stdio) -> Result<Child> {
+    command
+        .stdin(stdin)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    command
+        .spawn()
+        .map_err(|e| Error::new("processStart", e.to_string()))
+}
+/// Waits for exit and both readers, or until `failure` asks to stop. The outer
+/// error (stop request or lost waiter) means the child is still to be killed.
+pub(crate) fn wait_captured(
+    receiver: &mpsc::Receiver<ProcessEvent>,
+    captured: &mut usize,
+    mut failure: impl FnMut() -> Option<Error>,
+    disconnected: impl FnOnce() -> Error,
+) -> Result<std::io::Result<ExitStatus>> {
+    let mut exited = None;
+    loop {
+        if let Some(error) = failure() {
+            return Err(error);
+        }
+        if *captured == 2 {
+            if let Some(status) = exited.take() {
+                return Ok(status);
+            }
+        }
+        match receiver.recv_timeout(WAIT_CHECK_INTERVAL) {
+            Ok(ProcessEvent::Exited(status)) => exited = Some(status),
+            Ok(ProcessEvent::Captured) => *captured += 1,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(disconnected()),
+        }
+    }
+}
+/// Normal completion always joins both readers. After a kill, an escaped
+/// descendant may still own a pipe: allow cleanup a bounded grace period,
+/// then detach only readers that remain blocked rather than hang the caller.
+pub(crate) fn abandon_readers<T>(
+    receiver: &mpsc::Receiver<ProcessEvent>,
+    mut captured: usize,
+    readers: impl IntoIterator<Item = thread::JoinHandle<T>>,
+) {
+    let deadline = Instant::now() + READER_SHUTDOWN_TIMEOUT;
+    while captured < 2 {
+        match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(ProcessEvent::Captured) => captured += 1,
+            Ok(ProcessEvent::Exited(_)) => {}
+            Err(_) => break,
+        }
+    }
+    for reader in readers {
+        if reader.is_finished() {
+            let _ = reader.join();
+        }
+    }
+}
 pub(crate) fn remaining_timeout() -> Result<Duration> {
     let timeout = REQUEST_DEADLINE
         .with(|d| {
@@ -927,23 +1018,7 @@ fn run_with_stdin_budget(
         .collect();
     let trace = std::env::var_os("GITTY_TRACE_PROCESS").is_some();
     let launched = Instant::now();
-    command
-        .stdin(stdin)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
-    let mut child = command
-        .spawn()
-        .map_err(|e| Error::new("processStart", e.to_string()))?;
+    let mut child = spawn_piped(command, stdin)?;
     let spawn_time = launched.elapsed();
     note_spawn();
     let overflow = Arc::new(AtomicBool::new(false));
@@ -969,10 +1044,8 @@ fn run_with_stdin_budget(
     for clock in &clocks {
         clock.observe(&budget);
     }
-    let mut failure = None;
-    let mut exited: Option<std::io::Result<ExitStatus>> = None;
     let mut captured = 0;
-    let status = loop {
+    let failure = || {
         let paused = budget.elapsed();
         let cancelled = clocks
             .iter()
@@ -984,7 +1057,7 @@ fn run_with_stdin_budget(
             if clocks.is_empty() { timeout } else { overall },
         );
         if overflow.load(Ordering::Relaxed) || exceeded || cancelled {
-            failure = Some(if overflow.load(Ordering::Relaxed) {
+            Some(if overflow.load(Ordering::Relaxed) {
                 Error::new(
                     "outputLimit",
                     "Git output exceeded the 32 MiB per-stream limit; narrow the request",
@@ -1009,58 +1082,35 @@ fn run_with_stdin_budget(
                         )
                     },
                 )
-            });
-            child.kill();
-            child.reap();
-            break Ok(None);
-        }
-        if exited.is_some() && captured == 2 {
-            child.reap();
-            break exited.take().unwrap().map(Some);
-        }
-        match receiver.recv_timeout(WAIT_CHECK_INTERVAL) {
-            Ok(ProcessEvent::Exited(status)) => exited = Some(status),
-            Ok(ProcessEvent::Captured) => captured += 1,
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                child.kill();
-                child.reap();
-                break Err(std::io::Error::other("Process waiter ended unexpectedly"));
-            }
+            })
+        } else {
+            None
         }
     };
-    if failure.is_some() || status.is_err() {
-        // Normal completion always joins both readers. After a kill, an escaped
-        // descendant may still own a pipe: allow cleanup a bounded grace period,
-        // then detach only readers that remain blocked rather than hang the caller.
-        let deadline = Instant::now() + READER_SHUTDOWN_TIMEOUT;
-        while captured < 2 {
-            match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-                Ok(ProcessEvent::Captured) => captured += 1,
-                Ok(ProcessEvent::Exited(_)) => {}
-                Err(_) => break,
-            }
-        }
-        for reader in [out, err] {
-            if reader.is_finished() {
-                let _ = reader.join();
-            }
-        }
-        return Err(failure.unwrap_or_else(|| status.err().unwrap().into()));
+    let status = wait_captured(&receiver, &mut captured, failure, || {
+        std::io::Error::other("Process waiter ended unexpectedly").into()
+    });
+    // Only a stop request or a lost waiter kills; a failed exit status is just reaped.
+    if status.is_err() {
+        child.kill();
     }
+    child.reap();
+    let status = match status.and_then(|status| status.map_err(Error::from)) {
+        Ok(status) => status,
+        Err(error) => {
+            abandon_readers(&receiver, captured, [out, err]);
+            return Err(error);
+        }
+    };
     let stdout = out
         .join()
         .map_err(|_| Error::new("process", "Output reader failed"))??;
     let stderr = err
         .join()
         .map_err(|_| Error::new("process", "Error reader failed"))??;
-    if let Some(e) = failure {
-        return Err(e);
-    }
     if overflow.load(Ordering::Relaxed) {
         return Err(Error::new("outputLimit", "Command output exceeded 32 MiB"));
     }
-    let status = status?.expect("successful wait has an exit status");
     if trace {
         // Program only: command arguments/environments may contain credentials.
         eprintln!(

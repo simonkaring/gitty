@@ -6,7 +6,7 @@ import { WORKING_ID } from '../model/native';
 import type { Commit, GitRef } from '../model/types';
 import type { ActionContext } from './OperationDialog';
 import { DEFAULT_HISTORY_COLUMNS, useSettings, type HistoryColumnId, type ThemeDefinition } from '../model/settings';
-import { HistoryColumnMenu } from './HistoryColumnMenu';
+import { COLUMN_LABELS, HistoryColumnMenu } from './HistoryColumnMenu';
 import { AuthorAvatar } from './AuthorAvatar';
 import { commitIsoString, formatCommitDate } from '../model/dates';
 
@@ -27,7 +27,7 @@ export function groupRefsByCommit<T extends GitRef>(refs: readonly T[]): Map<str
 const NO_REFS: GraphRef[] = [];
 
 export interface GraphAnchor { id: string; offset: number }
-export interface GraphHandle { scrollTo: (row: number) => void; focus: () => void; anchor: () => GraphAnchor | null; restore: (anchor: GraphAnchor) => void }
+export interface GraphHandle { scrollTo: (row: number) => void; anchor: () => GraphAnchor | null; restore: (anchor: GraphAnchor) => void }
 export const REF_DRAG_TYPE = 'application/x-gitty-ref';
 export const COMMIT_DRAG_TYPE = 'application/x-gitty-commit';
 export function acceptsGraphDrop(data: DataTransfer, target: GraphRef, headRef: string | null | undefined): boolean {
@@ -69,7 +69,6 @@ interface Props {
   refs: (GitRef & { fullName?: string })[];
   selectedId: string;
   head: string;
-  loaded: number;
   matches: Set<string> | null;
   onSelect: (id: string) => void;
   onLoadMore: () => void;
@@ -86,8 +85,9 @@ interface Props {
   onTogglePick?: (oid: string) => void;
 }
 
+const WIDTH_VAR: Record<HistoryColumnId, string> = { refs: 'var(--ref-width)', graph: 'var(--graph-width)', message: 'var(--message-width)', author: 'var(--author-width)', hash: 'var(--hash-width)', date: 'var(--date-width)' };
 const MIN_GRAPH_WIDTH = laneX(2) + 14; // three lanes plus padding; also fits the "GRAPH" label
-export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, loaded, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onContextActions, onSwitchBranch, pickOrder, onTogglePick }, ref) {
+export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onContextActions, onSwitchBranch, pickOrder, onTogglePick }, ref) {
   const uid = useId();
   const { settings, updateSettings } = useSettings();
   const graphLaneWidth = settings.graphAuthorAvatars ? 30 : LANE_WIDTH;
@@ -115,8 +115,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     setWidths(current => ({ ...current, [column]: Math.max(limits[column][0], Math.min(limits[column][1], initial + delta)) }));
   }
   function resizeHandle(column: Column) {
-    const colLabels: Record<Column, string> = { refs: 'Branch / tag', graph: 'Graph', message: 'Commit message', author: 'Author', hash: 'Commit', date: 'Date' };
-    return <button className="history-column-resize" aria-label={`Resize ${colLabels[column]} column`} title="Drag or use arrow keys to resize" onClick={event => event.stopPropagation()}
+    return <button className="history-column-resize" aria-label={`Resize ${COLUMN_LABELS[column]} column`} title="Drag or use arrow keys to resize" onClick={event => event.stopPropagation()}
       onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); resize(column, event.key === 'ArrowRight' ? 10 : -10, column === 'message' ? event.currentTarget.parentElement!.getBoundingClientRect().width : widths[column]); } }}
       onPointerDown={event => {
         event.preventDefault();
@@ -128,24 +127,24 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       }} />;
   }
   const dragFrame = useRef(0);
-  const badgeAction = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dragVelocity = useRef(0);
   function stopDrag() { cancelAnimationFrame(dragFrame.current); dragFrame.current = 0; dragVelocity.current = 0; }
   function autoScroll() {
     if (scroller.current && dragVelocity.current) { scroller.current.scrollTop += dragVelocity.current; setScrollTop(scroller.current.scrollTop); dragFrame.current = requestAnimationFrame(autoScroll); }
     else dragFrame.current = 0;
   }
-  useEffect(() => { window.addEventListener('dragend', stopDrag); window.addEventListener('drop', stopDrag, true); return () => { stopDrag(); if (badgeAction.current) clearTimeout(badgeAction.current); window.removeEventListener('dragend', stopDrag); window.removeEventListener('drop', stopDrag, true); }; }, []);
+  useEffect(() => { window.addEventListener('dragend', stopDrag); window.addEventListener('drop', stopDrag, true); return () => { stopDrag(); window.removeEventListener('dragend', stopDrag); window.removeEventListener('drop', stopDrag, true); }; }, []);
   // The column keeps its own width however wide the lane tree gets; the canvas shows a window scrolled by graphScroll.
   const graphContent = Math.max(112, layout.laneCount * graphLaneWidth + 32);
   const graphWidth = Math.max(widths.graph, minGraphWidth);
   const graphScrollMax = Math.max(0, graphContent - graphWidth);
   const graphX = Math.min(graphScroll, graphScrollMax);
+  const loaded = commits.length;
   const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - 8);
   const end = Math.min(loaded, Math.ceil((scrollTop + height) / ROW_HEIGHT) + 8);
   const selectedIndex = useMemo(() => commits.findIndex(commit => commit.id === selectedId), [commits, selectedId]);
   const refsByCommit = useMemo(() => groupRefsByCommit(refs), [refs]);
-  const loadedIds = useMemo(() => new Set(commits.slice(0, loaded).map(commit => commit.id)), [commits, loaded]);
+  const loadedIds = useMemo(() => new Set(commits.map(commit => commit.id)), [commits]);
   const visibleEdges = useMemo(() => indexEdges(layout.edges, layout.edgeMaxTo), [layout.edges, layout.edgeMaxTo]);
   const colors = useMemo(() => Array.from({ length: 8 }, (_, index) => theme.colors[`graphLane${index + 1}`]), [theme]);
   const palette = useMemo(() => [...colors, theme.colors.accent], [colors, theme]);
@@ -166,13 +165,13 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                       style={name !== null ? { '--branch-color': palette[branchColors.branches.get(name)!] } as React.CSSProperties : undefined}
                       data-name={ref.name} title={remote ? `${ref.fullName} + ${remote.name}` : ref.fullName ?? ref.name}
                       role={ref.fullName ? 'button' : undefined} tabIndex={ref.fullName ? -1 : undefined} aria-label={ref.fullName ? `Select tip of ${ref.fullName}; right-click or press Shift+F10 for actions` : undefined}
-                      onKeyDown={event => { if (!ref.fullName) return; if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && onContextActions) { event.preventDefault(); event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); onContextActions({ oid: commit.id, ref: ref.fullName }, rect.left, rect.bottom, scroller.current ?? event.currentTarget); } else if (onSelect && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.stopPropagation(); onSelect(commit.id); } }}
+                      onKeyDown={event => { if (!ref.fullName) return; if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && onContextActions) { event.preventDefault(); event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); onContextActions({ oid: commit.id, ref: ref.fullName }, rect.left, rect.bottom, scroller.current ?? event.currentTarget); } else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onSelect(commit.id); } }}
                       data-current={!!headRef && ref.fullName === headRef} draggable={!!onActions && !!ref.fullName && ref.kind !== 'tag'}
                       onDragStart={event => { event.stopPropagation(); if (onActions && ref.fullName && ref.kind !== 'tag') { event.dataTransfer.clearData(COMMIT_DRAG_TYPE); event.dataTransfer.setData(REF_DRAG_TYPE, ref.fullName); event.dataTransfer.effectAllowed = 'copy'; } else event.preventDefault(); }} onDragEnd={stopDrag}
                        onDragOver={event => { if (onActions && acceptsGraphDrop(event.dataTransfer, ref, headRef)) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
-                      onDrop={event => { event.preventDefault(); event.stopPropagation(); stopDrag(); const action = graphDropAction(event.dataTransfer, ref.fullName, headRef, commits.slice(0, loaded), refs); if (action) onActions?.(action); }}
-                      onContextMenu={event => { if (onContextActions && ref.fullName) { event.preventDefault(); event.stopPropagation(); onContextActions({ oid: commit.id, ref: ref.fullName }, event.clientX, event.clientY, scroller.current ?? event.currentTarget); } }} onClick={event => { if (onSelect) { event.stopPropagation(); onSelect(commit.id); scroller.current?.focus(); } }}
-                      onDoubleClick={event => { if (ref.fullName && (ref.kind === 'local' || (ref.kind === 'remote' && ref.fullName.startsWith('refs/remotes/origin/') && ref.fullName !== 'refs/remotes/origin/HEAD')) && onSwitchBranch) { event.stopPropagation(); if (badgeAction.current) clearTimeout(badgeAction.current); badgeAction.current = null; onSwitchBranch(ref.fullName); } }}>
+                      onDrop={event => { event.preventDefault(); event.stopPropagation(); stopDrag(); const action = graphDropAction(event.dataTransfer, ref.fullName, headRef, commits, refs); if (action) onActions?.(action); }}
+                      onContextMenu={event => { if (onContextActions && ref.fullName) { event.preventDefault(); event.stopPropagation(); onContextActions({ oid: commit.id, ref: ref.fullName }, event.clientX, event.clientY, scroller.current ?? event.currentTarget); } }} onClick={event => { event.stopPropagation(); onSelect(commit.id); scroller.current?.focus(); }}
+                      onDoubleClick={event => { if (ref.fullName && (ref.kind === 'local' || (ref.kind === 'remote' && ref.fullName.startsWith('refs/remotes/origin/') && ref.fullName !== 'refs/remotes/origin/HEAD')) && onSwitchBranch) { event.stopPropagation(); onSwitchBranch(ref.fullName); } }}>
                       {!!headRef && ref.fullName === headRef && <Check size={10} strokeWidth={3} aria-hidden="true" />}{ref.kind === 'tag' ? <Tag size={10} /> : ref.kind === 'remote' ? <Globe2 size={10} /> : <Laptop size={10} />}{remote && <Globe2 size={10} />}<span className="ref-pill-name">{ref.name}</span>
                     </span>;
   }
@@ -186,7 +185,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       setScrollTop(el.scrollTop);
     }
   }
-  useImperativeHandle(ref, () => ({ scrollTo, focus: () => scroller.current?.focus(), anchor: () => {
+  useImperativeHandle(ref, () => ({ scrollTo, anchor: () => {
     const top = scroller.current?.scrollTop ?? 0;
     const commit = commits[Math.floor(top / ROW_HEIGHT)];
     return commit ? { id: commit.id, offset: top % ROW_HEIGHT } : null;
@@ -316,14 +315,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const gridTemplateColumns = useMemo(
     () =>
       visibleColumns
-        .map(c => {
-          if (c.id === 'refs') return 'var(--ref-width)';
-          if (c.id === 'graph') return 'var(--graph-width)';
-          if (c.id === 'message') return messageResized ? 'var(--message-width)' : 'minmax(var(--message-width), 1fr)';
-          if (c.id === 'author') return 'var(--author-width)';
-          if (c.id === 'hash') return 'var(--hash-width)';
-          return 'var(--date-width)';
-        })
+        .map(c => c.id === 'message' && !messageResized ? `minmax(${WIDTH_VAR.message}, 1fr)` : WIDTH_VAR[c.id])
         .join(' '),
     [visibleColumns, messageResized]
   );
@@ -373,15 +365,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   } as React.CSSProperties}>
     <div className="history-column-viewport">
       <div className="history-columns" style={{ transform: `translateX(${-scrollLeft}px)`, gridTemplateColumns }}>
-        {visibleColumns.map(col => {
-          if (col.id === 'refs') return <span key="refs">Branch / tag{resizeHandle('refs')}</span>;
-          if (col.id === 'graph') return <span key="graph">Graph{resizeHandle('graph')}</span>;
-          if (col.id === 'message') return <span key="message">Commit message{resizeHandle('message')}</span>;
-          if (col.id === 'author') return <span key="author" className="author-column">Author{resizeHandle('author')}</span>;
-          if (col.id === 'hash') return <span key="hash" className="hash-column">Commit{resizeHandle('hash')}</span>;
-          if (col.id === 'date') return <span key="date" className="date-column">Date{resizeHandle('date')}</span>;
-          return null;
-        })}
+        {visibleColumns.map(({ id }) => <span key={id} className={id === 'author' || id === 'hash' || id === 'date' ? `${id}-column` : undefined}>{COLUMN_LABELS[id]}{resizeHandle(id)}</span>)}
       </div>
       <div className="history-column-settings-anchor">
         <button
@@ -498,7 +482,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       {isGraphVisible && <canvas ref={canvas} className="graph-canvas" aria-hidden="true" style={{ width: graphWidth, height, left: graphOffset - scrollLeft }} />}
     </div>
     <div className="history-bottom"><span><span className="live-dot" />{(loaded - (commits[0]?.id === WORKING_ID ? 1 : 0)).toLocaleString()} commits loaded{shallow ? ' · Shallow repository boundary' : ''}</span>
-      {(hasMore ?? loaded < commits.length) ? <button className="text-button" disabled={paging} onClick={onLoadMore}>{paging ? 'Loading…' : 'Load older history ↓'}</button> : <span className="muted">{shallow ? 'Available history loaded' : 'All history loaded'}</span>}
+      {hasMore ? <button className="text-button" disabled={paging} onClick={onLoadMore}>{paging ? 'Loading…' : 'Load older history ↓'}</button> : <span className="muted">{shallow ? 'Available history loaded' : 'All history loaded'}</span>}
     </div>
     <span id={`${uid}-help`} className="sr-only">Use Up and Down to select commits, Page Up and Page Down to move a page, Home and End to move to the loaded boundaries. Press Enter to open details. Press Right or Left Arrow to move through the selected commit’s branch badges and controls, Enter or Space to activate the highlighted control, and Escape to return to the commit.{onActions && ' Press Shift+F10 for commit actions, or on a highlighted branch badge for branch actions.'}{onSwitchBranch && ' Double-click a local or origin branch badge to switch branches, creating a local tracking branch if needed.'}</span>
   </div>;

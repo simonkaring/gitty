@@ -270,22 +270,7 @@ impl AskpassRegistry {
 }
 
 pub fn bind() -> std::io::Result<(TcpListener, Arc<AskpassRegistry>)> {
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-
-    // A unique, exclusively created file avoids overwriting another process's
-    // askpass script (or following a pre-existing symlink in the temp directory).
-    let tmp_dir = std::env::temp_dir();
-    bridge::remove_stale_helpers(&tmp_dir, "gitty-askpass-", bridge::STALE_HELPER_AGE);
-    let script_id = uuid::Uuid::new_v4();
-    let script_path = if cfg!(windows) {
-        tmp_dir.join(format!("gitty-askpass-{script_id}.bat"))
-    } else {
-        tmp_dir.join(format!("gitty-askpass-{script_id}.sh"))
-    };
-
-    bridge::write_helper_script(&script_path, &bridge::helper_script("askpass")?)?;
-
+    let (listener, port, script_path) = bridge::bind_helper("gitty-askpass-", "askpass")?;
     Ok((listener, Arc::new(AskpassRegistry::new(port, script_path))))
 }
 
@@ -298,21 +283,17 @@ pub fn serve<F, E>(
     F: Fn(usize, String, Option<AskpassContext>) -> Result<(), ()> + Send + Sync + 'static,
     E: Fn(usize) + Send + Sync + 'static,
 {
-    let emit_prompt = Arc::new(emit_prompt);
-    let emit_expired = Arc::new(emit_expired);
     bridge::serve(
         listener,
         ConnectionLimiter::new(bridge::MAX_CONNECTIONS),
         move |stream, request_id| {
-            let emit_prompt = emit_prompt.clone();
-            let emit_expired = emit_expired.clone();
             handle_connection(
                 stream,
                 &registry,
                 request_id,
                 LIMITS,
-                move |id, prompt, context| emit_prompt(id, prompt, context),
-                move |id| emit_expired(id),
+                &emit_prompt,
+                &emit_expired,
             );
         },
     );

@@ -10,7 +10,7 @@ use crate::{
     process::{self, args, Output, CHECK_TIMEOUT, MUTATION_TIMEOUT},
     repository::{validate_path, Repository},
 };
-use std::{collections::HashSet, process::Command};
+use std::collections::HashSet;
 
 /// Paths and messages are fed to Git on stdin, never as command-line arguments:
 /// Windows caps a whole command line at ~32767 UTF-16 units and Unix caps both
@@ -209,33 +209,11 @@ impl Repository {
                 }
                 Ok(names)
             }
-            RepositoryLocation::Wsl { distribution, .. } => {
-                process::validate_distribution(distribution)?;
-                let mut command = Command::new("wsl.exe");
-                command.args([
-                    "--distribution",
-                    distribution,
-                    "--exec",
-                    "find",
-                    &self.session.git_dir,
-                    "-mindepth",
-                    "1",
-                    "-maxdepth",
-                    "1",
-                    "-print0",
-                ]);
-                let o = process::run_for(command, CHECK_TIMEOUT)?;
-                if !crate::operations::find_outcome_acceptable(o.success, o.code, &o.stdout) {
-                    return Err(Error::new("git", report(&o)));
-                }
-                git_dir_names(&o.stdout)
-            }
-            RepositoryLocation::Ssh { .. } => {
-                // One listing over the channel: a `test -e` per name would be a
+            RepositoryLocation::Wsl { .. } | RepositoryLocation::Ssh { .. } => {
+                // One listing per call: a `test -e` per name would be a process or
                 // round trip per file. Entries vanishing mid-scan are tolerated.
-                let command = process::ssh_exec(
+                let command = process::host_command(
                     self.location(),
-                    &[],
                     &args(&[
                         "find",
                         &self.session.git_dir,

@@ -8,6 +8,27 @@ use crate::{
     repository::{resolve, Repository, Service},
 };
 
+/// No configured refspecs, tags, pruning or FETCH_HEAD: only the refspecs each
+/// caller names after `-- <remote>` can move.
+const SAFE_FETCH: [&str; 8] = [
+    "fetch",
+    "--no-all",
+    "--no-recurse-submodules",
+    "--no-tags",
+    "--no-prune",
+    "--no-prune-tags",
+    "--no-write-fetch-head",
+    "--refmap=",
+];
+pub(crate) const SAFE_PUSH: [&str; 6] = [
+    "push",
+    "--porcelain",
+    "--no-force",
+    "--no-mirror",
+    "--no-follow-tags",
+    "--recurse-submodules=no",
+];
+
 impl Service {
     pub fn remote_action(
         &self,
@@ -162,6 +183,33 @@ impl Repository {
         Ok(())
     }
 
+    /// The single push URL of a non-mirror remote; even an explicit refspec does
+    /// not neutralize `remote.*.mirror`.
+    pub(crate) fn push_destination(&self, remote: &str) -> Result<String> {
+        let mirror = self.check(&[
+            "config",
+            "--bool",
+            "--get",
+            &format!("remote.{remote}.mirror"),
+        ])?;
+        if mirror.success && process::text_ref(&mirror.stdout)?.trim() == "true" {
+            return Err(Error::new(
+                "mirrorRemote",
+                "Mirror remotes cannot be pushed from Gitty; configure a normal remote.",
+            ));
+        } else if !mirror.success && mirror.code != Some(1) {
+            return Err(self.failed(&mirror));
+        }
+        let urls = self.check_text(&["remote", "get-url", "--push", "--all", "--", remote])?;
+        if urls.lines().count() != 1 {
+            return Err(Error::new(
+                "multiplePushUrls",
+                "Choose a remote with exactly one push URL.",
+            ));
+        }
+        Ok(urls.trim_end().to_owned())
+    }
+
     fn choose_remote(
         &self,
         requested: Option<&str>,
@@ -306,18 +354,8 @@ impl Repository {
         match &action {
             RemoteAction::Fetch { .. } | RemoteAction::BackgroundFetch => {
                 let (mut a, env) = network();
-                a.extend(args(&[
-                    "fetch",
-                    "--no-all",
-                    "--no-recurse-submodules",
-                    "--no-tags",
-                    "--no-prune",
-                    "--no-prune-tags",
-                    "--no-write-fetch-head",
-                    "--refmap=",
-                    "--",
-                    &remote,
-                ]));
+                a.extend(args(&SAFE_FETCH));
+                a.extend(args(&["--", &remote]));
                 // Ignore configured fetch refspecs (including mirror mappings
                 // into local heads). Only remote-tracking branches may move,
                 // including when the remote rewrites its history.
@@ -361,38 +399,9 @@ impl Repository {
                 }
                 let destination = branch.or(tracking_branch).unwrap_or(source);
                 self.remote_branch_name(destination)?;
-                // Even an explicit refspec does not neutralize remote.*.mirror.
-                let mirror = self.check(&[
-                    "config",
-                    "--bool",
-                    "--get",
-                    &format!("remote.{remote}.mirror"),
-                ])?;
-                if mirror.success && process::text_ref(&mirror.stdout)?.trim() == "true" {
-                    return Err(Error::new(
-                        "mirrorRemote",
-                        "Mirror remotes cannot be pushed from Gitty; configure a normal remote.",
-                    ));
-                } else if !mirror.success && mirror.code != Some(1) {
-                    return Err(self.failed(&mirror));
-                }
-                let urls =
-                    self.check_text(&["remote", "get-url", "--push", "--all", "--", &remote])?;
-                if urls.lines().count() != 1 {
-                    return Err(Error::new(
-                        "multiplePushUrls",
-                        "Choose a remote with exactly one push URL.",
-                    ));
-                }
+                self.push_destination(&remote)?;
                 let (mut a, env) = network();
-                a.extend(args(&[
-                    "push",
-                    "--porcelain",
-                    "--no-force",
-                    "--no-mirror",
-                    "--no-follow-tags",
-                    "--recurse-submodules=no",
-                ]));
+                a.extend(args(&SAFE_PUSH));
                 if *set_upstream {
                     a.push("--set-upstream".into());
                 }
@@ -424,15 +433,8 @@ impl Repository {
                 })?;
                 self.remote_branch_name(branch)?;
                 let (mut fetch, env) = network();
+                fetch.extend(args(&SAFE_FETCH));
                 fetch.extend(args(&[
-                    "fetch",
-                    "--no-all",
-                    "--no-recurse-submodules",
-                    "--no-tags",
-                    "--no-prune",
-                    "--no-prune-tags",
-                    "--no-write-fetch-head",
-                    "--refmap=",
                     "--",
                     &remote,
                     &format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}"),
@@ -473,15 +475,8 @@ impl Repository {
                 // No merge/rebase ever runs after an uncertain or failed fetch.
                 let (mut fetch, env) = network();
                 let private_ref = format!("refs/gitty/pull/{}", uuid::Uuid::new_v4());
+                fetch.extend(args(&SAFE_FETCH));
                 fetch.extend(args(&[
-                    "fetch",
-                    "--no-all",
-                    "--no-recurse-submodules",
-                    "--no-tags",
-                    "--no-prune",
-                    "--no-prune-tags",
-                    "--no-write-fetch-head",
-                    "--refmap=",
                     "--",
                     &remote,
                     &format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}"),

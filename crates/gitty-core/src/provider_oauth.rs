@@ -2,6 +2,7 @@
 use crate::{
     dto::{Error, Result},
     provider_accounts::{AccountStore, Provider, ProviderAccount},
+    repository::lock,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -203,10 +204,7 @@ fn verification_uri(provider: Provider, uri: &str) -> Result<String> {
 
 impl OAuth {
     pub fn start(&self, provider: Provider) -> Result<DeviceAuthorization> {
-        let mut state = self
-            .0
-            .lock()
-            .map_err(|_| Error::new("oauth", "Sign-in lock poisoned"))?;
+        let mut state = lock(&self.0)?;
         let (id, device, _, scope) = config(provider)?;
         let value = post(device, &[("client_id", id), ("scope", scope)])?;
         if value.get("error").is_some() {
@@ -237,10 +235,7 @@ impl OAuth {
     }
 
     pub fn cancel(&self, id: &str) -> Result<()> {
-        let mut state = self
-            .0
-            .lock()
-            .map_err(|_| Error::new("oauth", "Sign-in lock poisoned"))?;
+        let mut state = lock(&self.0)?;
         if state.as_ref().is_some_and(|s| s.id == id) {
             *state = None;
         }
@@ -248,10 +243,7 @@ impl OAuth {
     }
 
     pub fn poll(&self, accounts: &AccountStore, id: &str) -> Result<PollResult> {
-        let mut state = self
-            .0
-            .lock()
-            .map_err(|_| Error::new("oauth", "Sign-in lock poisoned"))?;
+        let mut state = lock(&self.0)?;
         let session = state
             .as_mut()
             .filter(|s| s.id == id)
@@ -285,10 +277,7 @@ impl OAuth {
         } else {
             None
         };
-        let mut state = self
-            .0
-            .lock()
-            .map_err(|_| Error::new("oauth", "Sign-in lock poisoned"))?;
+        let mut state = lock(&self.0)?;
         // Cancellation during either HTTP request discards the returned credentials.
         let session = state
             .as_mut()

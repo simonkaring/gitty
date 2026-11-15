@@ -32,6 +32,17 @@ const CLONE_RESULT_TTL = 60_000;
 const MAX_ACTIVE_CLONES = 4;
 const TRACKED_REQUEST_DONE = Symbol('tracked-request-done');
 const execFile = promisify(execFileCb);
+const hostGitConfig = {
+  HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE,
+  XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
+  GIT_CONFIG_SYSTEM: process.env.GIT_CONFIG_SYSTEM,
+};
+// Two environments, kept distinct: GIT_ENV re-applies the harness's isolated Git config; GIT_ENV_NARROW only
+// strips inherited GIT_*/GITTY_*/editor overrides and disables system config.
+const GIT_ENV = isolatedEnvironment(process.env, { ...hostGitConfig, GIT_CONFIG_NOSYSTEM: '1' });
+const GIT_ENV_NARROW = isolatedEnvironment(process.env, { GIT_CONFIG_NOSYSTEM: '1' });
+const git = (args, { maxBuffer = 64 * 1024, env = GIT_ENV } = {}) => execFile('git', args, { env, timeout: COMMAND_TIMEOUT, maxBuffer });
 
 function send(res, status, body) {
   res[TRACKED_REQUEST_DONE]?.();
@@ -89,17 +100,9 @@ function validRepoPath(value) {
 }
 
 async function localRemotesOnly(root, remotesRoot, registered) {
-  const env = isolatedEnvironment(process.env, {
-    HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE,
-    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
-    GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
-    GIT_CONFIG_SYSTEM: process.env.GIT_CONFIG_SYSTEM, GIT_CONFIG_NOSYSTEM: '1',
-  });
   const config = async pattern => {
     try {
-      return (await execFile('git', ['-C', root, 'config', '--includes', '--show-origin', '--get-regexp', pattern], {
-        env, timeout: COMMAND_TIMEOUT, maxBuffer: 64 * 1024,
-      })).stdout;
+      return (await git(['-C', root, 'config', '--includes', '--show-origin', '--get-regexp', pattern])).stdout;
     } catch (error) {
       if (error.code === 1) return '';
       throw error;
@@ -107,16 +110,16 @@ async function localRemotesOnly(root, remotesRoot, registered) {
   };
   if (await config('^remote\\..*\\.(uploadpack|receivepack|vcs|proxy)$') ||
     await config('^url\\..*\\.(insteadof|pushinsteadof)$')) return false;
-  const names = await execFile('git', ['-C', root, 'remote'], { env, timeout: COMMAND_TIMEOUT, maxBuffer: 64 * 1024 });
+  const names = await git(['-C', root, 'remote']);
   for (const name of names.stdout.split(/\r?\n/).filter(Boolean)) {
     try {
-      const urls = await execFile('git', ['-C', root, 'remote', 'get-url', '--all', name], { env, timeout: COMMAND_TIMEOUT, maxBuffer: 64 * 1024 });
-      const pushUrls = await execFile('git', ['-C', root, 'remote', 'get-url', '--push', '--all', name], { env, timeout: COMMAND_TIMEOUT, maxBuffer: 64 * 1024 });
+      const urls = await git(['-C', root, 'remote', 'get-url', '--all', name]);
+      const pushUrls = await git(['-C', root, 'remote', 'get-url', '--push', '--all', name]);
       for (const value of [...urls.stdout, ...pushUrls.stdout].join('').split(/\r?\n/).filter(Boolean)) {
         if (!path.isAbsolute(value)) return false;
         const canonical = await realpath(value);
         if (!within(remotesRoot, canonical) || !samePath(canonical, value) || !registered.has(canonical)) return false;
-        const { stdout } = await execFile('git', ['-C', canonical, 'rev-parse', '--is-bare-repository'], { env, timeout: COMMAND_TIMEOUT, maxBuffer: 1024 });
+        const { stdout } = await git(['-C', canonical, 'rev-parse', '--is-bare-repository'], { maxBuffer: 1024 });
         if (stdout.trim() !== 'true') return false;
       }
     } catch { return false; }
@@ -212,14 +215,7 @@ export function gittyTestBridge() {
       cwd: fixtureTemplate,
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: isolatedEnvironment(process.env, {
-        HOME: process.env.HOME,
-        USERPROFILE: process.env.USERPROFILE,
-        XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
-        GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
-        GIT_CONFIG_SYSTEM: process.env.GIT_CONFIG_SYSTEM,
-        GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM,
-      }),
+      env: isolatedEnvironment(process.env, { ...hostGitConfig, GIT_CONFIG_NOSYSTEM: process.env.GIT_CONFIG_NOSYSTEM }),
     });
     childReady = new Promise((resolve, reject) => {
       child.once('spawn', resolve);
@@ -397,11 +393,7 @@ export function gittyTestBridge() {
           await Promise.all([mkdir(path.join(sandbox, 'worktrees')), mkdir(path.join(sandbox, 'remotes')), mkdir(path.join(sandbox, 'clones'))]);
           const registeredRoot = await realpath(repoPath);
           if (!within(sandbox, registeredRoot)) throw new Error('Fixture escaped harness sandbox');
-          const { stdout: commonOutput } = await execFile('git', ['-C', registeredRoot, 'rev-parse', '--git-common-dir'], {
-            env: isolatedEnvironment(process.env, { GIT_CONFIG_NOSYSTEM: '1' }),
-            timeout: COMMAND_TIMEOUT,
-            maxBuffer: 4096,
-          });
+          const { stdout: commonOutput } = await git(['-C', registeredRoot, 'rev-parse', '--git-common-dir'], { env: GIT_ENV_NARROW, maxBuffer: 4096 });
           const fixtureCommonDir = await realpath(path.resolve(registeredRoot, commonOutput.trim()));
           if (!within(registeredRoot, fixtureCommonDir)) throw new Error('Fixture common directory escapes repository root');
           fixtures.set(fixtureId, registeredRoot);
@@ -409,16 +401,7 @@ export function gittyTestBridge() {
           worktrees.set(registeredRoot, new Set([registeredRoot]));
           commonDirs.set(registeredRoot, new Map([[registeredRoot, fixtureCommonDir]]));
           remotes.set(registeredRoot, new Set());
-          const { stdout: initialHead } = await execFile('git', ['-C', registeredRoot, 'rev-parse', 'HEAD'], {
-            timeout: COMMAND_TIMEOUT,
-            maxBuffer: 64 * 1024,
-            env: isolatedEnvironment(process.env, {
-              HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE,
-              XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
-              GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL,
-              GIT_CONFIG_SYSTEM: process.env.GIT_CONFIG_SYSTEM, GIT_CONFIG_NOSYSTEM: '1',
-            }),
-          });
+          const { stdout: initialHead } = await git(['-C', registeredRoot, 'rev-parse', 'HEAD']);
           creatingFixtures--;
           return send(res, 200, {
             token: fixtureToken, fixtureId, initialHead: initialHead.trim(),
@@ -531,7 +514,7 @@ export function gittyTestBridge() {
             if (!trackFixtureRequest(body.fixtureId, res)) return;
             const root = fixtures.get(body.fixtureId);
             const remotePath = path.join(path.dirname(root), 'remotes', `${body.name}.git`);
-            await execFile('git', ['init', '--bare', remotePath], { env: isolatedEnvironment(process.env, { GIT_CONFIG_NOSYSTEM: '1' }), timeout: COMMAND_TIMEOUT, maxBuffer: 64 * 1024 });
+            await git(['init', '--bare', remotePath], { env: GIT_ENV_NARROW });
             remotes.get(root).add(await realpath(remotePath));
             return send(res, 200, { path: remotePath });
           } catch (error) {
@@ -592,8 +575,7 @@ export function gittyTestBridge() {
             const registered = remotes.get(registeredRoot);
             if (!samePath(source, request.source) || !registered?.has(source) ||
               !within(path.join(path.dirname(registeredRoot), 'remotes'), source)) throw new Error();
-            const env = isolatedEnvironment(process.env, { GIT_CONFIG_NOSYSTEM: '1' });
-            const bare = await execFile('git', ['-C', source, 'rev-parse', '--is-bare-repository'], { env, timeout: COMMAND_TIMEOUT, maxBuffer: 1024 });
+            const bare = await git(['-C', source, 'rev-parse', '--is-bare-repository'], { env: GIT_ENV_NARROW, maxBuffer: 1024 });
             if (bare.stdout.trim() !== 'true') throw new Error();
             if (await realpath(cloneDestination).catch(() => '')) throw new Error();
             reservation.validating = false;
@@ -713,11 +695,7 @@ export function gittyTestBridge() {
               !within(path.join(path.dirname(registeredRoot), 'clones'), clonedRoot)) {
               return send(res, 403, { error: { code: 'fixtureBoundary', message: 'Clone result escaped its registered destination' } });
             }
-            const cloneCommonPath = await execFile('git', ['-C', clonedRoot, 'rev-parse', '--git-common-dir'], {
-              env: isolatedEnvironment(process.env, { GIT_CONFIG_NOSYSTEM: '1' }),
-              timeout: COMMAND_TIMEOUT,
-              maxBuffer: 4096,
-            });
+            const cloneCommonPath = await git(['-C', clonedRoot, 'rev-parse', '--git-common-dir'], { env: GIT_ENV_NARROW, maxBuffer: 4096 });
             const cloneCommonDir = await realpath(path.resolve(clonedRoot, cloneCommonPath.stdout.trim()));
             const expectedCloneCommonDir = await realpath(path.join(clonedRoot, '.git'));
             if (!samePath(cloneCommonDir, expectedCloneCommonDir) || !within(clonedRoot, cloneCommonDir)) {

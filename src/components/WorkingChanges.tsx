@@ -35,7 +35,6 @@ export interface ActiveDiffState {
   loading: boolean;
   hunkAction?: 'stage_hunk' | 'unstage_hunk';
   busy?: boolean;
-  unavailable?: string;
   onHunk?: (mutation: RepositoryMutation) => void;
   onToggleStage?: () => void;
   isStaged?: boolean;
@@ -167,7 +166,6 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
       loading: !visiblePreview,
       hunkAction: isStaged ? 'unstage_hunk' : active.group === 'unstaged' ? 'stage_hunk' : undefined,
       busy: blocked || !currentPreview,
-      unavailable: demo ? 'Hunk staging is unavailable in the demo. Open a desktop repository to stage individual hunks.' : undefined,
       onHunk: mutation => { if (currentPreview && !busy) void perform(mutation); },
       onToggleStage: () => {
         const operationKind = isStaged ? 'unstage' : 'stage';
@@ -176,7 +174,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
       },
       isStaged,
     });
-  }, [active, currentPreview, visiblePreview, busy, blocked, demo, onActiveDiffChange]);
+  }, [active, currentPreview, visiblePreview, busy, blocked, onActiveDiffChange]);
   // The diff pane's stage buttons act through this component, so closing the inspector must close the pane too.
   useEffect(() => () => { onActiveDiffChange?.(null); }, []);
   const composerDraft = amending ? amendDraft ?? { subject: '', body: '' } : draft;

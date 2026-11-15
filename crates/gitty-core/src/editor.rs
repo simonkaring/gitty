@@ -154,24 +154,12 @@ impl EditorRegistry {
 }
 
 pub fn bind() -> std::io::Result<(TcpListener, Arc<EditorRegistry>)> {
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-
+    let (listener, port, script_path) = bridge::bind_helper("gitty-editor-", "editor")?;
     let token = uuid::Uuid::new_v4().to_string();
-
-    let tmp_dir = std::env::temp_dir();
-    bridge::remove_stale_helpers(&tmp_dir, "gitty-editor-", bridge::STALE_HELPER_AGE);
-    let script_id = uuid::Uuid::new_v4();
-    let script_path = if cfg!(windows) {
-        tmp_dir.join(format!("gitty-editor-{script_id}.bat"))
-    } else {
-        tmp_dir.join(format!("gitty-editor-{script_id}.sh"))
-    };
-
-    bridge::write_helper_script(&script_path, &bridge::helper_script("editor")?)?;
-
-    let registry = Arc::new(EditorRegistry::new(port, token.clone(), script_path));
-    Ok((listener, registry))
+    Ok((
+        listener,
+        Arc::new(EditorRegistry::new(port, token, script_path)),
+    ))
 }
 
 pub fn serve<F, E>(
@@ -183,21 +171,11 @@ pub fn serve<F, E>(
     F: Fn(usize, String, String) -> Result<(), ()> + Send + Sync + 'static,
     E: Fn(usize) + Send + Sync + 'static,
 {
-    let emit_prompt = Arc::new(emit_prompt);
-    let emit_expired = Arc::new(emit_expired);
     bridge::serve(
         listener,
         ConnectionLimiter::new(bridge::MAX_CONNECTIONS),
         move |stream, request_id| {
-            let emit_prompt = emit_prompt.clone();
-            let emit_expired = emit_expired.clone();
-            handle_connection(
-                stream,
-                &registry,
-                request_id,
-                move |id, name, content| emit_prompt(id, name, content),
-                move |id| emit_expired(id),
-            );
+            handle_connection(stream, &registry, request_id, &emit_prompt, &emit_expired);
         },
     );
 }
@@ -235,157 +213,93 @@ fn handle_connection_within<F, E>(
     E: FnOnce(usize),
 {
     let _ = stream.set_write_timeout(Some(bridge::WRITE_TIMEOUT));
-    let mut len_buf = [0u8; 4];
-    let (token_buf, path_buf);
-    {
+    // A malformed frame closes the connection without a reply.
+    let (token_buf, path_buf) = {
         let mut reader = DeadlineReader::new(&stream, Instant::now() + handshake);
-        // Read token length
-        if reader.read_exact(&mut len_buf).is_err() {
-            return;
-        }
-        let token_len = u32::from_be_bytes(len_buf) as usize;
-        if token_len == 0 || token_len > 128 {
-            return;
-        }
-        let mut buf = vec![0u8; token_len];
-        if reader.read_exact(&mut buf).is_err() {
-            return;
-        }
-        token_buf = buf;
-
-        // Read path length
-        if reader.read_exact(&mut len_buf).is_err() {
-            return;
-        }
-        let path_len = u32::from_be_bytes(len_buf) as usize;
-        if path_len == 0 || path_len > 4096 {
-            return;
-        }
-        let mut buf = vec![0u8; path_len];
-        if reader.read_exact(&mut buf).is_err() {
-            return;
-        }
-        path_buf = buf;
-    }
-    let request_token = match String::from_utf8(token_buf) {
-        Ok(token) => token,
-        Err(_) => return,
+        let mut read_field = |max: usize| {
+            let mut len_buf = [0u8; 4];
+            reader.read_exact(&mut len_buf).ok()?;
+            let len = u32::from_be_bytes(len_buf) as usize;
+            if len == 0 || len > max {
+                return None;
+            }
+            let mut buf = vec![0u8; len];
+            reader.read_exact(&mut buf).ok()?;
+            Some(buf)
+        };
+        let Some(token) = read_field(128) else { return };
+        let Some(path) = read_field(4096) else { return };
+        (token, path)
     };
-    let raw_path = match String::from_utf8(path_buf) {
-        Ok(p) => p,
-        Err(_) => {
-            let _ = stream.write_all(b"0");
-            return;
-        }
+    let Ok(request_token) = String::from_utf8(token_buf) else {
+        return;
     };
-    // Authenticate against this specific mutation, not another repository's
-    // concurrently running rebase.
-    let (expected_git_dir, expected_common_dir, plan) = {
-        let active = registry
+    let prepared = (|| -> Option<_> {
+        let raw_path = String::from_utf8(path_buf).ok()?;
+        // Authenticate against this specific mutation, not another repository's
+        // concurrently running rebase.
+        let (expected_git_dir, expected_common_dir, plan) = registry
             .active_mutations
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        match active.get(&request_token) {
-            Some(m) => (m.git_dir.clone(), m.common_dir.clone(), m.plan.clone()),
-            None => {
-                let _ = stream.write_all(b"0");
-                return;
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&request_token)
+            .map(|m| (m.git_dir.clone(), m.common_dir.clone(), m.plan.clone()))?;
+
+        // Path validation
+        let file_path = Path::new(&raw_path);
+        let symlink_meta = fs::symlink_metadata(file_path).ok()?;
+        if symlink_meta.file_type().is_symlink() || !symlink_meta.is_file() {
+            return None;
+        }
+        let canonical_path = fs::canonicalize(file_path).ok()?;
+        if !canonical_path.starts_with(&expected_git_dir)
+            && !canonical_path.starts_with(&expected_common_dir)
+        {
+            return None;
+        }
+
+        let file_name = canonical_path.file_name()?.to_str()?.to_string();
+        let allowed = match file_name.as_str() {
+            "COMMIT_EDITMSG" => {
+                canonical_path.parent() == Some(expected_git_dir.as_path())
+                    || canonical_path.parent() == Some(expected_common_dir.as_path())
             }
+            "message" | "final-commit" => {
+                canonical_path.parent() == Some(expected_git_dir.join("rebase-merge").as_path())
+            }
+            "git-rebase-todo" => {
+                plan.is_some()
+                    && canonical_path.parent()
+                        == Some(expected_git_dir.join("rebase-merge").as_path())
+            }
+            _ => false,
+        };
+        if !allowed {
+            return None;
         }
-    };
 
-    // Path validation
-    let file_path = Path::new(&raw_path);
-    let symlink_meta = match fs::symlink_metadata(file_path) {
-        Ok(m) => m,
-        Err(_) => {
-            let _ = stream.write_all(b"0");
-            return;
+        let dir = cap_std::fs::Dir::open_ambient_dir(
+            canonical_path.parent().unwrap(),
+            cap_std::ambient_authority(),
+        )
+        .ok()?;
+        let initial = read_message(&dir, &file_name).ok()?;
+        if initial.bytes.len() > 256 * 1024 || initial.bytes.contains(&0) {
+            return None;
         }
-    };
-    if symlink_meta.file_type().is_symlink() || !symlink_meta.is_file() {
+        let content_str = String::from_utf8(initial.bytes.clone()).ok()?;
+        Some((dir, file_name, initial, content_str, plan))
+    })();
+    let Some((dir, file_name, initial, content_str, plan)) = prepared else {
         let _ = stream.write_all(b"0");
         return;
-    }
-    let canonical_path = match fs::canonicalize(file_path) {
-        Ok(c) => c,
-        Err(_) => {
-            let _ = stream.write_all(b"0");
-            return;
-        }
-    };
-    if !canonical_path.starts_with(&expected_git_dir)
-        && !canonical_path.starts_with(&expected_common_dir)
-    {
-        let _ = stream.write_all(b"0");
-        return;
-    }
-
-    let file_name = match canonical_path.file_name().and_then(|n| n.to_str()) {
-        Some(name) => name,
-        None => {
-            let _ = stream.write_all(b"0");
-            return;
-        }
-    };
-    let allowed = match file_name {
-        "COMMIT_EDITMSG" => {
-            canonical_path.parent() == Some(expected_git_dir.as_path())
-                || canonical_path.parent() == Some(expected_common_dir.as_path())
-        }
-        "message" | "final-commit" => {
-            canonical_path.parent() == Some(expected_git_dir.join("rebase-merge").as_path())
-        }
-        "git-rebase-todo" => {
-            plan.is_some()
-                && canonical_path.parent() == Some(expected_git_dir.join("rebase-merge").as_path())
-        }
-        _ => false,
-    };
-    if !allowed {
-        let _ = stream.write_all(b"0");
-        return;
-    }
-
-    let dir = match cap_std::fs::Dir::open_ambient_dir(
-        canonical_path.parent().unwrap(),
-        cap_std::ambient_authority(),
-    ) {
-        Ok(dir) => dir,
-        Err(_) => {
-            let _ = stream.write_all(b"0");
-            return;
-        }
-    };
-    let initial = match read_message(&dir, file_name) {
-        Ok(snapshot) => snapshot,
-        Err(_) => {
-            let _ = stream.write_all(b"0");
-            return;
-        }
-    };
-    if initial.bytes.len() > 256 * 1024 {
-        let _ = stream.write_all(b"0");
-        return;
-    }
-
-    if initial.bytes.contains(&0) {
-        let _ = stream.write_all(b"0");
-        return;
-    }
-    let content_str = match String::from_utf8(initial.bytes.clone()) {
-        Ok(s) => s,
-        Err(_) => {
-            let _ = stream.write_all(b"0");
-            return;
-        }
     };
 
     if file_name == "git-rebase-todo" {
         let result = plan
             .as_deref()
             .and_then(|steps| rewrite_todo(&content_str, steps))
-            .and_then(|todo| save_message(&dir, file_name, &initial, todo.as_bytes()).ok());
+            .and_then(|todo| save_message(&dir, &file_name, &initial, todo.as_bytes()).ok());
         let _ = stream.write_all(if result.is_some() { b"1" } else { b"0" });
         return;
     }
@@ -414,33 +328,21 @@ fn handle_connection_within<F, E>(
     }
 
     let _wait = crate::process::prompt_wait(&request_token);
-    if emit_prompt(request_id, file_name.to_string(), content_str).is_ok() {
-        let response = rx.recv_timeout(Duration::from_secs(90));
-        match response {
+    // A cancelled, expired or oversized reply leaves the file untouched.
+    let saved = emit_prompt(request_id, file_name.clone(), content_str).is_ok()
+        && match rx.recv_timeout(Duration::from_secs(90)) {
             Ok(Some(new_content)) => {
-                if new_content.len() > 256 * 1024 || new_content.as_bytes().contains(&0) {
-                    let _ = stream.write_all(b"0");
-                } else {
-                    if save_message(&dir, file_name, &initial, new_content.as_bytes()).is_ok() {
-                        let _ = stream.write_all(b"1");
-                    } else {
-                        let _ = stream.write_all(b"0");
-                    }
-                }
+                new_content.len() <= 256 * 1024
+                    && !new_content.as_bytes().contains(&0)
+                    && save_message(&dir, &file_name, &initial, new_content.as_bytes()).is_ok()
             }
-            Ok(None) => {
-                // User cancelled
-                let _ = stream.write_all(b"0");
-            }
+            Ok(None) => false,
             Err(_) => {
-                // Expired or disconnected
                 emit_expired(request_id);
-                let _ = stream.write_all(b"0");
+                false
             }
-        }
-    } else {
-        let _ = stream.write_all(b"0");
-    }
+        };
+    let _ = stream.write_all(if saved { b"1" } else { b"0" });
 
     registry
         .requests

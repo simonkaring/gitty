@@ -1,10 +1,38 @@
 use std::{
     io::{BufRead, BufReader, Read, Write},
     net::TcpListener,
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     thread,
     time::Duration,
 };
+
+fn spawn_serve() -> Child {
+    Command::new(env!("CARGO_BIN_EXE_gitty-cli"))
+        .args(["serve", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap()
+}
+
+/// Opens `path` through the stdio protocol and returns the session handle.
+fn open(input: &mut impl Write, output: &mut impl BufRead, path: &std::path::Path) -> String {
+    let request = serde_json::json!({
+        "version":1,
+        "id":"open",
+        "method":"repository_open",
+        "params":{"location":{"kind":"native","path":path}}
+    });
+    writeln!(input, "{request}").unwrap();
+    let mut line = String::new();
+    output.read_line(&mut line).unwrap();
+    let response: serde_json::Value = serde_json::from_str(&line).unwrap();
+    response["result"]["session"]["handle"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
 
 #[test]
 fn cli_askpass_helper_roundtrips_secret_without_logging_it() {
@@ -123,14 +151,7 @@ fn cli_capabilities_condition_account_and_platform_methods() {
 
 #[test]
 fn cli_stdio_exits_after_eof_and_closed_output() {
-    let binary = env!("CARGO_BIN_EXE_gitty-cli");
-    let mut eof = Command::new(binary)
-        .args(["serve", "--stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut eof = spawn_serve();
     drop(eof.stdin.take());
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     thread::spawn(move || done_tx.send(eof.wait().unwrap()).unwrap());
@@ -139,13 +160,7 @@ fn cli_stdio_exits_after_eof_and_closed_output() {
         .unwrap()
         .success());
 
-    let mut broken = Command::new(binary)
-        .args(["serve", "--stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut broken = spawn_serve();
     let mut stdin = broken.stdin.take().unwrap();
     drop(broken.stdout.take());
     stdin
@@ -157,88 +172,40 @@ fn cli_stdio_exits_after_eof_and_closed_output() {
     drop(stdin);
 }
 
-#[test]
-fn cli_stdio_closed_output_cancels_search_while_input_stays_open() {
+fn search_shutdown_is_prompt(close_output: bool) {
     let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .canonicalize()
         .unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_gitty-cli"))
-        .args(["serve", "--stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut child = spawn_serve();
     let mut input = child.stdin.take().unwrap();
-    let output = child.stdout.take().unwrap();
-    let mut output = BufReader::new(output);
-    let open = serde_json::json!({
-        "version":1,
-        "id":1,
-        "method":"repository_open",
-        "params":{"location":{"kind":"native","path":repository}}
-    });
-    writeln!(input, "{open}").unwrap();
-    let mut line = String::new();
-    output.read_line(&mut line).unwrap();
-    let response: serde_json::Value = serde_json::from_str(&line).unwrap();
-    let handle = response["result"]["session"]["handle"].as_str().unwrap();
+    let mut output = BufReader::new(child.stdout.take().unwrap());
+    let handle = open(&mut input, &mut output, &repository);
     let search = serde_json::json!({
         "version":1,
         "id":2,
         "method":"repository_search",
         "params":{"handle":handle,"query":{"text":"a phrase that should not exist in commit history"}}
     });
-    drop(output);
+    let _output = (!close_output).then_some(output);
     writeln!(input, "{search}").unwrap();
+    let _input = close_output.then_some(input);
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     thread::spawn(move || done_tx.send(child.wait().unwrap()).unwrap());
     assert!(
         done_rx.recv_timeout(Duration::from_secs(5)).is_ok(),
-        "server did not shut down after its output pipe broke"
+        "server did not shut down after its output pipe broke or stdin reached EOF"
     );
-    drop(input);
+}
+
+#[test]
+fn cli_stdio_closed_output_cancels_search_while_input_stays_open() {
+    search_shutdown_is_prompt(true);
 }
 
 #[test]
 fn cli_stdio_eof_cancels_an_active_search() {
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_gitty-cli"))
-        .args(["serve", "--stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let mut input = child.stdin.take().unwrap();
-    let mut output = BufReader::new(child.stdout.take().unwrap());
-    let open = serde_json::json!({
-        "version":1,
-        "id":1,
-        "method":"repository_open",
-        "params":{"location":{"kind":"native","path":repository}}
-    });
-    writeln!(input, "{open}").unwrap();
-    let mut line = String::new();
-    output.read_line(&mut line).unwrap();
-    let response: serde_json::Value = serde_json::from_str(&line).unwrap();
-    let handle = response["result"]["session"]["handle"].as_str().unwrap();
-    let search = serde_json::json!({
-        "version":1,
-        "id":2,
-        "method":"repository_search",
-        "params":{"handle":handle,"query":{"text":"a phrase that should not exist in commit history"}}
-    });
-    writeln!(input, "{search}").unwrap();
-    drop(input);
-    let (done_tx, done_rx) = std::sync::mpsc::channel();
-    thread::spawn(move || done_tx.send(child.wait().unwrap()).unwrap());
-    assert!(done_rx.recv_timeout(Duration::from_secs(5)).is_ok());
-    drop(output);
+    search_shutdown_is_prompt(false);
 }
 
 #[test]
@@ -272,13 +239,7 @@ fn cli_stdio_cancels_clones_on_request_and_eof() {
     git(&["add", "payload.bin"]);
     git(&["commit", "--quiet", "-m", "payload"]);
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_gitty-cli"))
-        .args(["serve", "--stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut child = spawn_serve();
     let operation_id = "123e4567-e89b-12d3-a456-426614174000";
     let mut input = child.stdin.take().unwrap();
     let mut output = BufReader::new(child.stdout.take().unwrap());
@@ -390,29 +351,10 @@ fn cli_process_saturation_returns_server_busy_without_dropping_requests() {
         .unwrap();
     }
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_gitty-cli"))
-        .args(["serve", "--stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut child = spawn_serve();
     let mut input = child.stdin.take().unwrap();
     let mut output = BufReader::new(child.stdout.take().unwrap());
-    let open = serde_json::json!({
-        "version":1,
-        "id":"open",
-        "method":"repository_open",
-        "params":{"location":{"kind":"native","path":repository.path()}}
-    });
-    writeln!(input, "{open}").unwrap();
-    let mut line = String::new();
-    output.read_line(&mut line).unwrap();
-    let opened: serde_json::Value = serde_json::from_str(&line).unwrap();
-    let handle = opened["result"]["session"]["handle"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let handle = open(&mut input, &mut output, repository.path());
     let (response_tx, response_rx) = std::sync::mpsc::channel();
     let output_thread = thread::spawn(move || {
         let mut line = String::new();
@@ -473,29 +415,11 @@ fn cli_process_exit_expires_session_handles_and_history_cursors() {
         git(&["commit", "--quiet", "-m", &format!("commit {index}")]);
     }
 
-    let mut first = Command::new(env!("CARGO_BIN_EXE_gitty-cli"))
-        .args(["serve", "--stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut first = spawn_serve();
     let mut first_input = first.stdin.take().unwrap();
     let mut first_output = BufReader::new(first.stdout.take().unwrap());
-    let open = serde_json::json!({
-        "version":1,
-        "id":1,
-        "method":"repository_open",
-        "params":{"location":{"kind":"native","path":repository.path()}}
-    });
-    writeln!(first_input, "{open}").unwrap();
+    let handle = open(&mut first_input, &mut first_output, repository.path());
     let mut line = String::new();
-    first_output.read_line(&mut line).unwrap();
-    let opened: serde_json::Value = serde_json::from_str(&line).unwrap();
-    let handle = opened["result"]["session"]["handle"]
-        .as_str()
-        .unwrap()
-        .to_owned();
     let history = serde_json::json!({
         "version":1,
         "id":2,
@@ -510,13 +434,7 @@ fn cli_process_exit_expires_session_handles_and_history_cursors() {
     drop(first_input);
     assert!(first.wait().unwrap().success());
 
-    let mut second = Command::new(env!("CARGO_BIN_EXE_gitty-cli"))
-        .args(["serve", "--stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut second = spawn_serve();
     let mut second_input = second.stdin.take().unwrap();
     let mut second_output = BufReader::new(second.stdout.take().unwrap());
     let stale_handle = serde_json::json!({
@@ -532,17 +450,7 @@ fn cli_process_exit_expires_session_handles_and_history_cursors() {
         serde_json::from_str::<serde_json::Value>(&line).unwrap()["error"]["code"],
         "invalidHandle"
     );
-    let reopened = serde_json::json!({
-        "version":1,
-        "id":4,
-        "method":"repository_open",
-        "params":{"location":{"kind":"native","path":repository.path()}}
-    });
-    writeln!(second_input, "{reopened}").unwrap();
-    line.clear();
-    second_output.read_line(&mut line).unwrap();
-    let reopened: serde_json::Value = serde_json::from_str(&line).unwrap();
-    let new_handle = reopened["result"]["session"]["handle"].as_str().unwrap();
+    let new_handle = open(&mut second_input, &mut second_output, repository.path());
     let stale_cursor = serde_json::json!({
         "version":1,
         "id":5,
@@ -619,24 +527,11 @@ fn independent_cli_processes_contend_across_linked_worktrees() {
     git(&main_repo, &["add", "base.txt"]);
     std::fs::write(side_repo.join("side.txt"), "side change\n").unwrap();
 
-    let mut first = Command::new(env!("CARGO_BIN_EXE_gitty-cli"))
-        .args(["serve", "--stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut first = spawn_serve();
     let mut first_input = first.stdin.take().unwrap();
     let mut first_output = BufReader::new(first.stdout.take().unwrap());
-    let first_open = serde_json::json!({
-        "version":1,"id":"open-main","method":"repository_open",
-        "params":{"location":{"kind":"native","path":main_repo}}
-    });
-    writeln!(first_input, "{first_open}").unwrap();
+    let first_handle = open(&mut first_input, &mut first_output, &main_repo);
     let mut line = String::new();
-    first_output.read_line(&mut line).unwrap();
-    let first_open: serde_json::Value = serde_json::from_str(&line).unwrap();
-    let first_handle = first_open["result"]["session"]["handle"].as_str().unwrap();
     let commit = serde_json::json!({
         "version":1,"id":"commit","method":"repository_create_commit",
         "params":{"handle":first_handle,"message":"reviewed commit"}
@@ -649,24 +544,10 @@ fn independent_cli_processes_contend_across_linked_worktrees() {
     }
     assert!(marker_path.exists(), "commit hook did not start");
 
-    let mut second = Command::new(env!("CARGO_BIN_EXE_gitty-cli"))
-        .args(["serve", "--stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut second = spawn_serve();
     let mut second_input = second.stdin.take().unwrap();
     let mut second_output = BufReader::new(second.stdout.take().unwrap());
-    let second_open = serde_json::json!({
-        "version":1,"id":"open-side","method":"repository_open",
-        "params":{"location":{"kind":"native","path":side_repo}}
-    });
-    writeln!(second_input, "{second_open}").unwrap();
-    line.clear();
-    second_output.read_line(&mut line).unwrap();
-    let second_open: serde_json::Value = serde_json::from_str(&line).unwrap();
-    let second_handle = second_open["result"]["session"]["handle"].as_str().unwrap();
+    let second_handle = open(&mut second_input, &mut second_output, &side_repo);
     let stage = serde_json::json!({
         "version":1,"id":"stage","method":"repository_stage",
         "params":{"handle":second_handle,"paths":["side.txt"]}
@@ -770,13 +651,7 @@ fn cli_child_exits_when_its_parent_process_is_killed() {
 
 fn parent_death_helper() {
     let repository = std::env::var("GITTY_PARENT_DEATH_REPO").unwrap();
-    let mut cli = Command::new(env!("CARGO_BIN_EXE_gitty-cli"))
-        .args(["serve", "--stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut cli = spawn_serve();
     let mut input = cli.stdin.take().unwrap();
     let mut output = BufReader::new(cli.stdout.take().unwrap());
     let request = serde_json::json!({

@@ -71,10 +71,6 @@ pub struct BranchBatchDeleteResult {
     pub branches: Vec<BranchBatchDeleteOutcome>,
 }
 
-struct OriginPreflight {
-    push_url: String,
-    tracking_oid: String,
-}
 fn outcome(
     target: &'static str,
     status: &'static str,
@@ -234,30 +230,22 @@ impl Repository {
                 "This branch is checked out in a worktree.",
             ));
         }
-        let mut origin_preflight = None;
         if delete_origin {
-            match self.origin_preflight(
-                &branch,
-                expected_origin_oid.as_deref(),
-                expected_push_url.as_deref(),
-            ) {
-                Ok(value) => origin_preflight = Some(value),
-                Err(error) => {
-                    return Ok(BranchDeleteResult {
-                        local: delete_local.then(|| {
-                            outcome(
-                                "local",
-                                "notAttempted",
-                                None,
-                                Some(
-                                    "Origin preflight failed; local deletion was not started."
-                                        .into(),
-                                ),
-                            )
-                        }),
-                        origin: Some(outcome("origin", "failed", Some(error), None)),
-                    })
-                }
+            if let Err(error) = self
+                .origin_destination(expected_push_url.as_deref())
+                .and_then(|_| self.origin_tracking(&branch, expected_origin_oid.as_deref()))
+            {
+                return Ok(BranchDeleteResult {
+                    local: delete_local.then(|| {
+                        outcome(
+                            "local",
+                            "notAttempted",
+                            None,
+                            Some("Origin preflight failed; local deletion was not started.".into()),
+                        )
+                    }),
+                    origin: Some(outcome("origin", "failed", Some(error), None)),
+                });
             }
         }
         let mut local = None;
@@ -278,25 +266,11 @@ impl Repository {
         let mut origin = None;
         if delete_origin {
             let result = (|| -> Result<_> {
-                let current_preflight = self.origin_preflight(
-                    &branch,
-                    expected_origin_oid.as_deref(),
-                    expected_push_url.as_deref(),
-                )?;
-                let reviewed = origin_preflight
-                    .as_ref()
-                    .expect("origin target preflighted before local mutation");
-                if current_preflight.tracking_oid != reviewed.tracking_oid
-                    || current_preflight.push_url != reviewed.push_url
-                {
-                    return Err(Error::new(
-                        "staleOperation",
-                        "Origin branch or push destination changed during local deletion.",
-                    ));
-                }
-                let current = current_preflight.tracking_oid;
+                // Each recheck returns exactly the reviewed value or fails.
+                let push_url = self.origin_destination(expected_push_url.as_deref())?;
+                let current = self.origin_tracking(&branch, expected_origin_oid.as_deref())?;
                 let (output, wsl) = self.push_origin_deletions(
-                    &current_preflight.push_url,
+                    &push_url,
                     format!("delete origin/{branch}"),
                     &[(branch.as_str(), current.as_str())],
                     askpass,
@@ -708,14 +682,7 @@ impl Repository {
             }
         };
         a.extend(network);
-        a.extend(args(&[
-            "push",
-            "--porcelain",
-            "--no-force",
-            "--no-mirror",
-            "--no-follow-tags",
-            "--recurse-submodules=no",
-        ]));
+        a.extend(args(&crate::remote::SAFE_PUSH));
         for (branch, oid) in deletions {
             a.push(format!("--force-with-lease=refs/heads/{branch}:{oid}"));
         }
@@ -771,47 +738,14 @@ impl Repository {
             .any(|branch| branch == full_ref))
     }
 
-    fn origin_preflight(
-        &self,
-        branch: &str,
-        expected_oid: Option<&str>,
-        expected_push_url: Option<&str>,
-    ) -> Result<OriginPreflight> {
-        let push_url = self.origin_destination(expected_push_url)?;
-        let tracking_oid = self.origin_tracking(branch, expected_oid)?;
-        Ok(OriginPreflight {
-            push_url,
-            tracking_oid,
-        })
-    }
-
     /// Origin must have exactly the reviewed single push URL and not be a mirror.
     fn origin_destination(&self, expected_push_url: Option<&str>) -> Result<String> {
-        let push_url = self.check_text(&["remote", "get-url", "--push", "--", "origin"])?;
-        let all_urls =
-            self.check_text(&["remote", "get-url", "--push", "--all", "--", "origin"])?;
-        if all_urls.lines().count() != 1 {
-            return Err(Error::new(
-                "multiplePushUrls",
-                "Origin must have exactly one push URL.",
-            ));
-        }
-        let push_url = push_url.trim_end().to_owned();
+        let push_url = self.push_destination("origin")?;
         if Some(push_url.as_str()) != expected_push_url {
             return Err(Error::new(
                 "staleOperation",
                 "Origin push URL changed. Review the deletion again.",
             ));
-        }
-        let mirror = self.check(&["config", "--bool", "--get", "remote.origin.mirror"])?;
-        if mirror.success && process::text_ref(&mirror.stdout)?.trim() == "true" {
-            return Err(Error::new(
-                "mirrorRemote",
-                "Mirror remotes cannot be pushed from Gitty.",
-            ));
-        }
-        if !mirror.success && mirror.code != Some(1) {
-            return Err(self.failed(&mirror));
         }
         Ok(push_url)
     }
@@ -852,84 +786,25 @@ impl Repository {
                 }
                 Ok(false)
             }
-            RepositoryLocation::Wsl { distribution, .. } => {
-                #[cfg(windows)]
-                {
-                    crate::process::validate_distribution(distribution)?;
-                    for path in locks {
-                        let mut command = std::process::Command::new("wsl.exe");
-                        command.args([
-                            "--distribution",
-                            distribution,
-                            "--exec",
-                            "test",
-                            "-e",
-                            &path,
-                        ]);
-                        let out = process::run(command)?;
-                        match out.code {
-                            Some(0) => return Ok(true),
-                            Some(1) => {
-                                let mut symlink = std::process::Command::new("wsl.exe");
-                                symlink.args([
-                                    "--distribution",
-                                    distribution,
-                                    "--exec",
-                                    "test",
-                                    "-L",
-                                    &path,
-                                ]);
-                                let out = process::run(symlink)?;
-                                match out.code {
-                                    Some(0) => return Ok(true),
-                                    Some(1) => {}
-                                    _ => {
-                                        return Err(Error::new(
-                                            "wsl",
-                                            "Unable to verify Git ref-lock state.",
-                                        ))
-                                    }
-                                }
-                            }
-                            _ => {
-                                return Err(Error::new(
-                                    "wsl",
-                                    "Unable to verify Git ref-lock state.",
-                                ))
-                            }
-                        }
-                    }
-                    Ok(false)
-                }
-                #[cfg(not(windows))]
-                {
-                    let _ = distribution;
-                    Err(Error::new(
-                        "unsupportedPlatform",
-                        "WSL ref-lock checks require Windows.",
-                    ))
-                }
-            }
-            // A destructive delete is worth a few round trips; the control
+            // A destructive delete is worth a few round trips; the SSH control
             // connection makes them cheap after the first one.
-            RepositoryLocation::Ssh { .. } => {
+            RepositoryLocation::Wsl { .. } | RepositoryLocation::Ssh { .. } => {
+                let (code, message) = if matches!(self.location(), RepositoryLocation::Wsl { .. }) {
+                    ("wsl", "Unable to verify Git ref-lock state.")
+                } else {
+                    (
+                        "ssh",
+                        "Unable to verify Git ref-lock state on the remote host.",
+                    )
+                };
                 for path in locks {
                     for flag in ["-e", "-L"] {
-                        let command = process::ssh_exec(
-                            self.location(),
-                            &[],
-                            &["test".to_string(), flag.into(), path.clone()],
-                        )?;
-                        let out = process::run(command)?;
-                        match out.code {
+                        let command =
+                            process::host_command(self.location(), &args(&["test", flag, &path]))?;
+                        match process::run(command)?.code {
                             Some(0) => return Ok(true),
                             Some(1) => {}
-                            _ => {
-                                return Err(Error::new(
-                                    "ssh",
-                                    "Unable to verify Git ref-lock state on the remote host.",
-                                ))
-                            }
+                            _ => return Err(Error::new(code, message)),
                         }
                     }
                 }

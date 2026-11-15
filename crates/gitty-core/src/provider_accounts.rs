@@ -1,6 +1,9 @@
 //! Local provider accounts. Credentials live in the OS credential store, never
 //! in browser preferences or the metadata file.
-use crate::dto::{Error, Result};
+use crate::{
+    dto::{Error, Result},
+    repository::lock,
+};
 use serde::{Deserialize, Serialize};
 use std::{io::Read, path::PathBuf, sync::Mutex};
 
@@ -81,10 +84,7 @@ impl AccountStore {
     }
 
     pub fn list(&self) -> Result<Vec<ProviderAccount>> {
-        let _guard = self
-            .lock
-            .lock()
-            .map_err(|_| Error::new("worker", "Account lock poisoned"))?;
+        let _guard = lock(&self.lock)?;
         self.read()
     }
 
@@ -134,10 +134,7 @@ impl AccountStore {
         token: String,
         oauth: bool,
     ) -> Result<ProviderAccount> {
-        let _guard = self
-            .lock
-            .lock()
-            .map_err(|_| Error::new("worker", "Account lock poisoned"))?;
+        let _guard = lock(&self.lock)?;
         let mut accounts = self.read()?;
         if accounts
             .iter()
@@ -169,10 +166,7 @@ impl AccountStore {
     }
 
     pub fn disconnect(&self, id: &str) -> Result<()> {
-        let _guard = self
-            .lock
-            .lock()
-            .map_err(|_| Error::new("worker", "Account lock poisoned"))?;
+        let _guard = lock(&self.lock)?;
         let mut accounts = self.read()?;
         if !accounts.iter().any(|account| account.id == id) {
             return Err(Error::new("invalidAccount", "Account not found"));
@@ -197,10 +191,7 @@ impl AccountStore {
         // as long as the provider's HTTP timeout and must not block calls for
         // other accounts (listing, connecting, another account's request).
         let (account, token) = {
-            let _guard = self
-                .lock
-                .lock()
-                .map_err(|_| Error::new("worker", "Account lock poisoned"))?;
+            let _guard = lock(&self.lock)?;
             let account = self
                 .read()?
                 .into_iter()
@@ -219,10 +210,7 @@ impl AccountStore {
         }
         let (access, updated) = crate::provider_oauth::access_token(account.provider, &token)?;
         if let Some(updated) = updated {
-            let _guard = self
-                .lock
-                .lock()
-                .map_err(|_| Error::new("worker", "Account lock poisoned"))?;
+            let _guard = lock(&self.lock)?;
             // A disconnect may have run while the refresh was in flight; never
             // write a token back for an account that is no longer listed.
             if self.read()?.iter().any(|account| account.id == id) {

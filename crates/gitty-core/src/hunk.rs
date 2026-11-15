@@ -120,65 +120,61 @@ fn hunk_header(bytes: &[u8], offsets: &[usize], hunk_index: usize) -> Result<Hun
     })
 }
 
-/// Keep the original quoted path headers and body bytes, including CR, invalid
-/// UTF-8 and no-newline markers. Only ASCII hunk coordinates are regenerated.
-/// Earlier omitted hunks must not contribute their line-count deltas: forward
-/// application is based on the old range, reverse application on the new range.
-fn selected_patch(bytes: &[u8], hunk_index: usize, reverse: bool) -> Result<Vec<u8>> {
-    let offsets = hunk_offsets(bytes);
-    let HunkHeader {
-        end,
-        body_start,
-        old_start,
-        old_count,
-        new_start,
-        new_count,
-    } = hunk_header(bytes, &offsets, hunk_index)?;
-    // Empty ranges refer to the line *before* the insertion/deletion.
-    let (old_start, new_start) = if reverse {
-        (
-            if old_count == 0 {
-                new_start.saturating_sub(1)
-            } else if new_count == 0 {
-                new_start + 1
-            } else {
-                new_start
-            },
-            new_start,
-        )
+/// The file headers, one regenerated `@@` header and `body`. Earlier omitted hunks
+/// must not contribute their line-count deltas: forward application is based on
+/// the old range, reverse application on the new range.
+fn hunk_patch(
+    prefix: &[u8],
+    hunk: &HunkHeader,
+    old_count: u64,
+    new_count: u64,
+    reverse: bool,
+    body: &[u8],
+) -> Vec<u8> {
+    let base = if reverse {
+        hunk.new_start
     } else {
-        (
-            old_start,
-            if new_count == 0 {
-                old_start.saturating_sub(1)
-            } else if old_count == 0 {
-                old_start + 1
-            } else {
-                old_start
-            },
-        )
+        hunk.old_start
     };
-    let mut patch = bytes[..offsets[0]].to_vec();
+    let (own, other) = if reverse {
+        (old_count, new_count)
+    } else {
+        (new_count, old_count)
+    };
+    // Empty ranges refer to the line *before* the insertion/deletion.
+    let shifted = if own == 0 {
+        base.saturating_sub(1)
+    } else if other == 0 {
+        base + 1
+    } else {
+        base
+    };
+    let (old_start, new_start) = if reverse {
+        (shifted, base)
+    } else {
+        (base, shifted)
+    };
+    let mut patch = prefix.to_vec();
     patch.extend_from_slice(
         format!("@@ -{old_start},{old_count} +{new_start},{new_count} @@\n").as_bytes(),
     );
-    patch.extend_from_slice(&bytes[body_start..end]);
-    Ok(patch)
+    patch.extend_from_slice(body);
+    patch
 }
 
-fn split_raw_lines(slice: &[u8]) -> Vec<&[u8]> {
-    let mut lines = Vec::new();
-    let mut rest = slice;
-    while !rest.is_empty() {
-        if let Some(pos) = rest.iter().position(|b| *b == b'\n') {
-            lines.push(&rest[..pos + 1]);
-            rest = &rest[pos + 1..];
-        } else {
-            lines.push(rest);
-            break;
-        }
-    }
-    lines
+/// Keep the original quoted path headers and body bytes, including CR, invalid
+/// UTF-8 and no-newline markers. Only ASCII hunk coordinates are regenerated.
+fn selected_patch(bytes: &[u8], hunk_index: usize, reverse: bool) -> Result<Vec<u8>> {
+    let offsets = hunk_offsets(bytes);
+    let hunk = hunk_header(bytes, &offsets, hunk_index)?;
+    Ok(hunk_patch(
+        &bytes[..offsets[0]],
+        &hunk,
+        hunk.old_count,
+        hunk.new_count,
+        reverse,
+        &bytes[hunk.body_start..hunk.end],
+    ))
 }
 
 fn selected_lines_patch(
@@ -188,15 +184,11 @@ fn selected_lines_patch(
     line_indices: &[usize],
 ) -> Result<Vec<u8>> {
     let offsets = hunk_offsets(bytes);
-    let HunkHeader {
-        end,
-        body_start,
-        old_start,
-        new_start,
-        ..
-    } = hunk_header(bytes, &offsets, hunk_index)?;
+    let hunk = hunk_header(bytes, &offsets, hunk_index)?;
 
-    let raw_lines = split_raw_lines(&bytes[body_start..end]);
+    let raw_lines: Vec<&[u8]> = bytes[hunk.body_start..hunk.end]
+        .split_inclusive(|b| *b == b'\n')
+        .collect();
     if line_indices.is_empty() {
         return Err(Error::new(
             "invalidSelection",
@@ -232,12 +224,13 @@ fn selected_lines_patch(
 
     let has_meta_after =
         |idx: usize| -> bool { idx + 1 < raw_lines.len() && raw_lines[idx + 1].starts_with(b"\\") };
+    // Unselected changes on the side the patch applies to become context; those
+    // on the other side are left out.
+    let base = if reverse { b'+' } else { b'-' };
 
     let mut patch_body = Vec::new();
     let mut patch_old_count: u64 = 0;
     let mut patch_new_count: u64 = 0;
-    let mut additions_in_patch: usize = 0;
-    let mut deletions_in_patch: usize = 0;
 
     let mut idx = 0;
     while idx < raw_lines.len() {
@@ -247,82 +240,32 @@ fn selected_lines_patch(
             continue;
         }
 
-        let is_selected = selected_set.contains(&idx);
         let has_no_newline = has_meta_after(idx);
         let first_byte = *line.first().unwrap_or(&b' ');
 
-        match first_byte {
-            b' ' => {
-                patch_body.extend_from_slice(line);
-                if has_no_newline {
-                    patch_body.extend_from_slice(raw_lines[idx + 1]);
-                }
+        // Selected lines are validated above to be `+` or `-` lines.
+        if first_byte == b' ' || selected_set.contains(&idx) {
+            patch_body.extend_from_slice(line);
+            if has_no_newline {
+                patch_body.extend_from_slice(raw_lines[idx + 1]);
+            }
+            if first_byte != b'+' {
                 patch_old_count += 1;
+            }
+            if first_byte != b'-' {
                 patch_new_count += 1;
             }
-            b'+' => {
-                if reverse {
-                    if is_selected {
-                        patch_body.extend_from_slice(line);
-                        if has_no_newline {
-                            patch_body.extend_from_slice(raw_lines[idx + 1]);
-                        }
-                        patch_new_count += 1;
-                        additions_in_patch += 1;
-                    } else {
-                        if has_no_newline {
-                            return Err(Error::new(
-                                "unsupportedHunk",
-                                "Partial staging across a newline-at-EOF transition is unsupported. Use full-hunk staging or Git.",
-                            ));
-                        }
-                        let mut ctx = line.to_vec();
-                        ctx[0] = b' ';
-                        patch_body.extend_from_slice(&ctx);
-                        patch_old_count += 1;
-                        patch_new_count += 1;
-                    }
-                } else if is_selected {
-                    patch_body.extend_from_slice(line);
-                    if has_no_newline {
-                        patch_body.extend_from_slice(raw_lines[idx + 1]);
-                    }
-                    patch_new_count += 1;
-                    additions_in_patch += 1;
-                }
+        } else if first_byte == base {
+            if has_no_newline {
+                return Err(Error::new(
+                    "unsupportedHunk",
+                    "Partial staging across a newline-at-EOF transition is unsupported. Use full-hunk staging or Git.",
+                ));
             }
-            b'-' => {
-                if reverse {
-                    if is_selected {
-                        patch_body.extend_from_slice(line);
-                        if has_no_newline {
-                            patch_body.extend_from_slice(raw_lines[idx + 1]);
-                        }
-                        patch_old_count += 1;
-                        deletions_in_patch += 1;
-                    }
-                } else if is_selected {
-                    patch_body.extend_from_slice(line);
-                    if has_no_newline {
-                        patch_body.extend_from_slice(raw_lines[idx + 1]);
-                    }
-                    patch_old_count += 1;
-                    deletions_in_patch += 1;
-                } else {
-                    if has_no_newline {
-                        return Err(Error::new(
-                            "unsupportedHunk",
-                            "Partial staging across a newline-at-EOF transition is unsupported. Use full-hunk staging or Git.",
-                        ));
-                    }
-                    let mut ctx = line.to_vec();
-                    ctx[0] = b' ';
-                    patch_body.extend_from_slice(&ctx);
-                    patch_old_count += 1;
-                    patch_new_count += 1;
-                }
-            }
-            _ => {}
+            patch_body.push(b' ');
+            patch_body.extend_from_slice(&line[1..]);
+            patch_old_count += 1;
+            patch_new_count += 1;
         }
 
         if has_no_newline {
@@ -332,43 +275,14 @@ fn selected_lines_patch(
         }
     }
 
-    if additions_in_patch == 0 && deletions_in_patch == 0 {
-        return Err(Error::new(
-            "invalidSelection",
-            "Select one or more changed lines.",
-        ));
-    }
-
-    let (patch_old_start, patch_new_start) = if reverse {
-        let base_start = new_start;
-        let s_old = if patch_old_count == 0 {
-            base_start.saturating_sub(1)
-        } else if patch_new_count == 0 {
-            base_start + 1
-        } else {
-            base_start
-        };
-        (s_old, base_start)
-    } else {
-        let s_new = if patch_new_count == 0 {
-            old_start.saturating_sub(1)
-        } else if patch_old_count == 0 {
-            old_start + 1
-        } else {
-            old_start
-        };
-        (old_start, s_new)
-    };
-
-    let mut patch = bytes[..offsets[0]].to_vec();
-    patch.extend_from_slice(
-        format!(
-            "@@ -{patch_old_start},{patch_old_count} +{patch_new_start},{patch_new_count} @@\n"
-        )
-        .as_bytes(),
-    );
-    patch.extend_from_slice(&patch_body);
-    Ok(patch)
+    Ok(hunk_patch(
+        &bytes[..offsets[0]],
+        &hunk,
+        patch_old_count,
+        patch_new_count,
+        reverse,
+        &patch_body,
+    ))
 }
 
 impl Repository {

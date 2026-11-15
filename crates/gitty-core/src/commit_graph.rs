@@ -63,23 +63,7 @@ fn run_write(mut command: Command, control: &Control) -> Result<process::Output>
             "History acceleration was cancelled",
         ));
     }
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
-    let mut child = command
-        .spawn()
-        .map_err(|e| Error::new("processStart", e.to_string()))?;
+    let mut child = process::spawn_piped(&mut command, Stdio::null())?;
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let overflow = Arc::new(AtomicBool::new(false));
@@ -103,10 +87,9 @@ fn run_write(mut command: Command, control: &Control) -> Result<process::Output>
     .collect();
     drop(sender);
     let started = Instant::now();
-    let mut exited = None;
     let mut captured = 0;
-    let result = loop {
-        let failure = if control.cancelled.load(Ordering::Acquire) {
+    let failure = || {
+        if control.cancelled.load(Ordering::Acquire) {
             Some(Error::new(
                 "cancelled",
                 "History acceleration was cancelled",
@@ -123,43 +106,19 @@ fn run_write(mut command: Command, control: &Control) -> Result<process::Output>
             ))
         } else {
             None
-        };
-        if let Some(error) = failure {
-            break Err(error);
-        }
-        if captured == 2 {
-            if let Some(status) = exited.take() {
-                break status;
-            }
-        }
-        match receiver.recv_timeout(process::WAIT_CHECK_INTERVAL) {
-            Ok(process::ProcessEvent::Exited(status)) => exited = Some(status.map_err(Error::from)),
-            Ok(process::ProcessEvent::Captured) => captured += 1,
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                break Err(Error::new("process", "Process waiter ended unexpectedly"))
-            }
         }
     };
+    let result = process::wait_captured(&receiver, &mut captured, failure, || {
+        Error::new("process", "Process waiter ended unexpectedly")
+    })
+    .and_then(|status| status.map_err(Error::from));
     let mut child = lock(&control.child)?.take().unwrap();
     if result.is_err() {
         child.kill();
     }
     child.reap();
     if let Err(error) = result {
-        let deadline = Instant::now() + process::READER_SHUTDOWN_TIMEOUT;
-        while captured < 2 {
-            match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-                Ok(process::ProcessEvent::Captured) => captured += 1,
-                Ok(process::ProcessEvent::Exited(_)) => {}
-                Err(_) => break,
-            }
-        }
-        for reader in readers {
-            if reader.is_finished() {
-                let _ = reader.join();
-            }
-        }
+        process::abandon_readers(&receiver, captured, readers);
         return Err(error);
     }
     let mut output = Vec::new();
@@ -275,19 +234,7 @@ fn any_file(location: &RepositoryLocation, paths: &[String]) -> Result<bool> {
         }
         values.extend(["-f".into(), path.clone()]);
     }
-    let command = match location {
-        RepositoryLocation::Ssh { .. } => process::ssh_exec(location, &[], &values)?,
-        RepositoryLocation::Wsl { distribution, .. } => {
-            if !cfg!(windows) {
-                return Err(Error::new("unsupportedPlatform", "WSL requires Windows"));
-            }
-            let mut command = std::process::Command::new("wsl.exe");
-            command.args(["--distribution", distribution, "--exec"]);
-            command.args(values);
-            command
-        }
-        RepositoryLocation::Native { .. } => unreachable!(),
-    };
+    let command = process::host_command(location, &values)?;
     let output = process::run_for(command, Duration::from_secs(30))?;
     match output.code {
         Some(0) => Ok(true),

@@ -2,12 +2,11 @@
 name = "gitty-core"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.89"
 
 [dependencies]
 base64 = "0.22"
 cap-std = "3"
-fs2 = "0.4"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 notify = "8"
 open = "5"

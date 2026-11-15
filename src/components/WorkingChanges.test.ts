@@ -41,7 +41,6 @@ function buttons(node: ReactNode): ReactElement<{ disabled?: boolean; onClick?: 
 }
 
 const hunkButtons = (tree: ReactNode) => buttons(tree).filter(b => b.props.className === 'hunk-action-button');
-const lineButtons = (tree: ReactNode) => buttons(tree).filter(b => b.props.className === 'line-select-toggle');
 
 it('combines unstaged and new files while preserving diff and staging actions', async () => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -82,21 +81,40 @@ it('combines unstaged and new files while preserving diff and staging actions', 
   } finally { await act(async () => { root.unmount(); }); }
 });
 
+/** Mounts a real DiffPreview so selection is driven through its own buttons. */
+async function renderDiff(props: Parameters<typeof DiffPreview>[0]) {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const host = document.createElement('div');
+  document.body.append(host);
+  const root = createRoot(host);
+  const render = (next: Parameters<typeof DiffPreview>[0]) => act(async () => { root.render(createElement(DiffPreview, next)); });
+  await render(props);
+  return {
+    toggles: () => [...host.querySelectorAll<HTMLButtonElement>('.line-select-toggle')],
+    hunks: () => [...host.querySelectorAll<HTMLButtonElement>('.hunk-action-button')],
+    render,
+    unmount: async () => { await act(async () => { root.unmount(); }); host.remove(); },
+  };
+}
+
 describe('hunk preview actions', () => {
-  it('keeps before/after selection scoped to original line indices after pairing replacements', () => {
+  it('keeps before/after selection scoped to original line indices after pairing replacements', async () => {
     const replacement: FileDiff = { ...diff, hunks: [{ header: '@@ -1,2 +1,1 @@', lines: [
       { kind: 'remove', content: 'old one', oldLine: 1, newLine: null },
       { kind: 'remove', content: 'old two', oldLine: 2, newLine: null },
       { kind: 'add', content: 'new one', oldLine: null, newLine: 1 },
     ] }] };
-    const onHunk = vi.fn(), onToggleLine = vi.fn();
-    const tree = renderTree({ diff: replacement, split: true, hunkAction: 'stage_hunk', selectedLines: { 0: [2, 0] }, onHunk, onToggleLine });
-    const toggles = lineButtons(tree);
-    expect(toggles.map(toggle => toggle.props['aria-pressed'])).toEqual([true, true, false]);
-    toggles[1].props.onClick?.();
-    expect(onToggleLine).toHaveBeenCalledWith(0, 2);
-    hunkButtons(tree)[0].props.onClick?.();
-    expect(onHunk).toHaveBeenCalledWith({ kind: 'stage_hunk', path: 'file.txt', hunkIndex: 0, fingerprint: 'backend-token', lineIndices: [0, 2] });
+    const onHunk = vi.fn();
+    const view = await renderDiff({ diff: replacement, split: true, hunkAction: 'stage_hunk', onHunk });
+    try {
+      expect(view.toggles().map(toggle => toggle.getAttribute('aria-pressed'))).toEqual(['false', 'false', 'false']);
+      // The paired row's second toggle is the replacement's "after" side, whose original line index is 2.
+      await click(view.toggles()[0]);
+      await click(view.toggles()[1]);
+      expect(view.toggles().map(toggle => toggle.getAttribute('aria-pressed'))).toEqual(['true', 'true', 'false']);
+      await click(view.hunks()[0]);
+      expect(onHunk).toHaveBeenCalledWith({ kind: 'stage_hunk', path: 'file.txt', hunkIndex: 0, fingerprint: 'backend-token', lineIndices: [0, 2] });
+    } finally { await view.unmount(); }
     const host = document.createElement('div');
     host.innerHTML = renderToStaticMarkup(createElement(() => DiffPreview({ diff: replacement, split: true })));
     const rows = host.querySelectorAll('.split-row');
@@ -118,59 +136,63 @@ describe('hunk preview actions', () => {
     }
   });
 
-  it.each([false, true])('renders line selection toggles and routes selected lines in split=%s', split => {
+  it.each([false, true])('renders line selection toggles and routes selected lines in split=%s', async split => {
     for (const kind of ['stage_hunk', 'unstage_hunk'] as const) {
+      const verb = kind === 'stage_hunk' ? 'staging' : 'unstaging';
       const onHunk = vi.fn();
-      const tree = renderTree({ diff, split, hunkAction: kind, onHunk });
-      const toggles = lineButtons(tree);
-      expect(toggles).toHaveLength(2);
-      expect(toggles[0].props['aria-pressed']).toBe(false);
-      expect(toggles[0].props['aria-label']).toContain(`Select line 1 for ${kind === 'stage_hunk' ? 'staging' : 'unstaging'}`);
+      const view = await renderDiff({ diff, split, hunkAction: kind, onHunk });
+      try {
+        expect(view.toggles()).toHaveLength(2);
+        expect(view.toggles()[0].getAttribute('aria-pressed')).toBe('false');
+        expect(view.toggles()[0].getAttribute('aria-label')).toContain(`Select line 1 for ${verb}`);
 
-      // With line 0 selected in hunk 1:
-      const treeWithSelection = renderTree({ diff, split, hunkAction: kind, onHunk, selectedLines: { 1: [0] } });
-      const selectedToggles = lineButtons(treeWithSelection);
-      expect(selectedToggles[1].props['aria-pressed']).toBe(true);
-      expect(selectedToggles[1].props['aria-label']).toContain(`Deselect line 21 for ${kind === 'stage_hunk' ? 'staging' : 'unstaging'}`);
+        // Select line 0 in hunk 1:
+        await click(view.toggles()[1]);
+        expect(view.toggles()[1].getAttribute('aria-pressed')).toBe('true');
+        expect(view.toggles()[1].getAttribute('aria-label')).toContain(`Deselect line 21 for ${verb}`);
 
-      // Hunk button label changed to "selected lines":
-      const hButtons = hunkButtons(treeWithSelection);
-      expect(hButtons[1].props['aria-label']).toContain(`${kind === 'stage_hunk' ? 'Stage' : 'Unstage'} selected lines 2 in file.txt`);
-      hButtons[1].props.onClick?.();
-      expect(onHunk).toHaveBeenCalledExactlyOnceWith({
-        kind,
-        path: 'file.txt',
-        hunkIndex: 1,
-        fingerprint: 'backend-token',
-        lineIndices: [0],
-      });
+        // Hunk button label changed to "selected lines":
+        expect(view.hunks()[1].getAttribute('aria-label')).toContain(`${kind === 'stage_hunk' ? 'Stage' : 'Unstage'} selected lines 2 in file.txt`);
+        await click(view.hunks()[1]);
+        expect(onHunk).toHaveBeenCalledExactlyOnceWith({
+          kind,
+          path: 'file.txt',
+          hunkIndex: 1,
+          fingerprint: 'backend-token',
+          lineIndices: [0],
+        });
+      } finally { await view.unmount(); }
     }
   });
 
-  it('toggles line selection state when toggle buttons are clicked', () => {
-    const onToggleLine = vi.fn();
-    const tree = renderTree({ diff, split: false, hunkAction: 'stage_hunk', onToggleLine });
-    const toggles = lineButtons(tree);
-    toggles[0].props.onClick?.();
-    expect(onToggleLine).toHaveBeenCalledExactlyOnceWith(0, 0);
+  it('toggles line selection state when toggle buttons are clicked', async () => {
+    const view = await renderDiff({ diff, split: false, hunkAction: 'stage_hunk' });
+    try {
+      await click(view.toggles()[0]);
+      expect(view.toggles().map(toggle => toggle.getAttribute('aria-pressed'))).toEqual(['true', 'false']);
+      await click(view.toggles()[0]);
+      expect(view.toggles().map(toggle => toggle.getAttribute('aria-pressed'))).toEqual(['false', 'false']);
+    } finally { await view.unmount(); }
   });
 
-  it('does not allow a retained line selection to submit while writes are blocked', () => {
+  it('does not allow a retained line selection to submit while writes are blocked', async () => {
     const onHunk = vi.fn();
-    const onToggleLine = vi.fn();
-    const tree = renderTree({ diff, split: false, hunkAction: 'stage_hunk', selectedLines: { 0: [0] }, busy: true, onHunk, onToggleLine });
-    expect(lineButtons(tree)[0].props['aria-pressed']).toBe(true);
-    expect(hunkButtons(tree)[0].props.disabled).toBe(true);
-    expect(lineButtons(tree)[0].props.disabled).toBe(true);
-    hunkButtons(tree)[0].props.onClick?.();
-    lineButtons(tree)[0].props.onClick?.();
-    expect(onHunk).not.toHaveBeenCalled();
-    expect(onToggleLine).not.toHaveBeenCalled();
+    const view = await renderDiff({ diff, split: false, hunkAction: 'stage_hunk', onHunk });
+    try {
+      await click(view.toggles()[0]);
+      await view.render({ diff, split: false, hunkAction: 'stage_hunk', busy: true, onHunk });
+      expect(view.toggles()[0].getAttribute('aria-pressed')).toBe('true');
+      expect(view.hunks()[0].disabled).toBe(true);
+      expect(view.toggles()[0].disabled).toBe(true);
+      await click(view.hunks()[0]);
+      await click(view.toggles()[0]);
+      expect(onHunk).not.toHaveBeenCalled();
+      expect(view.toggles()[0].getAttribute('aria-pressed')).toBe('true');
+    } finally { await view.unmount(); }
   });
 
-  it.each([
+  it.each<Partial<Parameters<typeof DiffPreview>[0]>>([
     { busy: true },
-    { unavailable: 'Unavailable in demo. Open a desktop repository.' },
     { diff: { ...diff, truncated: true } },
     { diff: { ...diff, binary: true } },
     { diff: { ...diff, hunkAction: null } },
@@ -1088,18 +1110,18 @@ describe('virtualized diff rows', () => {
   });
 
   it('keeps keyboard selection off while writes are blocked', async () => {
-    const onToggleLine = vi.fn();
-    const view = await mountDiff({ diff, split: false, hunkAction: 'stage_hunk', busy: true, onToggleLine });
+    const onHunk = vi.fn();
+    const view = await mountDiff({ diff, split: false, hunkAction: 'stage_hunk', busy: true, onHunk });
     try {
       await view.key('ArrowDown');
       await view.key(' ');
-      expect(onToggleLine).not.toHaveBeenCalled();
+      expect([...view.host.querySelectorAll('.line-select-toggle')].map(toggle => toggle.getAttribute('aria-pressed'))).toEqual(['false', 'false']);
+      expect(onHunk).not.toHaveBeenCalled();
     } finally { await view.unmount(); }
   });
 
   it('reveals the active row when keyboard navigation jumps outside the rendered window', async () => {
-    const onToggleLine = vi.fn();
-    const view = await mountDiff({ diff: big, split: true, hunkAction: 'stage_hunk', onToggleLine, selectedLines: {} });
+    const view = await mountDiff({ diff: big, split: true, hunkAction: 'stage_hunk' });
     try {
       const last = diffRows(big.hunks, true).length - 1;
       await view.key('End');
@@ -1119,7 +1141,8 @@ describe('virtualized diff rows', () => {
       await view.key(' ');
       await view.key('ArrowLeft');
       await view.key(' ');
-      expect(onToggleLine.mock.calls).toEqual([[1, 9951], [1, 9950]]);
+      expect(view.button('Deselect line 109951 for staging (after)')?.getAttribute('aria-pressed')).toBe('true');
+      expect(view.button('Deselect line 109950 for staging (before)')?.getAttribute('aria-pressed')).toBe('true');
     } finally { await view.unmount(); }
   });
 

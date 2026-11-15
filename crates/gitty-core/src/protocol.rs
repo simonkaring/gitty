@@ -28,8 +28,7 @@ macro_rules! params {
     ($name:ident { $($field:ident: $kind:ty),* $(,)? }) => {
         #[derive(Deserialize, JsonSchema)]
         #[serde(rename_all = "camelCase", deny_unknown_fields)]
-        #[allow(dead_code)]
-        struct $name { $(pub $field: $kind),* }
+        pub(crate) struct $name { $(pub $field: $kind),* }
     };
 }
 
@@ -186,78 +185,11 @@ fn schema<T: JsonSchema>() -> Value {
     serde_json::to_value(schema_for!(T)).expect("JSON Schema serializes")
 }
 
-fn insert<T: JsonSchema>(schemas: &mut Map<String, Value>, method: &str) {
+fn insert<Req: JsonSchema, Resp: JsonSchema>(schemas: &mut Map<String, Value>, method: &str) {
     schemas.insert(
         method.into(),
-        json!({ "request": schema::<T>(), "response": response_schema(method) }),
+        json!({ "request": schema::<Req>(), "response": schema::<Resp>() }),
     );
-}
-
-fn response_schema(method: &str) -> Value {
-    macro_rules! response {
-        ($type:ty) => {
-            schema::<$type>()
-        };
-    }
-    match method {
-        "capabilities" => json!({"type":"object"}),
-        "repository_open" => response!(RepositoryState),
-        "repository_close"
-        | "repository_cancel_search"
-        | "repository_resolve_conflict"
-        | "repository_stage"
-        | "repository_unstage"
-        | "repository_discard"
-        | "repository_stage_hunk"
-        | "repository_unstage_hunk"
-        | "repository_worktree_execute"
-        | "repository_write_commit_graph"
-        | "repository_ignore_path"
-        | "repository_cancel_clone"
-        | "provider_disconnect"
-        | "repository_prompt_reply" => response!(()),
-        "repository_snapshot" => response!(RepositorySnapshot),
-        "repository_status" => response!(RepositoryStatus),
-        "repository_operation_state" => response!(OperationState),
-        "repository_state" => response!(RepositoryState),
-        "repository_git_identity" | "repository_set_git_identity" => {
-            response!(RepositoryGitIdentity)
-        }
-        "repository_sync_info" => response!(SyncInfo),
-        "repository_worktrees" => response!(Vec<Worktree>),
-        "repository_worktree_review" => response!(WorktreeReview),
-        "repository_remotes" => response!(Vec<RemoteInfo>),
-        "repository_stashes" => response!(Vec<StashEntry>),
-        "repository_stash_action" | "repository_remote_action" => response!(ActionOutput),
-        "repository_run_operation" => response!(crate::operation_dto::OperationResult),
-        "repository_delete_branch" => response!(crate::branch_delete::BranchDeleteResult),
-        "repository_delete_branches" => response!(crate::branch_delete::BranchBatchDeleteResult),
-        "repository_history" => response!(HistoryPage),
-        "repository_search" => response!(SearchResult),
-        "repository_commit" => response!(crate::dto::CommitDetail),
-        "repository_conflict_file" => response!(ConflictFile),
-        "repository_branch_relation" => response!((usize, usize)),
-        "repository_diff_files" => response!(Vec<DiffFile>),
-        "repository_commit_edit_eligibility" => response!(CommitEditEligibility),
-        "repository_commit_graph_status" => response!(crate::commit_graph::CommitGraphStatus),
-        "repository_diff" => response!(FileDiff),
-        "repository_create_commit" | "repository_amend_commit" => response!(CreatedCommit),
-        "repository_watch" => response!(WatchStatus),
-        "repository_clone" => response!(RepositoryLocation),
-        "list_provider_accounts" => response!(Vec<ProviderAccount>),
-        "provider_repositories" => response!(RepositoryPage),
-        "provider_organizations" => response!(Vec<String>),
-        "provider_pull_requests" => response!(crate::provider_pr::ProviderPullRequests),
-        "provider_create_pull_request" => response!(ProviderPullRequest),
-        "provider_connect_token" => response!(ProviderAccount),
-        "provider_oauth_start" => response!(DeviceAuthorization),
-        "provider_oauth_poll" => response!(PollResult),
-        "provider_oauth_cancel" => response!(()),
-        "ssh_test" => response!(SshProbe),
-        "ssh_directories" | "wsl_directories" => response!(Vec<DirectoryEntry>),
-        "wsl_distributions" => response!(Vec<WslDistribution>),
-        _ => json!({"notSupported":true}),
-    }
 }
 
 fn event_schema() -> Value {
@@ -331,73 +263,90 @@ fn event_schema() -> Value {
 /// the schema document. Optional host policies only add their own methods.
 pub fn schemas(accounts_enabled: bool, prompts_enabled: bool) -> Value {
     let mut schemas = Map::new();
-    insert::<Empty>(&mut schemas, "capabilities");
-    insert::<Open>(&mut schemas, "repository_open");
-    for method in [
-        "repository_close",
-        "repository_status",
-        "repository_operation_state",
-        "repository_state",
-        "repository_git_identity",
-        "repository_remotes",
-        "repository_stashes",
+    schemas.insert(
+        "capabilities".into(),
+        json!({ "request": schema::<Empty>(), "response": {"type":"object"} }),
+    );
+    insert::<Open, RepositoryState>(&mut schemas, "repository_open");
+    insert::<Handle, ()>(&mut schemas, "repository_close");
+    insert::<Handle, RepositoryStatus>(&mut schemas, "repository_status");
+    insert::<Handle, OperationState>(&mut schemas, "repository_operation_state");
+    insert::<Handle, RepositoryState>(&mut schemas, "repository_state");
+    insert::<Handle, RepositoryGitIdentity>(&mut schemas, "repository_git_identity");
+    insert::<Handle, Vec<RemoteInfo>>(&mut schemas, "repository_remotes");
+    insert::<Handle, Vec<StashEntry>>(&mut schemas, "repository_stashes");
+    insert::<Handle, crate::commit_graph::CommitGraphStatus>(
+        &mut schemas,
         "repository_commit_graph_status",
-        "repository_write_commit_graph",
-        "repository_cancel_search",
-        "repository_watch",
-    ] {
-        insert::<Handle>(&mut schemas, method);
-    }
-    insert::<Snapshot>(&mut schemas, "repository_snapshot");
-    insert::<History>(&mut schemas, "repository_history");
-    insert::<Commit>(&mut schemas, "repository_commit");
-    insert::<Commit>(&mut schemas, "repository_commit_edit_eligibility");
-    insert::<BranchRelation>(&mut schemas, "repository_branch_relation");
-    insert::<Search>(&mut schemas, "repository_search");
-    insert::<SyncInfoRequest>(&mut schemas, "repository_sync_info");
-    insert::<Handle>(&mut schemas, "repository_worktrees");
-    insert::<WorktreeReviewRequest>(&mut schemas, "repository_worktree_review");
-    insert::<WorktreeExecuteRequest>(&mut schemas, "repository_worktree_execute");
-    insert::<PathRequest>(&mut schemas, "repository_conflict_file");
-    insert::<ResolveConflict>(&mut schemas, "repository_resolve_conflict");
-    insert::<SetIdentity>(&mut schemas, "repository_set_git_identity");
-    insert::<StashActionRequest>(&mut schemas, "repository_stash_action");
-    insert::<RemoteActionRequest>(&mut schemas, "repository_remote_action");
-    insert::<Operation>(&mut schemas, "repository_run_operation");
-    insert::<BranchDelete>(&mut schemas, "repository_delete_branch");
-    insert::<BranchBatchDelete>(&mut schemas, "repository_delete_branches");
-    insert::<Discard>(&mut schemas, "repository_discard");
-    insert::<Hunk>(&mut schemas, "repository_stage_hunk");
-    insert::<Hunk>(&mut schemas, "repository_unstage_hunk");
-    insert::<Amend>(&mut schemas, "repository_amend_commit");
-    insert::<DiffFiles>(&mut schemas, "repository_diff_files");
-    insert::<Diff>(&mut schemas, "repository_diff");
-    insert::<Paths>(&mut schemas, "repository_stage");
-    insert::<Paths>(&mut schemas, "repository_unstage");
-    insert::<CreateCommit>(&mut schemas, "repository_create_commit");
-    insert::<Clone>(&mut schemas, "repository_clone");
-    insert::<CancelClone>(&mut schemas, "repository_cancel_clone");
-    insert::<PathRequest>(&mut schemas, "repository_ignore_path");
+    );
+    insert::<Handle, ()>(&mut schemas, "repository_write_commit_graph");
+    insert::<Handle, ()>(&mut schemas, "repository_cancel_search");
+    insert::<Handle, WatchStatus>(&mut schemas, "repository_watch");
+    insert::<Snapshot, RepositorySnapshot>(&mut schemas, "repository_snapshot");
+    insert::<History, HistoryPage>(&mut schemas, "repository_history");
+    insert::<Commit, crate::dto::CommitDetail>(&mut schemas, "repository_commit");
+    insert::<Commit, CommitEditEligibility>(&mut schemas, "repository_commit_edit_eligibility");
+    insert::<BranchRelation, (usize, usize)>(&mut schemas, "repository_branch_relation");
+    insert::<Search, SearchResult>(&mut schemas, "repository_search");
+    insert::<SyncInfoRequest, SyncInfo>(&mut schemas, "repository_sync_info");
+    insert::<Handle, Vec<Worktree>>(&mut schemas, "repository_worktrees");
+    insert::<WorktreeReviewRequest, WorktreeReview>(&mut schemas, "repository_worktree_review");
+    insert::<WorktreeExecuteRequest, ()>(&mut schemas, "repository_worktree_execute");
+    insert::<PathRequest, ConflictFile>(&mut schemas, "repository_conflict_file");
+    insert::<ResolveConflict, ()>(&mut schemas, "repository_resolve_conflict");
+    insert::<SetIdentity, RepositoryGitIdentity>(&mut schemas, "repository_set_git_identity");
+    insert::<StashActionRequest, ActionOutput>(&mut schemas, "repository_stash_action");
+    insert::<RemoteActionRequest, ActionOutput>(&mut schemas, "repository_remote_action");
+    insert::<Operation, crate::operation_dto::OperationResult>(
+        &mut schemas,
+        "repository_run_operation",
+    );
+    insert::<BranchDelete, crate::branch_delete::BranchDeleteResult>(
+        &mut schemas,
+        "repository_delete_branch",
+    );
+    insert::<BranchBatchDelete, crate::branch_delete::BranchBatchDeleteResult>(
+        &mut schemas,
+        "repository_delete_branches",
+    );
+    insert::<Discard, ()>(&mut schemas, "repository_discard");
+    insert::<Hunk, ()>(&mut schemas, "repository_stage_hunk");
+    insert::<Hunk, ()>(&mut schemas, "repository_unstage_hunk");
+    insert::<Amend, CreatedCommit>(&mut schemas, "repository_amend_commit");
+    insert::<DiffFiles, Vec<DiffFile>>(&mut schemas, "repository_diff_files");
+    insert::<Diff, FileDiff>(&mut schemas, "repository_diff");
+    insert::<Paths, ()>(&mut schemas, "repository_stage");
+    insert::<Paths, ()>(&mut schemas, "repository_unstage");
+    insert::<CreateCommit, CreatedCommit>(&mut schemas, "repository_create_commit");
+    insert::<Clone, RepositoryLocation>(&mut schemas, "repository_clone");
+    insert::<CancelClone, ()>(&mut schemas, "repository_cancel_clone");
+    insert::<PathRequest, ()>(&mut schemas, "repository_ignore_path");
     if prompts_enabled {
-        insert::<PromptReply>(&mut schemas, "repository_prompt_reply");
+        insert::<PromptReply, ()>(&mut schemas, "repository_prompt_reply");
     }
     if accounts_enabled {
-        insert::<Empty>(&mut schemas, "list_provider_accounts");
-        insert::<ProviderConnectToken>(&mut schemas, "provider_connect_token");
-        insert::<ProviderOAuthStart>(&mut schemas, "provider_oauth_start");
-        insert::<ProviderOAuthSession>(&mut schemas, "provider_oauth_poll");
-        insert::<ProviderOAuthSession>(&mut schemas, "provider_oauth_cancel");
-        insert::<ProviderDisconnect>(&mut schemas, "provider_disconnect");
-        insert::<ProviderRepositories>(&mut schemas, "provider_repositories");
-        insert::<ProviderOrganizations>(&mut schemas, "provider_organizations");
-        insert::<ProviderPullRequestsRequest>(&mut schemas, "provider_pull_requests");
-        insert::<CreateProviderPullRequest>(&mut schemas, "provider_create_pull_request");
+        insert::<Empty, Vec<ProviderAccount>>(&mut schemas, "list_provider_accounts");
+        insert::<ProviderConnectToken, ProviderAccount>(&mut schemas, "provider_connect_token");
+        insert::<ProviderOAuthStart, DeviceAuthorization>(&mut schemas, "provider_oauth_start");
+        insert::<ProviderOAuthSession, PollResult>(&mut schemas, "provider_oauth_poll");
+        insert::<ProviderOAuthSession, ()>(&mut schemas, "provider_oauth_cancel");
+        insert::<ProviderDisconnect, ()>(&mut schemas, "provider_disconnect");
+        insert::<ProviderRepositories, RepositoryPage>(&mut schemas, "provider_repositories");
+        insert::<ProviderOrganizations, Vec<String>>(&mut schemas, "provider_organizations");
+        insert::<ProviderPullRequestsRequest, crate::provider_pr::ProviderPullRequests>(
+            &mut schemas,
+            "provider_pull_requests",
+        );
+        insert::<CreateProviderPullRequest, ProviderPullRequest>(
+            &mut schemas,
+            "provider_create_pull_request",
+        );
     }
-    insert::<SshTarget>(&mut schemas, "ssh_test");
-    insert::<SshTarget>(&mut schemas, "ssh_directories");
+    insert::<SshTarget, SshProbe>(&mut schemas, "ssh_test");
+    insert::<SshTarget, Vec<DirectoryEntry>>(&mut schemas, "ssh_directories");
     if cfg!(windows) {
-        insert::<Empty>(&mut schemas, "wsl_distributions");
-        insert::<WslDirectories>(&mut schemas, "wsl_directories");
+        insert::<Empty, Vec<WslDistribution>>(&mut schemas, "wsl_distributions");
+        insert::<WslDirectories, Vec<DirectoryEntry>>(&mut schemas, "wsl_directories");
     }
     json!({
         "schemaVersion": "https://json-schema.org/draft/2020-12/schema",
@@ -417,73 +366,15 @@ pub fn schemas(accounts_enabled: bool, prompts_enabled: bool) -> Value {
     })
 }
 
-/// Validate dispatched parameters with the same serde DTOs used to publish their
-/// schemas. This rejects unknown nested fields instead of maintaining a looser
-/// hand-written dispatcher contract.
-pub fn validate_params(method: &str, params: Value) -> crate::dto::Result<Value> {
-    macro_rules! validate {
-        ($type:ty) => {
-            serde_json::from_value::<$type>(params.clone())
-                .map(|_| params)
-                .map_err(|_| crate::dto::Error::new("invalidRequest", "method params are invalid"))
-        };
-    }
-    match method {
-        "list_provider_accounts" | "wsl_distributions" => validate!(Empty),
-        "repository_close"
-        | "repository_status"
-        | "repository_operation_state"
-        | "repository_state"
-        | "repository_git_identity"
-        | "repository_remotes"
-        | "repository_stashes"
-        | "repository_commit_graph_status"
-        | "repository_write_commit_graph"
-        | "repository_cancel_search"
-        | "repository_watch" => validate!(Handle),
-        "repository_open" => validate!(Open),
-        "repository_snapshot" => validate!(Snapshot),
-        "repository_history" => validate!(History),
-        "repository_commit" | "repository_commit_edit_eligibility" => validate!(Commit),
-        "repository_branch_relation" => validate!(BranchRelation),
-        "repository_search" => validate!(Search),
-        "repository_sync_info" => validate!(SyncInfoRequest),
-        "repository_worktrees" => validate!(Handle),
-        "repository_worktree_review" => validate!(WorktreeReviewRequest),
-        "repository_worktree_execute" => validate!(WorktreeExecuteRequest),
-        "repository_conflict_file" | "repository_ignore_path" => validate!(PathRequest),
-        "repository_resolve_conflict" => validate!(ResolveConflict),
-        "repository_set_git_identity" => validate!(SetIdentity),
-        "repository_stash_action" => validate!(StashActionRequest),
-        "repository_remote_action" => validate!(RemoteActionRequest),
-        "repository_run_operation" => validate!(Operation),
-        "repository_delete_branch" => validate!(BranchDelete),
-        "repository_delete_branches" => validate!(BranchBatchDelete),
-        "repository_discard" => validate!(Discard),
-        "repository_stage_hunk" | "repository_unstage_hunk" => validate!(Hunk),
-        "repository_amend_commit" => validate!(Amend),
-        "repository_diff_files" => validate!(DiffFiles),
-        "repository_diff" => validate!(Diff),
-        "repository_stage" | "repository_unstage" => validate!(Paths),
-        "repository_create_commit" => validate!(CreateCommit),
-        "repository_clone" => validate!(Clone),
-        "repository_cancel_clone" => validate!(CancelClone),
-        "repository_prompt_reply" => validate!(PromptReply),
-        "provider_connect_token" => validate!(ProviderConnectToken),
-        "provider_oauth_start" => validate!(ProviderOAuthStart),
-        "provider_oauth_poll" | "provider_oauth_cancel" => validate!(ProviderOAuthSession),
-        "provider_disconnect" => validate!(ProviderDisconnect),
-        "provider_repositories" => validate!(ProviderRepositories),
-        "provider_organizations" => validate!(ProviderOrganizations),
-        "provider_pull_requests" => validate!(ProviderPullRequestsRequest),
-        "provider_create_pull_request" => validate!(CreateProviderPullRequest),
-        "ssh_test" | "ssh_directories" => validate!(SshTarget),
-        "wsl_directories" => validate!(WslDirectories),
-        _ => Err(crate::dto::Error::new(
-            "unsupportedOperation",
-            "Unsupported CLI method",
-        )),
-    }
+/// Dispatched parameters deserialize into the same serde DTOs used to publish
+/// their schemas, so unknown nested fields are rejected. Named fields only: a
+/// positional array would otherwise deserialize into the struct.
+pub(crate) fn parse_params<T: serde::de::DeserializeOwned>(params: Value) -> crate::dto::Result<T> {
+    params
+        .is_object()
+        .then(|| serde_json::from_value(params).ok())
+        .flatten()
+        .ok_or_else(|| crate::dto::Error::new("invalidRequest", "method params are invalid"))
 }
 
 pub fn supported_methods(accounts_enabled: bool, prompts_enabled: bool) -> Vec<String> {
@@ -663,6 +554,8 @@ mod tests {
 
     #[test]
     fn dispatch_validation_uses_published_typed_parameter_dtos() {
+        let data = tempfile::tempdir().unwrap();
+        let service = crate::AgentService::new(data.path().to_owned());
         for (method, params) in [
             (
                 "provider_connect_token",
@@ -678,15 +571,28 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                validate_params(method, params).unwrap_err().code,
+                service.dispatch(method, params).unwrap_err().code,
                 "invalidRequest",
                 "{method}"
             );
         }
-        assert!(validate_params(
-            "provider_connect_token",
-            json!({"provider":"github","username":"user","token":"secret"})
-        )
-        .is_ok());
+        // Valid params pass parsing and reach the account policy check.
+        assert_eq!(
+            service
+                .dispatch(
+                    "provider_connect_token",
+                    json!({"provider":"github","username":"user","token":"secret"})
+                )
+                .unwrap_err()
+                .code,
+            "accountPolicy"
+        );
+        assert_eq!(
+            service
+                .dispatch("repository_status", json!(["handle"]))
+                .unwrap_err()
+                .code,
+            "invalidRequest"
+        );
     }
 }

@@ -9,7 +9,6 @@ import { isolatedEnvironment } from './environment.mjs';
 const execFile = promisify(execFileCb);
 const project = process.cwd();
 const port = 4173;
-const stateFile = path.join(project, 'test-results', 'e2e-fixture.json');
 const root = await mkdtemp(path.join(tmpdir(), 'gitty-e2e-'));
 const repository = path.join(root, 'repo');
 const home = path.join(root, 'home');
@@ -35,7 +34,6 @@ async function cleanup(exitCode = 0) {
   if (stopped) return;
   stopped = true;
   await stopTree();
-  if (stateFile) await rm(stateFile, { force: true }).catch(() => {});
   await rm(root, { recursive: true, force: true });
   process.exit(exitCode);
 }
@@ -52,13 +50,16 @@ try {
   await mkdir(repository, { recursive: true });
   await mkdir(home, { recursive: true });
   await mkdir(hooks, { recursive: true });
-  const env = isolatedEnvironment(process.env, {
+  const gitConfigEnv = {
     HOME: home,
     USERPROFILE: home,
     XDG_CONFIG_HOME: home,
     GIT_CONFIG_GLOBAL: globalConfig,
     GIT_CONFIG_SYSTEM: path.join(home, 'system-gitconfig'),
     GIT_CONFIG_NOSYSTEM: '1',
+  };
+  const env = isolatedEnvironment(process.env, {
+    ...gitConfigEnv,
     GITTY_E2E: '1',
     GITTY_TEST_ROOT: repository,
     GITTY_TEST_PORT: String(port),
@@ -66,14 +67,8 @@ try {
     GITTY_CLI_BIN: path.join(project, 'target', 'debug', process.platform === 'win32' ? 'gitty-cli.exe' : 'gitty-cli'),
     VITE_GITTY_TEST_MODE: '1',
   });
-  const gitEnv = isolatedEnvironment(env, {
-    HOME: home,
-    USERPROFILE: home,
-    XDG_CONFIG_HOME: home,
-    GIT_CONFIG_GLOBAL: globalConfig,
-    GIT_CONFIG_SYSTEM: path.join(home, 'system-gitconfig'),
-    GIT_CONFIG_NOSYSTEM: '1',
-  });
+  // Same Git isolation as `env`, without the GITTY_* test token.
+  const gitEnv = isolatedEnvironment(process.env, gitConfigEnv);
   await execFile('git', ['init', '--initial-branch=main', repository], { env: gitEnv });
   await execFile('git', ['-C', repository, 'config', 'user.name', 'Gitty E2E'], { env: gitEnv });
   await execFile('git', ['-C', repository, 'config', 'user.email', 'gitty-e2e@example.invalid'], { env: gitEnv });
@@ -83,19 +78,8 @@ try {
   await writeFile(path.join(repository, 'tracked.txt'), 'base content\nstable line\n');
   await execFile('git', ['-C', repository, 'add', '--', 'tracked.txt'], { env: gitEnv });
   await execFile('git', ['-C', repository, 'commit', '-m', 'fixture base'], { env: gitEnv });
-  const { stdout: initialHead } = await execFile('git', ['-C', repository, 'rev-parse', 'HEAD'], { env: gitEnv });
   await writeFile(path.join(repository, 'tracked.txt'), 'changed by the rendered app\nstable line\nextra working line\n');
   await writeFile(path.join(repository, 'keep-untracked.txt'), 'must remain uncommitted\n');
-  const { stdout: version } = await execFile('git', ['--version'], { env: gitEnv });
-  if (stateFile) {
-    await mkdir(path.dirname(stateFile), { recursive: true });
-    await writeFile(stateFile, JSON.stringify({
-      fixtureId: 'disposable-local-git',
-      root: repository,
-      initialHead: initialHead.trim(),
-      gitVersion: version.trim(),
-    }));
-  }
   vite = spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '127.0.0.1', '--port', String(port), '--strictPort'], {
     cwd: project,
     env,
@@ -117,7 +101,7 @@ try {
     try {
       const response = await fetch(origin);
       if (response.ok) {
-        console.log(`Gitty E2E ready: ${JSON.stringify({ url: origin, fixtureId: 'disposable-local-git', gitVersion: version.trim(), artifacts: path.join(project, 'test-results') })}`);
+        console.log(`Gitty E2E ready: ${JSON.stringify({ url: origin, artifacts: path.join(project, 'test-results') })}`);
         break;
       }
     } catch { /* wait for Vite readiness */ }

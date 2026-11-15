@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { CommitDetail, CommitEditEligibility, DiffFile, FileDiff, RepositorySession } from '../model/repository';
 import { errorMessage, inspectorSpec, native } from '../model/native';
 import { AlertTriangle, ArrowUpRight, Check, ChevronDown, Copy, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, GitMerge, Info, Pencil, X } from 'lucide-react';
@@ -11,20 +11,16 @@ import { commitDescription, commitMessage, draftFromCommitMessage, type Mutation
 /** Pause before fetching a newly selected commit, so rapid keyboard navigation only loads where it lands. */
 export const SELECTION_DEBOUNCE_MS = 120;
 
-function statusClass(status: string): string {
-  const s = status.toUpperCase();
-  if (s.startsWith('A')) return 'added';
-  if (s.startsWith('D')) return 'deleted';
-  return 'modified';
+const FILE_KINDS = { A: [FilePlus2, 'added'], D: [FileMinus2, 'deleted'], R: [FileSymlink, 'renamed'], C: [FilePlus2, 'modified'], U: [AlertTriangle, 'conflict'] } as const;
+
+/** Icon and icon status per status letter; only added and deleted get their own letter color, everything else reads as modified. */
+function fileKind(status: string) {
+  const [Icon, name] = FILE_KINDS[(status[0]?.toUpperCase() ?? '') as keyof typeof FILE_KINDS] ?? [FilePenLine, 'modified'];
+  return { Icon, name, letterClass: name === 'added' || name === 'deleted' ? name : 'modified' };
 }
 
 function statusLabel(status: string): string {
   return status[0]?.toUpperCase() ?? 'M';
-}
-
-function fileIcon(status: string) {
-  const s = status.toUpperCase();
-  return s.startsWith('A') ? FilePlus2 : s.startsWith('D') ? FileMinus2 : s.startsWith('R') ? FileSymlink : s.startsWith('C') ? FilePlus2 : s.startsWith('U') ? AlertTriangle : FilePenLine;
 }
 
 export function NativeInspector({
@@ -108,9 +104,6 @@ export function NativeInspector({
 
   useEffect(() => {
     setParent('');
-    setError('');
-    setDiffError('');
-    setDiffBusy(false);
     setCopied(false);
     // Changing the selection ends the editor. A write already in flight still completes and is
     // reported by its own token check; it is never retargeted at the new selection.
@@ -338,6 +331,16 @@ export function NativeInspector({
     }
   }
 
+  const editKeys = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelEditing();
+    } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      void handleSaveMessage();
+    }
+  };
+
   return (
     <aside className="inspector native-inspector" aria-label={comparing ? 'Commit comparison' : 'Commit inspector'} aria-busy={loading || filesLoading || stale}>
       <div className="inspector-content" data-stale={stale || undefined}>
@@ -403,15 +406,7 @@ export function NativeInspector({
                         value={subjectDraft}
                         disabled={savingMessage}
                         onChange={e => setSubjectDraft(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Escape') {
-                            e.preventDefault();
-                            cancelEditing();
-                          } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                            e.preventDefault();
-                            void handleSaveMessage();
-                          }
-                        }}
+                        onKeyDown={editKeys}
                       />
                     </label>
                     <label>
@@ -422,15 +417,7 @@ export function NativeInspector({
                         disabled={savingMessage}
                         placeholder="Optional extended description…"
                         onChange={e => setBodyDraft(e.target.value)}
-                        onKeyDown={e => {
-                          if (e.key === 'Escape') {
-                            e.preventDefault();
-                            cancelEditing();
-                          } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                            e.preventDefault();
-                            void handleSaveMessage();
-                          }
-                        }}
+                        onKeyDown={editKeys}
                       />
                     </label>
                     <div className="commit-message-editor-actions">
@@ -616,8 +603,7 @@ export function NativeInspector({
             const isSelected = activePath ? f.path === activePath : f.path === path;
             const filename = f.path.split('/').at(-1);
             const dirname = f.path.split('/').slice(0, -1).join('/');
-            const Icon = fileIcon(f.status);
-            const iconStatus = f.status.toUpperCase().startsWith('A') ? 'added' : f.status.toUpperCase().startsWith('D') ? 'deleted' : f.status.toUpperCase().startsWith('R') ? 'renamed' : f.status.toUpperCase().startsWith('U') ? 'conflict' : 'modified';
+            const { Icon, name: iconStatus, letterClass } = fileKind(f.status);
             return (
               <button
                 key={f.path}
@@ -631,7 +617,7 @@ export function NativeInspector({
                   <strong>{filename}</strong>
                   <span>{dirname ? `${dirname}/` : ''}</span>
                 </span>
-                <span className={`file-status ${statusClass(f.status)}`}>{statusLabel(f.status)}</span>
+                <span className={`file-status ${letterClass}`}>{statusLabel(f.status)}</span>
               </button>
             );
           })}

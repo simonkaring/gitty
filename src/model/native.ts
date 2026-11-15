@@ -12,25 +12,8 @@ import { isCancelledSearch } from './searchFlow';
 let demoMode = false;
 const realBackendTest = import.meta.env.DEV && import.meta.env.VITE_GITTY_TEST_MODE === '1';
 const desktopHost = () => isTauri();
-export type HostMode = 'desktop' | 'demo' | 'test';
-export interface HostCapabilities {
-  repository: boolean;
-  events: boolean;
-  clone: boolean;
-  nativeWindow: boolean;
-}
-export function hostMode(): HostMode {
-  return realBackendTest ? 'test' : demoMode ? 'demo' : 'desktop';
-}
-export function hostCapabilities(): HostCapabilities {
-  const mode = hostMode();
-  return {
-    repository: mode !== 'demo',
-    events: mode === 'desktop' || mode === 'test',
-    clone: mode === 'desktop' || mode === 'test',
-    nativeWindow: mode === 'desktop' || (mode === 'demo' && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window),
-  };
-}
+/** Events and cloning exist on the desktop and the real-backend test host, not in the browser demo. */
+export const hostLive = () => realBackendTest || !demoMode;
 let testSession: Promise<{ token: string; fixtureId: string; location: import('./repository').RepositoryLocation; cloneParent: string }> | undefined;
 let testToken: string | undefined;
 let testFixtureId: string | undefined;
@@ -174,7 +157,7 @@ export function subscribeNative<T>(event: string, handler: (payload: T) => void)
       throw error;
     });
   }
-  if (!hostCapabilities().events) return Promise.resolve(() => {});
+  if (!hostLive()) return Promise.resolve(() => {});
   return listen<T>(event, event => handler(event.payload));
 }
 export async function openCloneProgress(operationId: string, handler: (value: CloneProgress) => void) {
@@ -184,7 +167,7 @@ export async function openCloneProgress(operationId: string, handler: (value: Cl
     });
     return { channel: undefined, stop };
   }
-  if (hostCapabilities().clone) {
+  if (hostLive()) {
     const channel = new Channel<CloneProgress>();
     channel.onmessage = handler;
     return { channel, stop() {} };

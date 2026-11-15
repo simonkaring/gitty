@@ -5,7 +5,7 @@ import { chmod, mkdir, readFile, stat, symlink, unlink, writeFile } from 'node:f
 import { resolve } from 'node:path';
 
 const execFile = promisify(execFileCb);
-type Fixture = { fixtureId: string; root: string; initialHead: string; gitVersion: string; token: string };
+type Fixture = { fixtureId: string; root: string; initialHead: string; token: string };
 type TestSession = { fixtureId: string; initialHead: string; location: { path: string }; cloneParent: string; token: string };
 const fixturesByPage = new WeakMap<object, Fixture>();
 const diagnosticsByPage = new WeakMap<object, string[]>();
@@ -45,7 +45,7 @@ async function fixture(page: import('@playwright/test').Page): Promise<Fixture> 
     `Fixture bootstrap omitted session credentials: ${safeJson(body)}`).toBeTruthy();
   const session = body as TestSession;
   sessions.set(session.fixtureId, session);
-  const result = { fixtureId: session.fixtureId, root: session.location.path, initialHead: session.initialHead, gitVersion: 'git', token: session.token };
+  const result = { fixtureId: session.fixtureId, root: session.location.path, initialHead: session.initialHead, token: session.token };
   fixturesByPage.set(page, result);
   return result;
 }
@@ -143,7 +143,7 @@ test('renders a real repository, stages and commits through the UI, and preserve
 test('the test bridge rejects missing auth, hostile origins, unsupported methods, and paths outside its fixture', async ({ request }) => {
   const origin = 'http://127.0.0.1:4173';
   const session = await bootstrap(request, origin);
-  const fixtureData = { fixtureId: session.fixtureId, root: session.location.path, initialHead: session.initialHead, gitVersion: 'git' };
+  const fixtureData = { fixtureId: session.fixtureId, root: session.location.path, initialHead: session.initialHead };
   const call = (command: string, args: Record<string, unknown>, headers: Record<string, string> = {}) =>
     request.post(`${origin}/__gitty_test/invoke`, {
     headers: { Origin: origin, Authorization: `Bearer ${session.token}`, ...headers },
