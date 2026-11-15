@@ -5,8 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { IntegrationsSettings } from './IntegrationsSettings';
 
 const mocks = vi.hoisted(() => ({ native: vi.fn<(...args: unknown[]) => Promise<unknown>>(), desktop: true }));
-vi.mock('../model/native', () => ({ native: mocks.native, errorMessage: String }));
-vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => mocks.desktop }));
+vi.mock('../model/native', () => ({ native: mocks.native, errorMessage: String, isDesktopHost: () => mocks.desktop }));
 
 let container: HTMLDivElement;
 let root: Root;

@@ -5,9 +5,9 @@ description: How repository snapshots, pinned history, and session-aware refresh
 status: draft
 sources:
   - id: snapshot
-    resource: ../../src-tauri/src/operations.rs
+    resource: ../../crates/gitty-core/src/operations.rs
   - id: history
-    resource: ../../src-tauri/src/repository.rs
+    resource: ../../crates/gitty-core/src/repository.rs
   - id: loader
     resource: ../../src/model/native.ts
   - id: pane
@@ -21,7 +21,7 @@ sources:
   - id: working
     resource: ../../src/components/WorkingChanges.tsx
   - id: watcher
-    resource: ../../src-tauri/src/watcher.rs
+    resource: ../../crates/gitty-core/src/watcher.rs
   - id: policy
     resource: ../../src/model/autoFetch.ts
 ---
@@ -34,7 +34,11 @@ three times before `unstable`. This is a best-effort read across external
 changes, not a transactional filesystem snapshot. Its first read may consume the
 server-owned opening state, still verified at the end.[^snapshot][^contract]
 Expired history cursors and history errors accompanied by changed state restart
-from a fresh `state()` within that same three-attempt budget. The client also
+from a fresh `state()` within that same three-attempt budget.
+The state read itself derives HEAD and the checked-out ref from the same
+`for-each-ref` listing (`%(HEAD)`), and only falls back to separate
+`symbolic-ref`/`rev-parse` probes for a detached or unborn HEAD; refs that do
+not peel to a commit are skipped instead of resolved one by one.[^snapshot] The client also
 retries snapshot HEAD/status mismatches before publishing fresh or reused history.[^snapshot][^loader]
 Operation preflight builds its reviewed fingerprint from the same request-local
 state used for HEAD/ref validation. Index and all-ref fingerprint reads run
@@ -95,10 +99,16 @@ an event arriving during a read or write retries after it, a hidden tab or
 window keeps it pending, and bursts collapse into one read. An activation refresh
 clears events it covers before starting, retaining any event received during that
 read; activation while busy keeps a refresh pending. The backend coalesces
-(300 ms quiet, 2 s maximum) and drops only object-store, Git-directory lock,
-access-only and Git-ignored working-path events. Gitty's own optional-lock-free
-reads do not write the index, so they do not trigger events; a real-repository
-test guards that.[^watcher][^policy]
+(300 ms quiet, 2 s maximum) and drops object-store, Git-directory lock,
+access-only and Git-ignored working-path events. On Windows, `Modify(Any)` for
+`.git` itself and existing `hooks`, `info`, or `logs` directories is also
+suppressed: `ReadDirectoryChangesW` does not identify the changed metadata
+field, while child entry changes are reported at their own paths. Other Git
+metadata directories and file-level Git state remain conservative. A regression
+covers those known noisy directories versus refs, index/config, unknown
+metadata, and working files. Gitty's own optional-lock-free
+reads do not write the index, so they do not trigger refresh loops; snapshot and
+the ignored/object-write behavior have real-repository tests on Windows.[^watcher][^policy]
 
 `RepositoryPane` coordinates reads with write completion. File/index-only
 mutations refresh status, falling back to full refresh if HEAD/ref moved;
@@ -121,8 +131,8 @@ For changes, inspect `readNativeSnapshot`, `refreshStatus`, and `mutate`, plus
 the scripted-IPC regressions in
 [native.integration.test.ts](../../src/model/native.integration.test.ts).
 Despite that filename, those tests mock IPC. Backend snapshot tests live in
-[operation_tests.rs](../../src-tauri/src/operation_tests.rs); real history and
-fingerprint tests live in [tests.rs](../../src-tauri/src/tests.rs).
+[operation_tests.rs](../../crates/gitty-core/src/operation_tests.rs); real history and
+fingerprint tests live in [tests.rs](../../crates/gitty-core/src/tests.rs).
 
 Related: [mutation safeguards](git-mutation-safeguards.md),
 [verification scope](demo-and-native-verification.md), and the detailed

@@ -9,13 +9,13 @@ sources:
   - id: window
     resource: ../../src/components/WorkingFileWindow.tsx
   - id: diff
-    resource: ../../src-tauri/src/diff.rs
+    resource: ../../crates/gitty-core/src/diff.rs
   - id: status
-    resource: ../../src-tauri/src/repository.rs
+    resource: ../../crates/gitty-core/src/repository.rs
   - id: ui-tests
     resource: ../../src/components/WorkingChanges.test.ts
   - id: native-tests
-    resource: ../../src-tauri/src/tests.rs
+    resource: ../../crates/gitty-core/src/tests.rs
   - id: smoke
     resource: ../../src/components/working-files.smoke.mjs
   - id: contract
@@ -69,6 +69,9 @@ patch is generated. Untracked/conflict validation scopes porcelain to the
 requested literal path. Complete status refreshes and write checks remain
 repository-wide. Index-before/index-after checks and byte-based hunk tokens are
 unchanged; previews are not cached across revisions.[^diff][^status][^contract]
+For unstaged/conflict previews, a tracked worktree change with no raw diff entry
+returns an explanatory `noPatch` error (commonly line-ending normalization).
+Staged and untracked membership errors retain their normal behavior.
 
 Full status retains content-aware fingerprints, not stat-only shortcuts. SSH
 tracked binary patches are digested where the files live; only a bounded Git blob

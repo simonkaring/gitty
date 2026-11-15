@@ -3,7 +3,8 @@ import postcss from 'postcss';
 import { describe, expect, it } from 'vitest';
 
 /** Guards visual cohesion: spacing on one scale, type and radii only via tokens. */
-const root = postcss.parse(readFileSync(new URL('./styles.css', import.meta.url), 'utf8'));
+const SHEETS = ['tokens', 'shell', 'history', 'inspector', 'working', 'feedback', 'motion', 'overrides'];
+const root = postcss.parse(SHEETS.map(name => readFileSync(new URL(`./styles/${name}.css`, import.meta.url), 'utf8')).join('\n'));
 const SPACE = new Set([0, 1, 2, 4, 6, 8, 12, 16, 20, 24, 32]);
 const offenders = (test: (prop: string, value: string) => boolean) => {
   const found: string[] = [];

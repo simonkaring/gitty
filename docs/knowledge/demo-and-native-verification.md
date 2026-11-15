@@ -10,14 +10,18 @@ sources:
     resource: ../../src/model/demoBackend.ts
   - id: scripts
     resource: ../../package.json
+  - id: bridge
+    resource: ../../scripts/e2e/viteBridge.mjs
+  - id: e2e
+    resource: ../../tests/e2e/real-git.spec.ts
   - id: readme
     resource: ../../README.md
   - id: rust-tests
-    resource: ../../src-tauri/src/tests.rs
+    resource: ../../crates/gitty-core/src/tests.rs
   - id: wsl-tests
-    resource: ../../src-tauri/src/wsl_tests.rs
+    resource: ../../crates/gitty-core/src/wsl_tests.rs
   - id: ssh-tests
-    resource: ../../src-tauri/src/ssh_tests.rs
+    resource: ../../crates/gitty-core/src/ssh_tests.rs
 ---
 
 # Demo and native verification
@@ -28,14 +32,24 @@ by handle even after a mode switch. Demo staging, discard, and new commits
 operate on fixtures. Synthetic history/diffs and simulated remote responses
 cannot establish native Git correctness.[^dispatch][^demo]
 
+`npm run test:e2e` is a separate explicit host mode: the Vite development server
+connects the rendered workspace to a harness-created local Git fixture through
+an authenticated loopback bridge and the Rust CLI. Per-test repository sandboxes
+and raw Git/file assertions verify the rendered workflows independently; see
+[browser testing](browser-agent-testing.md) for the scenario and boundary details.
+It does not exercise Tauri IPC,
+native dialogs, packaged webviews, or other platforms.[^bridge][^e2e]
+
 ## Choose evidence for the boundary changed
 
 | Boundary | Checks / entry points | What the evidence covers |
 | --- | --- | --- |
 | Frontend models and UI | `npm test`; `npm run build` | Vitest behavior and TypeScript/Vite compilation; inspect each test's mocks. |
-| Native Git or IPC | Build frontend first, then `npm run check:rust`, `npm run test:rust`; Rust edits also need `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | Host compilation and Rust tests, including real temporary repositories; platform gates still apply. |
+| Native Git or IPC | Build frontend first for desktop checks, then `npm run check:rust`, `npm run test:rust`; Rust edits also need `cargo fmt --all -- --check` | Workspace compilation and Rust tests, including real temporary repositories; platform gates still apply. |
+| Standalone engine/CLI | `npm run check:headless`; `npm run test:headless` | Core/CLI compilation and tests without frontend assets, Tauri or a webview. |
 | Browser smoke | `src/components/*.smoke.mjs`, using the README's separate Playwright/Chromium setup | Mocked Tauri interactions; historical scripts may need current-UI updates. |
-| Windows/WSL | On Windows, set `GITTY_WSL_TEST_DISTRO` and run `cargo test --manifest-path src-tauri/Cargo.toml wsl_tests` | Real distribution tests only when enabled; without the variable they return immediately. |
+| Real-Git browser E2E | `npx playwright install chromium`, then `npm run test:e2e` | Rendered React app, restricted local bridge, Rust CLI and per-test disposable Git fixtures; not packaged Tauri coverage. |
+| Windows/WSL | On Windows, set `GITTY_WSL_TEST_DISTRO` and run `cargo test -p gitty-core wsl_tests` | Real distribution tests only when enabled; without the variable they return immediately. |
 | SSH transport | `npm run test:rust` on Unix runs `ssh_tests`, which substitute a shell double for the `ssh` client | Quoting, remote environment and stdin framing through a real shell; no authentication, host keys, network, Windows client or real remote host. Use the connect form's **Test connection** (`ssh_test`) for a real host and record its scope. |
 | Packaged desktop | Build and exercise on the target platform using README procedures | Native GUI, authentication, process cleanup, and installation require their own observations. |
 
@@ -68,6 +82,8 @@ Related: [platform boundaries](native-and-wsl-boundaries.md) and
 [^dispatch]: Native/demo dispatch by handle and mode.
 [^demo]: Simulated commands and unsupported operations.
 [^scripts]: Current npm command definitions.
+[^bridge]: Dev-only bridge authentication, origin checks, fixture allowlist and lifecycle.
+[^e2e]: Rendered-app and independent raw-Git assertions.
 [^readme]: Setup, checks, smoke prerequisites, and runtime gaps.
 [^rust-tests]: Real Git repository fixtures and platform-specific tests.
 [^wsl-tests]: Conditional real-WSL test setup.

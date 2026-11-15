@@ -34,7 +34,10 @@ for tabs closing or deduplicating during a gesture. Keyed panes retain their
 state while their order changes.[^model][^workspace][^model-tests]
 
 The existing workspace persistence effect saves repository locations in their
-new order and restores them with the active ID. Start tabs are omitted and demo
+new order and restores them with the active ID. Restoration drops a record whose id
+was already restored (every tab action addresses tabs by id, so a duplicate would
+close or update both) and keeps at most 32 records, matching the backend's
+open-session cap, so a corrupted or oversized stored list cannot fill the strip. Start tabs are omitted and demo
 order is session-only. UI tests use jsdom pointer-capture stubs; they do not
 establish native webview drag behavior.[^workspace][^model][^ui-tests]
 

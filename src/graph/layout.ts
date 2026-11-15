@@ -10,10 +10,14 @@ export interface LayoutState {
   edges: GraphEdge[];
   positions: Map<string, GraphNode>;
   laneCount: number;
+  /** Edge indices waiting for their parent row, keyed by parent commit id. */
+  pending: Map<string, number[]>;
+  /** Indices of previously delivered edges re-pointed by the latest append. */
+  lastResolved: number[];
 }
 
 export function createLayoutState(): LayoutState {
-  return { slots: [], nodes: [], edges: [], positions: new Map(), laneCount: 1 };
+  return { slots: [], nodes: [], edges: [], positions: new Map(), laneCount: 1, pending: new Map(), lastResolved: [] };
 }
 
 /**
@@ -27,7 +31,13 @@ export function layoutHistory(commits: readonly GraphCommit[]): GraphLayout {
 }
 
 export function appendHistory(state: LayoutState, commits: readonly GraphCommit[]): GraphLayout {
-  const { slots, nodes, edges, positions } = state;
+  const { slots, positions } = state;
+  // Copy the containers, not the records: previous snapshots keep their arrays
+  // and edge objects, while only edges whose endpoint moved are reallocated.
+  const nodes = [...state.nodes];
+  const edges = state.edges.slice();
+  const resolved: number[] = [];
+  state.lastResolved = resolved;
   function reserve(id: string): number {
     const existing = slots.indexOf(id);
     if (existing >= 0) return existing;
@@ -35,6 +45,12 @@ export function appendHistory(state: LayoutState, commits: readonly GraphCommit[
     const lane = empty >= 0 ? empty : slots.length;
     slots[lane] = id;
     return lane;
+  }
+  function resolve(index: number, row: number, lane: number) {
+    const edge = edges[index];
+    if (edge.toRow === row && edge.toLane === lane) return;
+    edges[index] = { ...edge, toRow: row, toLane: lane };
+    resolved.push(index);
   }
   commits.forEach(commit => {
     const row = nodes.length;
@@ -44,6 +60,10 @@ export function appendHistory(state: LayoutState, commits: readonly GraphCommit[
     nodes.push(node);
     positions.set(commit.id, node);
     slots[lane] = null;
+    // Edges from earlier pages that were waiting for this parent. Scans only
+    // the parents that just arrived, never the whole edge list.
+    for (const index of state.pending.get(commit.id) ?? []) resolve(index, row, lane);
+    state.pending.delete(commit.id);
     [...new Set(commit.parents)].forEach((parent, index) => {
       if (positions.has(parent)) throw new Error(`History is not child-before-parent: ${parent}`);
       let track = slots.indexOf(parent);
@@ -52,16 +72,20 @@ export function appendHistory(state: LayoutState, commits: readonly GraphCommit[
         else track = reserve(parent);
       }
       edges.push({ from: commit.id, to: parent, fromRow: row, fromLane: lane, track, toRow: row + 1, toLane: track });
+      const waiting = state.pending.get(parent);
+      if (waiting) waiting.push(edges.length - 1); else state.pending.set(parent, [edges.length - 1]);
     });
     state.laneCount = Math.max(state.laneCount, slots.length, lane + 1);
     while (slots.length && slots[slots.length - 1] === null) slots.pop();
   });
-  // Do not mutate previous snapshots: callers may still be painting the prior page.
-  const resolved = edges.map(edge => {
-    const target = positions.get(edge.to);
-    return { ...edge, toRow: target?.row ?? nodes.length, toLane: target?.lane ?? edge.track };
-  });
-  return { nodes: [...nodes], edges: resolved, laneCount: state.laneCount };
+  // A parent that never appears ends at the loaded boundary, which moves with
+  // each page; only those few edges are re-pointed.
+  for (const waiting of state.pending.values()) {
+    for (const index of waiting) resolve(index, nodes.length, edges[index].toLane);
+  }
+  state.nodes = nodes;
+  state.edges = edges;
+  return { nodes: [...nodes], edges, laneCount: state.laneCount };
 }
 
 export const ROW_HEIGHT = 36;

@@ -75,6 +75,17 @@ describe('tab persistence', () => {
     const raw = JSON.stringify({ tabs: [{ id: 't1', location: { kind: 'native', path: '/a' } }, { id: 't2', location: { kind: 'native', path: '/b' } }], activeId: 'missing' });
     expect(loadPersistedTabs(memoryStorage({ [TABS_STORAGE_KEY]: raw })).activeId).toBe('t2');
   });
+  it('drops duplicate tab ids and caps how many tabs are restored', () => {
+    const tabs = [
+      { id: 'dup', location: { kind: 'native', path: '/a' } },
+      { id: 'dup', location: { kind: 'native', path: '/b' } },
+      ...Array.from({ length: 40 }, (_, i) => ({ id: `t${i}`, location: { kind: 'native', path: `/r${i}` } })),
+    ];
+    const result = loadPersistedTabs(memoryStorage({ [TABS_STORAGE_KEY]: JSON.stringify({ tabs, activeId: 'dup' }) }));
+    expect(result.tabs.filter(tab => tab.id === 'dup')).toEqual([{ id: 'dup', location: { kind: 'native', path: '/a' } }]);
+    expect(result.tabs).toHaveLength(32);
+    expect(result.activeId).toBe('dup');
+  });
   it('survives a storage that throws on write', () => {
     const storage: TabStorage = { getItem: () => null, setItem: () => { throw new Error('quota exceeded'); } };
     expect(savePersistedTabs(storage, { tabs: [], activeId: null })).toBe(false);

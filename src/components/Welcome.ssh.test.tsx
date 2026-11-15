@@ -15,6 +15,7 @@ const onOpen = vi.fn();
 beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.native.mockReset(); onOpen.mockReset();
+  delete document.documentElement.dataset.platform;
   mocks.native.mockImplementation(async (command: string) => {
     if (command === 'repository_recent') return [{ kind: 'ssh', host: 'home', user: 'me', path: '/home/me/code/thing' }];
     if (command === 'wsl_distributions') return [];
@@ -94,6 +95,37 @@ it('explains an untrusted host key instead of retrying with a weaker policy', as
   await click('Test connection');
   expect(container.querySelector('[role="alert"]')?.textContent).toContain('Connect once from a terminal');
   expect(onOpen).not.toHaveBeenCalled();
+});
+
+it('shows and retries WSL discovery errors on Windows only', async () => {
+  document.documentElement.dataset.platform = 'windows';
+  mocks.native.mockImplementation(async (command: string) => {
+    if (command === 'repository_recent') return [];
+    if (command === 'wsl_distributions') throw new Error('WSL is unavailable');
+    throw new Error(`Unexpected command ${command}`);
+  });
+  await mount();
+  expect(button('Browse WSL')).toBeDefined();
+  await click('Browse WSL');
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain('WSL is unavailable');
+  for (const label of ['Browse', 'Clone into this folder', 'Open this folder']) {
+    expect(button(label)?.disabled).toBe(true);
+  }
+  mocks.native.mockImplementation(async (command: string) => {
+    if (command === 'repository_recent') return [];
+    if (command === 'wsl_distributions') return [{ name: 'Ubuntu' }];
+    throw new Error(`Unexpected command ${command}`);
+  });
+  await click('Retry');
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect(container.querySelector('select')?.value).toBe('Ubuntu');
+});
+
+it('does not request WSL discovery on non-Windows platforms', async () => {
+  document.documentElement.dataset.platform = 'linux';
+  await mount();
+  expect(mocks.native).not.toHaveBeenCalledWith('wsl_distributions');
+  expect(button('Browse WSL')).toBeUndefined();
 });
 
 it('browses remote folders instead of requiring an exact path', async () => {

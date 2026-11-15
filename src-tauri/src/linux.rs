@@ -20,7 +20,10 @@ pub fn configure_button_layout(app: &tauri::AppHandle) {
                 .gtk_decoration_layout()
                 .map(|layout| layout.to_string())
                 .unwrap_or_else(|| ":minimize,maximize,close".into());
-            *app.state::<WindowButtonLayout>().0.lock().unwrap() = layout.clone();
+            *app.state::<WindowButtonLayout>()
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = layout.clone();
             let _ = app.emit("window-button-layout-changed", layout);
         });
     }

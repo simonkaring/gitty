@@ -17,6 +17,9 @@ export interface PersistedTabRecord { id: string; location: RepositoryLocation }
 export interface PersistedTabsState { tabs: PersistedTabRecord[]; activeId: string | null }
 
 export const TABS_STORAGE_KEY = 'gitty:native-tabs:v1';
+/** The backend caps open sessions, so a longer stored list could not be opened
+ * anyway; restoring it would only render a tab per record. */
+const MAX_RESTORED_TABS = 32;
 
 function isRepositoryLocation(value: unknown): value is RepositoryLocation {
   if (!value || typeof value !== 'object') return false;
@@ -67,9 +70,14 @@ export function loadPersistedTabs(storage: TabStorage): PersistedTabsState {
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as { tabs?: unknown }).tabs)) return { tabs: [], activeId: null };
     const rawTabs = (parsed as { tabs: unknown[] }).tabs;
+    const seen = new Set<string>();
     const tabs = rawTabs
       .filter((entry): entry is PersistedTabRecord => !!entry && typeof entry === 'object' && typeof (entry as { id?: unknown }).id === 'string' && isRepositoryLocation((entry as { location?: unknown }).location))
-      .map(entry => ({ id: entry.id, location: entry.location }));
+      // Every tab action addresses tabs by id, so a duplicate id would make two tabs
+      // act as one: closing either removes both, and branch/dirty updates hit both.
+      .filter(entry => { if (seen.has(entry.id)) return false; seen.add(entry.id); return true; })
+      .map(entry => ({ id: entry.id, location: entry.location }))
+      .slice(0, MAX_RESTORED_TABS);
     const rawActiveId = (parsed as { activeId?: unknown }).activeId;
     const activeId = typeof rawActiveId === 'string' && tabs.some(tab => tab.id === rawActiveId) ? rawActiveId : (tabs.at(-1)?.id ?? null);
     return { tabs, activeId };

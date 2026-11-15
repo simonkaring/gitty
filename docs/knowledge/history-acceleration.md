@@ -5,7 +5,7 @@ description: Explicit commit-graph writes, object-store-only scope, and dismissi
 status: draft
 sources:
   - id: backend
-    resource: ../../src-tauri/src/commit_graph.rs
+    resource: ../../crates/gitty-core/src/commit_graph.rs
   - id: contract
     resource: ../../src-tauri/BACKEND.md
   - id: advice

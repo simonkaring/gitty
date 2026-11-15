@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
+import { subscribeNative } from '../model/native';
 import { Dialog } from './ui';
 
 /** App-supplied label for the operation asking; null for prompts without a known operation. */
@@ -22,11 +22,11 @@ export function AskPassDialog() {
   const passwordRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const unlistenPrompt = listen<AskPassPrompt>('git_askpass_prompt', (event) => {
-      setPrompts((prev) => [...prev, event.payload]);
+    const unlistenPrompt = subscribeNative<AskPassPrompt>('git_askpass_prompt', prompt => {
+      setPrompts(prev => [...prev, prompt]);
     });
-    const unlistenExpired = listen<number>('git_askpass_expired', (event) => {
-      setPrompts(prev => prev.filter(prompt => prompt.requestId !== event.payload));
+    const unlistenExpired = subscribeNative<number>('git_askpass_expired', requestId => {
+      setPrompts(prev => prev.filter(prompt => prompt.requestId !== requestId));
     });
     return () => {
       void unlistenPrompt.then(fn => fn());

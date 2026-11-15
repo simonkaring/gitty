@@ -1,0 +1,2003 @@
+//! Subprocesses have bounded capture, a deadline and controlled stdin. SSH uses
+//! an encoded envelope through the login shell, then a POSIX shell on the host.
+use crate::dto::{Error, RepositoryLocation, Result};
+use std::{
+    io::{Read, Seek, SeekFrom, Write},
+    path::PathBuf,
+    process::{Child, Command, ExitStatus, Stdio},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Sender},
+        Arc, OnceLock,
+    },
+    thread,
+    time::{Duration, Instant},
+};
+
+const MAX_OUTPUT: usize = 32 * 1024 * 1024;
+const TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const WAIT_CHECK_INTERVAL: Duration = Duration::from_millis(25);
+pub(crate) const READER_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// Keep PATH-selected wrappers intact. Only Apple's native xcrun shim is bypassed;
+/// Git for Windows, WSL and SSH must retain their own executable/environment setup.
+pub(crate) fn native_git_program() -> &'static std::ffi::OsStr {
+    #[cfg(target_os = "macos")]
+    {
+        static GIT: OnceLock<PathBuf> = OnceLock::new();
+        GIT.get_or_init(|| {
+            resolve_native_git(std::env::var_os("PATH").as_deref(), || {
+                let mut command = Command::new("/usr/bin/xcrun");
+                command.args(["--find", "git"]);
+                let output = run_for(command, Duration::from_secs(5)).ok()?;
+                if !output.success {
+                    return None;
+                }
+                let path = PathBuf::from(text(output.stdout).ok()?.trim());
+                Some(path)
+            })
+        })
+        .as_os_str()
+    }
+    #[cfg(not(target_os = "macos"))]
+    std::ffi::OsStr::new("git")
+}
+
+#[cfg(target_os = "macos")]
+fn executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_native_git(
+    path: Option<&std::ffi::OsStr>,
+    find_real: impl FnOnce() -> Option<PathBuf>,
+) -> PathBuf {
+    let fallback = || PathBuf::from("git");
+    let Some(path) = path else {
+        return fallback();
+    };
+    let Some(selected) = std::env::split_paths(path)
+        .map(|p| p.join("git"))
+        .find(|p| executable(p))
+    else {
+        return fallback();
+    };
+    let Ok(canonical) = selected.canonicalize() else {
+        return fallback();
+    };
+    if canonical != std::path::Path::new("/usr/bin/git") {
+        // Preserve a symlink/wrapper's argv[0], rather than selecting its target.
+        return if selected.is_absolute() {
+            selected
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(selected))
+                .unwrap_or_else(|_| fallback())
+        };
+    }
+    find_real()
+        .filter(|real| {
+            real.is_absolute()
+                && executable(real)
+                && real.canonicalize().is_ok_and(|p| p != canonical)
+        })
+        .unwrap_or_else(fallback)
+}
+
+pub(crate) enum ProcessEvent {
+    Exited(std::io::Result<ExitStatus>),
+    Captured,
+}
+
+#[cfg(unix)]
+struct UnixChild {
+    child: Child,
+    reaped: bool,
+    #[cfg(test)]
+    kill_attempts: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// Observe exit without reaping on Unix: the zombie reserves the PID/PGID until
+/// the owner finishes cleanup. Killing and reaping serialize on the same mutex.
+/// Reader completion shares the channel so inherited pipes remain deadline-bound.
+pub(crate) struct ChildWait {
+    id: u32,
+    waiter: Option<thread::JoinHandle<()>>,
+    #[cfg(unix)]
+    unix: Arc<std::sync::Mutex<UnixChild>>,
+    #[cfg(windows)]
+    job: ProcessJob,
+}
+impl ChildWait {
+    pub(crate) fn new(child: Child, sender: Sender<ProcessEvent>) -> Result<Self> {
+        #[cfg(not(unix))]
+        let mut child = child;
+        #[cfg(windows)]
+        let job = match ProcessJob::attach(&child) {
+            Ok(job) => job,
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(e);
+            }
+        };
+        let id = child.id();
+        #[cfg(unix)]
+        let unix = Arc::new(std::sync::Mutex::new(UnixChild {
+            child,
+            reaped: false,
+            #[cfg(test)]
+            kill_attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }));
+        #[cfg(unix)]
+        let observed = unix.clone();
+        let waiter = thread::spawn(move || {
+            #[cfg(unix)]
+            let status = {
+                let status = observe_exit(id);
+                // An external reaper/SIGCHLD policy can remove ownership. Never
+                // signal a numeric group after waitid reports that it is gone.
+                if status
+                    .as_ref()
+                    .err()
+                    .is_some_and(|e| e.raw_os_error() == Some(libc::ECHILD))
+                {
+                    observed.lock().unwrap_or_else(|e| e.into_inner()).reaped = true;
+                }
+                status
+            };
+            #[cfg(not(unix))]
+            let status = child.wait();
+            #[cfg(not(unix))]
+            if status.is_err() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            let _ = sender.send(ProcessEvent::Exited(status));
+        });
+        Ok(Self {
+            id,
+            waiter: Some(waiter),
+            #[cfg(unix)]
+            unix,
+            #[cfg(windows)]
+            job,
+        })
+    }
+    #[cfg(test)]
+    pub(crate) fn id(&self) -> u32 {
+        self.id
+    }
+    pub(crate) fn kill(&self) {
+        #[cfg(unix)]
+        {
+            let state = self.unix.lock().unwrap_or_else(|e| e.into_inner());
+            if !state.reaped {
+                #[cfg(test)]
+                state.kill_attempts.fetch_add(1, Ordering::Relaxed);
+                unsafe {
+                    libc::kill(-(self.id as i32), libc::SIGKILL);
+                }
+            }
+        }
+        #[cfg(windows)]
+        self.job.kill();
+    }
+    pub(crate) fn reap(&mut self) {
+        if let Some(waiter) = self.waiter.take() {
+            let _ = waiter.join();
+            #[cfg(unix)]
+            {
+                let mut state = self.unix.lock().unwrap_or_else(|e| e.into_inner());
+                if !state.reaped {
+                    let _ = state.child.wait();
+                    // Disable numeric signaling before releasing the mutex,
+                    // including when wait() reports lost child ownership.
+                    state.reaped = true;
+                }
+            }
+        }
+    }
+    #[cfg(all(test, unix))]
+    pub(crate) fn kill_attempts(&self) -> Arc<std::sync::atomic::AtomicUsize> {
+        self.unix
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .kill_attempts
+            .clone()
+    }
+}
+
+#[cfg(unix)]
+fn observe_exit(id: u32) -> std::io::Result<ExitStatus> {
+    use std::os::unix::process::ExitStatusExt;
+    loop {
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                id as libc::id_t,
+                &mut info,
+                libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        if result == 0 {
+            let code = unsafe { info.si_status() };
+            let raw = match info.si_code {
+                libc::CLD_EXITED => code << 8,
+                libc::CLD_KILLED => code,
+                libc::CLD_DUMPED => code | 0x80,
+                _ => return Err(std::io::Error::other("Unexpected child exit notification")),
+            };
+            return Ok(ExitStatus::from_raw(raw));
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+impl Drop for ChildWait {
+    fn drop(&mut self) {
+        if self.waiter.is_some() {
+            self.kill();
+            self.reap();
+        }
+    }
+}
+/// Index mutations run outside the read request budget: hooks and signing are
+/// interactive-speed work, and an abandoned mutation cannot be reasoned about.
+pub const MUTATION_TIMEOUT: Duration = Duration::from_secs(120);
+/// Checks around a mutation share the mutation lock, not the read deadline.
+pub const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+/// Human wait time is excluded only for authenticated, operation-scoped bridge
+/// prompts. A hard wall-clock ceiling still bounds repeated prompts.
+const PROMPT_OVERALL_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+#[derive(Default)]
+struct PromptTime {
+    waits: usize,
+    since: Option<Instant>,
+    elapsed: Duration,
+    observers: Vec<std::sync::Weak<PromptClock>>,
+}
+#[derive(Default)]
+struct PromptClock {
+    time: std::sync::Mutex<PromptTime>,
+    cancelled: AtomicBool,
+}
+fn prompt_clocks(
+) -> &'static std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<PromptClock>>> {
+    static CLOCKS: OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, std::sync::Weak<PromptClock>>>,
+    > = OnceLock::new();
+    CLOCKS.get_or_init(Default::default)
+}
+pub(crate) struct PromptScope {
+    token: String,
+    clock: Arc<PromptClock>,
+}
+impl PromptScope {
+    pub(crate) fn new(token: &str) -> Self {
+        let clock = Arc::new(PromptClock::default());
+        prompt_clocks()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(token.into(), Arc::downgrade(&clock));
+        Self {
+            token: token.into(),
+            clock,
+        }
+    }
+    pub(crate) fn cancel(&self) {
+        self.clock.cancelled.store(true, Ordering::Relaxed);
+    }
+}
+impl Drop for PromptScope {
+    fn drop(&mut self) {
+        self.cancel();
+        prompt_clocks()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.token);
+    }
+}
+pub(crate) struct PromptWait(Arc<PromptClock>);
+pub(crate) fn cancel_prompt_scope(token: &str) {
+    if let Some(clock) = prompt_clocks()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(token)
+        .and_then(std::sync::Weak::upgrade)
+    {
+        clock.cancelled.store(true, Ordering::Relaxed);
+    }
+}
+pub(crate) fn prompt_wait(token: &str) -> Option<PromptWait> {
+    let clock = prompt_clocks()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(token)?
+        .upgrade()?;
+    clock.begin_wait();
+    Some(PromptWait(clock))
+}
+impl Drop for PromptWait {
+    fn drop(&mut self) {
+        self.0.end_wait();
+    }
+}
+impl PromptClock {
+    fn begin_wait(&self) {
+        let mut time = self.time.lock().unwrap_or_else(|e| e.into_inner());
+        if time.waits == 0 {
+            time.since = Some(Instant::now());
+            time.observers.retain(|observer| {
+                if let Some(observer) = observer.upgrade() {
+                    observer.begin_wait();
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+        time.waits += 1;
+    }
+    fn end_wait(&self) {
+        let mut time = self.time.lock().unwrap_or_else(|e| e.into_inner());
+        time.waits -= 1;
+        if time.waits == 0 {
+            if let Some(since) = time.since.take() {
+                time.elapsed += since.elapsed();
+            }
+            time.observers.retain(|observer| {
+                if let Some(observer) = observer.upgrade() {
+                    observer.end_wait();
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+    }
+    /// Subscribe a fresh per-command clock. It records the union of all selected
+    /// token waits, starting now, not historical wait credit from an earlier
+    /// command or launch. Budget clocks never subscribe to another budget clock.
+    fn observe(&self, budget: &Arc<PromptClock>) {
+        let mut time = self.time.lock().unwrap_or_else(|e| e.into_inner());
+        time.observers
+            .retain(|observer| observer.strong_count() > 0);
+        if time.waits > 0 {
+            budget.begin_wait();
+        }
+        time.observers.push(Arc::downgrade(budget));
+    }
+    fn elapsed(&self) -> Duration {
+        let time = self.time.lock().unwrap_or_else(|e| e.into_inner());
+        time.elapsed + time.since.map(|since| since.elapsed()).unwrap_or_default()
+    }
+}
+fn execution_expired(
+    elapsed: Duration,
+    paused: Duration,
+    execution: Duration,
+    overall: Duration,
+) -> bool {
+    elapsed.saturating_sub(paused) > execution || elapsed > overall
+}
+// Test-only, per-thread process-launch counter. Tests run on parallel threads, so
+// a thread-local (propagated into `parallel` workers) keeps counts uncontaminated.
+#[cfg(test)]
+thread_local! {
+    static SPAWN_COUNTER: std::cell::RefCell<Option<Arc<std::sync::atomic::AtomicUsize>>> =
+        const { std::cell::RefCell::new(None) };
+}
+/// Records one successful child launch for [`count_spawns`]; a no-op outside tests.
+pub(crate) fn note_spawn() {
+    #[cfg(test)]
+    SPAWN_COUNTER.with(|c| {
+        if let Some(counter) = &*c.borrow() {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+}
+/// Runs `f` and reports how many Git/helper processes it launched through
+/// `run_with_stdin` and `GitStream::spawn`, including those on `parallel` workers.
+#[cfg(test)]
+pub(crate) fn count_spawns<T>(f: impl FnOnce() -> T) -> (T, usize) {
+    struct Restore(Option<Arc<std::sync::atomic::AtomicUsize>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SPAWN_COUNTER.with(|c| *c.borrow_mut() = self.0.take());
+        }
+    }
+    let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let _restore = Restore(SPAWN_COUNTER.with(|c| c.borrow_mut().replace(counter.clone())));
+    let value = f();
+    (value, counter.load(Ordering::Relaxed))
+}
+thread_local! { static REQUEST_DEADLINE: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) }; }
+pub fn request<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            REQUEST_DEADLINE.with(|d| d.set(None));
+        }
+    }
+    REQUEST_DEADLINE.with(|d| d.set(Some(Instant::now() + Duration::from_secs(60))));
+    let _reset = Reset;
+    f()
+}
+
+/// A slow hook must not consume the budget for post-write reconciliation.
+pub(crate) fn without_read_deadline<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    struct Restore(Option<Instant>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            REQUEST_DEADLINE.with(|d| d.set(self.0));
+        }
+    }
+    let _restore = Restore(REQUEST_DEADLINE.with(|d| d.replace(None)));
+    f()
+}
+
+/// Runs independent reads concurrently. Each costs a process launch — about
+/// potentially seconds through `wsl.exe` under load — so sequential reads dominate WSL refreshes. The
+/// caller's request deadline is carried into every worker thread.
+pub(crate) fn parallel<T: Send>(jobs: Vec<Box<dyn FnOnce() -> T + Send + '_>>) -> Vec<T> {
+    let deadline = REQUEST_DEADLINE.with(|d| d.get());
+    #[cfg(test)]
+    let counter = SPAWN_COUNTER.with(|c| c.borrow().clone());
+    thread::scope(|scope| {
+        let handles: Vec<_> = jobs
+            .into_iter()
+            .map(|job| {
+                #[cfg(test)]
+                let counter = counter.clone();
+                scope.spawn(move || {
+                    REQUEST_DEADLINE.with(|d| d.set(deadline));
+                    #[cfg(test)]
+                    SPAWN_COUNTER.with(|c| *c.borrow_mut() = counter);
+                    job()
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or_else(|p| std::panic::resume_unwind(p)))
+            .collect()
+    })
+}
+
+/// Where multiplexed SSH control sockets live. Set once at startup from app data
+/// so every connection to the same destination reuses one authenticated session
+/// instead of paying TCP + key exchange for each Git launch.
+static SSH_CONTROL_DIR: OnceLock<PathBuf> = OnceLock::new();
+pub fn set_ssh_control_dir(path: PathBuf) {
+    let _ = SSH_CONTROL_DIR.set(path);
+}
+fn ssh_control_dir() -> PathBuf {
+    let dir = SSH_CONTROL_DIR
+        .get()
+        .cloned()
+        .unwrap_or_else(temp_control_dir);
+    dir
+}
+/// The per-process directory used when no app-data directory is configured or when
+/// that directory is too long for a socket path.
+fn temp_control_dir() -> PathBuf {
+    static TEMP: OnceLock<Option<tempfile::TempDir>> = OnceLock::new();
+    TEMP.get_or_init(|| {
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("gs-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        builder.tempdir().ok()
+    })
+    .as_ref()
+    .map(|dir| dir.path().to_path_buf())
+    // Deliberately unusable when private directory creation failed: the
+    // transport will omit multiplexing rather than use a shared directory.
+    .unwrap_or_else(|| std::env::temp_dir().join("gitty-control-unavailable".repeat(100)))
+}
+/// Creates `dir` if needed and keeps it user-only: sockets here grant access to the
+/// user's authenticated sessions.
+fn private_dir(dir: &std::path::Path) -> bool {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    if let Err(error) = builder.create(dir) {
+        if error.kind() != std::io::ErrorKind::AlreadyExists {
+            return false;
+        }
+    }
+    let Ok(metadata) = std::fs::symlink_metadata(dir) else {
+        return false;
+    };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        return metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o077 == 0;
+    }
+    #[cfg(not(unix))]
+    true
+}
+/// The kernel rejects a Unix socket path past `sun_path` (104 bytes on macOS, 108
+/// on Linux), and OpenSSH also appends `.XXXXXXXXXX` while it creates the listening
+/// socket of a master. Staying under 88 bytes leaves room for both.
+#[cfg(unix)]
+const MAX_CONTROL_PATH: usize = 88;
+/// A short, stable name per destination. `%C` would encode the same destination in
+/// 40 characters; sixteen are enough to keep hosts apart and leave room for the
+/// directory name.
+#[cfg(unix)]
+fn control_name(destination: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in destination.bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+/// Chooses where this destination's control socket lives. A long home directory
+/// (or spaces in an app-data path) must not push the socket past the kernel limit,
+/// so an over-long candidate falls back to the per-process directory in the temp
+/// directory, which is created with user-only permissions. Both candidates are
+/// measured: a long `TMPDIR` can exceed the limit too, and then multiplexing is
+/// disabled for this command instead of every SSH launch failing.
+#[cfg(unix)]
+fn control_path_in(
+    preferred: &std::path::Path,
+    fallback: &std::path::Path,
+    destination: &str,
+) -> Option<PathBuf> {
+    let name = control_name(destination);
+    let candidate = preferred.join(&name);
+    if candidate.as_os_str().len() <= MAX_CONTROL_PATH && private_dir(preferred) {
+        return Some(candidate);
+    }
+    let candidate = fallback.join(name);
+    if candidate.as_os_str().len() > MAX_CONTROL_PATH {
+        return None;
+    }
+    private_dir(fallback).then_some(candidate)
+}
+/// One `-o` value. OpenSSH parses each `-o` as a configuration line and splits it
+/// on whitespace, so a value that contains a space (macOS app-data paths do) must be
+/// quoted for that parser, not merely for argv.
+#[cfg(unix)]
+fn ssh_option_value(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+/// The local OpenSSH client. Tests replace it with a shim that runs the remote
+/// command locally, so quoting and stdin framing are exercised end to end.
+fn ssh_program() -> String {
+    #[cfg(test)]
+    if let Some(program) = std::env::var_os("GITTY_SSH_EXECUTABLE") {
+        return program.to_string_lossy().into_owned();
+    }
+    "ssh".into()
+}
+fn valid_env_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+/// POSIX script decoded only by the explicitly invoked host `sh`, never passed
+/// literally to the login shell (notably, tcsh does not quote newlines like sh).
+fn ssh_script(env: &[(String, String)], words: &[String]) -> Result<String> {
+    if env.iter().any(|(_, value)| value.contains('\0'))
+        || words.iter().any(|word| word.contains('\0'))
+    {
+        return Err(Error::new(
+            "invalidRequest",
+            "Remote arguments cannot contain NUL.",
+        ));
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if !env.is_empty() {
+        parts.push("env".into());
+        for (key, value) in env {
+            if !valid_env_key(key) {
+                return Err(Error::new(
+                    "internalEnv",
+                    "Gitty tried to pass an invalid environment name to the remote host.",
+                ));
+            }
+            parts.push(crate::askpass::shell_quote(&format!("{key}={value}")));
+        }
+    }
+    parts.extend(words.iter().map(|word| crate::askpass::shell_quote(word)));
+    Ok(parts.join(" "))
+}
+/// `ssh` with a fixed, non-interactive security posture. Host keys must already be
+/// trusted and authentication must already work: Gitty never answers a prompt, never
+/// writes `known_hosts`, and never weakens the user's `~/.ssh/config`.
+pub(crate) fn ssh_command(location: &RepositoryLocation) -> Result<Command> {
+    let RepositoryLocation::Ssh {
+        host, port, user, ..
+    } = location
+    else {
+        return Err(Error::new(
+            "internalLocation",
+            "SSH transport requires an SSH repository location.",
+        ));
+    };
+    crate::dto::validate_ssh_destination(host, user.as_deref(), *port)?;
+    let destination = match user {
+        Some(user) => format!("{user}@{host}"),
+        None => host.clone(),
+    };
+    let mut cmd = Command::new(ssh_program());
+    cmd.args([
+        "-T",
+        "-x",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=3",
+    ]);
+    // Win32 OpenSSH does not implement connection multiplexing; omitting the
+    // options there keeps the transport working with one connection per command.
+    #[cfg(unix)]
+    {
+        let mut key = destination.clone();
+        if let Some(port) = port {
+            key = format!("{key}:{port}");
+        }
+        // Neither directory fits a Unix socket path: run without multiplexing
+        // rather than hand OpenSSH a path it must reject.
+        let control = control_path_in(&ssh_control_dir(), &temp_control_dir(), &key);
+        if let Some(control) = control.as_deref().and_then(std::path::Path::to_str) {
+            cmd.args([
+                "-o",
+                "ControlMaster=auto",
+                "-o",
+                &format!("ControlPath={}", ssh_option_value(control)),
+                "-o",
+                "ControlPersist=60",
+            ]);
+        }
+    }
+    if let Some(port) = port {
+        cmd.args(["-p", &port.to_string()]);
+    }
+    // `--` ends option parsing locally, so a validated destination can never be
+    // reinterpreted as an option.
+    cmd.arg("--").arg(destination);
+    Ok(cmd)
+}
+/// ASCII-only outer envelope: the login shell sees no user-controlled quoting,
+/// newlines, history expansion, substitutions or metacharacters. POSIX printf
+/// decodes octal bytes without Python/base64 and without consuming binary stdin.
+fn ssh_envelope(script: &str) -> Result<String> {
+    use std::fmt::Write;
+    let mut envelope = String::from("sh -c 'eval \"$(printf \"");
+    for byte in script.bytes() {
+        write!(envelope, "\\{byte:03o}").expect("writing to String");
+    }
+    envelope.push_str("\")\"'");
+    // OpenSSH forwards one argument. Bound the expanded ASCII command, not the
+    // original argv: Windows has a ~32K command line and Linux a 128K argument.
+    let limit = if cfg!(windows) { 24 * 1024 } else { 96 * 1024 };
+    if envelope.len() > limit {
+        return Err(Error::new(
+            "inputLimit",
+            "Encoded SSH command exceeds the platform command-line budget; narrow the request.",
+        ));
+    }
+    Ok(envelope)
+}
+/// Runs a word list on the remote host with an encoded login-shell envelope.
+pub(crate) fn ssh_exec(
+    location: &RepositoryLocation,
+    env: &[(String, String)],
+    words: &[String],
+) -> Result<Command> {
+    let script = ssh_script(env, words)?;
+    let mut cmd = ssh_command(location)?;
+    cmd.arg(ssh_envelope(&script)?);
+    Ok(cmd)
+}
+
+#[cfg(windows)]
+pub(crate) struct ProcessJob(windows_sys::Win32::Foundation::HANDLE);
+// The handle is exclusively owned and Win32 job operations may run on any thread.
+#[cfg(windows)]
+unsafe impl Send for ProcessJob {}
+#[cfg(windows)]
+impl ProcessJob {
+    pub(crate) fn attach(child: &std::process::Child) -> Result<Self> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::*;
+        unsafe {
+            let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if handle.is_null() {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            let job = Self(handle);
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if SetInformationJobObject(
+                handle,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const _,
+                std::mem::size_of_val(&info) as u32,
+            ) == 0
+                || AssignProcessToJobObject(handle, child.as_raw_handle()) == 0
+            {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            Ok(job)
+        }
+    }
+    pub(crate) fn kill(&self) {
+        unsafe {
+            windows_sys::Win32::System::JobObjects::TerminateJobObject(self.0, 1);
+        }
+    }
+}
+#[cfg(windows)]
+impl Drop for ProcessJob {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+/// One finished Git write, for the activity log. `command` is the Git arguments
+/// without `-c` configuration overrides, which carry credential helper wiring.
+/// `stdin` is the text fed to Git (pathspecs, commit messages), never a patch.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitLog {
+    pub command: String,
+    pub stdin: Option<String>,
+    pub success: bool,
+    pub code: Option<i32>,
+    pub millis: u64,
+}
+static GIT_LOG: std::sync::OnceLock<Box<dyn Fn(GitLog) + Send + Sync>> = std::sync::OnceLock::new();
+pub fn set_git_log(sink: impl Fn(GitLog) + Send + Sync + 'static) {
+    let _ = GIT_LOG.set(Box::new(sink));
+}
+fn display_git(args: &[String]) -> String {
+    let mut shown = vec!["git".to_string()];
+    let mut rest = args.iter();
+    // Only the leading `-c key=value` overrides (before the subcommand) carry
+    // configuration; after the subcommand `-c` is that command's own option
+    // (`switch -c <branch>`) and is kept verbatim.
+    let mut subcommand = None;
+    while let Some(arg) = rest.next() {
+        if arg == "-c" {
+            rest.next();
+        } else if arg.starts_with('-') {
+            shown.push(arg.clone());
+        } else {
+            subcommand = Some(arg);
+            break;
+        }
+    }
+    shown.extend(subcommand.into_iter().chain(rest).cloned());
+    shown.join(" ")
+}
+/// Callers bound their input (1 MiB of pathspecs, 64 KiB of message). Patches are
+/// file content, not metadata, so `git apply` input is never reported.
+fn display_stdin(args: &[String], input: &[u8]) -> Option<String> {
+    if input.is_empty() || args.iter().any(|arg| arg == "apply") {
+        return None;
+    }
+    std::str::from_utf8(input)
+        .ok()
+        .map(|text| text.replace('\0', "\n"))
+}
+/// Reports a Git write to the activity log once it has finished, whatever its outcome.
+pub(crate) fn logged(
+    args: &[String],
+    input: &[u8],
+    run: impl FnOnce() -> Result<Output>,
+) -> Result<Output> {
+    let start = Instant::now();
+    let result = run();
+    if let Some(sink) = GIT_LOG.get() {
+        let (success, code) = result
+            .as_ref()
+            .map_or((false, None), |o| (o.success, o.code));
+        sink(GitLog {
+            command: display_git(args),
+            stdin: display_stdin(args, input),
+            success,
+            code,
+            millis: start.elapsed().as_millis() as u64,
+        });
+    }
+    result
+}
+
+pub struct Output {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub success: bool,
+    pub code: Option<i32>,
+}
+
+pub(crate) fn capture(
+    mut reader: impl Read,
+    overflow: Arc<AtomicBool>,
+) -> std::io::Result<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut buf = [0; 8192];
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        if out.len() + n > MAX_OUTPUT {
+            overflow.store(true, Ordering::Relaxed);
+        } else {
+            out.extend_from_slice(&buf[..n]);
+        }
+    }
+    Ok(out)
+}
+pub(crate) fn remaining_timeout() -> Result<Duration> {
+    let timeout = REQUEST_DEADLINE
+        .with(|d| {
+            d.get()
+                .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+                .unwrap_or(TIMEOUT)
+        })
+        .min(TIMEOUT);
+    if timeout.is_zero() {
+        return Err(Error::new(
+            "timeout",
+            "Repository request exceeded its 60 second deadline",
+        ));
+    }
+    Ok(timeout)
+}
+pub fn run(mut command: Command) -> Result<Output> {
+    run_with_timeout(&mut command, remaining_timeout()?)
+}
+/// Runs with an explicit deadline instead of the shared per-request budget.
+pub fn run_for(mut command: Command, timeout: Duration) -> Result<Output> {
+    run_with_timeout(&mut command, timeout)
+}
+fn run_with_timeout(command: &mut Command, timeout: Duration) -> Result<Output> {
+    run_with_stdin(command, timeout, Stdio::null())
+}
+fn run_with_stdin(command: &mut Command, timeout: Duration, stdin: Stdio) -> Result<Output> {
+    run_with_stdin_budget(command, timeout, PROMPT_OVERALL_TIMEOUT, stdin)
+}
+fn run_with_stdin_budget(
+    command: &mut Command,
+    timeout: Duration,
+    overall: Duration,
+    stdin: Stdio,
+) -> Result<Output> {
+    // Native bridge tokens live in env; WSL forwards them as env argv. Never
+    // recognize arbitrary/global tokens, only currently registered scopes.
+    let tokens = command
+        .get_envs()
+        .filter_map(|(key, value)| {
+            matches!(
+                key.to_str(),
+                Some("GITTY_ASKPASS_TOKEN" | "GITTY_EDITOR_TOKEN")
+            )
+            .then(|| value.and_then(|value| value.to_str()).map(String::from))
+            .flatten()
+        })
+        .chain(
+            command
+                .get_args()
+                .filter_map(|arg| arg.to_str())
+                .filter_map(|arg| {
+                    arg.strip_prefix("GITTY_ASKPASS_TOKEN=")
+                        .or_else(|| arg.strip_prefix("GITTY_EDITOR_TOKEN="))
+                        .map(String::from)
+                }),
+        );
+    let clocks: Vec<_> = tokens
+        .filter_map(|token| {
+            prompt_clocks()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&token)
+                .and_then(std::sync::Weak::upgrade)
+        })
+        .collect();
+    let trace = std::env::var_os("GITTY_TRACE_PROCESS").is_some();
+    let launched = Instant::now();
+    command
+        .stdin(stdin)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|e| Error::new("processStart", e.to_string()))?;
+    let spawn_time = launched.elapsed();
+    note_spawn();
+    let overflow = Arc::new(AtomicBool::new(false));
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let a = overflow.clone();
+    let b = overflow.clone();
+    let (sender, receiver) = mpsc::channel();
+    let mut child = ChildWait::new(child, sender.clone())?;
+    let out_sender = sender.clone();
+    let out = thread::spawn(move || {
+        let result = capture(stdout, a);
+        let _ = out_sender.send(ProcessEvent::Captured);
+        result
+    });
+    let err = thread::spawn(move || {
+        let result = capture(stderr, b);
+        let _ = sender.send(ProcessEvent::Captured);
+        result
+    });
+    let start = Instant::now();
+    let budget = Arc::new(PromptClock::default());
+    for clock in &clocks {
+        clock.observe(&budget);
+    }
+    let mut failure = None;
+    let mut exited: Option<std::io::Result<ExitStatus>> = None;
+    let mut captured = 0;
+    let status = loop {
+        let paused = budget.elapsed();
+        let cancelled = clocks
+            .iter()
+            .any(|clock| clock.cancelled.load(Ordering::Relaxed));
+        let exceeded = execution_expired(
+            start.elapsed(),
+            paused,
+            timeout,
+            if clocks.is_empty() { timeout } else { overall },
+        );
+        if overflow.load(Ordering::Relaxed) || exceeded || cancelled {
+            failure = Some(if overflow.load(Ordering::Relaxed) {
+                Error::new(
+                    "outputLimit",
+                    "Git output exceeded the 32 MiB per-stream limit; narrow the request",
+                )
+            } else if cancelled {
+                Error::new(
+                    "cancelled",
+                    "The prompt operation was cancelled; refresh before another action.",
+                )
+            } else {
+                Error::new(
+                    "timeout",
+                    if !clocks.is_empty() && start.elapsed() > overall {
+                        format!(
+                            "Command exceeded its {} ms overall deadline (including prompts)",
+                            overall.as_millis()
+                        )
+                    } else {
+                        format!(
+                            "Command exceeded its {} ms execution deadline",
+                            timeout.as_millis()
+                        )
+                    },
+                )
+            });
+            child.kill();
+            child.reap();
+            break Ok(None);
+        }
+        if exited.is_some() && captured == 2 {
+            child.reap();
+            break exited.take().unwrap().map(Some);
+        }
+        match receiver.recv_timeout(WAIT_CHECK_INTERVAL) {
+            Ok(ProcessEvent::Exited(status)) => exited = Some(status),
+            Ok(ProcessEvent::Captured) => captured += 1,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                child.kill();
+                child.reap();
+                break Err(std::io::Error::other("Process waiter ended unexpectedly"));
+            }
+        }
+    };
+    if failure.is_some() || status.is_err() {
+        // Normal completion always joins both readers. After a kill, an escaped
+        // descendant may still own a pipe: allow cleanup a bounded grace period,
+        // then detach only readers that remain blocked rather than hang the caller.
+        let deadline = Instant::now() + READER_SHUTDOWN_TIMEOUT;
+        while captured < 2 {
+            match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(ProcessEvent::Captured) => captured += 1,
+                Ok(ProcessEvent::Exited(_)) => {}
+                Err(_) => break,
+            }
+        }
+        for reader in [out, err] {
+            if reader.is_finished() {
+                let _ = reader.join();
+            }
+        }
+        return Err(failure.unwrap_or_else(|| status.err().unwrap().into()));
+    }
+    let stdout = out
+        .join()
+        .map_err(|_| Error::new("process", "Output reader failed"))??;
+    let stderr = err
+        .join()
+        .map_err(|_| Error::new("process", "Error reader failed"))??;
+    if let Some(e) = failure {
+        return Err(e);
+    }
+    if overflow.load(Ordering::Relaxed) {
+        return Err(Error::new("outputLimit", "Command output exceeded 32 MiB"));
+    }
+    let status = status?.expect("successful wait has an exit status");
+    if trace {
+        // Program only: command arguments/environments may contain credentials.
+        eprintln!(
+            "Gitty process {:?}: spawn {:?}, total {:?}, exit {:?}",
+            command.get_program(),
+            spawn_time,
+            launched.elapsed(),
+            status.code()
+        );
+    }
+    Ok(Output {
+        stdout,
+        stderr,
+        success: status.success(),
+        code: status.code(),
+    })
+}
+pub fn text(bytes: Vec<u8>) -> Result<String> {
+    String::from_utf8(bytes).map_err(|_| {
+        Error::new(
+            "unsupportedEncoding",
+            "Non-UTF-8 Git paths or metadata cannot be represented by the JSON contract",
+        )
+    })
+}
+pub fn text_ref(bytes: &[u8]) -> Result<&str> {
+    std::str::from_utf8(bytes).map_err(|_| {
+        Error::new(
+            "unsupportedEncoding",
+            "Non-UTF-8 Git paths or metadata cannot be represented by the JSON contract",
+        )
+    })
+}
+pub fn git(location: &RepositoryLocation, args: &[String]) -> Result<Output> {
+    run(git_command(location, args)?)
+}
+/// Read commands add safety overrides that must never apply to a write: optional
+/// locks and diff/textconv suppression are read-only conveniences, and a mutation
+/// has to be able to take the index lock and run the user's configured hooks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Contract {
+    Read,
+    ReadDigest,
+    Mutation,
+}
+/// Reduce a potentially large read on the SSH host before transport. The
+/// producer's exit status is recorded separately: POSIX pipelines alone would
+/// silently accept a partial diff when only hash-object succeeds.
+pub(crate) fn git_digest_command(
+    location: &RepositoryLocation,
+    args: &[String],
+) -> Result<Command> {
+    command(location, args, Contract::ReadDigest, &[])
+}
+pub(crate) fn git_command(location: &RepositoryLocation, args: &[String]) -> Result<Command> {
+    command(location, args, Contract::Read, &[])
+}
+pub(crate) fn git_mutation_command(
+    location: &RepositoryLocation,
+    args: &[String],
+) -> Result<Command> {
+    command(location, args, Contract::Mutation, &[])
+}
+/// The same, with extra environment for the Git process. For an SSH location these
+/// become `env` assignments inside the remote command; for native and WSL they are
+/// handed to the child process.
+pub(crate) fn git_mutation_command_with_env(
+    location: &RepositoryLocation,
+    args: &[String],
+    env: &[(String, String)],
+) -> Result<Command> {
+    command(location, args, Contract::Mutation, env)
+}
+/// Per-command identity overrides are passed as `env` assignments for WSL and SSH,
+/// rather than relying on host environment forwarding through wsl.exe or ssh.
+pub(crate) fn git_commit_command(
+    location: &RepositoryLocation,
+    args: &[String],
+    identity: &[(&str, &str)],
+) -> Result<Command> {
+    command_inner(location, args, Contract::Mutation, true, identity, &[])
+}
+/// A repository-independent probe (`git --version`) for a connection test.
+pub(crate) fn git_probe_command(location: &RepositoryLocation) -> Result<Command> {
+    command_inner(
+        location,
+        &args(&["--version"]),
+        Contract::Read,
+        false,
+        &[],
+        &[],
+    )
+}
+/// Runs Git using the selected native/WSL transport without requiring an
+/// existing repository. Clone uses this with the mutation environment because
+/// credential helpers, SSH configuration, filters and user locale must remain
+/// available.
+pub(crate) fn git_external_mutation_command(
+    location: &RepositoryLocation,
+    args: &[String],
+) -> Result<Command> {
+    if matches!(location, RepositoryLocation::Ssh { .. }) {
+        return Err(Error::new(
+            "unsupportedLocation",
+            "Cloning into an SSH destination is not supported; clone on the remote host or open an existing repository.",
+        ));
+    }
+    command_inner(location, args, Contract::Mutation, false, &[], &[])
+}
+fn command(
+    location: &RepositoryLocation,
+    values: &[String],
+    contract: Contract,
+    extra_env: &[(String, String)],
+) -> Result<Command> {
+    command_inner(location, values, contract, true, &[], extra_env)
+}
+fn command_inner(
+    location: &RepositoryLocation,
+    values: &[String],
+    contract: Contract,
+    repository_context: bool,
+    identity: &[(&str, &str)],
+    extra_env: &[(String, String)],
+) -> Result<Command> {
+    let read = contract != Contract::Mutation;
+    if let RepositoryLocation::Native { path } = location {
+        if path.to_ascii_lowercase().starts_with("\\\\wsl") {
+            return Err(Error::new(
+                "wslLocationRequired",
+                "Open WSL repositories through their distribution, not Windows Git on UNC",
+            ));
+        }
+    }
+    // Git arguments shared by every transport, in the same order: repository
+    // selector, then output/automation suppressions, then the caller's command.
+    let mut git_args: Vec<String> = Vec::new();
+    if repository_context {
+        match location {
+            RepositoryLocation::Native { path }
+            | RepositoryLocation::Wsl { path, .. }
+            | RepositoryLocation::Ssh { path, .. } => {
+                git_args.extend(["-C".to_string(), path.clone()])
+            }
+        }
+    }
+    git_args.extend(args(&[
+        "--no-pager",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.untrackedCache=false",
+        "-c",
+        "maintenance.auto=false",
+        "-c",
+        "gc.auto=0",
+        "-c",
+        "core.pager=cat",
+        "-c",
+        "protocol.allow=never",
+    ]));
+    if read {
+        // Display-only suppressions. A mutation must not impose them on hooks,
+        // which inherit these overrides through GIT_CONFIG_PARAMETERS.
+        git_args.extend(args(&[
+            "-c",
+            "diff.external=",
+            "-c",
+            "core.quotePath=true",
+            "-c",
+            "diff.submodule=short",
+        ]));
+    }
+    git_args.extend(values.iter().cloned());
+    // Contract environment. For SSH this travels inside the remote command, since
+    // SSH forwards no local environment to the host running Git.
+    let mut vars: Vec<(String, String)> = Vec::new();
+    if read {
+        vars.push(("GIT_OPTIONAL_LOCKS".into(), "0".into()));
+        vars.push(("LC_ALL".into(), "C".into()));
+    }
+    for (key, value) in [
+        ("GIT_NO_LAZY_FETCH", "1"),
+        ("GIT_TERMINAL_PROMPT", "0"),
+        ("GIT_NO_REPLACE_OBJECTS", "1"),
+        // Literal pathspecs are the reason explicit file arguments cannot become
+        // magic (`:(exclude)…`, globs) in either contract.
+        ("GIT_LITERAL_PATHSPECS", "1"),
+    ] {
+        vars.push((key.into(), value.into()));
+    }
+    if matches!(
+        location,
+        RepositoryLocation::Wsl { .. } | RepositoryLocation::Ssh { .. }
+    ) {
+        vars.push(("GIT_PAGER".into(), "cat".into()));
+    }
+    if !read {
+        // Hooks inherit this environment; leave the locale as the user configured it.
+        vars.retain(|(key, _)| key != "GIT_OPTIONAL_LOCKS");
+    }
+    vars.extend(
+        identity
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
+    );
+    vars.extend(extra_env.iter().cloned());
+    let cmd = match location {
+        RepositoryLocation::Native { .. } => {
+            let mut c = Command::new(native_git_program());
+            c.args(&git_args);
+            // Repository/index/object-store overrides must not redirect this
+            // session. Honor native configuration-file selectors, including
+            // administrators' system config.
+            for (key, _) in std::env::vars_os() {
+                let name = key.to_string_lossy();
+                let config_selector = matches!(
+                    name.as_ref(),
+                    "GIT_CONFIG_GLOBAL" | "GIT_CONFIG_SYSTEM" | "GIT_CONFIG_NOSYSTEM"
+                );
+                if name.starts_with("GIT_") && !config_selector {
+                    c.env_remove(key);
+                }
+            }
+            if !read {
+                c.env_remove("GIT_OPTIONAL_LOCKS");
+            }
+            c.envs(vars.iter().map(|(key, value)| (key, value)));
+            c
+        }
+        RepositoryLocation::Wsl { distribution, .. } => {
+            if !cfg!(windows) {
+                return Err(Error::new(
+                    "unsupportedPlatform",
+                    "WSL is available only on Windows",
+                ));
+            }
+            validate_distribution(distribution)?;
+            let mut c = Command::new("wsl.exe");
+            c.args(["--distribution", distribution, "--exec", "env"]);
+            for (key, value) in &vars {
+                c.arg(format!("{key}={value}"));
+            }
+            c.arg("git").args(&git_args);
+            for (key, _) in std::env::vars_os() {
+                if key.to_string_lossy().starts_with("GIT_") {
+                    c.env_remove(key);
+                }
+            }
+            c
+        }
+        RepositoryLocation::Ssh { path, .. } => {
+            crate::dto::validate_ssh_path(path)?;
+            let mut words = vec!["git".to_string()];
+            words.extend(git_args);
+            if contract == Contract::ReadDigest {
+                let script = "tmp=$(mktemp -d) || exit 1\ntrap 'rm -f \"$tmp/status\"; rmdir \"$tmp\"' 0\ntrap 'exit 1' 1 2 15\n( \"$@\"; printf '%s\\n' \"$?\" > \"$tmp/status\" ) | git hash-object --stdin\nresult=$?\ntest \"$(cat \"$tmp/status\")\" = 0 || exit 1\nexit \"$result\"";
+                let mut wrapper = args(&["sh", "-c", script, "gitty-digest"]);
+                wrapper.extend(words);
+                words = wrapper;
+            }
+            ssh_exec(location, &vars, &words)?
+        }
+    };
+    Ok(cmd)
+}
+pub fn checked(location: &RepositoryLocation, args: &[String]) -> Result<Vec<u8>> {
+    checked_output(git(location, args)?)
+}
+pub fn checked_with_input(
+    location: &RepositoryLocation,
+    args: &[String],
+    input: &[u8],
+) -> Result<Vec<u8>> {
+    checked_output(run_with_input_for(
+        git_command(location, args)?,
+        input,
+        remaining_timeout()?,
+        32 * 1024,
+    )?)
+}
+/// Feeds bounded input on stdin under an explicit deadline. Each caller states
+/// its own limit: batch reads stay small, while a write's pathspec list or commit
+/// message is bounded by policy rather than by any command-line length.
+pub fn run_with_input_for(
+    mut command: Command,
+    input: &[u8],
+    timeout: Duration,
+    max_input: usize,
+) -> Result<Output> {
+    run_with_stdin(&mut command, timeout, input_stdio(input, max_input)?)
+}
+/// Bounded stdin backed by an anonymous file. It supplies EOF without a pipe
+/// writer that could deadlock against full stdout/stderr pipes. WSL requests pass
+/// this handle to wsl.exe using the same command runner.
+pub(crate) fn input_stdio(input: &[u8], max_input: usize) -> Result<Stdio> {
+    if input.len() > max_input {
+        return Err(Error::new(
+            "inputLimit",
+            format!("Git stdin input exceeded {max_input} bytes"),
+        ));
+    }
+    let mut file = tempfile::tempfile()?;
+    file.write_all(input)?;
+    file.seek(SeekFrom::Start(0))?;
+    Ok(file.into())
+}
+fn checked_output(o: Output) -> Result<Vec<u8>> {
+    if !o.success {
+        return Err(Error::new(
+            "git",
+            String::from_utf8_lossy(&o.stderr).trim().to_string(),
+        ));
+    }
+    Ok(o.stdout)
+}
+pub fn args(values: &[&str]) -> Vec<String> {
+    values.iter().map(|s| s.to_string()).collect()
+}
+pub fn validate_distribution(name: &str) -> Result<()> {
+    if name.is_empty() || name.starts_with('-') || name.chars().any(|c| c.is_control()) {
+        return Err(Error::new(
+            "invalidDistribution",
+            "Invalid WSL distribution name",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn native_git_resolution_preserves_path_choice_and_fails_closed() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let custom = dir.path().join("git");
+        std::fs::write(&custom, b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&custom, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(
+            resolve_native_git(Some(dir.path().as_os_str()), || panic!(
+                "custom Git must not invoke xcrun"
+            )),
+            custom
+        );
+        assert_eq!(resolve_native_git(None, || panic!()), PathBuf::from("git"));
+        assert_eq!(
+            resolve_native_git(Some(std::ffi::OsStr::new("/nonexistent")), || panic!()),
+            PathBuf::from("git")
+        );
+        let shim = tempfile::tempdir().unwrap();
+        symlink("/usr/bin/git", shim.path().join("git")).unwrap();
+        for real in [
+            None,
+            Some(PathBuf::from("relative")),
+            Some(PathBuf::from("/usr/bin/git")),
+            Some(dir.path().join("absent")),
+        ] {
+            assert_eq!(
+                resolve_native_git(Some(shim.path().as_os_str()), || real),
+                PathBuf::from("git")
+            );
+        }
+        assert_eq!(
+            resolve_native_git(Some(shim.path().as_os_str()), || Some(custom.clone())),
+            custom
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn child_exit_notification_wakes_without_a_timer_tick() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "exit 7"]);
+        let (sender, receiver) = mpsc::channel();
+        let mut waiter = ChildWait::new(command.spawn().unwrap(), sender).unwrap();
+        match receiver.recv_timeout(Duration::from_secs(5)).unwrap() {
+            ProcessEvent::Exited(status) => assert_eq!(status.unwrap().code(), Some(7)),
+            _ => panic!("unexpected reader event"),
+        }
+        let attempts = waiter.kill_attempts();
+        // Notification is non-reaping: even an exited child still owns its PID.
+        assert_eq!(observe_exit(waiter.id()).unwrap().code(), Some(7));
+        waiter.reap();
+        waiter.kill();
+        assert_eq!(
+            attempts.load(Ordering::Relaxed),
+            0,
+            "never signal a reaped PID/PGID"
+        );
+        assert_eq!(unsafe { libc::kill(waiter.id() as i32, 0) }, -1);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn unix_exit_notification_preserves_signal_status() {
+        use std::os::unix::process::{CommandExt, ExitStatusExt};
+        let mut command = Command::new("sleep");
+        command.arg("60").process_group(0);
+        let (sender, receiver) = mpsc::channel();
+        let mut waiter = ChildWait::new(command.spawn().unwrap(), sender).unwrap();
+        waiter.kill();
+        match receiver.recv_timeout(Duration::from_secs(5)).unwrap() {
+            ProcessEvent::Exited(status) => {
+                assert_eq!(status.unwrap().signal(), Some(libc::SIGKILL))
+            }
+            _ => panic!("unexpected reader event"),
+        }
+        let attempts = waiter.kill_attempts();
+        waiter.reap();
+        waiter.kill();
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn timeout_does_not_join_pipes_held_by_an_escaped_descendant_forever() {
+        if Command::new("python3").arg("--version").output().is_err() {
+            return;
+        }
+        let mut command = Command::new("sh");
+        command.args(["-c", "python3 -c 'import os,time; os.setsid(); print(\"ready\", flush=True); time.sleep(3)' & wait"]);
+        let start = Instant::now();
+        let error = run_for(command, Duration::from_secs(1)).err().unwrap();
+        assert_eq!(error.code, "timeout");
+        assert!(
+            start.elapsed() < Duration::from_millis(2500),
+            "escaped pipe must not extend the deadline through join()"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn exited_child_with_inherited_pipes_remains_deadline_bound() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 5 & exit 0"]);
+        let start = Instant::now();
+        let error = run_for(command, Duration::from_millis(50)).err().unwrap();
+        assert_eq!(error.code, "timeout");
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn overflow_kills_and_reaps_a_running_producer() {
+        let start = Instant::now();
+        let error = run_for(Command::new("yes"), Duration::from_secs(10))
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "outputLimit");
+        assert!(start.elapsed() < Duration::from_secs(5));
+    }
+    #[test]
+    #[cfg(unix)]
+    fn ssh_encoded_envelope_survives_sh_and_tcsh_with_binary_stdin() {
+        let hostile = "é\n'; touch INJECTED; #\n$(touch INJECTED) `touch INJECTED` ! $HOME \\\"";
+        let script = ssh_script(
+            &[("HOSTILE".into(), hostile.into())],
+            &args(&[
+                "sh",
+                "-c",
+                "printf '%s\\0%s\\0' \"$HOSTILE\" \"$1\"; cat",
+                "_",
+                hostile,
+            ]),
+        )
+        .unwrap();
+        let envelope = ssh_envelope(&script).unwrap();
+        assert!(!envelope.contains('\n'));
+        assert!(!envelope.contains('!'));
+        for shell in ["sh", "tcsh"] {
+            if Command::new(shell)
+                .arg("-c")
+                .arg("exit 0")
+                .status()
+                .is_err()
+            {
+                continue;
+            }
+            let dir = tempfile::tempdir().unwrap();
+            let mut command = Command::new(shell);
+            command.arg("-c").arg(&envelope).current_dir(dir.path());
+            let binary = b"\0\xff\ninput\0";
+            let output = run_with_input_for(command, binary, CHECK_TIMEOUT, 1024).unwrap();
+            assert!(
+                output.success,
+                "{shell}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                output.stdout,
+                [hostile.as_bytes(), b"\0", hostile.as_bytes(), b"\0", binary].concat()
+            );
+            assert!(!dir.path().join("INJECTED").exists());
+            if Command::new("python3").arg("--version").output().is_ok() {
+                // The real multiline conflict helper must survive a tcsh login
+                // parse too, with its JSON + arbitrary binary stdin unchanged.
+                let path = "conflict\nfile";
+                std::fs::write(dir.path().join(path), b"old").unwrap();
+                let request = serde_json::json!({"root": dir.path(), "path": path, "action": "write", "expected": {"kind": "file", "bytes": [111,108,100]}, "executable": false});
+                let mut input = serde_json::to_vec(&request).unwrap();
+                input.push(b'\n');
+                input.extend_from_slice(binary);
+                let helper = ssh_script(
+                    &[],
+                    &args(&["python3", "-c", crate::conflicts::REMOTE_FILE]),
+                )
+                .unwrap();
+                let mut command = Command::new(shell);
+                command.arg("-c").arg(ssh_envelope(&helper).unwrap());
+                let output = run_with_input_for(command, &input, CHECK_TIMEOUT, 8192).unwrap();
+                assert!(
+                    output.success,
+                    "{shell}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert_eq!(std::fs::read(dir.path().join(path)).unwrap(), binary);
+            }
+        }
+        assert_eq!(
+            ssh_envelope(&"x".repeat(100 * 1024)).unwrap_err().code,
+            "inputLimit"
+        );
+        assert_eq!(
+            ssh_script(&[], &args(&["a\0b"])).unwrap_err().code,
+            "invalidRequest"
+        );
+    }
+    #[test]
+    #[cfg(unix)]
+    fn ssh_control_directory_rejects_symlinks_and_public_permissions() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let link = dir.path().join("link");
+        symlink(dir.path(), &link).unwrap();
+        assert!(!private_dir(&link));
+        let public = dir.path().join("public");
+        std::fs::create_dir(&public).unwrap();
+        std::fs::set_permissions(&public, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(!private_dir(&public));
+        assert!(private_dir(&temp_control_dir()));
+    }
+    #[test]
+    #[cfg(unix)]
+    fn execution_budget_excludes_only_scoped_prompt_waits() {
+        assert!(
+            execution_expired(
+                Duration::from_millis(100),
+                Duration::from_millis(100),
+                Duration::from_millis(20),
+                Duration::from_millis(80)
+            ),
+            "prompt time cannot exceed the overall ceiling"
+        );
+        let token = uuid::Uuid::new_v4().to_string();
+        let scope = PromptScope::new(&token);
+        let dir = tempfile::tempdir().unwrap();
+        let ready = dir.path().join("ready");
+        let done = dir.path().join("done");
+        let prompt_token = token.clone();
+        let prompt_ready = ready.clone();
+        let prompt_done = done.clone();
+        // The first authenticated prompt is already pending as its helper
+        // launches. Its *current* wait may pause the new command, but past wait
+        // credit must not. This also isolates tiny scaled execution budgets from
+        // OS executable-approval delays before the helper signals readiness.
+        let first_wait = prompt_wait(&token).unwrap();
+        let prompts = thread::spawn(move || {
+            // Start only once this child is running. Independent sleeps could
+            // finish during a slow spawn, testing historical credit instead.
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !prompt_ready.exists() {
+                assert!(Instant::now() < deadline, "child did not signal readiness");
+                thread::sleep(Duration::from_millis(5));
+            }
+            thread::sleep(Duration::from_millis(600));
+            drop(first_wait);
+            thread::sleep(Duration::from_millis(20));
+            let second_wait = prompt_wait(&prompt_token).unwrap();
+            thread::sleep(Duration::from_millis(600));
+            drop(second_wait);
+            thread::sleep(Duration::from_millis(20));
+            std::fs::write(prompt_done, b"done").unwrap();
+        });
+        let mut command = Command::new("sh");
+        command
+            // Builtins only: no repeated helper launches in the handshake loop.
+            .arg("-c")
+            .arg(format!(
+                "printf ready > {}; while [ ! -f {} ]; do :; done",
+                crate::askpass::shell_quote(ready.to_str().unwrap()),
+                crate::askpass::shell_quote(done.to_str().unwrap())
+            ))
+            .env("GITTY_EDITOR_TOKEN", &token);
+        let result = run_with_timeout(&mut command, Duration::from_secs(1));
+        prompts.join().unwrap();
+        assert!(result.unwrap().success);
+        let other_token = uuid::Uuid::new_v4().to_string();
+        let _other_scope = PromptScope::new(&other_token);
+        let other_wait = prompt_wait(&other_token).unwrap();
+        let mut hung = Command::new("sleep");
+        hung.arg("5").env("GITTY_EDITOR_TOKEN", &token);
+        assert_eq!(
+            run_with_timeout(&mut hung, Duration::from_millis(40))
+                .err()
+                .unwrap()
+                .code,
+            "timeout"
+        );
+        drop(other_wait); // another operation's prompt never pauses this command
+        let wait = prompt_wait(&token).unwrap();
+        let mut overall = Command::new("sleep");
+        overall.arg("5").env("GITTY_EDITOR_TOKEN", &token);
+        let error = run_with_stdin_budget(
+            &mut overall,
+            Duration::from_millis(40),
+            Duration::from_millis(120),
+            Stdio::null(),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(error.code, "timeout");
+        assert!(error.message.contains("overall deadline"));
+        drop(wait);
+        scope.cancel();
+        let mut cancelled = Command::new("sleep");
+        cancelled.arg("5").env("GITTY_EDITOR_TOKEN", &token);
+        assert_eq!(
+            run_with_timeout(&mut cancelled, Duration::from_secs(5))
+                .err()
+                .unwrap()
+                .code,
+            "cancelled"
+        );
+    }
+    #[test]
+    fn prompt_budget_starts_fresh_and_combines_overlapping_scoped_waits() {
+        let first = Arc::new(PromptClock::default());
+        let second = Arc::new(PromptClock::default());
+        first.time.lock().unwrap_or_else(|e| e.into_inner()).elapsed = Duration::from_secs(90);
+        first.begin_wait();
+        first.time.lock().unwrap_or_else(|e| e.into_inner()).since =
+            Some(Instant::now() - Duration::from_secs(10));
+        let observed = Instant::now();
+        let budget = Arc::new(PromptClock::default());
+        first.observe(&budget);
+        {
+            let time = budget.time.lock().unwrap_or_else(|e| e.into_inner());
+            assert_eq!(time.elapsed, Duration::ZERO);
+            assert_eq!(time.waits, 1);
+            assert!(
+                time.since.unwrap() >= observed,
+                "pre-launch wait must not grant historical credit"
+            );
+        }
+        second.observe(&budget);
+        second.begin_wait();
+        second.begin_wait(); // nested prompts on one token remain one interval
+        assert_eq!(
+            budget.time.lock().unwrap_or_else(|e| e.into_inner()).waits,
+            2
+        );
+        first.end_wait();
+        assert_eq!(
+            budget.time.lock().unwrap_or_else(|e| e.into_inner()).waits,
+            1
+        );
+        second.end_wait();
+        assert_eq!(
+            budget.time.lock().unwrap_or_else(|e| e.into_inner()).waits,
+            1
+        );
+        second.end_wait();
+        assert_eq!(
+            budget.time.lock().unwrap_or_else(|e| e.into_inner()).waits,
+            0
+        );
+        assert!(budget
+            .time
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .since
+            .is_none());
+    }
+    #[test]
+    fn non_utf8_metadata_is_never_lossily_aliased() {
+        assert_eq!(
+            text(vec![b'x', 0xff]).unwrap_err().code,
+            "unsupportedEncoding"
+        );
+    }
+    #[test]
+    fn logged_command_omits_config_overrides() {
+        let args: Vec<String> = [
+            "-c",
+            "credential.helper=secret",
+            "fetch",
+            "--",
+            "origin",
+            "-c",
+        ]
+        .map(String::from)
+        .into();
+        assert_eq!(display_git(&args), "git fetch -- origin -c");
+        let switch: Vec<String> = ["-c", "x=y", "switch", "-c", "feature"]
+            .map(String::from)
+            .into();
+        assert_eq!(display_git(&switch), "git switch -c feature");
+        let global: Vec<String> = ["--no-pager", "-c", "x=y", "-c", "z=w", "switch", "-c", "b"]
+            .map(String::from)
+            .into();
+        assert_eq!(display_git(&global), "git --no-pager switch -c b");
+    }
+    #[test]
+    fn logged_stdin_shows_paths_and_messages_but_never_patches() {
+        let add: Vec<String> = ["add", "--pathspec-from-file=-"].map(String::from).into();
+        let apply: Vec<String> = ["-c", "x=y", "apply", "--cached", "-"]
+            .map(String::from)
+            .into();
+        assert_eq!(
+            display_stdin(&add, b"a.txt\0b c.txt"),
+            Some("a.txt\nb c.txt".into())
+        );
+        assert_eq!(
+            display_stdin(&add, "fix: caf\u{e9}\n\nbody".as_bytes()),
+            Some("fix: caf\u{e9}\n\nbody".into())
+        );
+        assert_eq!(display_stdin(&add, b""), None);
+        assert_eq!(display_stdin(&add, &[0xff, 0xfe]), None);
+        assert_eq!(display_stdin(&apply, b"+secret = 1"), None);
+    }
+    #[test]
+    fn output_capture_is_bounded() {
+        let overflow = Arc::new(AtomicBool::new(false));
+        let bytes = capture(
+            std::io::repeat(b'x').take((MAX_OUTPUT + 1) as u64),
+            overflow.clone(),
+        )
+        .unwrap();
+        assert!(bytes.len() <= MAX_OUTPUT);
+        assert!(overflow.load(Ordering::Relaxed));
+    }
+    #[test]
+    #[cfg(unix)]
+    fn count_spawns_covers_parallel_workers_and_is_per_thread() {
+        let run = || {
+            let mut c = Command::new("true");
+            run_with_timeout(&mut c, Duration::from_secs(10)).unwrap();
+        };
+        let ((), count) = count_spawns(|| {
+            run();
+            let jobs: Vec<Box<dyn FnOnce() + Send>> = (0..3)
+                .map(|_| Box::new(run) as Box<dyn FnOnce() + Send>)
+                .collect();
+            parallel(jobs);
+            // A nested counter shadows, then restores, the outer one.
+            let ((), inner) = count_spawns(run);
+            assert_eq!(inner, 1);
+        });
+        assert_eq!(count, 4);
+        // Outside a counting scope, launches are not recorded anywhere.
+        run();
+        let ((), none) = count_spawns(|| ());
+        assert_eq!(none, 0);
+    }
+    #[test]
+    #[cfg(unix)]
+    fn ssh_scripts_quote_every_remote_word_and_never_expand_it() {
+        let env = vec![
+            ("GIT_AUTHOR_NAME".to_string(), "O'Brien $(id)".to_string()),
+            ("LC_ALL".to_string(), "C".to_string()),
+        ];
+        let words = vec![
+            "git".to_string(),
+            "-C".to_string(),
+            "/tmp/sp ace's".to_string(),
+            "status".to_string(),
+        ];
+        let script = ssh_script(&env, &words).unwrap();
+        assert_eq!(
+            script,
+            "env 'GIT_AUTHOR_NAME=O'\\''Brien $(id)' 'LC_ALL=C' 'git' '-C' '/tmp/sp ace'\\''s' 'status'"
+        );
+        // The shell that runs it receives the literal words, not a substitution or
+        // a word split: this is the property every remote Git argument depends on.
+        let echoed = ssh_script(
+            &[("A".into(), "$(id)".into())],
+            &args(&["printf", "[%s]", "a b", "$(id)", "'quoted'"]),
+        )
+        .unwrap();
+        let output = Command::new("sh").arg("-c").arg(&echoed).output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "[a b][$(id)]['quoted']"
+        );
+    }
+
+    #[test]
+    fn ssh_scripts_refuse_an_environment_name_that_is_not_an_identifier() {
+        let error = ssh_script(&[("A B".into(), "1".into())], &["git".to_string()]).unwrap_err();
+        assert_eq!(error.code, "internalEnv");
+        assert!(ssh_script(&[], &[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn ssh_destinations_cannot_become_options() {
+        let location = RepositoryLocation::Ssh {
+            host: "-oProxyCommand=touch /tmp/pwned".into(),
+            port: None,
+            user: None,
+            path: "/tmp".into(),
+        };
+        assert_eq!(ssh_command(&location).unwrap_err().code, "invalidHost");
+        for (user, port, code) in [
+            (Some("-lroot".to_string()), None, "invalidUser"),
+            (None, Some(0), "invalidPort"),
+        ] {
+            let location = RepositoryLocation::Ssh {
+                host: "home".into(),
+                port,
+                user,
+                path: "/tmp".into(),
+            };
+            assert_eq!(ssh_command(&location).unwrap_err().code, code);
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ssh_control_paths_fit_the_socket_limit_and_stay_per_destination() {
+        use std::os::unix::fs::PermissionsExt;
+        let long = std::path::Path::new(
+            "/home/someone/with/a/very/long/home/directory/Library/Application Support/app.gitty.desktop/ssh",
+        );
+        let short = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(short.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let fits = |path: &std::path::Path| path.as_os_str().len() <= MAX_CONTROL_PATH;
+
+        // A directory that fits is preferred over the temp-directory fallback.
+        let preferred = control_path_in(short.path(), long, "me@home:22").unwrap();
+        assert!(preferred.starts_with(short.path()), "{preferred:?}");
+
+        // An over-long preferred directory moves to a fallback that fits.
+        let first = control_path_in(long, short.path(), "me@home:22").unwrap();
+        let second = control_path_in(long, short.path(), "me@home:2222").unwrap();
+        assert_ne!(first, second, "each destination keeps its own session");
+        assert_eq!(
+            first,
+            control_path_in(long, short.path(), "me@home:22").unwrap()
+        );
+        for path in [&first, &second] {
+            assert!(fits(path), "{} bytes: {path:?}", path.as_os_str().len());
+            assert!(path.starts_with(short.path()), "{path:?}");
+        }
+
+        // A long TMPDIR is measured too: without a fitting directory, multiplexing is
+        // skipped rather than handing OpenSSH an unusable socket path.
+        assert_eq!(control_path_in(long, long, "me@home:22"), None);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ssh_control_option_survives_openssh_config_parsing() {
+        // macOS app-data paths contain a space, which OpenSSH's `-o` parser splits on
+        // unless the value is quoted for it. `ssh -G` parses options without connecting.
+        let dir = tempfile::tempdir().unwrap();
+        set_ssh_control_dir(dir.path().join("gitty support").join("ssh"));
+        let location = RepositoryLocation::Ssh {
+            host: "example.invalid".into(),
+            port: None,
+            user: None,
+            path: "/srv/repo".into(),
+        };
+        let command = ssh_command(&location).unwrap();
+        let argv: Vec<String> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let option = argv
+            .iter()
+            .find(|arg| arg.starts_with("ControlPath="))
+            .expect("multiplexing is configured on Unix");
+        let value = option.strip_prefix("ControlPath=").unwrap();
+        assert!(value.starts_with('"') && value.ends_with('"'), "{option}");
+        let path = value.trim_matches('"');
+        assert!(path.as_bytes().len() <= MAX_CONTROL_PATH, "{path}");
+        // `-F /dev/null` isolates the parse from the developer's ~/.ssh/config, so a
+        // malformed option cannot be excused by an unrelated configuration failure.
+        let Ok(output) = Command::new("ssh")
+            .args(["-G", "-F", "/dev/null", "-o"])
+            .arg(option)
+            .arg("example.invalid")
+            .output()
+        else {
+            return; // No OpenSSH client on this host.
+        };
+        assert!(
+            output.status.success(),
+            "ssh -G rejected our control path: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let parsed = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            parsed
+                .lines()
+                .any(|line| line == format!("controlpath {path}")),
+            "ssh did not parse our control path: {parsed}"
+        );
+    }
+
+    #[test]
+    fn ssh_paths_must_be_absolute_posix_and_reach_no_shell_metacharacter() {
+        for path in ["relative", "", "/tmp/../etc", "/tmp/a\nb", "/tmp/\0x"] {
+            assert_eq!(
+                crate::dto::validate_ssh_path(path).unwrap_err().code,
+                "invalidPath",
+                "{path}"
+            );
+        }
+        for path in ["/", "/home/you/code/thing", "/tmp/a b's (1)"] {
+            assert!(crate::dto::validate_ssh_path(path).is_ok(), "{path}");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn deadline_kills_process() {
+        let mut c = Command::new("sleep");
+        c.arg("5");
+        assert_eq!(
+            run_with_timeout(&mut c, Duration::from_millis(30))
+                .err()
+                .unwrap()
+                .code,
+            "timeout"
+        );
+    }
+}

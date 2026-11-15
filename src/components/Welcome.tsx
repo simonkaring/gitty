@@ -29,13 +29,15 @@ const parentPath = (path: string) => path.replace(/\/?[^/]+\/?$/, '') || '/';
 
 /** The start page: shown with no tabs open and in every new tab. Opening a
  * repository from a tab replaces that tab (see `tabsReducer` 'open'). */
-export function StartPage({ onOpen, onClone, cloneBusy }: {
-  onOpen: (location: RepositoryLocation) => void; onClone: (request: CloneRequest) => void; cloneBusy: boolean;
+export function StartPage({ onOpen, onClone, cloneBusy, cloneParent }: {
+  onOpen: (location: RepositoryLocation) => void; onClone: (request: CloneRequest) => void; cloneBusy: boolean; cloneParent?: string;
 }) {
   const [view, setView] = useState<View>('recent');
   const [recent, setRecent] = useState<RepositoryLocation[] | null>(null);
   const [filter, setFilter] = useState('');
   const [distributions, setDistributions] = useState<WslDistribution[]>([]);
+  const [wslError, setWslError] = useState('');
+  const [wslRetry, setWslRetry] = useState(0);
   const [distribution, setDistribution] = useState('');
   const [path, setPath] = useState('/');
   const [entries, setEntries] = useState<DirectoryEntry[]>([]);
@@ -46,7 +48,7 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
   const [cloneAccountId, setCloneAccountId] = useState<string>();
   const [cloneName, setCloneName] = useState('');
   const [cloneKind, setCloneKind] = useState<'native' | 'wsl'>('native');
-  const [nativeParent, setNativeParent] = useState('');
+  const [nativeParent, setNativeParent] = useState(cloneParent ?? '');
   const [sshHost, setSshHost] = useState('');
   const [sshUser, setSshUser] = useState('');
   const [sshPort, setSshPort] = useState('');
@@ -68,10 +70,19 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
   useEffect(() => {
     let live = true;
     native<RepositoryLocation[]>('repository_recent').then(v => { if (live) setRecent(Array.isArray(v) ? v : []); }).catch(e => { if (live) { setRecent([]); setError(errorMessage(e)); } });
-    // ponytail: WSL is optional; an unavailable host just hides the WSL view.
-    native<WslDistribution[]>('wsl_distributions').then(v => { if (live && v.length) { setDistributions(v); setDistribution(v[0].name); } }).catch(() => {});
     return () => { live = false; request.current++; sshProbeRequest.current++; sshBrowseRequest.current++; };
   }, []);
+  useEffect(() => {
+    if (document.documentElement.dataset.platform !== 'windows') return;
+    let live = true;
+    native<WslDistribution[]>('wsl_distributions').then(v => {
+      if (!live) return;
+      setDistributions(v);
+      if (v.length) setDistribution(v[0].name);
+      setWslError('');
+    }).catch(e => { if (live) setWslError(errorMessage(e)); });
+    return () => { live = false; };
+  }, [wslRetry]);
   function show(next: View) { setView(next); setError(''); }
   async function browse(next = path) {
     const token = ++request.current; setBusy(true); setError('');
@@ -156,7 +167,7 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
     } catch (e) { if (token === sshBrowseRequest.current) setError(errorMessage(e)); }
     finally { if (token === sshBrowseRequest.current) setSshBrowseBusy(false); }
   }
-  const views: [View, string, typeof Clock3][] = [['recent', 'Recent', Clock3], ['clone', 'Clone', Download], ['ssh', 'Open over SSH', Server], ...(distributions.length ? [['wsl', 'Browse WSL', SquareTerminal] as [View, string, typeof Clock3]] : [])];
+  const views: [View, string, typeof Clock3][] = [['recent', 'Recent', Clock3], ['clone', 'Clone', Download], ['ssh', 'Open over SSH', Server], ...((distributions.length || wslError) ? [['wsl', 'Browse WSL', SquareTerminal] as [View, string, typeof Clock3]] : [])];
   function navKey(event: KeyboardEvent) {
     const index = views.findIndex(([id]) => id === view);
     const next = event.key === 'ArrowDown' ? index + 1 : event.key === 'ArrowUp' ? index - 1 : null;
@@ -203,7 +214,7 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
             <Segmented label="Clone source" value={cloneMethod} options={[[ 'accounts', 'Connected accounts' ], [ 'url', 'Repository URL' ]]} onChange={value => { if (cloneBusy) return; setCloneMethod(value); selectRepository(null); if (value === 'accounts') setCloneKind('native'); }} />
             {cloneMethod === 'accounts' && <RepositoryBrowser disabled={cloneBusy} onSelect={selectRepository} />}
             <form className="start-form" onSubmit={event => { event.preventDefault(); submitClone(); }}>
-            <label className="field">Repository URL<input autoFocus={cloneMethod === 'url'} value={cloneSource} readOnly={cloneMethod === 'accounts'} disabled={cloneBusy} onChange={event => setCloneSource(event.target.value)} onBlur={() => { if (!cloneName.trim()) setCloneName(suggestedCloneName(cloneSource)); }} placeholder={cloneMethod === 'accounts' ? 'Select a repository above' : 'https://host/team/repository.git'} /></label>
+             <label className="field">Repository URL<input autoFocus={cloneMethod === 'url'} value={cloneSource} readOnly={cloneMethod === 'accounts'} disabled={cloneBusy} onChange={event => setCloneSource(event.target.value)} placeholder={cloneMethod === 'accounts' ? 'Select a repository above' : 'https://host/team/repository.git'} /></label>
             <div className="field">
               <span>Destination</span>
               {!!distributions.length && cloneMethod === 'url' && <Segmented label="Destination type" value={cloneKind} options={[['native', 'This computer'], ['wsl', 'WSL']]} onChange={setCloneKind} />}
@@ -252,19 +263,20 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
             <p className="muted small">Uses your own SSH configuration and keys, so nothing new is trusted or stored here. The remote host needs Git; editing conflict files there also needs python3. Cloning and opening files are not available over SSH.</p>
           </div>}
           {view === 'wsl' && <div className="start-form">
+            {wslError && <p className="alert" role="alert">WSL distributions could not be loaded: {wslError} <button type="button" className="text-button" onClick={() => setWslRetry(value => value + 1)}>Retry</button></p>}
             <label className="field">Distribution<select value={distribution} onChange={e => { request.current++; setDistribution(e.target.value); setEntries([]); setPath('/'); setBusy(false); }}>{distributions.map(item => <option key={item.name}>{item.name}</option>)}</select></label>
             <form className="field" onSubmit={e => { e.preventDefault(); void browse(); }}>
               <label htmlFor="start-wsl-path">Linux path</label>
-              <div className="field-row"><input id="start-wsl-path" className="mono" value={path} onChange={e => setPath(e.target.value)} /><button className="secondary-button" disabled={busy}>{busy ? 'Loading…' : 'Browse'}</button></div>
+              <div className="field-row"><input id="start-wsl-path" className="mono" value={path} onChange={e => setPath(e.target.value)} /><button className="secondary-button" disabled={busy || !distribution}>{busy ? 'Loading…' : 'Browse'}</button></div>
             </form>
             {alert}
             <ul className="start-list" aria-label="Folders">
-              {path !== '/' && <li><button className="start-item" disabled={busy} onClick={() => void browse(parentPath(path))}><ArrowUp size={16} /><span><strong>Parent folder</strong></span></button></li>}
+              {path !== '/' && <li><button className="start-item" disabled={busy || !distribution} onClick={() => void browse(parentPath(path))}><ArrowUp size={16} /><span><strong>Parent folder</strong></span></button></li>}
               {entries.map(entry => <li key={entry.path}><button className="start-item" disabled={busy} onClick={() => void browse(entry.path)}><Folder size={16} /><span><strong>{entry.name}</strong></span></button></li>)}
             </ul>
             <div className="start-actions">
-              <button className="secondary-button" onClick={() => { setCloneMethod('url'); selectRepository(null); setCloneKind('wsl'); show('clone'); }}>Clone into this folder</button>
-              <button className="primary-button" onClick={() => onOpen({ kind: 'wsl', distribution, path })}>Open this folder</button>
+              <button className="secondary-button" disabled={!distribution} onClick={() => { setCloneMethod('url'); selectRepository(null); setCloneKind('wsl'); show('clone'); }}>Clone into this folder</button>
+              <button className="primary-button" disabled={!distribution} onClick={() => onOpen({ kind: 'wsl', distribution, path })}>Open this folder</button>
             </div>
           </div>}
         </section>

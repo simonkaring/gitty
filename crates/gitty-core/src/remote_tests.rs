@@ -1,0 +1,1454 @@
+use crate::{
+    dto::{HistoryQuery, RepositoryLocation, Result},
+    operation_dto::OperationKind,
+    remote_dto::{ActionOutput, RemoteAction, StashAction},
+    repository::{Repository, Service},
+};
+use serde_json::{json, Value};
+use std::{path::Path, process::Command, sync::Arc};
+
+#[test]
+fn wsl_network_bridge_uses_scoped_token_and_linux_executable_path() {
+    let registry = crate::askpass::AskpassRegistry::new(4521, "unused".into());
+    let guard = registry.start_operation();
+    let (args, env) = crate::remote::network_args_wsl(
+        "/mnt/c/Program Files/Gitty/gitty.exe",
+        &registry,
+        guard.token(),
+    );
+    assert!(args
+        .iter()
+        .any(|arg| arg == "core.askPass=/mnt/c/Program Files/Gitty/gitty.exe"));
+    assert!(args.iter().any(|arg| arg == "credential.interactive=true"));
+    assert!(args
+        .iter()
+        .any(|arg| arg == "core.sshCommand=ssh -oBatchMode=no -oStrictHostKeyChecking=yes"));
+    assert!(env
+        .iter()
+        .any(|(key, value)| key == "GITTY_ASKPASS_TOKEN" && value == guard.token()));
+    assert!(env.iter().any(
+        |(key, value)| key == "SSH_ASKPASS" && value == "/mnt/c/Program Files/Gitty/gitty.exe"
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn native_network_askpass_runs_git_helper_from_environment() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("askpass helper's script.sh");
+    std::fs::write(
+        &script_path,
+        "#!/bin/sh\ncase \"$1\" in *Username*) printf 'test-user\\n';; *Password*) printf 'test-password\\n';; esac\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let registry = crate::askpass::AskpassRegistry::new(4521, script_path.clone());
+    let guard = registry.start_operation();
+    let (args, env) = crate::remote::network_args(true, Some(&guard));
+    assert!(env
+        .iter()
+        .any(|(key, value)| { key == "GIT_ASKPASS" && value == script_path.to_str().unwrap() }));
+
+    for use_environment in [true, false] {
+        let mut command = Command::new("git");
+        command
+            .args(&args)
+            .args(["-c", "credential.helper="])
+            .args(["credential", "fill"])
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GCM_INTERACTIVE", "never")
+            .env_remove("GIT_CONFIG_PARAMETERS")
+            .env_remove("GIT_ASKPASS")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        for (key, value) in &env {
+            if use_environment || key != "GIT_ASKPASS" {
+                command.env(key, value);
+            }
+        }
+        let mut child = command.spawn().unwrap();
+        use std::io::Write;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"protocol=https\nhost=example.invalid\n\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let answer = String::from_utf8(output.stdout).unwrap();
+        assert!(answer.contains("username=test-user\n"));
+        assert!(answer.contains("password=test-password\n"));
+    }
+}
+
+fn git(path: &Path, a: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(a)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env(
+            "GIT_CONFIG_GLOBAL",
+            if cfg!(windows) { "NUL" } else { "/dev/null" },
+        )
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{a:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim_end().into()
+}
+
+struct Fixture {
+    dir: tempfile::TempDir,
+    _data: tempfile::TempDir,
+    service: Service,
+    repo: Arc<Repository>,
+    handle: String,
+}
+impl Fixture {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-b", "main"]);
+        for (k, v) in [
+            ("user.name", "Test"),
+            ("user.email", "test@example.com"),
+            ("commit.gpgSign", "false"),
+            ("core.autocrlf", "false"),
+            ("core.hooksPath", ".git/no-hooks"),
+        ] {
+            git(dir.path(), &["config", k, v]);
+        }
+        std::fs::write(dir.path().join("file"), "base\n").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "base"]);
+        let data = tempfile::tempdir().unwrap();
+        let service = Service::new(data.path().into());
+        let handle = service
+            .open(RepositoryLocation::Native {
+                path: dir.path().to_str().unwrap().into(),
+            })
+            .unwrap()
+            .session
+            .handle;
+        let repo = service.repo(&handle).unwrap();
+        Self {
+            dir,
+            _data: data,
+            service,
+            repo,
+            handle,
+        }
+    }
+    fn git(&self, a: &[&str]) -> String {
+        git(self.dir.path(), a)
+    }
+    fn write(&self, name: &str, text: &str) {
+        std::fs::write(self.dir.path().join(name), text).unwrap();
+    }
+    fn commit(&self, message: &str) -> String {
+        self.git(&["add", "."]);
+        self.git(&["commit", "-m", message]);
+        self.git(&["rev-parse", "HEAD"])
+    }
+    fn remote(&self, action: Value) -> Result<ActionOutput> {
+        self.service
+            .remote_action(&self.handle, serde_json::from_value(action).unwrap(), None)
+    }
+    fn stash(&self, action: Value) -> Result<ActionOutput> {
+        self.service
+            .stash_action(&self.handle, serde_json::from_value(action).unwrap())
+    }
+    fn save(&self, message: &str) -> String {
+        self.stash(json!({"kind":"save", "message":message}))
+            .unwrap();
+        self.repo.stashes().unwrap()[0].oid.clone()
+    }
+    fn bare_remote(&self) -> tempfile::TempDir {
+        let bare = tempfile::tempdir().unwrap();
+        git(bare.path(), &["init", "--bare", "-b", "main"]);
+        self.git(&["remote", "add", "origin", bare.path().to_str().unwrap()]);
+        bare
+    }
+    fn publish(&self) {
+        self.remote(json!({"kind":"push", "setUpstream":true}))
+            .unwrap();
+    }
+    fn peer(&self, bare: &Path) -> Self {
+        let peer = Self::new();
+        peer.git(&["remote", "add", "origin", bare.to_str().unwrap()]);
+        peer.git(&["fetch", "origin"]);
+        peer.git(&["reset", "--hard", "origin/main"]);
+        peer.git(&["branch", "--set-upstream-to=origin/main"]);
+        peer
+    }
+}
+
+#[test]
+fn remote_ipc_shape_and_missing_upstream() {
+    let f = Fixture::new();
+    assert_eq!(
+        serde_json::to_value(f.repo.sync_info().unwrap()).unwrap(),
+        json!({
+            "branch":"main", "upstream":null, "ahead":null, "behind":null, "remotes":[]
+        })
+    );
+    assert_eq!(
+        f.remote(json!({"kind":"fetch"})).unwrap_err().code,
+        "noRemote"
+    );
+    let _bare = f.bare_remote();
+    assert_eq!(
+        f.remote(json!({"kind":"push"})).unwrap_err().code,
+        "noUpstream"
+    );
+    assert_eq!(
+        f.remote(json!({"kind":"pull"})).unwrap_err().code,
+        "noUpstream"
+    );
+    f.publish();
+    let info = f.repo.sync_info().unwrap();
+    assert_eq!(info.upstream.as_deref(), Some("origin/main"));
+    assert_eq!((info.ahead, info.behind), (Some(0), Some(0)));
+    f.git(&["update-ref", "-d", "refs/remotes/origin/main"]);
+    let info = f.repo.sync_info().unwrap();
+    assert_eq!(info.upstream.as_deref(), Some("origin/main"));
+    assert_eq!((info.ahead, info.behind), (None, None));
+    f.git(&["checkout", "--detach"]);
+    assert!(f.repo.sync_info().unwrap().branch.is_none());
+    assert_eq!(
+        f.remote(json!({"kind":"push", "setUpstream":true}))
+            .unwrap_err()
+            .code,
+        "detachedHead"
+    );
+    assert!(serde_json::from_value::<RemoteAction>(json!({"kind":"push","force":true})).is_err());
+    assert!(
+        serde_json::from_value::<StashAction>(json!({"kind":"pop","selector":"stash@{0}"}))
+            .is_err()
+    );
+}
+
+#[test]
+fn remote_fetch_counts_fast_forward_pull_and_push() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    let peer = f.peer(bare.path());
+    peer.write("incoming", "from peer");
+    let incoming = peer.commit("incoming");
+    peer.remote(json!({"kind":"push"})).unwrap();
+    // Reading metadata must not fetch even when the remote moved.
+    assert_eq!(f.repo.sync_info().unwrap().behind, Some(0));
+    f.remote(json!({"kind":"fetch"})).unwrap();
+    assert_eq!(f.repo.sync_info().unwrap().behind, Some(1));
+    f.remote(json!({"kind":"pull"})).unwrap();
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), incoming);
+    f.write("outgoing", "from local");
+    let outgoing = f.commit("outgoing");
+    assert_eq!(f.repo.sync_info().unwrap().ahead, Some(1));
+    f.remote(json!({"kind":"push"})).unwrap();
+    assert_eq!(git(bare.path(), &["rev-parse", "main"]), outgoing);
+    assert_eq!(f.repo.sync_info().unwrap().ahead, Some(0));
+}
+
+#[test]
+fn pull_target_fast_forwards_another_branch_without_touching_the_checkout() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    let base = f.git(&["rev-parse", "HEAD"]);
+    let peer = f.peer(bare.path());
+    peer.git(&["switch", "-c", "topic"]);
+    peer.write("incoming", "from peer");
+    let incoming = peer.commit("incoming");
+    peer.git(&["push", "origin", "topic"]);
+    f.git(&["branch", "topic"]);
+    f.write("file", "dirty\n");
+    let pull = json!({"kind":"pull", "remote":"origin", "branch":"topic", "target":"topic"});
+    let output = f.remote(pull.clone()).unwrap().output;
+    assert!(!output.contains("Already up to date."), "{output}");
+    assert_eq!(f.git(&["rev-parse", "topic"]), incoming);
+    assert_eq!(f.git(&["rev-parse", "origin/topic"]), incoming);
+    assert_eq!(f.git(&["symbolic-ref", "HEAD"]), "refs/heads/main");
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), base);
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("file")).unwrap(),
+        "dirty\n"
+    );
+    assert!(f
+        .remote(pull.clone())
+        .unwrap()
+        .output
+        .contains("Already up to date."));
+
+    let diverged = f.git(&[
+        "commit-tree",
+        "HEAD^{tree}",
+        "-p",
+        &base,
+        "-m",
+        "local only",
+    ]);
+    f.git(&["update-ref", "refs/heads/topic", &diverged]);
+    peer.write("more", "again");
+    peer.commit("more");
+    peer.git(&["push", "origin", "topic"]);
+    assert_eq!(f.remote(pull).unwrap_err().code, "git");
+    assert_eq!(f.git(&["rev-parse", "topic"]), diverged);
+
+    let checked_out = json!({"kind":"pull", "remote":"origin", "branch":"main", "target":"main"});
+    assert_eq!(f.remote(checked_out).unwrap_err().code, "invalidRequest");
+}
+
+#[test]
+#[cfg(unix)]
+fn remote_pull_integrates_private_fetched_oid_despite_fetch_head_and_tracking_race() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    let wrong = f.git(&["rev-parse", "HEAD"]);
+    let peer = f.peer(bare.path());
+    peer.write("incoming", "fetched source\n");
+    let incoming = peer.commit("incoming");
+    peer.remote(json!({"kind":"push"})).unwrap();
+    let hooks = f.dir.path().join(".git/race-hooks");
+    std::fs::create_dir(&hooks).unwrap();
+    let hook = hooks.join("reference-transaction");
+    std::fs::write(&hook, format!("#!/bin/sh\n[ \"$1\" = committed ] || exit 0\ninput=$(cat)\ncase \"$input\" in *refs/gitty/pull/*) printf '%s\\n' '{wrong}' > .git/FETCH_HEAD; git update-ref refs/remotes/origin/main '{wrong}';; esac\n")).unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    f.git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    f.remote(json!({"kind":"pull"})).unwrap();
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), incoming);
+    assert!(f
+        .git(&["for-each-ref", "--format=%(refname)", "refs/gitty/pull"])
+        .is_empty());
+}
+
+#[test]
+#[cfg(unix)]
+fn pull_refuses_head_or_branch_changes_during_fetch() {
+    use std::os::unix::fs::PermissionsExt;
+    for change in ["git switch feature", "git reset --hard origin/main"] {
+        let f = Fixture::new();
+        let bare = f.bare_remote();
+        f.publish();
+        let original = f.git(&["rev-parse", "HEAD"]);
+        f.git(&["branch", "feature"]);
+        let peer = f.peer(bare.path());
+        peer.write("incoming", "fetched\n");
+        let incoming = peer.commit("incoming");
+        peer.remote(json!({"kind":"push"})).unwrap();
+        let hooks = f.dir.path().join(".git/race-hooks");
+        std::fs::create_dir(&hooks).unwrap();
+        let hook = hooks.join("reference-transaction");
+        std::fs::write(&hook, format!("#!/bin/sh\n[ \"$1\" = committed ] || exit 0\ninput=$(cat)\ncase \"$input\" in *refs/gitty/pull/*) {change} >&2;; esac\n")).unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        f.git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+        let error = f.remote(json!({"kind":"pull"})).unwrap_err();
+        assert_eq!(error.code, "staleOperation", "{change}: {error:?}");
+        assert!(error.message.contains("No integration was attempted"));
+        assert_eq!(f.git(&["rev-parse", "feature"]), original);
+        assert_eq!(
+            f.git(&["rev-parse", "main"]),
+            if change.contains("switch") {
+                original
+            } else {
+                incoming
+            }
+        );
+        assert!(f
+            .git(&["for-each-ref", "--format=%(refname)", "refs/gitty/pull"])
+            .is_empty());
+    }
+}
+
+#[test]
+fn remote_fetch_does_not_touch_fetch_head_and_private_refs_do_not_change_review() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    std::fs::write(f.dir.path().join(".git/FETCH_HEAD"), "sentinel\n").unwrap();
+    let peer = f.peer(bare.path());
+    peer.write("incoming", "incoming\n");
+    peer.commit("incoming");
+    peer.remote(json!({"kind":"push"})).unwrap();
+    f.remote(json!({"kind":"backgroundFetch"})).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join(".git/FETCH_HEAD")).unwrap(),
+        "sentinel\n"
+    );
+    let before = f.repo.operation_state().unwrap().fingerprint;
+    let state = f.repo.state().unwrap().fingerprint;
+    let orphan = f.git(&["commit-tree", "HEAD^{tree}", "-m", "private-only orphan"]);
+    f.git(&["update-ref", "refs/gitty/pull/test-only", &orphan]);
+    assert_eq!(f.repo.operation_state().unwrap().fingerprint, before);
+    assert_eq!(f.repo.state().unwrap().fingerprint, state);
+    assert!(!f
+        .repo
+        .history(None, 200, HistoryQuery::default())
+        .unwrap()
+        .commits
+        .iter()
+        .any(|commit| commit.id == orphan));
+    // A non-private ref still belongs to the all-ref review fingerprint.
+    f.git(&["update-ref", "refs/notes/test-only", &orphan]);
+    assert_ne!(f.repo.operation_state().unwrap().fingerprint, before);
+}
+
+#[test]
+#[cfg(unix)]
+fn remote_pull_cleanup_uses_expected_oid_without_reclassifying_success() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    let base = f.git(&["rev-parse", "HEAD"]);
+    let peer = f.peer(bare.path());
+    peer.write("incoming", "incoming\n");
+    let incoming = peer.commit("incoming");
+    peer.remote(json!({"kind":"push"})).unwrap();
+    let hooks = f.dir.path().join(".git/cleanup-hooks");
+    std::fs::create_dir(&hooks).unwrap();
+    let hook = hooks.join("post-merge");
+    std::fs::write(&hook, format!("#!/bin/sh\nref=$(git for-each-ref --format='%(refname)' refs/gitty/pull/)\ngit update-ref \"$ref\" '{base}'\n")).unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    f.git(&["config", "core.hooksPath", hooks.to_str().unwrap()]);
+    let result = f.remote(json!({"kind":"pull"})).unwrap();
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), incoming);
+    assert!(result.output.contains("Integration completed"));
+    assert!(result.output.contains("Do not repeat"));
+    assert_eq!(
+        f.git(&["for-each-ref", "--format=%(objectname)", "refs/gitty/pull/"]),
+        base
+    );
+}
+
+#[test]
+fn remote_fetch_skips_upstream_counts_and_branch_configuration() {
+    let f = Fixture::new();
+    let _bare = f.bare_remote();
+    f.publish();
+    let (result, spawns) = crate::process::count_spawns(|| f.remote(json!({"kind":"fetch"})));
+    result.unwrap();
+    // Native preflight + remote selection + the fetch; no upstream rev-list walk.
+    assert!(spawns <= 8, "fetch launched {spawns} processes");
+    assert_eq!(f.repo.sync_info().unwrap().ahead, Some(0));
+}
+
+#[test]
+fn background_fetch_updates_remote_history_without_local_refs_tags_or_worktree() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    let peer = f.peer(bare.path());
+    peer.write("incoming", "new remote commit\n");
+    let incoming = peer.commit("incoming");
+    peer.remote(json!({"kind":"push"})).unwrap();
+    peer.git(&["tag", "remote-only-tag"]);
+    peer.git(&["push", "origin", "refs/tags/remote-only-tag"]);
+
+    f.write("file", "staged\n");
+    f.git(&["add", "file"]);
+    f.write("file", "unstaged\n");
+    let original_head = f.git(&["rev-parse", "HEAD"]);
+    let original_index = f.git(&["ls-files", "--stage"]);
+    let original_status = f.git(&["status", "--porcelain"]);
+    let original_contents = std::fs::read(f.dir.path().join("file")).unwrap();
+
+    f.remote(json!({"kind":"backgroundFetch"})).unwrap();
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), original_head);
+    assert_eq!(f.git(&["rev-parse", "refs/heads/main"]), original_head);
+    assert_eq!(f.git(&["rev-parse", "refs/remotes/origin/main"]), incoming);
+    assert_eq!(f.repo.sync_info().unwrap().behind, Some(1));
+    assert_eq!(f.git(&["ls-files", "--stage"]), original_index);
+    assert_eq!(f.git(&["status", "--porcelain"]), original_status);
+    assert_eq!(
+        std::fs::read(f.dir.path().join("file")).unwrap(),
+        original_contents
+    );
+    assert!(f.git(&["tag", "--list", "remote-only-tag"]).is_empty());
+    assert!(f
+        .repo
+        .history(None, 20, HistoryQuery::default())
+        .unwrap()
+        .commits
+        .iter()
+        .any(|commit| commit.id == incoming));
+}
+
+#[test]
+fn remote_fetch_follows_rewritten_history_without_forcing_local_branches() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    let peer = f.peer(bare.path());
+    let base = peer.git(&["rev-parse", "HEAD"]);
+    peer.write("incoming", "original remote history\n");
+    let original = peer.commit("original");
+    peer.remote(json!({"kind":"push"})).unwrap();
+    f.remote(json!({"kind":"pull"})).unwrap();
+
+    peer.git(&["reset", "--hard", &base]);
+    peer.write("replacement", "rewritten remote history\n");
+    let replacement = peer.commit("replacement");
+    peer.git(&[
+        "push",
+        "--force",
+        "origin",
+        "refs/heads/main:refs/heads/main",
+    ]);
+
+    // Even a mirror mapping must not let a forced fetch move local heads/tags.
+    f.git(&["config", "remote.origin.fetch", "+refs/*:refs/*"]);
+    f.git(&["tag", "local-tag"]);
+    f.write("file", "staged\n");
+    f.git(&["add", "file"]);
+    f.write("file", "unstaged\n");
+    let index = f.git(&["ls-files", "--stage"]);
+    let status = f.git(&["status", "--porcelain"]);
+    let refs = f.git(&[
+        "for-each-ref",
+        "--format=%(refname) %(objectname)",
+        "refs/heads",
+        "refs/tags",
+    ]);
+
+    for action in [
+        json!({"kind":"fetch"}),
+        json!({"kind":"fetch", "branch":"main"}),
+        json!({"kind":"backgroundFetch"}),
+        json!({"kind":"pull"}),
+    ] {
+        f.git(&["update-ref", "refs/remotes/origin/main", &original]);
+        let result = f.remote(action.clone());
+        if action["kind"] == "pull" {
+            // Fetch succeeds, but default integration still refuses divergence.
+            assert_eq!(result.unwrap_err().code, "git");
+        } else {
+            result.unwrap();
+        }
+        assert_eq!(
+            f.git(&["rev-parse", "refs/remotes/origin/main"]),
+            replacement
+        );
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), original);
+        assert_eq!(
+            f.git(&[
+                "for-each-ref",
+                "--format=%(refname) %(objectname)",
+                "refs/heads",
+                "refs/tags"
+            ]),
+            refs
+        );
+        assert_eq!(f.git(&["ls-files", "--stage"]), index);
+        assert_eq!(f.git(&["status", "--porcelain"]), status);
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join("file")).unwrap(),
+            "unstaged\n"
+        );
+        assert_eq!(git(bare.path(), &["rev-parse", "main"]), replacement);
+    }
+}
+
+#[test]
+fn remote_divergence_is_refused_by_default_even_with_pull_configuration() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    let peer = f.peer(bare.path());
+    peer.write("peer", "incoming");
+    let incoming = peer.commit("incoming");
+    peer.remote(json!({"kind":"push"})).unwrap();
+    f.write("local", "outgoing");
+    let local = f.commit("local");
+    f.git(&["config", "pull.rebase", "true"]);
+    f.git(&["config", "pull.ff", "false"]);
+    assert_eq!(f.remote(json!({"kind":"pull"})).unwrap_err().code, "git");
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), local);
+    let info = f.repo.sync_info().unwrap();
+    assert_eq!((info.ahead, info.behind), (Some(1), Some(1)));
+    assert_eq!(f.remote(json!({"kind":"push"})).unwrap_err().code, "git");
+    assert_eq!(git(bare.path(), &["rev-parse", "main"]), incoming);
+    f.remote(json!({"kind":"pull","pullMode":"merge"})).unwrap();
+    assert_eq!(
+        f.git(&["rev-list", "--parents", "-1", "HEAD"])
+            .split_whitespace()
+            .count(),
+        3
+    );
+    f.remote(json!({"kind":"push"})).unwrap();
+}
+
+#[test]
+fn remote_rebase_is_opt_in_and_conflicts_are_observable() {
+    for conflict in [false, true] {
+        let f = Fixture::new();
+        let bare = f.bare_remote();
+        f.publish();
+        let peer = f.peer(bare.path());
+        peer.write("file", "incoming\n");
+        let incoming = peer.commit("incoming");
+        peer.remote(json!({"kind":"push"})).unwrap();
+        f.write(if conflict { "file" } else { "local" }, "local\n");
+        f.commit("local");
+        let outcome = f.remote(json!({"kind":"pull","pullMode":"rebase"}));
+        if conflict {
+            assert!(outcome.is_err());
+            let operation = f.repo.operation_state().unwrap();
+            assert_eq!(operation.kind, OperationKind::Rebase);
+            assert_eq!(operation.conflicts, ["file"]);
+        } else {
+            outcome.unwrap();
+            assert_eq!(f.git(&["rev-parse", "HEAD^"]), incoming);
+            assert_eq!(f.repo.sync_info().unwrap().ahead, Some(1));
+        }
+    }
+}
+
+#[test]
+fn remote_publication_is_single_branch_and_never_mirror_or_configured_force() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.git(&["branch", "unrelated"]);
+    f.git(&["tag", "unrelated-tag"]);
+    f.git(&["config", "push.default", "matching"]);
+    f.git(&["config", "push.followTags", "true"]);
+    f.git(&["config", "remote.origin.push", "+refs/heads/*:refs/heads/*"]);
+    f.remote(json!({"kind":"push","branch":"published","setUpstream":true}))
+        .unwrap();
+    assert_eq!(
+        git(bare.path(), &["for-each-ref", "--format=%(refname)"]),
+        "refs/heads/published"
+    );
+    assert_eq!(
+        f.git(&["config", "branch.main.merge"]),
+        "refs/heads/published"
+    );
+    f.git(&["config", "remote.origin.mirror", "true"]);
+    // `main` tracks the differently named `published`, so the destination is chosen.
+    assert_eq!(
+        f.remote(json!({"kind":"push","branch":"published"}))
+            .unwrap_err()
+            .code,
+        "mirrorRemote"
+    );
+    f.git(&["config", "remote.origin.mirror", "false"]);
+    f.git(&[
+        "config",
+        "--add",
+        "remote.origin.pushurl",
+        bare.path().to_str().unwrap(),
+    ]);
+    f.git(&[
+        "config",
+        "--add",
+        "remote.origin.pushurl",
+        "/another-destination",
+    ]);
+    assert_eq!(
+        f.remote(json!({"kind":"push","branch":"published"}))
+            .unwrap_err()
+            .code,
+        "multiplePushUrls"
+    );
+}
+
+#[test]
+fn remote_push_can_name_a_non_current_source_branch_without_switching() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    f.git(&["checkout", "-b", "topic"]);
+    f.write("topic", "one");
+    let first = f.commit("topic one");
+    f.remote(json!({"kind":"push", "branch":"topic", "setUpstream":true}))
+        .unwrap();
+    f.git(&["checkout", "main"]);
+    f.write("main", "main moved");
+    let main_tip = f.commit("main moved");
+    f.remote(json!({"kind":"push"})).unwrap();
+    f.git(&["checkout", "topic"]);
+    f.write("topic", "two");
+    let topic_tip = f.commit("topic two");
+    f.git(&["checkout", "main"]);
+
+    let info = f.repo.sync_info_for("topic").unwrap();
+    assert_eq!(info.branch.as_deref(), Some("topic"));
+    assert_eq!(info.upstream.as_deref(), Some("origin/topic"));
+    assert_eq!(info.ahead, Some(1));
+    let main_info = f.repo.sync_info_for("main").unwrap();
+    assert_eq!((main_info.ahead, main_info.behind), (Some(0), Some(0)));
+    assert_eq!(f.repo.sync_info_for("missing").unwrap_err().code, "git");
+    assert_eq!(
+        f.repo.sync_info_for("-topic").unwrap_err().code,
+        "invalidBranch"
+    );
+
+    let origin_main = git(bare.path(), &["rev-parse", "main"]);
+    assert_eq!(git(bare.path(), &["rev-parse", "topic"]), first);
+    // Without an explicit destination, use topic's upstream, never main's.
+    f.remote(json!({"kind":"push", "source":"topic"})).unwrap();
+    assert_eq!(git(bare.path(), &["rev-parse", "topic"]), topic_tip);
+    f.remote(json!({
+        "kind":"push", "remote":"origin", "branch":"topic", "source":"topic"
+    }))
+    .unwrap();
+    assert_eq!(git(bare.path(), &["rev-parse", "topic"]), topic_tip);
+    assert_eq!(git(bare.path(), &["rev-parse", "main"]), origin_main);
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), main_tip);
+    assert_eq!(f.git(&["symbolic-ref", "--short", "HEAD"]), "main");
+    assert_eq!(f.git(&["config", "branch.topic.merge"]), "refs/heads/topic");
+    assert_eq!(f.git(&["config", "branch.main.merge"]), "refs/heads/main");
+
+    assert_eq!(
+        f.remote(json!({"kind":"push", "source":"missing", "branch":"missing"}))
+            .unwrap_err()
+            .code,
+        "git"
+    );
+    assert_eq!(
+        f.remote(json!({"kind":"push", "source":"-topic"}))
+            .unwrap_err()
+            .code,
+        "invalidBranch"
+    );
+}
+
+#[test]
+fn remote_inputs_dirty_worktrees_and_in_progress_are_guarded() {
+    let f = Fixture::new();
+    let _bare = f.bare_remote();
+    f.publish();
+    for branch in ["--all", "+main", "main:other", "main~1", "x\ny", "", "../x"] {
+        assert_eq!(
+            f.remote(json!({"kind":"fetch","branch":branch}))
+                .unwrap_err()
+                .code,
+            "invalidBranch"
+        );
+    }
+    for remote in [
+        "--all",
+        "/tmp/repo",
+        "https://example.test/repo",
+        "missing",
+        "",
+    ] {
+        assert_eq!(
+            f.remote(json!({"kind":"fetch","remote":remote}))
+                .unwrap_err()
+                .code,
+            "invalidRemote"
+        );
+    }
+    let peer = f.peer(_bare.path());
+    peer.write("file", "peer incoming\n");
+    peer.commit("incoming");
+    peer.remote(json!({"kind":"push"})).unwrap();
+    let before_head = f.git(&["rev-parse", "HEAD"]);
+    f.write("file", "dirty local\n");
+    let err = f.remote(json!({"kind":"pull"})).unwrap_err();
+    assert_eq!(err.code, "git");
+    assert!(err.message.contains("file"));
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), before_head);
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("file")).unwrap(),
+        "dirty local\n"
+    );
+    f.git(&["checkout", "HEAD", "--", "file"]);
+    f.remote(json!({"kind":"pull"})).unwrap();
+    f.remote(json!({"kind":"fetch"})).unwrap();
+    f.remote(json!({"kind":"push"})).unwrap();
+    std::fs::write(
+        f.dir.path().join(".git/MERGE_HEAD"),
+        f.git(&["rev-parse", "HEAD"]),
+    )
+    .unwrap();
+    assert_eq!(
+        f.remote(json!({"kind":"fetch"})).unwrap_err().code,
+        "operationInProgress"
+    );
+    assert_eq!(
+        f.stash(json!({"kind":"save"})).unwrap_err().code,
+        "operationInProgress"
+    );
+}
+
+#[test]
+fn fetch_ignores_mirror_refspecs_and_pull_preserves_ignored_files() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    let peer = f.peer(bare.path());
+    peer.write("precious", "incoming");
+    peer.commit("incoming");
+    peer.remote(json!({"kind":"push"})).unwrap();
+    let before = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["config", "remote.origin.fetch", "+refs/*:refs/*"]);
+    f.remote(json!({"kind":"fetch"})).unwrap();
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), before);
+    std::fs::write(f.dir.path().join(".git/info/exclude"), "precious\n").unwrap();
+    f.write("precious", "preserve me");
+    for mode in ["ffOnly", "merge", "rebase"] {
+        assert!(f.remote(json!({"kind":"pull","pullMode":mode})).is_err());
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join("precious")).unwrap(),
+            "preserve me"
+        );
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), before);
+    }
+}
+
+#[test]
+fn stash_save_apply_pop_drop_and_untracked() {
+    let f = Fixture::new();
+    assert!(f.repo.stashes().unwrap().is_empty());
+    f.write("file", "saved\n");
+    f.write("untracked", "keep\n");
+    let oid = f.save("message with spaces 工作");
+    assert!(f.dir.path().join("untracked").exists());
+    let list = f.repo.stashes().unwrap();
+    assert_eq!(list[0].selector, "stash@{0}");
+    assert!(list[0].message.contains("message with spaces 工作"));
+    let saved = f
+        .stash(json!({"kind":"save","includeUntracked":true}))
+        .unwrap();
+    let untracked = f.repo.stashes().unwrap()[0].oid.clone();
+    assert!(!f.dir.path().join("untracked").exists(), "{}", saved.output);
+    f.stash(json!({"kind":"apply","oid":oid})).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("file")).unwrap(),
+        "saved\n"
+    );
+    assert_eq!(f.repo.stashes().unwrap().len(), 2);
+    f.commit("applied");
+    f.stash(json!({"kind":"pop","oid":untracked})).unwrap();
+    assert!(f.dir.path().join("untracked").exists());
+    assert_eq!(f.repo.stashes().unwrap().len(), 1);
+    // Dropping a stash does not require a clean worktree.
+    f.stash(json!({"kind":"drop","oid":oid})).unwrap();
+    assert!(f.repo.stashes().unwrap().is_empty());
+}
+
+#[test]
+fn stash_pop_conflict_retains_entry_and_uses_existing_conflict_state() {
+    let f = Fixture::new();
+    f.write("file", "stashed\n");
+    let oid = f.save("conflicting");
+    f.write("file", "committed\n");
+    f.commit("conflicting base");
+    assert_eq!(
+        f.stash(json!({"kind":"pop","oid":oid})).unwrap_err().code,
+        "git"
+    );
+    assert_eq!(f.repo.stashes().unwrap()[0].oid, oid);
+    let operation = f.repo.operation_state().unwrap();
+    assert_eq!(operation.kind, OperationKind::None);
+    assert_eq!(operation.conflicts, ["file"]);
+    assert!(f.repo.conflict_file("file").unwrap().ours.is_some());
+    assert_eq!(
+        f.stash(json!({"kind":"save"})).unwrap_err().code,
+        "unresolvedConflict"
+    );
+}
+
+#[test]
+fn stash_identity_is_stable_across_reordering_and_rejects_stale_or_ambiguous_oids() {
+    let f = Fixture::new();
+    f.write("file", "first\n");
+    let first = f.save("first");
+    f.write("file", "second\n");
+    let second = f.save("second");
+    f.git(&["config", "log.date", "iso"]);
+    f.git(&["config", "log.showSignature", "true"]);
+    assert_eq!(f.repo.stashes().unwrap()[0].selector, "stash@{0}");
+    assert_eq!(f.repo.stashes().unwrap()[1].selector, "stash@{1}");
+    f.stash(json!({"kind":"pop","oid":first})).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("file")).unwrap(),
+        "first\n"
+    );
+    assert_eq!(f.repo.stashes().unwrap()[0].oid, second);
+    assert_eq!(
+        f.stash(json!({"kind":"drop","oid":first}))
+            .unwrap_err()
+            .code,
+        "staleStash"
+    );
+    f.git(&["stash", "store", "-m", "intermediate", &first]);
+    f.git(&["stash", "store", "-m", "duplicate", &second]);
+    assert_eq!(
+        f.stash(json!({"kind":"drop","oid":second}))
+            .unwrap_err()
+            .code,
+        "ambiguousStash"
+    );
+    assert_eq!(
+        f.stash(json!({"kind":"drop","oid":"stash@{0}"}))
+            .unwrap_err()
+            .code,
+        "invalidStash"
+    );
+}
+
+#[test]
+fn stash_dirty_index_lock_bare_and_closed_sessions_are_guarded() {
+    let f = Fixture::new();
+    f.write("file", "saved\n");
+    let oid = f.save("saved");
+    f.write("file", "dirty\n");
+    assert_eq!(
+        f.stash(json!({"kind":"apply","oid":oid})).unwrap_err().code,
+        "dirtyWorktree"
+    );
+    std::fs::write(f.dir.path().join(".git/index.lock"), "locked").unwrap();
+    assert_eq!(
+        f.stash(json!({"kind":"save"})).unwrap_err().code,
+        "indexLocked"
+    );
+    let bare = f.bare_remote();
+    let handle = f
+        .service
+        .open(RepositoryLocation::Native {
+            path: bare.path().to_str().unwrap().into(),
+        })
+        .unwrap()
+        .session
+        .handle;
+    assert_eq!(
+        f.service
+            .stash_action(
+                &handle,
+                StashAction::Save {
+                    message: None,
+                    include_untracked: false
+                }
+            )
+            .unwrap_err()
+            .code,
+        "bareRepository"
+    );
+    f.service.close(&f.handle).unwrap();
+    assert_eq!(
+        f.stash(json!({"kind":"save"})).unwrap_err().code,
+        "invalidHandle"
+    );
+    assert_eq!(
+        f.remote(json!({"kind":"fetch"})).unwrap_err().code,
+        "invalidHandle"
+    );
+}
+
+#[test]
+fn stash_is_shared_with_linked_worktree_but_applies_to_requested_worktree() {
+    let f = Fixture::new();
+    let linked = tempfile::tempdir().unwrap();
+    let path = linked.path().join("linked");
+    f.git(&["worktree", "add", "-b", "linked", path.to_str().unwrap()]);
+    let handle = f
+        .service
+        .open(RepositoryLocation::Native {
+            path: path.to_str().unwrap().into(),
+        })
+        .unwrap()
+        .session
+        .handle;
+    f.write("file", "shared stash\n");
+    let oid = f.save("shared");
+    let repo = f.service.repo(&handle).unwrap();
+    assert_eq!(repo.stashes().unwrap()[0].oid, oid);
+    f.service
+        .stash_action(
+            &handle,
+            StashAction::Pop {
+                oid,
+                restore_index: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(path.join("file")).unwrap(),
+        "shared stash\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("file")).unwrap(),
+        "base\n"
+    );
+    assert!(f.repo.stashes().unwrap().is_empty());
+    assert_eq!(repo.sync_info().unwrap().branch.as_deref(), Some("linked"));
+}
+
+#[test]
+fn stash_preserves_literal_paths_staged_content_and_ignored_files() {
+    let f = Fixture::new();
+    f.write("file", "staged\n");
+    f.git(&["add", "file"]);
+    f.write("file", "unstaged\n");
+    let mut names = vec!["-dash", "工作"];
+    if !cfg!(windows) {
+        names.push("[literal]*");
+    }
+    for name in &names {
+        f.write(name, name);
+    }
+    std::fs::write(f.dir.path().join(".git/info/exclude"), "ignored\n").unwrap();
+    f.write("ignored", "keep ignored");
+    f.stash(json!({"kind":"save", "includeUntracked":true, "message":"--literal message"}))
+        .unwrap();
+    let oid = f.repo.stashes().unwrap()[0].oid.clone();
+    assert_eq!(f.git(&["show", &format!("{oid}^2:file")]), "staged");
+    assert_eq!(f.git(&["show", &format!("{oid}:file")]), "unstaged");
+    assert!(f.repo.status().unwrap().entries.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("ignored")).unwrap(),
+        "keep ignored"
+    );
+    f.stash(json!({"kind":"pop", "oid":oid})).unwrap();
+    for name in names {
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join(name)).unwrap(),
+            name
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("file")).unwrap(),
+        "unstaged\n"
+    );
+}
+
+#[test]
+fn stash_save_refuses_to_erase_an_ignored_replacement_for_a_staged_deletion() {
+    let f = Fixture::new();
+    f.git(&["rm", "file"]);
+    std::fs::write(f.dir.path().join(".git/info/exclude"), "file\n").unwrap();
+    f.write("file", "irreplaceable");
+    assert_eq!(
+        f.stash(json!({"kind":"save","includeUntracked":true}))
+            .unwrap_err()
+            .code,
+        "dirtyWorktree"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("file")).unwrap(),
+        "irreplaceable"
+    );
+    assert!(f.repo.stashes().unwrap().is_empty());
+}
+
+#[test]
+fn explicit_branch_fetch_and_pull_work_without_upstream_and_failed_fetch_never_integrates() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    let peer = f.peer(bare.path());
+    peer.write("incoming", "new");
+    let incoming = peer.commit("incoming");
+    peer.remote(json!({"kind":"push"})).unwrap();
+    peer.git(&["branch", "other"]);
+    peer.git(&["push", "origin", "other"]);
+    f.git(&["branch", "--unset-upstream"]);
+    f.remote(json!({"kind":"fetch", "branch":"main"})).unwrap();
+    assert_eq!(
+        f.git(&["for-each-ref", "--format=%(refname)", "refs/remotes"]),
+        "refs/remotes/origin/main"
+    );
+    let before = f.git(&["rev-parse", "HEAD"]);
+    assert_eq!(f.git(&["rev-parse", "refs/remotes/origin/main"]), incoming);
+    assert!(f
+        .remote(json!({"kind":"pull", "branch":"missing"}))
+        .is_err());
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), before);
+    f.remote(json!({"kind":"pull", "remote":"origin", "branch":"main"}))
+        .unwrap();
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), incoming);
+    assert!(f.repo.sync_info().unwrap().upstream.is_none());
+}
+
+#[test]
+fn pull_merge_conflicts_remain_available_to_existing_operation_controls() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    let peer = f.peer(bare.path());
+    peer.write("file", "incoming\n");
+    peer.commit("incoming");
+    peer.remote(json!({"kind":"push"})).unwrap();
+    f.write("file", "local\n");
+    f.commit("local");
+    assert!(f
+        .remote(json!({"kind":"pull", "pullMode":"merge"}))
+        .is_err());
+    let operation = f.repo.operation_state().unwrap();
+    assert_eq!(operation.kind, OperationKind::Merge);
+    assert_eq!(operation.conflicts, ["file"]);
+    assert!(!operation.can_continue);
+}
+
+#[test]
+fn pull_uses_slashed_remote_and_nonmatching_upstream_and_ignores_merge_options() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.git(&["remote", "rename", "origin", "team/origin"]);
+    f.remote(json!({"kind":"push", "branch":"published", "setUpstream":true}))
+        .unwrap();
+    let peer = Fixture::new();
+    peer.git(&["remote", "add", "origin", bare.path().to_str().unwrap()]);
+    peer.git(&["fetch", "origin"]);
+    peer.git(&["reset", "--hard", "origin/published"]);
+    peer.write("incoming", "from published branch");
+    let incoming = peer.commit("incoming");
+    peer.git(&["push", "origin", "HEAD:published"]);
+    f.write("local", "local divergence");
+    let local = f.commit("local");
+    // Config must not silently turn an explicit merge pull into a squash or
+    // an unfinished --no-commit operation.
+    f.git(&["config", "branch.main.mergeOptions", "--squash --no-commit"]);
+    f.remote(json!({"kind":"pull", "pullMode":"merge"}))
+        .unwrap();
+    assert_ne!(f.git(&["rev-parse", "HEAD"]), local);
+    assert_eq!(f.git(&["rev-parse", "HEAD^2"]), incoming);
+    assert!(f.repo.status().unwrap().entries.is_empty());
+    assert_eq!(
+        f.repo.sync_info().unwrap().upstream.as_deref(),
+        Some("team/origin/published")
+    );
+    f.git(&[
+        "config",
+        "remote.team/origin.push",
+        "+refs/heads/*:refs/heads/*",
+    ]);
+    f.git(&["config", "push.default", "matching"]);
+    // Explicit single-branch refspec must win over configured forced matching.
+    peer.write("peer-again", "new remote commit");
+    let remote_head = peer.commit("remote moved");
+    peer.git(&["push", "origin", "HEAD:published"]);
+    // `main` tracks the differently named `published`: pushing needs a chosen
+    // destination, so nothing lands on that branch by one click.
+    assert_eq!(
+        f.remote(json!({"kind":"push"})).unwrap_err().code,
+        "upstreamNameDiffers"
+    );
+    assert_eq!(git(bare.path(), &["rev-parse", "published"]), remote_head);
+    // A chosen destination still cannot overwrite remote history.
+    assert!(f
+        .remote(json!({"kind":"push", "branch":"published"}))
+        .is_err());
+    assert_eq!(git(bare.path(), &["rev-parse", "published"]), remote_head);
+    assert_eq!(
+        git(
+            bare.path(),
+            &["for-each-ref", "--format=%(refname)", "refs/heads"]
+        ),
+        "refs/heads/published"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn stash_pop_does_not_drop_an_external_stash_inserted_during_apply() {
+    let f = Fixture::new();
+    f.write("file", "other stash\n");
+    let concurrent = f.save("other");
+    f.git(&["stash", "drop"]);
+    f.write("file", "requested stash\n");
+    let requested = f.save("requested");
+    f.write("file", "conflicting committed change\n");
+    f.write(".gitattributes", "file merge=external-stash\n");
+    f.commit("conflicting change and merge driver");
+    std::fs::write(
+        f.dir.path().join(".git/merge-driver"),
+        format!("git stash store -m concurrent {concurrent} || exit 1\ncp \"$2\" \"$1\"\n"),
+    )
+    .unwrap();
+    f.git(&[
+        "config",
+        "merge.external-stash.driver",
+        "sh .git/merge-driver %A %B",
+    ]);
+    f.stash(json!({"kind":"pop", "oid":requested})).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("file")).unwrap(),
+        "requested stash\n"
+    );
+    let stashes = f.repo.stashes().unwrap();
+    assert_eq!(stashes.len(), 1);
+    assert_eq!(stashes[0].oid, concurrent);
+}
+
+#[cfg(unix)]
+#[test]
+fn stash_pop_reports_partial_success_when_requested_entry_disappears_during_apply() {
+    let f = Fixture::new();
+    f.write("file", "requested stash\n");
+    let requested = f.save("requested");
+    f.write("file", "conflicting committed change\n");
+    f.write(".gitattributes", "file merge=external-stash\n");
+    f.commit("conflicting change and merge driver");
+    std::fs::write(
+        f.dir.path().join(".git/merge-driver"),
+        "git stash drop || exit 1\ncp \"$2\" \"$1\"\n",
+    )
+    .unwrap();
+    f.git(&[
+        "config",
+        "merge.external-stash.driver",
+        "sh .git/merge-driver %A %B",
+    ]);
+    let error = f.stash(json!({"kind":"pop", "oid":requested})).unwrap_err();
+    assert_eq!(error.code, "mutationUnverified");
+    assert!(error.message.contains("was applied"));
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("file")).unwrap(),
+        "requested stash\n"
+    );
+    assert!(f.repo.stashes().unwrap().is_empty());
+}
+
+#[test]
+fn untracked_protection_catches_both_file_directory_collision_directions() {
+    for target_is_directory in [false, true] {
+        let f = Fixture::new();
+        f.git(&["switch", "-c", "incoming"]);
+        if target_is_directory {
+            std::fs::create_dir(f.dir.path().join("nested")).unwrap();
+            f.write("nested/child", "incoming");
+        } else {
+            f.write("nested", "incoming");
+        }
+        let target = f.commit("incoming");
+        f.git(&["switch", "main"]);
+        std::fs::write(f.dir.path().join(".git/info/exclude"), "nested\n").unwrap();
+        let precious = if target_is_directory {
+            "nested"
+        } else {
+            "nested/child"
+        };
+        if !target_is_directory {
+            std::fs::create_dir(f.dir.path().join("nested")).unwrap();
+        }
+        f.write(precious, "preserve me");
+        assert_eq!(
+            f.repo.protect_untracked(&[target]).unwrap_err().code,
+            "dirtyWorktree"
+        );
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join(precious)).unwrap(),
+            "preserve me"
+        );
+    }
+}
+
+#[test]
+fn pull_fast_forward_preserves_unrelated_working_changes() {
+    for mode in ["ffOnly", "merge"] {
+        let f = Fixture::new();
+        let bare = f.bare_remote();
+        f.publish();
+        let peer = f.peer(bare.path());
+        peer.write("b.txt", "incoming b\n");
+        let incoming = peer.commit("incoming b");
+        peer.remote(json!({"kind":"push"})).unwrap();
+
+        f.write("a.txt", "local unstaged\n");
+        f.write("d.txt", "local staged\n");
+        f.git(&["add", "d.txt"]);
+        f.write("c.txt", "local untracked\n");
+
+        f.remote(json!({"kind":"pull", "pullMode":mode})).unwrap();
+
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), incoming);
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join("a.txt")).unwrap(),
+            "local unstaged\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join("c.txt")).unwrap(),
+            "local untracked\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join("d.txt")).unwrap(),
+            "local staged\n"
+        );
+        let status = f.git(&["status", "--porcelain"]);
+        assert!(
+            status.contains("?? a.txt")
+                || status.contains(" M a.txt")
+                || status.contains("?? c.txt")
+                || status.contains("A  d.txt")
+        );
+        assert_eq!(f.git(&["diff", "--cached", "--name-only"]), "d.txt");
+    }
+}
+
+#[test]
+fn pull_true_merge_preserves_unrelated_unstaged_and_untracked_changes() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+
+    let peer = f.peer(bare.path());
+    peer.write("b.txt", "incoming b\n");
+    peer.commit("incoming b");
+    peer.remote(json!({"kind":"push"})).unwrap();
+
+    f.write("a.txt", "local committed\n");
+    let local_head = f.commit("local a");
+
+    f.write("a.txt", "local unstaged edit\n");
+    f.write("c.txt", "local untracked\n");
+
+    f.remote(json!({"kind":"pull", "pullMode":"merge"}))
+        .unwrap();
+
+    let new_head = f.git(&["rev-parse", "HEAD"]);
+    assert_ne!(new_head, local_head);
+    let parents = f.git(&["rev-parse", "HEAD^1", "HEAD^2"]);
+    assert_eq!(parents.lines().count(), 2);
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("a.txt")).unwrap(),
+        "local unstaged edit\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("c.txt")).unwrap(),
+        "local untracked\n"
+    );
+}
+
+#[test]
+fn pull_true_merge_refuses_ordinary_unrelated_staged_changes() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+
+    let peer = f.peer(bare.path());
+    peer.write("b.txt", "incoming b\n");
+    peer.commit("incoming b");
+    peer.remote(json!({"kind":"push"})).unwrap();
+
+    f.write("a.txt", "local committed\n");
+    let local_head = f.commit("local a");
+
+    f.write("d.txt", "local staged\n");
+    f.git(&["add", "d.txt"]);
+
+    let err = f
+        .remote(json!({"kind":"pull", "pullMode":"merge"}))
+        .unwrap_err();
+    assert_eq!(err.code, "git");
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), local_head);
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("d.txt")).unwrap(),
+        "local staged\n"
+    );
+    assert_eq!(f.git(&["diff", "--cached", "--name-only"]), "d.txt");
+}
+
+#[test]
+fn pull_rebase_refuses_staged_and_unstaged_tracked_changes() {
+    for stage in [false, true] {
+        let f = Fixture::new();
+        let bare = f.bare_remote();
+        f.publish();
+
+        let peer = f.peer(bare.path());
+        peer.write("b.txt", "incoming b\n");
+        peer.commit("incoming b");
+        peer.remote(json!({"kind":"push"})).unwrap();
+
+        f.write("tracked.txt", "tracked\n");
+        let local_head = f.commit("track file");
+
+        f.write("tracked.txt", "modified\n");
+        if stage {
+            f.git(&["add", "tracked.txt"]);
+        }
+
+        let err = f
+            .remote(json!({"kind":"pull", "pullMode":"rebase"}))
+            .unwrap_err();
+        assert_eq!(err.code, "dirtyWorktree");
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), local_head);
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join("tracked.txt")).unwrap(),
+            "modified\n"
+        );
+    }
+}
+
+#[test]
+fn pull_refuses_overwriting_conflicting_working_changes() {
+    for mode in ["ffOnly", "merge"] {
+        for stage in [false, true] {
+            let f = Fixture::new();
+            let bare = f.bare_remote();
+            f.publish();
+
+            f.write("a.txt", "base a\n");
+            let local_head = f.commit("base");
+            f.remote(json!({"kind":"push"})).unwrap();
+
+            let peer = f.peer(bare.path());
+            peer.write("a.txt", "incoming peer edit\n");
+            peer.commit("incoming edit");
+            peer.remote(json!({"kind":"push"})).unwrap();
+
+            f.write("a.txt", "conflicting local edit\n");
+            if stage {
+                f.git(&["add", "a.txt"]);
+            }
+
+            let err = f
+                .remote(json!({"kind":"pull", "pullMode":mode}))
+                .unwrap_err();
+            assert_eq!(err.code, "git");
+            assert!(err.message.contains("a.txt"));
+            assert_eq!(f.git(&["rev-parse", "HEAD"]), local_head);
+            assert_eq!(
+                std::fs::read_to_string(f.dir.path().join("a.txt")).unwrap(),
+                "conflicting local edit\n"
+            );
+        }
+    }
+}
+
+#[test]
+fn pull_already_up_to_date_accepts_dirty_worktrees() {
+    for mode in ["ffOnly", "merge"] {
+        let f = Fixture::new();
+        let _bare = f.bare_remote();
+        f.publish();
+
+        f.write("unstaged.txt", "dirty unstaged\n");
+        f.write("staged.txt", "dirty staged\n");
+        f.git(&["add", "staged.txt"]);
+        let head = f.git(&["rev-parse", "HEAD"]);
+
+        f.remote(json!({"kind":"pull", "pullMode":mode})).unwrap();
+
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), head);
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join("unstaged.txt")).unwrap(),
+            "dirty unstaged\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(f.dir.path().join("staged.txt")).unwrap(),
+            "dirty staged\n"
+        );
+        assert_eq!(f.git(&["diff", "--cached", "--name-only"]), "staged.txt");
+    }
+}

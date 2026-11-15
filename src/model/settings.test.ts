@@ -19,6 +19,16 @@ describe('local preferences', () => {
     expect(readSettings(store).settings).toEqual(settings);
     expect(store.getItem('gitty:theme')).toBe('dark');
   });
+  it('ignores preferences written by a newer build instead of discarding the rest', () => {
+    const newer = { ...DEFAULT_SETTINGS, themeId: 'dracula', diffWrap: true, futurePreference: 'value' };
+    const store = storage({ [SETTINGS_KEY]: JSON.stringify(newer) });
+    const { settings, error } = readSettings(store);
+    expect(error).toBeNull();
+    expect(settings).toMatchObject({ themeId: 'dracula', diffWrap: true });
+    expect((settings as unknown as Record<string, unknown>).futurePreference).toBe('value');
+    expect(persistSettings(store, settings)).toBeNull();
+    expect(readSettings(store).settings).toMatchObject({ themeId: 'dracula', diffWrap: true });
+  });
   it('keeps corrupt and future stored data untouched and reports fallback', () => {
     for (const value of ['{broken', JSON.stringify({ ...DEFAULT_SETTINGS, version: 2 }), JSON.stringify({ ...DEFAULT_SETTINGS, diffWrap: 'yes' }), JSON.stringify({ ...DEFAULT_SETTINGS, authorAvatarMode: 'remote' })]) {
       const store = storage({ [SETTINGS_KEY]: value });

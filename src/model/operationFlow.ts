@@ -1,8 +1,8 @@
-import { native, errorMessage } from './native';
+import { native } from './native';
 import type { GitAction, OperationRequest, OperationResult, OperationState } from './operations';
 import type { RepositoryState } from './repository';
 import { actionReason } from './operationUi';
-import type { MutationOutcome } from './workflow';
+import { attemptAndRefresh, type MutationOutcome } from './workflow';
 
 /** Operation state without its fingerprint, which also covers status and index and so moves on every stage. */
 export const operationContent = (operation: OperationState) => JSON.stringify({ ...operation, fingerprint: '' });
@@ -21,13 +21,10 @@ export async function captureOperation(handle: string, action: GitAction, invoke
 /** Caller holds the shared mutation lock through the awaited reload, including
  * when a write failed or timed out: its outcome may be uncertain. */
 export async function operationAndRefresh(handle: string, command: string, args: Record<string, unknown>, reload: () => Promise<void>, current: () => boolean, invoke = native): Promise<MutationOutcome & { notice?: string }> {
-  if (!current()) return { superseded: true };
-  const outcome: MutationOutcome & { notice?: string } = {};
-  try {
-    const result = await invoke<OperationResult | undefined>(command, { ...args, handle });
-    if (result?.notice) outcome.notice = result.notice;
-  } catch (e) { outcome.error = errorMessage(e); }
-  if (!current()) return { ...outcome, superseded: true };
-  try { await reload(); } catch (e) { outcome.refreshError = errorMessage(e); }
-  return current() ? outcome : { ...outcome, superseded: true };
+  return attemptAndRefresh<OperationResult | undefined, MutationOutcome & { notice?: string }>(
+    () => invoke<OperationResult | undefined>(command, { ...args, handle }),
+    (outcome, result) => { if (result?.notice) outcome.notice = result.notice; },
+    () => reload(),
+    current,
+  );
 }

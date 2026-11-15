@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appendUnique, graphCommit, statusGroups } from './native';
+import { appendUnique, graphCommit, hostCapabilities, hostMode, setDemoMode, statusGroups } from './native';
 import type { CommitSummary, StatusEntry } from './repository';
 
 describe('native history adaptation', () => {
@@ -24,6 +24,14 @@ describe('working status categories', () => {
     const groups = statusGroups([conflict, untracked, { ...entry, indexStatus: '.', worktreeStatus: ' ' }]);
     expect(groups.conflict).toEqual([conflict]); expect(groups.untracked).toEqual([untracked]);
     expect(groups.staged).toEqual([]); expect(groups.unstaged).toEqual([]);
+  });
+});
+describe('host capabilities', () => {
+  it('keeps synthetic demo capabilities disabled', () => {
+    setDemoMode(true);
+    expect(hostMode()).toBe('demo');
+    expect(hostCapabilities()).toEqual({ repository: false, events: false, clone: false, nativeWindow: false });
+    setDemoMode(false);
   });
 });
 

@@ -3,20 +3,33 @@ import { repositoryStorageKey } from './ssh';
 import type { CreateCommitResult, RepositoryMutation, RepositorySession, StatusEntry } from './repository';
 
 export interface MutationOutcome { oid?: string; error?: string; refreshError?: string; superseded?: boolean }
-/** One attempt only. Even a failed write can have changed the index or HEAD. */
+/** The shared write+refresh lifecycle: one attempt only (even a failed write can have
+ * changed the index or HEAD), always reload, and a superseded tab discards its result. */
+export async function attemptAndRefresh<T, O extends MutationOutcome = MutationOutcome>(
+  attempt: () => Promise<T>,
+  record: (outcome: O, result: T) => void,
+  reload: (outcome: O) => Promise<void>,
+  current: () => boolean,
+  outcome: O = {} as O,
+): Promise<O> {
+  if (!current()) return { superseded: true } as O;
+  try { record(outcome, await attempt()); } catch (error) { outcome.error = errorMessage(error); }
+  if (!current()) return { ...outcome, superseded: true } as O;
+  try { await reload({ ...outcome }); } catch (error) { outcome.refreshError = errorMessage(error); }
+  return current() ? outcome : ({ ...outcome, superseded: true } as O);
+}
+
 /** `reload` receives what the write reported (a copy, before any refresh error exists) so a refresh can use a
  * confirmed new commit ID, e.g. to follow an amended HEAD. It is called even when the write failed. */
 export async function writeAndRefresh(handle: string, mutation: RepositoryMutation, reload: (outcome: MutationOutcome) => Promise<void>, current: () => boolean, invoke = native): Promise<MutationOutcome> {
-  const outcome: MutationOutcome = {};
-  try {
-    if (!current()) return { superseded: true };
+  return attemptAndRefresh<string | undefined>(async () => {
     if (mutation.kind === 'commit') {
        const result = await invoke<CreateCommitResult>('repository_create_commit', { handle, message: mutation.message, ...(mutation.identity ? { identity: mutation.identity } : {}) });
-      outcome.oid = result.oid;
+      return result.oid;
     } else if (mutation.kind === 'amend') {
       if (!mutation.expectedHead || !mutation.expectedStatusFingerprint) throw new Error('Refresh and review the last commit before amending.');
        const result = await invoke<CreateCommitResult>('repository_amend_commit', { handle, message: mutation.message, ...(mutation.identity ? { identity: mutation.identity } : {}), expectedHead: mutation.expectedHead, expectedHeadRef: mutation.expectedHeadRef, expectedStatusFingerprint: mutation.expectedStatusFingerprint, ...(mutation.messageOnly !== undefined ? { messageOnly: mutation.messageOnly } : {}), ...(mutation.requireUnpushed !== undefined ? { requireUnpushed: mutation.requireUnpushed } : {}) });
-      outcome.oid = result.oid;
+      return result.oid;
     } else if (mutation.kind === 'stage_hunk' || mutation.kind === 'unstage_hunk') {
       if (!mutation.path || !mutation.fingerprint || !Number.isSafeInteger(mutation.hunkIndex) || mutation.hunkIndex < 0) throw new Error('Select a complete hunk from a current diff.');
       if (mutation.lineIndices !== undefined) {
@@ -42,10 +55,7 @@ export async function writeAndRefresh(handle: string, mutation: RepositoryMutati
       if (!mutation.paths.length) throw new Error('Select at least one path.');
       await invoke(`repository_${mutation.kind}`, { handle, paths: [...new Set(mutation.paths)] });
     }
-  } catch (error) { outcome.error = errorMessage(error); }
-  if (!current()) return { ...outcome, superseded: true };
-  try { await reload({ ...outcome }); } catch (error) { outcome.refreshError = errorMessage(error); }
-  return current() ? outcome : { ...outcome, superseded: true };
+  }, (outcome, oid) => { if (oid !== undefined) outcome.oid = oid; }, reload, current);
 }
 
 export function operationPaths(entries: StatusEntry[], kind: 'stage' | 'unstage'): string[] {
