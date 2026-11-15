@@ -1,13 +1,13 @@
 import { useSyncExternalStore } from 'react';
-import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { isDesktopHost } from './native';
 
 export const SCALES = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300] as const;
 const KEY = 'gitty:scale';
 
 export function applyScale(percent: number) {
   // Native webview zoom behaves like browser zoom (no extra scrollbars); CSS zoom is the browser-preview fallback.
-  if (isTauri()) void getCurrentWebview().setZoom(percent / 100).catch(() => {});
+  if (isDesktopHost()) void getCurrentWebview().setZoom(percent / 100).catch(() => {});
   else { document.documentElement.style.zoom = String(percent / 100); document.documentElement.style.setProperty('--zoom', String(percent / 100)); }
   try { localStorage.setItem(KEY, String(percent)); } catch { /* shortcut: zoom is session-only without storage; revisit if it must survive a restart in a webview that lacks localStorage */ }
 }

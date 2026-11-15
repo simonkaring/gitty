@@ -1,0 +1,705 @@
+use crate::bridge::{self, ConnectionLimiter, DeadlineReader};
+use std::collections::HashMap;
+use std::io::{BufReader, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+pub struct AskpassRegistry {
+    requests: Mutex<HashMap<usize, PendingPrompt>>,
+    /// Scoped operation tokens and the label (if any) shown with their prompts.
+    active_tokens: Mutex<HashMap<String, Option<AskpassContext>>>,
+    pub port: u16,
+    pub script_path: std::path::PathBuf,
+}
+
+struct PendingPrompt {
+    token: String,
+    reply: std::sync::mpsc::Sender<Option<String>>,
+}
+
+/// Which repository and operation a scoped token belongs to. Git's prompt text can
+/// be influenced by hooks or remote servers, so the dialog shows this app-supplied
+/// label separately from it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct AskpassContext {
+    pub repository: String,
+    pub operation: String,
+}
+
+impl AskpassContext {
+    const MAX_LEN: usize = 200;
+
+    pub fn new(repository: impl AsRef<str>, operation: impl AsRef<str>) -> Self {
+        // Labels are single-line display text; control characters never reach the UI.
+        let clean = |value: &str| {
+            value
+                .chars()
+                .map(|ch| if ch.is_control() { ' ' } else { ch })
+                .take(Self::MAX_LEN)
+                .collect::<String>()
+                .trim()
+                .to_string()
+        };
+        Self {
+            repository: clean(repository.as_ref()),
+            operation: clean(operation.as_ref()),
+        }
+    }
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskpassPromptPayload {
+    pub request_id: usize,
+    pub prompt: String,
+    pub context: Option<AskpassContext>,
+}
+
+pub struct AskpassGuard<'a> {
+    registry: &'a AskpassRegistry,
+    token: String,
+    _budget: crate::process::PromptScope,
+}
+
+impl AskpassGuard<'_> {
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
+    pub fn registry(&self) -> &AskpassRegistry {
+        self.registry
+    }
+}
+
+impl Drop for AskpassGuard<'_> {
+    fn drop(&mut self) {
+        self.registry
+            .active_tokens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.token);
+        let mut pending = self
+            .registry
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        pending.retain(|_, prompt| {
+            if prompt.token != self.token {
+                return true;
+            }
+            let _ = prompt.reply.send(None);
+            false
+        });
+    }
+}
+
+impl AskpassRegistry {
+    pub fn new(port: u16, script_path: std::path::PathBuf) -> Self {
+        Self {
+            requests: Mutex::new(HashMap::new()),
+            active_tokens: Mutex::new(HashMap::new()),
+            port,
+            script_path,
+        }
+    }
+
+    /// Call before handing `script_path` to Git: the script can disappear while
+    /// the app runs, and every prompt would then fail to start.
+    pub fn ensure_script(&self) {
+        bridge::ensure_helper_script(&self.script_path, "askpass");
+    }
+
+    /// Starts an operation scope without a prompt label.
+    #[cfg(test)]
+    pub fn start_operation(&self) -> AskpassGuard<'_> {
+        self.start_scope(None)
+    }
+
+    /// Starts an operation scope whose prompts carry `context` to the dialog.
+    pub fn start_operation_with(&self, context: AskpassContext) -> AskpassGuard<'_> {
+        self.start_scope(Some(context))
+    }
+
+    fn start_scope(&self, context: Option<AskpassContext>) -> AskpassGuard<'_> {
+        let token = uuid::Uuid::new_v4().to_string();
+        self.active_tokens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(token.clone(), context);
+        AskpassGuard {
+            registry: self,
+            _budget: crate::process::PromptScope::new(&token),
+            token,
+        }
+    }
+
+    pub fn cancel_all(&self) {
+        for (_, pending) in self
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .drain()
+        {
+            let _ = pending.reply.send(None);
+        }
+        let mut active = self.active_tokens.lock().unwrap_or_else(|e| e.into_inner());
+        for token in active.keys() {
+            crate::process::cancel_prompt_scope(token);
+        }
+        active.clear();
+    }
+
+    /// Removes the helper script. Best effort: the script lives in the shared
+    /// temp directory and is only needed while this process can spawn Git.
+    pub fn cleanup(&self) {
+        let _ = std::fs::remove_file(&self.script_path);
+    }
+
+    pub fn reply(&self, request_id: usize, password: Option<String>) -> Result<(), String> {
+        if let Some(pending) = self
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&request_id)
+        {
+            let _ = pending.reply.send(password);
+            Ok(())
+        } else {
+            Err("Invalid request ID".into())
+        }
+    }
+}
+
+/// The unauthenticated token line (terminator included) is read before any
+/// credential check, so it is kept far below anything legitimate (a UUID).
+const MAX_TOKEN_LINE: u64 = 256;
+const MAX_PROMPT_LINE: u64 = 4096;
+const PROMPT_WAIT: Duration = Duration::from_secs(90);
+
+#[derive(Clone, Copy)]
+struct Limits {
+    handshake: Duration,
+    prompt_wait: Duration,
+}
+
+const LIMITS: Limits = Limits {
+    handshake: bridge::HANDSHAKE_DEADLINE,
+    prompt_wait: PROMPT_WAIT,
+};
+
+/// Serves one helper connection: `token\nprompt\n` in, a status-prefixed answer out.
+fn handle_connection<F, E>(
+    stream: TcpStream,
+    registry: &AskpassRegistry,
+    request_id: usize,
+    limits: Limits,
+    emit_prompt: F,
+    emit_expired: E,
+) where
+    F: FnOnce(usize, String, Option<AskpassContext>) -> Result<(), ()>,
+    E: FnOnce(usize),
+{
+    let _ = stream.set_write_timeout(Some(bridge::WRITE_TIMEOUT));
+    let deadline = Instant::now() + limits.handshake;
+    let mut reader = BufReader::new(DeadlineReader::new(&stream, deadline));
+    let Ok(received_token) = bridge::read_bounded_line(&mut reader, MAX_TOKEN_LINE) else {
+        return;
+    };
+    let supplied = received_token.trim();
+    if !registry.accepts(supplied) {
+        return;
+    }
+    let Ok(prompt) = bridge::read_bounded_line(&mut reader, MAX_PROMPT_LINE) else {
+        return;
+    };
+    let prompt = prompt.trim_end().to_string();
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let context = {
+        // Revalidate under the lock: the operation may have ended while reading.
+        let active = registry
+            .active_tokens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let Some(context) = active.get(supplied).cloned() else {
+            return;
+        };
+        registry
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                request_id,
+                PendingPrompt {
+                    token: supplied.to_string(),
+                    reply: tx,
+                },
+            );
+        context
+    };
+
+    let mut writer = &stream;
+    let _wait = crate::process::prompt_wait(supplied);
+    if emit_prompt(request_id, prompt, context).is_ok() {
+        // The child process has a shorter read timeout. A dismissed or lost
+        // prompt must not strand a thread.
+        let response = rx.recv_timeout(limits.prompt_wait);
+        if response.is_err() {
+            emit_expired(request_id);
+        }
+        let _ = writer.write_all(&encode_response(response.ok().flatten()));
+    } else {
+        let _ = writer.write_all(&encode_response(None));
+    }
+
+    registry
+        .requests
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&request_id);
+}
+
+impl AskpassRegistry {
+    fn accepts(&self, supplied: &str) -> bool {
+        self.active_tokens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(supplied)
+    }
+}
+
+pub fn bind() -> std::io::Result<(TcpListener, Arc<AskpassRegistry>)> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+
+    // A unique, exclusively created file avoids overwriting another process's
+    // askpass script (or following a pre-existing symlink in the temp directory).
+    let tmp_dir = std::env::temp_dir();
+    bridge::remove_stale_helpers(&tmp_dir, "gitty-askpass-", bridge::STALE_HELPER_AGE);
+    let script_id = uuid::Uuid::new_v4();
+    let script_path = if cfg!(windows) {
+        tmp_dir.join(format!("gitty-askpass-{script_id}.bat"))
+    } else {
+        tmp_dir.join(format!("gitty-askpass-{script_id}.sh"))
+    };
+
+    bridge::write_helper_script(&script_path, &bridge::helper_script("askpass")?)?;
+
+    Ok((listener, Arc::new(AskpassRegistry::new(port, script_path))))
+}
+
+pub fn serve<F, E>(
+    listener: TcpListener,
+    registry: Arc<AskpassRegistry>,
+    emit_prompt: F,
+    emit_expired: E,
+) where
+    F: Fn(usize, String, Option<AskpassContext>) -> Result<(), ()> + Send + Sync + 'static,
+    E: Fn(usize) + Send + Sync + 'static,
+{
+    let emit_prompt = Arc::new(emit_prompt);
+    let emit_expired = Arc::new(emit_expired);
+    bridge::serve(
+        listener,
+        ConnectionLimiter::new(bridge::MAX_CONNECTIONS),
+        move |stream, request_id| {
+            let emit_prompt = emit_prompt.clone();
+            let emit_expired = emit_expired.clone();
+            handle_connection(
+                stream,
+                &registry,
+                request_id,
+                LIMITS,
+                move |id, prompt, context| emit_prompt(id, prompt, context),
+                move |id| emit_expired(id),
+            );
+        },
+    );
+}
+
+// A one-byte status prefix distinguishes cancellation from a valid empty answer;
+// the remainder is the exact credential, including any trailing whitespace.
+fn encode_response(answer: Option<String>) -> Vec<u8> {
+    match answer {
+        Some(value) => [b"1".as_slice(), value.as_bytes()].concat(),
+        None => b"0".to_vec(),
+    }
+}
+
+pub(crate) fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// WSL interoperability runs the Windows app executable on the Windows host,
+/// so its existing loopback prompt server remains reachable without WSL2
+/// network/localhost forwarding assumptions.
+#[cfg(windows)]
+pub(crate) fn wsl_executable_path(distribution: &str) -> crate::dto::Result<String> {
+    crate::process::validate_distribution(distribution)?;
+    let exe = std::env::current_exe()?;
+    let mut cmd = std::process::Command::new("wsl.exe");
+    cmd.args(["--distribution", distribution, "--exec", "wslpath", "-u"])
+        .arg(exe);
+    let result = crate::process::run_for(cmd, crate::process::CHECK_TIMEOUT)?;
+    if !result.success {
+        return Err(crate::dto::Error::new("unsupportedOperation", "WSL interop could not translate the Gitty executable path; use a Linux credential helper or SSH agent."));
+    }
+    let path = crate::process::text(result.stdout)?.trim().to_string();
+    if !path.starts_with('/') || path.chars().any(|ch| matches!(ch, '\n' | '\r' | '\0')) {
+        return Err(crate::dto::Error::new(
+            "unsupportedOperation",
+            "WSL returned an invalid Gitty executable path.",
+        ));
+    }
+    Ok(path)
+}
+
+pub(crate) const WSL_ASKPASS_ENV: [&str; 6] = [
+    "GIT_ASKPASS",
+    "SSH_ASKPASS",
+    "SSH_ASKPASS_REQUIRE",
+    "DISPLAY",
+    "GITTY_ASKPASS_PORT",
+    "GITTY_ASKPASS_TOKEN",
+];
+
+pub(crate) fn wsl_env_mapping(previous: Option<&str>) -> String {
+    let mut parts = previous
+        .unwrap_or_default()
+        .split(':')
+        .filter(|part| !part.is_empty())
+        .map(String::from)
+        .collect::<Vec<_>>();
+    for key in WSL_ASKPASS_ENV {
+        parts.retain(|part| part.split('/').next() != Some(key));
+        parts.push(key.into());
+    }
+    parts.join(":")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        encode_response, handle_connection, shell_quote, wsl_env_mapping, AskpassContext,
+        AskpassPromptPayload, AskpassRegistry, Limits,
+    };
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::{mpsc, Arc};
+    use std::time::{Duration, Instant};
+
+    const TEST_LIMITS: Limits = Limits {
+        handshake: Duration::from_millis(300),
+        prompt_wait: Duration::from_secs(5),
+    };
+
+    /// Runs one `handle_connection` on a real loopback socket. Returns the client
+    /// stream, a receiver of emitted prompts and a handle yielding the elapsed time.
+    fn serve_once(
+        registry: Arc<AskpassRegistry>,
+        limits: Limits,
+    ) -> (
+        TcpStream,
+        mpsc::Receiver<(usize, String, Option<AskpassContext>)>,
+        std::thread::JoinHandle<Duration>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (prompts, received) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let started = Instant::now();
+            handle_connection(
+                stream,
+                &registry,
+                1,
+                limits,
+                |id, prompt, context| prompts.send((id, prompt, context)).map_err(|_| ()),
+                |_| {},
+            );
+            started.elapsed()
+        });
+        let client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        (client, received, server)
+    }
+
+    fn registry() -> Arc<AskpassRegistry> {
+        Arc::new(AskpassRegistry::new(0, "helper".into()))
+    }
+
+    #[test]
+    fn oversize_unauthenticated_token_is_rejected_without_a_prompt() {
+        for payload in [
+            // Terminated but far beyond a token.
+            format!("{}\nPassword:\n", "a".repeat(300)).into_bytes(),
+            // Unterminated and unbounded in intent.
+            vec![b'a'; 64 * 1024],
+        ] {
+            let (mut client, prompts, server) = serve_once(registry(), TEST_LIMITS);
+            let _ = client.write_all(&payload);
+            let mut reply = Vec::new();
+            let _ = client.read_to_end(&mut reply);
+            assert!(reply.is_empty(), "no response to an unauthenticated peer");
+            server.join().unwrap();
+            assert!(prompts.try_recv().is_err(), "no prompt event");
+        }
+    }
+
+    #[test]
+    fn oversize_prompt_is_rejected_after_authentication() {
+        let registry = registry();
+        let scoped = registry.start_operation();
+        let (mut client, prompts, server) = serve_once(registry.clone(), TEST_LIMITS);
+        let _ = client.write_all(format!("{}\n{}\n", scoped.token(), "p".repeat(5000)).as_bytes());
+        let mut reply = Vec::new();
+        let _ = client.read_to_end(&mut reply);
+        server.join().unwrap();
+        assert!(reply.is_empty());
+        assert!(prompts.try_recv().is_err());
+        assert!(registry
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_empty());
+    }
+
+    #[test]
+    fn idle_connection_is_closed_by_the_handshake_deadline() {
+        let (mut client, prompts, server) = serve_once(registry(), TEST_LIMITS);
+        let mut reply = Vec::new();
+        // Sends nothing; the server must hang up on its own.
+        client.read_to_end(&mut reply).unwrap();
+        let elapsed = server.join().unwrap();
+        assert!(elapsed >= Duration::from_millis(250), "{elapsed:?}");
+        assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+        assert!(prompts.try_recv().is_err());
+    }
+
+    #[test]
+    fn slow_dribbling_client_cannot_outlive_the_absolute_deadline() {
+        let (mut client, prompts, server) = serve_once(registry(), TEST_LIMITS);
+        let writer = std::thread::spawn(move || {
+            // Each byte arrives well inside any per-read timeout, but the line
+            // never completes.
+            for _ in 0..100 {
+                if client.write_all(b"a").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+        let elapsed = server.join().unwrap();
+        assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+        assert!(prompts.try_recv().is_err());
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn valid_scoped_tokens_still_prompt_and_reply() {
+        let registry = registry();
+        let scoped = registry.start_operation();
+        let (mut client, prompts, server) = serve_once(registry.clone(), TEST_LIMITS);
+        client
+            .write_all(format!("{}\nPassword for example\n", scoped.token()).as_bytes())
+            .unwrap();
+        let (id, prompt, context) = prompts.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(context, None, "unlabelled scopes carry no context");
+        assert_eq!(prompt, "Password for example");
+        registry
+            .requests
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&id)
+            .unwrap()
+            .reply
+            .send(Some("secret ".into()))
+            .unwrap();
+        let mut reply = Vec::new();
+        client.read_to_end(&mut reply).unwrap();
+        assert_eq!(reply, b"1secret ");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn unknown_token_gets_no_prompt() {
+        let (mut client, prompts, server) = serve_once(registry(), TEST_LIMITS);
+        client.write_all(b"guess\nPassword:\n").unwrap();
+        let mut reply = Vec::new();
+        let _ = client.read_to_end(&mut reply);
+        server.join().unwrap();
+        assert!(reply.is_empty());
+        assert!(prompts.try_recv().is_err());
+    }
+
+    #[test]
+    fn native_askpass_env_carries_a_scoped_token_that_dies_with_the_guard() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = AskpassRegistry::new(4521, dir.path().join("helper.sh"));
+        let token = {
+            let guard = registry.start_operation();
+            let (_, env) = crate::remote::network_args(true, Some(&guard));
+            let token = env
+                .iter()
+                .find(|(key, _)| key == "GITTY_ASKPASS_TOKEN")
+                .map(|(_, value)| value.clone())
+                .expect("interactive native actions pass an askpass token");
+            assert_eq!(token, guard.token());
+            assert!(registry
+                .active_tokens
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(&token));
+            token
+        };
+        assert!(!registry
+            .active_tokens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&token));
+        assert!(!registry.accepts(&token));
+    }
+
+    #[test]
+    fn cleanup_removes_the_helper_script_and_tolerates_absence() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("gitty-askpass-test.sh");
+        std::fs::write(&script, "#!/bin/sh\n").unwrap();
+        let registry = AskpassRegistry::new(1, script.clone());
+        registry.cleanup();
+        assert!(!script.exists());
+        registry.cleanup();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_removed_helper_script_is_recreated_before_use_and_a_present_one_is_kept() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("gitty-askpass-test.sh");
+        let registry = AskpassRegistry::new(1, script.clone());
+        // Interactive network arguments must restore a script that a stale-file
+        // sweep or a temp-folder cleaner removed while the app was running.
+        let guard = registry.start_operation();
+        let _ = crate::remote::network_args(true, Some(&guard));
+        let restored = std::fs::read_to_string(&script).unwrap();
+        assert!(restored.starts_with("#!/bin/sh\nexec "));
+        assert!(restored.contains(" askpass \"$@\""));
+        assert_eq!(
+            std::fs::metadata(&script).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        std::fs::write(&script, "#!/bin/sh\n# custom\n").unwrap();
+        registry.ensure_script();
+        assert_eq!(
+            std::fs::read_to_string(&script).unwrap(),
+            "#!/bin/sh\n# custom\n"
+        );
+    }
+
+    #[test]
+    fn prompt_event_uses_command_request_id_name() {
+        assert_eq!(
+            serde_json::to_value(AskpassPromptPayload {
+                request_id: 7,
+                prompt: "Username for example".into(),
+                context: None,
+            })
+            .unwrap(),
+            serde_json::json!({ "requestId": 7, "prompt": "Username for example", "context": null })
+        );
+        assert_eq!(
+            serde_json::to_value(AskpassPromptPayload {
+                request_id: 8,
+                prompt: "Password".into(),
+                context: Some(AskpassContext::new("repo", "fetch origin")),
+            })
+            .unwrap(),
+            serde_json::json!({
+                "requestId": 8,
+                "prompt": "Password",
+                "context": { "repository": "repo", "operation": "fetch origin" }
+            })
+        );
+    }
+
+    #[test]
+    fn scoped_token_prompt_carries_its_operation_context() {
+        let registry = registry();
+        let first = registry.start_operation_with(AskpassContext::new("gitty", "push origin"));
+        let second = registry.start_operation_with(AskpassContext::new("other", "clone"));
+        for (guard, repository, operation) in [
+            (&first, "gitty", "push origin"),
+            (&second, "other", "clone"),
+        ] {
+            let (mut client, prompts, server) = serve_once(registry.clone(), TEST_LIMITS);
+            client
+                .write_all(format!("{}\nPassword for example\n", guard.token()).as_bytes())
+                .unwrap();
+            let (id, prompt, context) = prompts.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(prompt, "Password for example");
+            assert_eq!(context, Some(AskpassContext::new(repository, operation)));
+            registry
+                .requests
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&id)
+                .unwrap()
+                .reply
+                .send(None)
+                .unwrap();
+            let mut reply = Vec::new();
+            client.read_to_end(&mut reply).unwrap();
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn context_labels_are_single_line_and_bounded() {
+        let context = AskpassContext::new("repo\nname\u{7}", "x".repeat(500));
+        assert_eq!(context.repository, "repo name");
+        assert_eq!(context.operation.chars().count(), 200);
+    }
+
+    #[test]
+    fn responses_preserve_whitespace_and_distinguish_cancel() {
+        assert_eq!(encode_response(Some("secret \n".into())), b"1secret \n");
+        assert_eq!(encode_response(Some(String::new())), b"1");
+        assert_eq!(encode_response(None), b"0");
+    }
+
+    #[test]
+    fn quotes_helper_paths_containing_spaces_or_apostrophes() {
+        assert_eq!(
+            shell_quote("/some path/app's helper"),
+            "'/some path/app'\\''s helper'"
+        );
+    }
+
+    #[test]
+    fn wsl_operation_tokens_expire_and_env_mapping_preserves_existing_entries() {
+        let registry = AskpassRegistry::new(12, "helper".into());
+        let token = {
+            let guard = registry.start_operation();
+            assert!(registry
+                .active_tokens
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(guard.token()));
+            guard.token().to_string()
+        };
+        assert!(!registry
+            .active_tokens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&token));
+        let mapped = wsl_env_mapping(Some("CUSTOM/p:GITTY_ASKPASS_TOKEN/w"));
+        assert!(mapped.starts_with("CUSTOM/p:"));
+        assert_eq!(mapped.matches("GITTY_ASKPASS_TOKEN").count(), 1);
+        assert!(!mapped.contains("GITTY_ASKPASS_TOKEN/w"));
+        assert!(mapped.contains("SSH_ASKPASS_REQUIRE"));
+    }
+}

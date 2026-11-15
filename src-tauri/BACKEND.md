@@ -276,6 +276,13 @@ Unknown or closed handles fail with `invalidHandle`.
   that `git check-ignore -z --stdin` (read environment; tracked files are never
   ignored) reports as ignored. A batch of more than 4,096 distinct working paths,
   a non-UTF-8 path, or a failed ignore check counts as a change.
+  On Windows, `ReadDirectoryChangesW` reports `FILE_ACTION_MODIFIED` as
+  `Modify(Any)` without identifying the field. For that event only, metadata on
+  the Git directory itself and its existing `hooks`, `info`, or `logs`
+  subdirectories is ignored: entry changes are also delivered at their changed
+  child path, where refs, index/config files, other metadata directories, and
+  working files remain conservative. File-level and non-`Modify(Any)`
+  Git-directory events are never dropped by this rule.
 - **No refresh loop.** Gitty's reads run with `GIT_OPTIONAL_LOCKS=0`,
   `core.untrackedCache=false` and `core.fsmonitor=false`, so status/diff never
   rewrite the index; history spools and stdin files live in the system temp
@@ -346,6 +353,94 @@ Refused over SSH with a normal `{code, message}` error (never a UI-only disable)
 interactive rebase/reword (`unsupportedOperation`). Worktree create/lock/unlock/prune,
 untracked discard, stash, merge/rebase/cherry-pick/reset, tags and branch deletion
 remain available because they only need Git.
+
+## Experimental agent CLI and test host
+
+The Cargo workspace keeps `gitty-core` and `gitty-cli` independent of this
+Tauri host; the desktop package depends on `gitty-core` for the same repository
+engine. The restricted `AgentService` supports native-local repository
+state/snapshot/status, history
+and search, commit/diff/identity/remote/stash/worktree reads, guarded staging,
+unstaging, discard, hunk writes, amend, conflict resolution, Git operations,
+branch deletion, and worktree review/execute. Each dispatch runs inside
+`process::request`, so
+subprocesses receive the normal request deadline and errors retain their
+`{code,message}` domain fields.
+
+One-shot commands are `capabilities [--json]`, `status --repo PATH [--json]`,
+`history --repo PATH [--limit N] [--json]`, `stage|unstage --repo PATH
+--path PATH...`, and `commit --repo PATH --message-file FILE [--json]`.
+Commit messages are bounded to 64 KiB, read from a file or stdin when the file
+is `-`, and must be valid UTF-8. Stage/unstage require one or more explicit
+paths. Every option is checked; no paths means no write.
+
+`serve --stdio` uses protocol major version 1 with one JSON request/response per
+line, request IDs, strict UTF-8, a 1 MiB request-line cap, parameters validated
+with the same typed DTOs used to publish method schemas (including nested
+unknown-field rejection), and structured `{error:{code,message}}` responses.
+Up to four requests execute concurrently, with eight queued; responses can
+arrive out of order and must be matched by ID. `repository_cancel_search` is
+handled by the reader while searches execute. A full queue returns `serverBusy`.
+Handles and cursors are process-local. EOF or broken output closes request
+admission, discards queued requests, stops events, cancels active clone/search/
+prompt work, and closes sessions before joining workers; shutdown repeats
+cancellation/cleanup every 25 ms while workers remain, then joins them, to catch
+work admitted immediately before shutdown. Already-started writes retain their
+normal outcome and are not claimed rolled back. Native watcher, Git activity,
+clone-progress, and opt-in prompt events use versioned envelopes.
+`repository_watch` reports watching as unsupported in this headless host.
+
+When started with `--accounts-file PATH`, stdio exposes provider token connection,
+device OAuth start/poll/cancel, and existing account-backed provider operations.
+Token input is accepted only as a bounded JSON request (not a CLI option); it is
+stored through the OS credential store and is not written to activity/event logs.
+OAuth returns a validated provider verification URL and user code without opening
+a browser; polling obeys provider intervals, uses bounded HTTP requests, and can
+be cancelled. Without the opt-in, account methods return `accountPolicy` and are
+omitted from capabilities.
+
+SSH test and directory discovery use the shared validated, shell-free SSH API.
+On Windows, WSL distribution and directory discovery use `wsl.exe`; missing WSL
+returns `wslUnavailable`, and WSL methods are omitted from non-Windows
+capabilities. These discovery methods are read-only and do not extend the local
+native mutation lock to WSL or SSH hosts.
+
+Native `Service::mutate` writes also acquire an OS-backed exclusive advisory
+lock at `<Git common directory>/.gitty-mutation.lock`, after the in-process
+repository lock and before revalidating the session and performing the action.
+Acquisition is nonblocking: contention returns `{code: "repositoryBusy"}` before
+the mutation closure runs, avoiding indefinite waits and hook-to-CLI deadlocks.
+The file may remain after use; the OS lock, not file existence, controls
+exclusion and is released when the process exits. Linked worktrees share the
+common-directory lock. WSL/SSH sessions do not use this local lock, and
+external Git remains an independent actor protected by Git's own locks and
+existing freshness checks.
+
+`request --repo PATH --method METHOD --params-file FILE` invokes a guarded
+repository method for one native-local session. The strict JSON params file is
+limited to 1 MiB and must not provide a `handle`; the command assigns one and
+closes the session after dispatch. Use `-` for stdin. Reviews whose authority is
+session-local (including worktree review tokens) must be reviewed and executed
+within the same `serve --stdio` process. The stdio implementation is sequential:
+review token state is not portable. The stdio dispatcher has bounded concurrent
+requests. Cancellation remains method-specific; provider OAuth has an explicit
+cancel method.
+Each serialized response is capped at 4 MiB.
+
+One-shot `--json` failures, including argument and domain errors, are emitted to
+stdout as `{"error":{"code","message"}}`; without `--json`, diagnostics go to
+stderr. Commit-message files and stdin are read through a 64-KiB-plus-one-byte
+limit before UTF-8 validation.
+
+The Playwright test host is enabled only by the E2E Vite harness. It uses a
+same-origin, loopback-only bridge with per-run bearer authentication, Host and
+Origin checks, a registered disposable fixture root, and a narrow method/path
+allowlist. It launches `gitty-cli serve --stdio`; ordinary browser preview
+remains synthetic. This verifies Chromium plus the real Rust/Git backend, not
+the packaged Tauri webview. The harness removes inherited `GIT_*`, `GITTY_*`,
+editor and askpass variables before constructing isolated Git configuration.
+Playwright tracing is disabled because traces would retain bridge authorization
+headers; failure screenshots and bounded backend stderr diagnostics remain.
 
 `ssh_test({target: {host, port?, user?, path?}}) -> {gitVersion, name}` runs the same
 transport without a session: `git --version` always, then bare/worktree discovery
@@ -1196,7 +1291,7 @@ stream cancellation/reaping, driver suppression and unchanged index bytes/mtime,
 output limits, persistence, and invalid handles/cursors. The non-UTF-8 filename
 integration test is Linux-only (APFS rejects those filenames).
 
-SSH transport tests (`src-tauri/src/ssh_tests.rs`, Unix only) replace the `ssh` client
+SSH transport tests (`crates/gitty-core/src/ssh_tests.rs`, Unix only) replace the `ssh` client
 with a shell double that consumes the options, joins the remaining remote arguments
 with spaces as OpenSSH does, and runs the result through a real shell, so quoting
 regressions at either layer fail. They cover open/state/status/history/diff, staging, commit and amend, a merge

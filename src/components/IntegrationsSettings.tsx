@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { isTauri } from '@tauri-apps/api/core';
 import { ArrowUpRight, Check, ChevronRight, KeyRound, LockKeyhole, Monitor, ShieldCheck } from 'lucide-react';
-import { errorMessage, native } from '../model/native';
+import { errorMessage, isDesktopHost, native } from '../model/native';
 import type { ProviderAccount as Account } from '../model/providerRepositories';
 import githubIcon from '../assets/providers/github.svg';
 import gitlabIcon from '../assets/providers/gitlab.svg';
@@ -32,7 +31,7 @@ export function IntegrationsSettings() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [device, setDevice] = useState<DeviceAuthorization | null>(null);
-  const desktop = isTauri();
+  const desktop = isDesktopHost();
   const [loading, setLoading] = useState(desktop);
   const [refresh, setRefresh] = useState(0);
   const [loadError, setLoadError] = useState('');

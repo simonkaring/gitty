@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import type { EditorPromptPayload } from '../model/operations';
+import { subscribeNative } from '../model/native';
 import { Dialog } from './ui';
 
 export function EditorDialog() {
@@ -11,11 +11,11 @@ export function EditorDialog() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    const unlistenPrompt = listen<EditorPromptPayload>('editor_prompt', (event) => {
-      setPrompts((prev) => [...prev, event.payload]);
+    const unlistenPrompt = subscribeNative<EditorPromptPayload>('editor_prompt', prompt => {
+      setPrompts(prev => [...prev, prompt]);
     });
-    const unlistenExpired = listen<number>('editor_expired', (event) => {
-      setPrompts((prev) => prev.filter((p) => p.requestId !== event.payload));
+    const unlistenExpired = subscribeNative<number>('editor_expired', requestId => {
+      setPrompts(prev => prev.filter(prompt => prompt.requestId !== requestId));
     });
     return () => {
       void unlistenPrompt.then((fn) => fn());

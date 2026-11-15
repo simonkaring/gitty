@@ -6,13 +6,14 @@ Gitty is a graph-first desktop Git client built with Tauri 2, Rust, React 19, Ty
 
 - `src/components/`, `src/App.tsx`, and `src/styles.css`: client-side workspace, graph, inspection, and UI. Keep interactions keyboard-accessible and responsive.
 - `src/model/` and `src/graph/`: shared types, typed Tauri IPC helpers, demo behavior, and graph layout. Keep the frontend/backend data contracts aligned when changing commands or DTOs.
-- `src-tauri/src/`: native repository reads and mutations. Keep Git and filesystem work in Rust, use explicit shell-free Git arguments, and preserve cross-platform native/WSL behavior where applicable.
-- The browser preview (`npm run dev`) uses synthetic repositories and simulated writes. Real repository access and Git mutations require the Tauri desktop app (`npm run desktop`).
+- `crates/gitty-core/src/`: shared repository reads, mutations, protocols, and process safeguards. Keep Git and filesystem work in Rust, use explicit shell-free Git arguments, and preserve native/WSL/SSH boundaries.
+- `crates/gitty-cli/`: console commands, stdio transport, and process-level agent checks. `src-tauri/src/` hosts desktop commands and prompt/window adapters over the same engine.
+- The browser preview (`npm run dev`) uses synthetic repositories and simulated writes. `npm run test:e2e` is a separate dev-only path to a disposable real-Git fixture; it does not use or fake Tauri internals.
 
 ## Invariants
 
 - Keep Git writes explicit and guarded against stale state; preserve working files and unrelated staged changes. Consult the backend contract before changing staging, commits, or graph operations.
-- Treat demo and native flows distinctly; test the appropriate path rather than assuming mocked browser IPC validates native behavior.
+- Treat demo, native, and real-backend test flows distinctly; mocked IPC does not validate native behavior.
 - Use Conventional Commits for commits when asked to create one.
 - Don't include co authors/assisted when committing.
 - No need to test before committing.
@@ -28,5 +29,6 @@ Gitty is a graph-first desktop Git client built with Tauri 2, Rust, React 19, Ty
 ## Checks
 
 - Frontend: `npm test` (Vitest) and `npm run build` (TypeScript + Vite).
-- Rust or IPC changes: `npm run check:rust` and `npm run test:rust`; run `cargo fmt --manifest-path src-tauri/Cargo.toml --check` for Rust edits. Build the frontend first with `npm run build`. Testing is local-only for now; see the README for checks and native compilation commands. Future automated checks will use Azure DevOps.
+- Rust or IPC changes: `npm run check:rust` and `npm run test:rust` cover the workspace; run `cargo fmt --all -- --check` for Rust edits. Build the frontend first with `npm run build` for desktop checks.
+- Standalone engine/CLI checks are `npm run check:headless` and `npm run test:headless`, with no frontend or desktop build requirement. Playwright's real-Git fixture suite is `npm run test:e2e` after installing Chromium with `npx playwright install chromium`; it is not packaged-desktop coverage.
 - Add or update focused tests for behavior changes. Browser smoke scripts under `src/components/*.smoke.mjs` use mocked Tauri IPC and require a separate Playwright/Chromium installation; see the README for invocation.

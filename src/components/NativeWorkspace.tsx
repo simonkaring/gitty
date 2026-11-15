@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps, type CSSProperties } from 'react';
-import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { FolderOpen, Palette, PanelLeft, PanelRight, Settings as SettingsIcon, Sparkles } from 'lucide-react';
 import type { PaletteCommand } from './CommandPalette';
 import { CommandPalette, SettingsDialog, preloadLazyDialogs } from './lazyDialogs';
@@ -13,9 +12,9 @@ import { Toast, ToastProvider, ToastRegion } from './ui';
 import { RepositoryPane } from './RepositoryPane';
 import { RepositoryTabs, type RepositoryTabSummary } from './RepositoryTabs';
 import { loadPersistedTabs, locationLabel, savePersistedTabs, tabsReducer, type TabsState } from '../model/tabs';
-import { errorMessage, handleWindowDrag, native } from '../model/native';
+import { errorMessage, handleWindowDrag, hostCapabilities, isDesktopHost, native, openCloneProgress, subscribeNative } from '../model/native';
 import { DEMO_REPOS, demoLocation } from '../model/demoBackend';
-import { cloneReducer, type CloneProgress, type CloneRequest } from '../model/clone';
+import { cloneReducer, type CloneRequest } from '../model/clone';
 import { ErrorBoundary } from './ErrorBoundary';
 import { DEFAULT_BUTTON_LAYOUT, parseWindowButtonLayout, WindowControls, WindowResizeHandles } from './WindowControls';
 import { NARROW_PANE_MAX_WIDTH, setPaneOpen, settleSidePanes, type SidePane } from '../model/paneLayout';
@@ -32,8 +31,10 @@ function SettingsHost(props: ComponentProps<typeof SettingsDialog>) {
 /** A repository named on the command line opens once per app run, not again after leaving the demo. */
 let launchPathHandled = false;
 
-function initialTabsState(demo: boolean): TabsState {
-  const persisted = demo ? { tabs: [{ id: 'demo', location: demoLocation(DEMO_REPOS[0].name) }], activeId: 'demo' } : loadPersistedTabs(window.localStorage);
+function initialTabsState(demo: boolean, initialLocation?: RepositoryLocation): TabsState {
+  const persisted = initialLocation
+    ? { tabs: [{ id: 'fixture', location: initialLocation }], activeId: 'fixture' }
+    : demo ? { tabs: [{ id: 'demo', location: demoLocation(DEMO_REPOS[0].name) }], activeId: 'demo' } : loadPersistedTabs(window.localStorage);
   return {
     tabs: persisted.tabs.map(tab => ({ id: tab.id, location: tab.location, title: locationLabel(tab.location), key: null, busy: false, branch: null, dirty: false })),
     activeId: persisted.activeId,
@@ -41,7 +42,7 @@ function initialTabsState(demo: boolean): TabsState {
   };
 }
 
-export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggleDemo?: () => void }) {
+export function NativeWorkspace({ demo, onToggleDemo, initialLocation, cloneParent }: { demo: boolean; onToggleDemo?: () => void; initialLocation?: RepositoryLocation; cloneParent?: string }) {
   // `tabsReducer` is a pure function: opening, deduping, closing, and
   // meta/busy updates never call `notify`/`setActiveId` as a side effect of
   // computing the next state. Under React StrictMode a `setTabs(current =>
@@ -50,7 +51,11 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
   // than the one in the committed tabs array — the newly opened tab then
   // never matched `activeId` and stayed permanently hidden. Routing every
   // transition through one reducer call removes that whole class of bug.
-  const [{ tabs, activeId, notice: pendingNotice }, dispatch] = useReducer(tabsReducer, demo, initialTabsState);
+  const [{ tabs, activeId, notice: pendingNotice }, dispatch] = useReducer(
+    tabsReducer,
+    { demo, initialLocation },
+    initial => initialTabsState(initial.demo, initial.initialLocation),
+  );
   // A restored tab only mounts its RepositoryPane (native session, snapshot,
   // history stream, polling) once it has been active in this app run; after
   // that it stays mounted so switching back keeps its state. The set is derived
@@ -106,13 +111,13 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
     noticeTimer.current = setTimeout(() => setNotice(''), 4500);
   }, []);
-  const isLinux = document.documentElement.dataset.platform === 'linux' && isTauri();
+  const isLinux = document.documentElement.dataset.platform === 'linux' && isDesktopHost();
   const [buttonLayout, setButtonLayout] = useState(DEFAULT_BUTTON_LAYOUT);
   useEffect(() => {
     if (!isLinux) return;
     let disposed = false;
     const update = (layout: string) => { if (!disposed) setButtonLayout(layout); };
-    const unlisten = listen<string>('window-button-layout-changed', event => update(event.payload));
+    const unlisten = subscribeNative<string>('window-button-layout-changed', update);
     void unlisten.then(() => invoke<string>('app_window_button_layout')).then(update).catch(error => { if (!disposed) notify(`Could not read window button layout: ${errorMessage(error)}`); });
     return () => { disposed = true; void unlisten.then(stop => stop()).catch(() => {}); };
   }, [isLinux, notify]);
@@ -125,7 +130,7 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
 
   const openLocation = useCallback((location: RepositoryLocation, fromTabId?: string) => dispatch({ type: 'open', location, fromTabId }), []);
   useEffect(() => {
-    if (demo || !isTauri() || launchPathHandled) return;
+    if (demo || !isDesktopHost() || launchPathHandled) return;
     let disposed = false;
     void invoke<string | null>('app_launch_path').then(path => {
       if (disposed || launchPathHandled) return;
@@ -136,22 +141,26 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
   }, [demo, openLocation, notify]);
   const startClone = useCallback((request: CloneRequest, fromTabId?: string) => {
     if (clone.status === 'running' || clone.status === 'cancelling') return;
-    if (demo) { notify('Cloning requires the desktop app.'); return; }
+    if (!hostCapabilities().clone) { notify('Cloning requires the desktop app.'); return; }
     const operationId = crypto.randomUUID();
-    const onProgress = new Channel<CloneProgress>();
-    onProgress.onmessage = progress => dispatchClone({ type: 'progress', operationId, progress });
     dispatchClone({ type: 'start', operationId, request });
-    void native<RepositoryLocation>('repository_clone', { operationId, request, onProgress }).then(location => {
-      dispatchClone({ type: 'finish', operationId });
-      dispatch({ type: 'open', location, fromTabId });
-      notify(`Cloned ${request.directoryName}.`);
-    }).catch(error => {
-      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'cancelled') {
+    void (async () => {
+      const progress = await openCloneProgress(operationId, value => dispatchClone({ type: 'progress', operationId, progress: value }));
+      try {
+        const location = await native<RepositoryLocation>('repository_clone', {
+          operationId, request, ...(progress.channel ? { onProgress: progress.channel } : {}),
+        });
         dispatchClone({ type: 'finish', operationId });
-        notify(`Cancelled clone of ${request.directoryName}.`);
-      } else dispatchClone({ type: 'fail', operationId, message: errorMessage(error) });
-    });
-  }, [clone.status, notify, demo]);
+        dispatch({ type: 'open', location, fromTabId });
+        notify(`Cloned ${request.directoryName}.`);
+      } catch (error) {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'cancelled') {
+          dispatchClone({ type: 'finish', operationId });
+          notify(`Cancelled clone of ${request.directoryName}.`);
+        } else dispatchClone({ type: 'fail', operationId, message: errorMessage(error) });
+      } finally { progress.stop(); }
+    })().catch(error => dispatchClone({ type: 'fail', operationId, message: errorMessage(error) }));
+  }, [clone.status, notify]);
   const cancelClone = useCallback(() => {
     if (clone.status !== 'running') return;
     const operationId = clone.operationId;
@@ -185,11 +194,11 @@ export function NativeWorkspace({ demo, onToggleDemo }: { demo: boolean; onToggl
     ...(onToggleDemo ? [{ id: 'demo', group: 'Workspace', label: demo ? 'Exit demo workspace' : 'Explore demo workspace', icon: <Sparkles size={15} />, disabled: anyBusy, run: requestDemo }] : []),
     ...themes.filter(t => t.id !== theme.id).map(t => ({ id: `theme:${t.id}`, group: 'Theme', label: `Theme: ${t.name}`, hint: t.mode, icon: <Palette size={15} />, run: () => updateSettings({ themeMode: 'fixed', themeId: t.id }) })),
   ];
-  const customWindowControls = (document.documentElement.dataset.platform === 'windows' && isTauri()) || isLinux;
+  const customWindowControls = (document.documentElement.dataset.platform === 'windows' && isDesktopHost()) || isLinux;
   const [leftButtons, rightButtons] = parseWindowButtonLayout(buttonLayout);
   const tabSummaries: RepositoryTabSummary[] = tabs.map(tab => ({ id: tab.id, title: tab.title, busy: tab.busy, branch: tab.branch, dirty: tab.dirty, start: !tab.location }));
   const activeTab = tabs.find(tab => tab.id === activeId);
-  const startPage = (fromTabId?: string) => <><StartPage onOpen={location => openLocation(location, fromTabId)} onClone={request => startClone(request, fromTabId)} cloneBusy={cloneBusy} /><footer className="statusbar"><span>Open a repository to get started</span><span><CommandSearchButton onClick={() => setPaletteOpen(true)} /></span></footer></>;
+  const startPage = (fromTabId?: string) => <><StartPage onOpen={location => openLocation(location, fromTabId)} onClone={request => startClone(request, fromTabId)} cloneBusy={cloneBusy} cloneParent={cloneParent} /><footer className="statusbar"><span>Open a repository to get started</span><span><CommandSearchButton onClick={() => setPaletteOpen(true)} /></span></footer></>;
   return <ToastProvider value={toastRoot}><div className="app-shell native-shell" style={{ '--inspector-width': `${inspectorWidth}px`, '--sidebar-width': `${sidebarWidth}px`, '--sidebar-space': `${sidebarOpen ? sidebarWidth : 0}px` } as CSSProperties}>
     {isLinux && <WindowResizeHandles onError={notify} />}
     <header className={`titlebar${customWindowControls ? isLinux ? ' titlebar-linux' : ' titlebar-windows' : ''}`} data-tauri-drag-region={customWindowControls ? 'deep' : true} onMouseDown={customWindowControls ? undefined : handleWindowDrag}>

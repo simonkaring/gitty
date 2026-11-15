@@ -1,18 +1,196 @@
-import { invoke } from '@tauri-apps/api/core';
+import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import type { Commit } from './types';
 import { demoInvoke } from './demoBackend';
 import type { CommitSummary, DiffSpec, RepositorySnapshot, RepositoryState, RepositoryStatus, StatusEntry } from './repository';
 import type { OperationState } from './operations';
+import type { CloneProgress } from './clone';
 
 import { recordCommandEnd, recordCommandStart } from './activity';
 import { isCancelledSearch } from './searchFlow';
 
 let demoMode = false;
+const realBackendTest = import.meta.env.DEV && import.meta.env.VITE_GITTY_TEST_MODE === '1';
+const desktopHost = () => isTauri();
+export type HostMode = 'desktop' | 'demo' | 'test';
+export interface HostCapabilities {
+  repository: boolean;
+  events: boolean;
+  clone: boolean;
+  nativeWindow: boolean;
+}
+export function hostMode(): HostMode {
+  return realBackendTest ? 'test' : demoMode ? 'demo' : 'desktop';
+}
+export function hostCapabilities(): HostCapabilities {
+  const mode = hostMode();
+  return {
+    repository: mode !== 'demo',
+    events: mode === 'desktop' || mode === 'test',
+    clone: mode === 'desktop' || mode === 'test',
+    nativeWindow: mode === 'desktop' || (mode === 'demo' && typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window),
+  };
+}
+let testSession: Promise<{ token: string; fixtureId: string; location: import('./repository').RepositoryLocation; cloneParent: string }> | undefined;
+let testToken: string | undefined;
+let testFixtureId: string | undefined;
+const testEventHandlers = new Map<string, Set<(payload: unknown) => void>>();
+const testHandles = new Set<string>();
+let testEventAbort: AbortController | undefined;
+let testEventTask: Promise<void> | undefined;
+let testEventReady: Promise<void> | undefined;
 /** While on, handle-less calls (open, recents, pickers) go to the in-memory demo backend. */
 export function setDemoMode(on: boolean) { demoMode = on; }
+export const isRealBackendTest = () => realBackendTest;
+export function initializeTestHost() {
+  if (!realBackendTest) return Promise.reject(new Error('Real-backend test host is not enabled.'));
+  testSession ??= fetch('/__gitty_test/session', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  }).then(async response => {
+    const value = await response.json();
+    if (!response.ok) throw new Error(value.error?.message ?? 'Test host initialization failed.');
+    testToken = value.token;
+    testFixtureId = value.fixtureId;
+    return value;
+  });
+  return testSession;
+}
+function deliverTestEvent(kind: string, data: unknown) {
+  const deliver = (name: string, payload: unknown) => {
+    for (const handler of testEventHandlers.get(name) ?? []) handler(payload);
+  };
+  if (kind === 'repository_changed' && data && typeof data === 'object' &&
+    'handle' in data && testHandles.has(String(data.handle))) deliver(kind, data);
+  else if (kind === 'git_command' || kind === 'repository_clone') deliver(kind, data);
+  else if (kind === 'events_dropped') {
+    deliver(kind, data);
+    for (const handle of testHandles) deliver('repository_changed', { handle });
+  }
+}
+function startTestEventStream(): Promise<void> {
+  if (testEventTask) return testEventAbort?.signal.aborted
+    ? testEventTask.then(() => startTestEventStream())
+    : testEventReady!;
+  if (!testFixtureId || !testToken) return Promise.reject(new Error('Test fixture is not initialized.'));
+  const controller = testEventAbort = new AbortController();
+  let resolveReady!: () => void;
+  let rejectReady!: (error: Error) => void;
+  let readySettled = false;
+  testEventReady = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+  testEventTask = (async () => {
+    while (!controller.signal.aborted) {
+      try {
+        const response = await fetch(`/__gitty_test/events?fixtureId=${encodeURIComponent(testFixtureId!)}`, {
+          headers: { authorization: `Bearer ${testToken}` }, signal: controller.signal,
+        });
+        if (!response.ok || !response.body) throw new Error(`Event stream failed (${response.status})`);
+        if (!readySettled) { readySettled = true; resolveReady(); }
+        // The backend queue may contain changes from before subscribe/watch, or
+        // while disconnected. Reload once on every connection to catch them.
+        deliverTestEvent('events_dropped', { count: 1 });
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (!controller.signal.aborted) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          if (buffer.length > 4 * 1024 * 1024) {
+            buffer = '';
+            deliverTestEvent('events_dropped', { count: 1 });
+          }
+          let newline;
+          while ((newline = buffer.indexOf('\n')) >= 0) {
+            const line = buffer.slice(0, newline);
+            buffer = buffer.slice(newline + 1);
+            try {
+              const frame = JSON.parse(line);
+              if (frame.version === 1 && Number.isSafeInteger(frame.eventId) &&
+                typeof frame.event?.kind === 'string') deliverTestEvent(frame.event.kind, frame.event.data);
+            } catch { deliverTestEvent('events_dropped', { count: 1 }); }
+          }
+        }
+      } catch (error) {
+        if (!readySettled) {
+          readySettled = true;
+          rejectReady(error instanceof Error ? error : new Error(String(error)));
+        }
+      }
+      if (!controller.signal.aborted) await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  })().finally(() => {
+    if (testEventAbort === controller) {
+      testEventAbort = undefined;
+      testEventTask = undefined;
+      testEventReady = undefined;
+    }
+  });
+  const ready = testEventReady!;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    ready,
+    new Promise<void>((_, reject) => { timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error('Test event stream did not become ready.'));
+    }, 5000); }),
+  ]).finally(() => { if (timer) clearTimeout(timer); });
+}
 export const isDemoHandle = (handle: unknown) => typeof handle === 'string' && handle.startsWith('demo:');
+async function testInvoke<T>(command: string, args: Record<string, unknown>): Promise<T> {
+  if (!testToken) await initializeTestHost();
+  const response = await fetch('/__gitty_test/invoke', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${testToken}` },
+    body: JSON.stringify({ command, args: { ...args, fixtureId: testFixtureId } }),
+  });
+  const value = await response.json();
+  if (value.error) throw Object.assign(new Error(value.error.message), { code: value.error.code });
+  if (!response.ok) throw Object.assign(new Error('Test backend request failed.'), { code: 'testBridge' });
+  if (command === 'repository_open' && value.result?.session?.handle) testHandles.add(value.result.session.handle);
+  if (command === 'repository_close' && typeof args.handle === 'string') testHandles.delete(args.handle);
+  return value.result as T;
+}
 const dispatch = <T,>(command: string, args: Record<string, unknown> = {}): Promise<T> =>
-  ('handle' in args ? isDemoHandle(args.handle) : demoMode) ? demoInvoke(command, args) as Promise<T> : invoke<T>(command, args);
+  ('handle' in args ? isDemoHandle(args.handle) : demoMode)
+    ? demoInvoke(command, args) as Promise<T>
+    : realBackendTest ? testInvoke<T>(command, args) : invoke<T>(command, args);
+export function subscribeNative<T>(event: string, handler: (payload: T) => void): Promise<() => void> {
+  if (realBackendTest) {
+    const listener = handler as (payload: unknown) => void;
+    const handlers = testEventHandlers.get(event) ?? new Set();
+    handlers.add(listener);
+    testEventHandlers.set(event, handlers);
+    const unsubscribe = () => {
+      handlers.delete(listener);
+      if (!handlers.size) testEventHandlers.delete(event);
+      if (![...testEventHandlers.values()].some(value => value.size)) {
+        testEventAbort?.abort();
+      }
+    };
+    return initializeTestHost().then(startTestEventStream).then(() => unsubscribe, error => {
+      unsubscribe();
+      throw error;
+    });
+  }
+  if (!hostCapabilities().events) return Promise.resolve(() => {});
+  return listen<T>(event, event => handler(event.payload));
+}
+export async function openCloneProgress(operationId: string, handler: (value: CloneProgress) => void) {
+  if (realBackendTest) {
+    const stop = await subscribeNative<{ operationId: string } & CloneProgress>('repository_clone', value => {
+      if (value.operationId === operationId) handler(value);
+    });
+    return { channel: undefined, stop };
+  }
+  if (hostCapabilities().clone) {
+    const channel = new Channel<CloneProgress>();
+    channel.onmessage = handler;
+    return { channel, stop() {} };
+  }
+  return { channel: undefined, stop() {} };
+}
 /** Session calls route by handle, so a pane closing after a mode switch still reaches the backend that owns it. */
 export const native = async <T,>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
   const activityId = recordCommandStart(command, args);
@@ -134,3 +312,5 @@ export function handleWindowDrag(event: React.MouseEvent<HTMLElement>) {
   if (target?.closest('button, input, select, textarea, a, [role="tab"]')) return;
   void native('app_start_dragging').catch(() => {});
 }
+
+export const isDesktopHost = desktopHost;

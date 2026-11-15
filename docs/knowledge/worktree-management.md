@@ -5,9 +5,9 @@ description: Sidebar discovery, reviewed worktree mutations, and open-session sa
 status: draft
 sources:
   - id: backend
-    resource: ../../src-tauri/src/worktrees.rs
+    resource: ../../crates/gitty-core/src/worktrees.rs
   - id: sessions
-    resource: ../../src-tauri/src/repository.rs
+    resource: ../../crates/gitty-core/src/repository.rs
   - id: ui
     resource: ../../src/components/Worktrees.tsx
   - id: ui-tests

@@ -29,8 +29,8 @@ const parentPath = (path: string) => path.replace(/\/?[^/]+\/?$/, '') || '/';
 
 /** The start page: shown with no tabs open and in every new tab. Opening a
  * repository from a tab replaces that tab (see `tabsReducer` 'open'). */
-export function StartPage({ onOpen, onClone, cloneBusy }: {
-  onOpen: (location: RepositoryLocation) => void; onClone: (request: CloneRequest) => void; cloneBusy: boolean;
+export function StartPage({ onOpen, onClone, cloneBusy, cloneParent }: {
+  onOpen: (location: RepositoryLocation) => void; onClone: (request: CloneRequest) => void; cloneBusy: boolean; cloneParent?: string;
 }) {
   const [view, setView] = useState<View>('recent');
   const [recent, setRecent] = useState<RepositoryLocation[] | null>(null);
@@ -48,7 +48,7 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
   const [cloneAccountId, setCloneAccountId] = useState<string>();
   const [cloneName, setCloneName] = useState('');
   const [cloneKind, setCloneKind] = useState<'native' | 'wsl'>('native');
-  const [nativeParent, setNativeParent] = useState('');
+  const [nativeParent, setNativeParent] = useState(cloneParent ?? '');
   const [sshHost, setSshHost] = useState('');
   const [sshUser, setSshUser] = useState('');
   const [sshPort, setSshPort] = useState('');
@@ -214,7 +214,7 @@ export function StartPage({ onOpen, onClone, cloneBusy }: {
             <Segmented label="Clone source" value={cloneMethod} options={[[ 'accounts', 'Connected accounts' ], [ 'url', 'Repository URL' ]]} onChange={value => { if (cloneBusy) return; setCloneMethod(value); selectRepository(null); if (value === 'accounts') setCloneKind('native'); }} />
             {cloneMethod === 'accounts' && <RepositoryBrowser disabled={cloneBusy} onSelect={selectRepository} />}
             <form className="start-form" onSubmit={event => { event.preventDefault(); submitClone(); }}>
-            <label className="field">Repository URL<input autoFocus={cloneMethod === 'url'} value={cloneSource} readOnly={cloneMethod === 'accounts'} disabled={cloneBusy} onChange={event => setCloneSource(event.target.value)} onBlur={() => { if (!cloneName.trim()) setCloneName(suggestedCloneName(cloneSource)); }} placeholder={cloneMethod === 'accounts' ? 'Select a repository above' : 'https://host/team/repository.git'} /></label>
+             <label className="field">Repository URL<input autoFocus={cloneMethod === 'url'} value={cloneSource} readOnly={cloneMethod === 'accounts'} disabled={cloneBusy} onChange={event => setCloneSource(event.target.value)} placeholder={cloneMethod === 'accounts' ? 'Select a repository above' : 'https://host/team/repository.git'} /></label>
             <div className="field">
               <span>Destination</span>
               {!!distributions.length && cloneMethod === 'url' && <Segmented label="Destination type" value={cloneKind} options={[['native', 'This computer'], ['wsl', 'WSL']]} onChange={setCloneKind} />}

@@ -5,21 +5,21 @@ description: How a repository on another machine is opened, which actions run re
 status: draft
 sources:
   - id: dto
-    resource: ../../src-tauri/src/dto.rs
+    resource: ../../crates/gitty-core/src/dto.rs
   - id: process
-    resource: ../../src-tauri/src/process.rs
+    resource: ../../crates/gitty-core/src/process.rs
   - id: repository
-    resource: ../../src-tauri/src/repository.rs
+    resource: ../../crates/gitty-core/src/repository.rs
   - id: operations
-    resource: ../../src-tauri/src/operations.rs
+    resource: ../../crates/gitty-core/src/operations.rs
   - id: mutate
-    resource: ../../src-tauri/src/mutate.rs
+    resource: ../../crates/gitty-core/src/mutate.rs
   - id: conflicts
-    resource: ../../src-tauri/src/conflicts.rs
+    resource: ../../crates/gitty-core/src/conflicts.rs
   - id: ssh
-    resource: ../../src-tauri/src/ssh.rs
+    resource: ../../crates/gitty-core/src/ssh.rs
   - id: ssh-tests
-    resource: ../../src-tauri/src/ssh_tests.rs
+    resource: ../../crates/gitty-core/src/ssh_tests.rs
   - id: contract
     resource: ../../src-tauri/BACKEND.md
   - id: plan

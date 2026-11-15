@@ -5,11 +5,11 @@ description: Connected-account repository browsing, clone credential scope, and 
 status: draft
 sources:
   - id: discovery
-    resource: ../../src-tauri/src/provider_repositories.rs
+    resource: ../../crates/gitty-core/src/provider_repositories.rs
   - id: accounts
-    resource: ../../src-tauri/src/provider_accounts.rs
+    resource: ../../crates/gitty-core/src/provider_accounts.rs
   - id: clone
-    resource: ../../src-tauri/src/clone.rs
+    resource: ../../crates/gitty-core/src/clone.rs
   - id: browser
     resource: ../../src/components/RepositoryBrowser.tsx
   - id: entry

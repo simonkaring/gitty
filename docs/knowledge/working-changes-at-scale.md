@@ -9,13 +9,13 @@ sources:
   - id: window
     resource: ../../src/components/WorkingFileWindow.tsx
   - id: diff
-    resource: ../../src-tauri/src/diff.rs
+    resource: ../../crates/gitty-core/src/diff.rs
   - id: status
-    resource: ../../src-tauri/src/repository.rs
+    resource: ../../crates/gitty-core/src/repository.rs
   - id: ui-tests
     resource: ../../src/components/WorkingChanges.test.ts
   - id: native-tests
-    resource: ../../src-tauri/src/tests.rs
+    resource: ../../crates/gitty-core/src/tests.rs
   - id: smoke
     resource: ../../src/components/working-files.smoke.mjs
   - id: contract

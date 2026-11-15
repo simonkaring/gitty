@@ -7,29 +7,29 @@ sources:
   - id: contract
     resource: ../../src-tauri/BACKEND.md
   - id: locking
-    resource: ../../src-tauri/src/repository.rs
+    resource: ../../crates/gitty-core/src/repository.rs
   - id: writes
-    resource: ../../src-tauri/src/mutate.rs
+    resource: ../../crates/gitty-core/src/mutate.rs
   - id: workflow
     resource: ../../src/model/workflow.ts
   - id: hunk-tests
-    resource: ../../src-tauri/src/hunk_tests.rs
+    resource: ../../crates/gitty-core/src/hunk_tests.rs
   - id: workflow-tests
     resource: ../../src/model/workflow.test.ts
   - id: branch-delete
-    resource: ../../src-tauri/src/branch_delete.rs
+    resource: ../../crates/gitty-core/src/branch_delete.rs
   - id: branch-delete-ui
     resource: ../../src/model/branchDelete.ts
   - id: branch-folder-dialog
     resource: ../../src/components/BranchFolderDeleteDialog.tsx
   - id: operations
-    resource: ../../src-tauri/src/operations.rs
+    resource: ../../crates/gitty-core/src/operations.rs
   - id: operation-tests
-    resource: ../../src-tauri/src/operation_tests.rs
+    resource: ../../crates/gitty-core/src/operation_tests.rs
   - id: operation-dialog
     resource: ../../src/components/OperationDialog.tsx
   - id: stashes
-    resource: ../../src-tauri/src/stash.rs
+    resource: ../../crates/gitty-core/src/stash.rs
   - id: stash-dialog
     resource: ../../src/components/RemoteStashDialog.tsx
   - id: origin-reset-dialog
@@ -39,11 +39,11 @@ sources:
   - id: graph-drop-tests
     resource: ../../src/components/HistoryGraph.ui.test.tsx
   - id: remote-writes
-    resource: ../../src-tauri/src/remote.rs
+    resource: ../../crates/gitty-core/src/remote.rs
   - id: remote-dto
-    resource: ../../src-tauri/src/remote_dto.rs
+    resource: ../../crates/gitty-core/src/remote_dto.rs
   - id: remote-tests
-    resource: ../../src-tauri/src/remote_tests.rs
+    resource: ../../crates/gitty-core/src/remote_tests.rs
   - id: remote-model
     resource: ../../src/model/remote.ts
   - id: branch-menu
@@ -64,7 +64,10 @@ File staging/unstaging takes explicit, validated, literal paths; an empty list
 never means all changes. New commits consume the index, not unstaged content.
 Ordinary writes reject unsupported operation/conflict states and respect Git's
 locks, hooks, and signing. The common-directory mutation lock serializes Gitty
-sessions, including linked worktrees; it cannot serialize external Git.[^writes][^locking]
+sessions, including linked worktrees. Native mutations additionally acquire an
+OS-backed advisory lock in that common directory; another process holding it
+causes `repositoryBusy` before the write runs. WSL/SSH retain process-local
+coordination, and neither lock serializes external Git.[^writes][^locking]
 
 Explicit [history acceleration](history-acceleration.md) writes only object-store
 commit-graph metadata, so it uses an independent common-directory job guard rather

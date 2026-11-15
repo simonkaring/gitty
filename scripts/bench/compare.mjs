@@ -28,6 +28,7 @@ import { delimiter, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { transform } from 'esbuild';
 import { benchDir, median, ms, parseArgs, table } from './common.mjs';
+import { backendPackage } from './backend-package.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
@@ -178,16 +179,14 @@ async function backend() {
   await mkdir(results, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const worktree = join(dir, `baseline-${short}`);
-  // Sharing the target directory avoids compiling Tauri and its dependencies
-  // twice; the local crate still rebuilds for each tree.
-  const targetDir = join(root, 'src-tauri', 'target');
+  // Share the workspace target directory across both revisions to avoid
+  // duplicating dependency builds; Cargo still fingerprints each package.
+  const targetDir = join(root, 'target');
 
   const run = async (cwd, out) => {
-    if (cwd === worktree && !existsSync(join(cwd, 'src-tauri/src/bench_tests.rs'))) {
-      throw new Error(`Baseline ${short} has no backend benchmark (src-tauri/src/bench_tests.rs).`);
-    }
+    const benchmark = backendPackage(cwd);
     execFileSync('cargo', [
-      'test', '--release', '--manifest-path', join(cwd, 'src-tauri', 'Cargo.toml'),
+      'test', '--release', '--manifest-path', benchmark.manifest,
       '--lib', 'bench_tests::backend_benchmark', '--', '--ignored', '--exact', '--nocapture',
     ], {
       cwd,

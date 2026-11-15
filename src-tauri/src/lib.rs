@@ -1,42 +1,16 @@
-mod askpass;
-mod branch_delete;
-mod bridge;
-pub mod editor;
-
-mod clone;
-mod clone_dto;
-mod commit;
-mod commit_graph;
-mod conflicts;
-mod credentials;
-mod diff;
-mod dto;
-mod external;
-mod hunk;
-mod identity;
+mod askpass_adapter;
+mod editor_adapter;
 #[cfg(target_os = "linux")]
 mod linux;
-mod mutate;
-mod operation_dto;
-mod operations;
-mod process;
-mod provider_accounts;
-mod provider_oauth;
-mod provider_pr;
-mod provider_repositories;
-mod remote;
-mod remote_dto;
-mod repository;
-mod ssh;
-mod stash;
-mod stream;
-mod watcher;
-mod worktree_files;
-mod worktrees;
-mod wsl;
 
 use clone_dto::*;
 use dto::*;
+pub use gitty_core::{
+    askpass, branch_delete, clone, clone_dto, commit_graph, conflicts, credentials, diff, dto,
+    editor, external, identity, mutate, operation_dto, operations, process, provider_accounts,
+    provider_oauth, provider_pr, provider_repositories, remote, remote_dto, repository, ssh, stash,
+    watcher, worktree_files, worktrees, wsl,
+};
 use operation_dto::*;
 use remote_dto::*;
 use repository::Service;
@@ -45,6 +19,7 @@ use tauri::{Emitter, Manager};
 
 type Shared = Arc<Service>;
 type Accounts = Arc<provider_accounts::AccountStore>;
+pub use gitty_core::Error;
 
 #[tauri::command]
 async fn repository_commit_graph_status(
@@ -784,8 +759,8 @@ pub fn run() {
             process::set_git_log(move |log| {
                 let _ = handle.emit("git_command", log);
             });
-            askpass::init(app.handle().clone())?;
-            editor::init(app.handle().clone())?;
+            askpass_adapter::init(app.handle().clone())?;
+            editor_adapter::init(app.handle().clone())?;
             #[cfg(target_os = "linux")]
             {
                 linux::configure_button_layout(app.handle());
@@ -876,28 +851,11 @@ pub fn run() {
             open_external_url,
             ssh_test,
             ssh_directories,
-            askpass::repository_provide_password,
-            editor::editor_reply,
+            askpass_adapter::repository_provide_password,
+            editor_adapter::editor_reply,
             wsl_distributions,
             wsl_directories
         ])
         .run(tauri::generate_context!())
         .expect("Unable to start Gitty");
 }
-
-#[cfg(test)]
-mod bench_tests;
-#[cfg(test)]
-mod branch_delete_tests;
-#[cfg(test)]
-mod hunk_tests;
-#[cfg(test)]
-mod operation_tests;
-#[cfg(test)]
-mod remote_tests;
-#[cfg(all(test, unix))]
-mod ssh_tests;
-#[cfg(test)]
-mod tests;
-#[cfg(all(test, windows))]
-mod wsl_tests;

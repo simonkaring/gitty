@@ -2,7 +2,7 @@
 
 **A little clarity for your Git history.**
 
-A graph-first desktop Git client built with **Tauri 2, React 19, TypeScript, and Rust**. Switch between repository tabs, clone repositories, explore history, stage files, hunks, or selected lines, create or amend commits, sync branches, manage stashes, and resolve conflicts in a customizable workspace. The browser preview uses the same workspace with synthetic repositories, illustrative diffs, and in-memory staging and commits. Real repository access and Git writes require the desktop app.
+A graph-first Git client built with **Tauri 2, React 19, TypeScript, and Rust**. Switch between repository tabs, clone repositories, explore history, stage files, hunks, or selected lines, create or amend commits, sync branches, manage stashes, and resolve conflicts in a customizable workspace. The browser preview uses synthetic repositories. The experimental Playwright test host uses a disposable real Git repository; ordinary browser preview remains synthetic.
 
 ## The redesigned workspace
 
@@ -42,6 +42,16 @@ npm run check:rust              # Cargo check (build the frontend first)
 ## Explore a real repository
 
 To open a repository directly, pass its path when launching the app: `/Applications/Gitty.app/Contents/MacOS/gitty ~/code/project` or `open -a Gitty --args ~/code/project` (use an absolute path with `open`). The path opens in a new tab alongside restored tabs, or focuses its existing tab; an invalid path shows the usual error in that tab.
+
+### CLI and browser integration tests (experimental)
+
+Build and run `cargo run --manifest-path crates/gitty-cli/Cargo.toml -- capabilities --json`, `... -- doctor --json`, `... -- status --repo PATH --json`, or `... -- history --repo PATH --limit 50 --json`. Explicit writes are available as `stage --repo PATH --path FILE`, `unstage --repo PATH --path FILE`, and `commit --repo PATH --message-file FILE --json` (`-` reads the commit message from stdin). For other guarded operations, `request --repo PATH --method repository_discard --params-file request.json --json` accepts a bounded JSON params object; use `--params-file -` for stdin. Portable actions use `review` and `execute`; process-local worktree tokens remain in one `serve --stdio` session. Stdio emits versioned event lines for repository changes, Git activity, clone progress, and explicitly enabled prompts; clone progress includes `operationId`. Prompt listeners and system-account/keychain access require explicit `--allow-prompts` and `--accounts-file PATH` opt-ins. With `--accounts-file`, token connection and device OAuth are available only through JSON stdio requests: never put access tokens in CLI arguments; OAuth returns a verification URL and user code but does not open a browser. Polling is provider-rate-limited and each request is bounded; cancel with `provider_oauth_cancel`. Provider secrets are not emitted in activity or event logs. SSH test/directory discovery is available through validated core SSH calls; WSL discovery is advertised only on Windows and returns a structured error when `wsl.exe` is unavailable. These host discovery calls do not claim cross-process locking on WSL/SSH hosts. `--json` errors are structured `{error:{code,message}}`; commit messages and structured inputs are bounded before reading. The version-1 stdio protocol runs up to four requests concurrently with eight queued; match responses by ID. Handles and history cursors exist only for that process, and requests are capped at 1 MiB. See the [command matrix](docs/knowledge/agent-command-matrix.md) for all Tauri operations and headless dispositions. The CLI uses standalone `gitty-core` and builds without Tauri, GTK, or frontend assets. Native Gitty writes use a nonblocking common-directory lock and fail with `repositoryBusy` if another Gitty process holds it; this does not coordinate WSL/SSH hosts or external Git.
+
+`npm run build:cli` produces an optimized CLI executable for the current build host in `target/release`; it does not create a cross-platform installer.
+
+For the extracted, desktop-independent CLI, `npm run package:cli` packages a release binary under the ignored `src-tauri/target/cli-artifacts` directory. Pass `-- --target RUST_TARGET` to cross-compile, or `-- --out-dir DIR` to select another output directory. The JSON manifest records target, package version, and SHA-256 (not a signature); verification only executes binaries matching the build host. Run `npm run package:cli:test` for argument and target-name checks, and see the [CLI and native platform checklist](docs/agent-native-platform-verification.md) before claiming platform support.
+
+Install Chromium once with `npx playwright install chromium`, then run `npm run test:e2e`. The harness strips inherited Git overrides, creates isolated temporary repositories and home/config, and launches Vite with the CLI stdio backend. Each test gets its own fixture and browser context; authenticated release closes its handles/watchers before removing its sandbox. The dev-only bridge restricts repository roots, worktrees, clones, and local bare remotes to that fixture. Tracing is disabled because Playwright traces retain authorization headers; screenshots and bounded backend diagnostics remain. Tests exercise rendered workflows and verify effects using raw Git and file bytes. This is browser/host coverage, not Tauri webview verification. `npm run dev:e2e` starts the harness for interactive exploration; never expose it beyond loopback. See [browser testing boundaries](docs/knowledge/browser-agent-testing.md).
 
 Run `npm run desktop`, choose **Open repository**, then use the native folder picker, a recent location, **Open over SSH**, or the clone form. **Open over SSH** runs Git on another machine (for example a home PC over Tailscale) with your own `ssh` configuration: give an alias and optional user/port, then browse remote folders or type the absolute repository path, and **Test connection**. It uses the same graph, staging, commit, conflict and fetch/push workflow; opening/revealing files, `.gitignore` appends, worktree move/remove, cloning into that host, and interactive rebase editing are refused with a reason, and conflict editing needs `python3` there. Gitty never answers a password prompt or accepts a host key; trust the host once with `ssh <alias>` first.
 
@@ -233,8 +243,11 @@ src/
     demo.ts                      Deterministic synthetic history/provider
     diff.ts                      Small LCS diff for synthetic text fixtures
     diff.test.ts                 Diff reconstruction and line-number invariants
-src-tauri/
-  src/lib.rs                     Tauri command registration and blocking-worker dispatch
+crates/gitty-core/
+  src/lib.rs                     Shared engine modules; no Tauri or webview dependency
+  src/agent.rs                   Headless host policies, guarded dispatch and portable reviews
+  src/protocol.rs                Typed request/response schemas and method registry
+  src/events.rs                  Bounded versioned event delivery
   src/repository.rs              Sessions, streaming history, status, search, metadata
   src/diff.rs                    Git change lists and structured patches
   src/mutate.rs                  Staging, unstaging, commits, write preflight checks
@@ -259,7 +272,14 @@ src-tauri/
   src/watcher.rs                 Native filesystem watcher and `repository_changed` events
   src/wsl.rs                     Windows distribution discovery and Linux browsing
   src/ssh.rs                     SSH connection test and failure mapping
-  src/main.rs                    Cross-platform native entry point
+crates/gitty-cli/
+  src/main.rs                    Console commands and bounded stdio transport
+  tests/helper_process.rs        Real-binary lifecycle, helpers and concurrency checks
+src-tauri/
+  src/lib.rs                     Desktop command registration and blocking-worker dispatch
+  src/main.rs                    Desktop launch and shared helper-mode entry point
+  src/askpass_adapter.rs          Tauri credential-prompt events and replies
+  src/editor_adapter.rs           Tauri editor-prompt events and replies
   capabilities/default.json     Minimal main-window permissions
   tauri.conf.json                Tauri 2 app/build/bundle configuration
 src-tauri/BACKEND.md              Current native Git and IPC contracts
@@ -277,7 +297,10 @@ npm run preview                 # Serve the production build
 npm audit
 npm run check:rust              # Requires Rust/Cargo
 npm run test:rust               # Real temporary repository integration tests
-cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo fmt --all -- --check
+npm run check:headless           # Engine + CLI only; no frontend/display required
+npm run test:headless
+npm run test:e2e                 # Rendered browser + isolated real Git
 ```
 
 For slow desktop operations, set `$env:GITTY_TRACE_PROCESS="1"` in PowerShell
@@ -285,7 +308,7 @@ before `npm run desktop`. The terminal prints each captured process's launch and
 total time plus mutation-lock waits, without arguments, stdin, or environment
 values. Remove the variable to disable tracing. On Windows, real WSL timing and
 safety tests can be run against temporary repositories with
-`$env:GITTY_WSL_TEST_DISTRO="Ubuntu"; cargo test --manifest-path src-tauri/Cargo.toml wsl_tests -- --nocapture --test-threads=1`.
+`$env:GITTY_WSL_TEST_DISTRO="Ubuntu"; cargo test -p gitty-core wsl_tests -- --nocapture --test-threads=1`.
 
 ### Performance benchmarks
 
@@ -295,9 +318,9 @@ npm run bench:backend              # Release-mode timings of Gitty's native read
 npm run bench:apps                 # macOS: Gitty vs GitKraken launch, memory, idle CPU
 ```
 
-Fixtures, the compiled probe and JSON results go to `$TMPDIR/gitty-bench` (override with `GITTY_BENCH_DIR` or `--dir`). `bench:backend` runs the ignored `bench_tests::backend_benchmark` Rust test and reports median wall time and Git processes launched for opening a tab, the five-second refresh snapshot, status, history pages, commit detail/files and search, next to raw `git` floors. `bench:apps` **quits running Gitty and GitKraken instances**, launches each with the repository path (Gitty from `src-tauri/target/release/bundle/macos` when built with `npm run tauri -- build --bundles app`, otherwise `/Applications`), and records first-window time, when the window stops visibly changing, process-family memory footprint and idle CPU including child `git` processes. It needs Screen Recording permission for the terminal. Visual completion is pixel-based and cannot tell a finished graph from a static loading state; check the per-run `changes` in the JSON. Both apps keep their own restored tabs, which affects their startup work (Gitty only opens the active restored tab; the rest load when first selected).
+Fixtures, the compiled probe and JSON results go to `$TMPDIR/gitty-bench` (override with `GITTY_BENCH_DIR` or `--dir`). `bench:backend` runs the ignored `bench_tests::backend_benchmark` Rust test and reports median wall time and Git processes launched for opening a tab, the five-second refresh snapshot, status, history pages, commit detail/files and search, next to raw `git` floors. `bench:apps` **quits running Gitty and GitKraken instances**, launches each with the repository path (Gitty from `target/release/bundle/macos` when built with `npm run tauri -- build --bundles app`, otherwise `/Applications`), and records first-window time, when the window stops visibly changing, process-family memory footprint and idle CPU including child `git` processes. It needs Screen Recording permission for the terminal. Visual completion is pixel-based and cannot tell a finished graph from a static loading state; check the per-run `changes` in the JSON. Both apps keep their own restored tabs, which affects their startup work (Gitty only opens the active restored tab; the rest load when first selected).
 
-SSH transport tests use a `ssh` double that joins the remote arguments as OpenSSH does and runs the result through a real shell (Unix only, `src-tauri/src/ssh_tests.rs`); they do not exercise authentication, host keys or a real network. `ssh_test` in the connect form is the manual check for a real host. Testing is local-only for now; pushes and pull requests do not trigger GitHub Actions checks. Run `npm run build` before the Rust checks so the frontend assets are available. For native compilation, run `npm run tauri -- build --no-bundle` on the target platform. Local checks validate the host platform; Windows and Linux runtime behavior require testing on those platforms. Automated cross-platform checks can be introduced in Azure DevOps when needed. The signed-release GitHub workflow has been removed while the app is validated locally.
+SSH transport tests use a `ssh` double that joins the remote arguments as OpenSSH does and runs the result through a real shell (Unix only, `crates/gitty-core/src/ssh_tests.rs`); they do not exercise authentication, host keys or a real network. `ssh_test` in the connect form is the manual check for a real host. Testing is local-only for now; pushes and pull requests do not trigger GitHub Actions checks. Run `npm run build` before the Rust checks so the frontend assets are available. For native compilation, run `npm run tauri -- build --no-bundle` on the target platform. Local checks validate the host platform; Windows and Linux runtime behavior require testing on those platforms. Automated cross-platform checks can be introduced in Azure DevOps when needed. The signed-release GitHub workflow has been removed while the app is validated locally.
 
 These browser smoke suites use mocked Tauri IPC and require an existing Playwright/Chromium installation; their UI expectations may need updating for the current workspace:
 

@@ -9,17 +9,17 @@ sources:
   - id: backend
     resource: ../../scripts/bench/backend.mjs
   - id: harness
-    resource: ../../src-tauri/src/bench_tests.rs
+    resource: ../../crates/gitty-core/src/bench_tests.rs
   - id: apps
     resource: ../../scripts/bench/apps.mjs
   - id: probe
     resource: ../../scripts/bench/probe.swift
   - id: launch
-    resource: ../../src-tauri/src/lib.rs
+    resource: ../../crates/gitty-core/src/bench_tests.rs
   - id: readme
     resource: ../../README.md
   - id: process
-    resource: ../../src-tauri/src/process.rs
+    resource: ../../crates/gitty-core/src/process.rs
 ---
 
 # Performance benchmarks
@@ -29,8 +29,10 @@ sources:
 `--real`, clones git/git. Every fixture's `origin` fetches from itself, so
 background fetches finish locally without changing what the apps draw.[^fixtures]
 
-`npm run bench:backend` builds the ignored `bench_tests::backend_benchmark`
-test in release mode. It calls the same `Service`/`Repository` methods as the
+`npm run bench:backend` builds `gitty-core`'s ignored
+`bench_tests::backend_benchmark` test in release mode. The comparison script
+selects the core package for current revisions and the legacy desktop package
+for older baseline worktrees. It calls the same `Service`/`Repository` methods as the
 Tauri commands inside the per-request deadline, counts Git launches with the
 test-only spawn counter, and records raw `git` floors for status and the first
 200 history entries. It covers native reads only: no IPC, React rendering, WSL

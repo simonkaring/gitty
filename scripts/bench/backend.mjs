@@ -10,6 +10,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { basename, delimiter, join, resolve } from 'node:path';
 import { benchDir, median, ms, parseArgs, table } from './common.mjs';
+import { backendPackage } from './backend-package.mjs';
 
 const args = parseArgs(process.argv.slice(2));
 const dir = args.dir ?? benchDir();
@@ -21,7 +22,8 @@ if (!repos.length) throw new Error('No repositories: run `npm run bench:fixtures
 await mkdir(join(dir, 'results'), { recursive: true });
 const out = join(dir, 'results', `backend-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
 
-execFileSync('cargo', ['test', '--release', '--manifest-path', 'src-tauri/Cargo.toml', '--lib', 'bench_tests::backend_benchmark', '--', '--ignored', '--exact', '--nocapture'], {
+const benchmark = backendPackage(process.cwd());
+execFileSync('cargo', ['test', '--release', '--manifest-path', benchmark.manifest, '--lib', 'bench_tests::backend_benchmark', '--', '--ignored', '--exact', '--nocapture'], {
   stdio: 'inherit',
   env: { ...process.env, GITTY_BENCH_REPOS: repos.join(delimiter), GITTY_BENCH_ITERATIONS: String(args.iterations ?? 5), GITTY_BENCH_OUT: out },
 });

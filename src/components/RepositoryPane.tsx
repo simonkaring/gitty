@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { listen } from '@tauri-apps/api/event';
 import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus, GitCommitHorizontal, Globe2, Laptop, LocateFixed, RefreshCw, ScrollText, Search, Tag, Upload, X, ZoomIn, ZoomOut } from 'lucide-react';
 import type { PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
 import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
 import { isCancelledSearch } from '../model/searchFlow';
-import { appendUnique, errorMessage, graphCommit, isDemoHandle, native, readNativeSnapshot, validateHistory, WORKING_ID } from '../model/native';
+import { appendUnique, errorMessage, graphCommit, isDemoHandle, native, readNativeSnapshot, subscribeNative, validateHistory, WORKING_ID } from '../model/native';
 import { HistoryGraph, type GraphAnchor, type GraphHandle } from './HistoryGraph';
 import { NativeInspector } from './NativeInspector';
 import { NativeSidebar } from './NativeSidebar';
@@ -500,7 +499,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     void (async () => {
       try {
         // Subscribe before watching so no change between the two is missed.
-        const stop = await listen<{ handle: string }>('repository_changed', event => { if (event.payload.handle === handle) changes.request(); });
+        const stop = await subscribeNative<{ handle: string }>('repository_changed', payload => { if (payload.handle === handle) changes.request(); });
         if (disposed) { stop(); return; }
         unlisten = stop;
         const watch = await native<WatchStatus>('repository_watch', { handle });

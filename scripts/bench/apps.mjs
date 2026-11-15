@@ -40,7 +40,8 @@ const threshold = Number(args.threshold ?? 0.003);
 const timeout = Number(args.timeout ?? 120_000);
 const sleep = ms => new Promise(done => setTimeout(done, ms));
 
-const localGitty = resolve('src-tauri/target/release/bundle/macos/Gitty.app');
+const desktopCargo = JSON.parse(execFileSync('cargo', ['metadata', '--no-deps', '--format-version', '1', '--manifest-path', 'src-tauri/Cargo.toml'], { encoding: 'utf8' }));
+const localGitty = join(desktopCargo.target_directory, 'release', 'bundle', 'macos', 'Gitty.app');
 const gittyBundle = args.gitty ?? (existsSync(localGitty) ? localGitty : '/Applications/Gitty.app');
 const isolatedGitty = (args['gitty-profile'] ?? 'isolated') === 'isolated';
 

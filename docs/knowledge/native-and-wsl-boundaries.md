@@ -5,19 +5,19 @@ description: Where Git and filesystem work execute and which platform capabiliti
 status: draft
 sources:
   - id: process
-    resource: ../../src-tauri/src/process.rs
+    resource: ../../crates/gitty-core/src/process.rs
   - id: remote
-    resource: ../../src-tauri/src/remote.rs
+    resource: ../../crates/gitty-core/src/remote.rs
   - id: provider-repositories
-    resource: ../../src-tauri/src/provider_repositories.rs
+    resource: ../../crates/gitty-core/src/provider_repositories.rs
   - id: askpass
-    resource: ../../src-tauri/src/askpass.rs
+    resource: ../../crates/gitty-core/src/askpass.rs
   - id: bridge
-    resource: ../../src-tauri/src/bridge.rs
+    resource: ../../crates/gitty-core/src/bridge.rs
   - id: bridge-test
-    resource: ../../src-tauri/src/remote_tests.rs
+    resource: ../../crates/gitty-core/src/remote_tests.rs
   - id: wsl-tests
-    resource: ../../src-tauri/src/wsl_tests.rs
+    resource: ../../crates/gitty-core/src/wsl_tests.rs
   - id: contract
     resource: ../../src-tauri/BACKEND.md
   - id: readme
@@ -31,7 +31,7 @@ sources:
   - id: controls
     resource: ../../src/components/WindowControls.tsx
   - id: watcher
-    resource: ../../src-tauri/src/watcher.rs
+    resource: ../../crates/gitty-core/src/watcher.rs
 ---
 
 # Native and WSL boundaries

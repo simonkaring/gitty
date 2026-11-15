@@ -1,0 +1,95 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncInfo {
+    pub branch: Option<String>,
+    pub upstream: Option<String>,
+    pub ahead: Option<u64>,
+    pub behind: Option<u64>,
+    pub remotes: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Default, Clone, Copy, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum PullMode {
+    #[default]
+    FfOnly,
+    Merge,
+    Rebase,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum RemoteAction {
+    Fetch {
+        remote: Option<String>,
+        branch: Option<String>,
+    },
+    Pull {
+        remote: Option<String>,
+        branch: Option<String>,
+        /// Local branch to fast-forward without checking it out. Omit to pull
+        /// into the checked-out branch.
+        target: Option<String>,
+        #[serde(default)]
+        pull_mode: PullMode,
+    },
+    BackgroundFetch,
+
+    Push {
+        remote: Option<String>,
+        branch: Option<String>,
+        /// Local branch to push. Omit to push the checked-out branch.
+        source: Option<String>,
+        #[serde(default)]
+        set_upstream: bool,
+    },
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ActionOutput {
+    pub output: String,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StashEntry {
+    pub oid: String,
+    pub selector: String,
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum StashAction {
+    Save {
+        message: Option<String>,
+        #[serde(default)]
+        include_untracked: bool,
+    },
+    Apply {
+        oid: String,
+        #[serde(default)]
+        restore_index: bool,
+    },
+    Pop {
+        oid: String,
+        #[serde(default)]
+        restore_index: bool,
+    },
+    Drop {
+        oid: String,
+    },
+}

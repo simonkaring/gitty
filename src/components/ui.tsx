@@ -65,20 +65,31 @@ export function Dialog({ title, onClose, size = 'md', footer, onSubmit, classNam
   onSubmit?: (event: FormEvent<HTMLFormElement>) => void; className?: string; children: ReactNode; label?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const restoreFocus = useRef<HTMLElement | null>(null);
   const titleId = useId();
   useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
+    restoreFocus.current ??= document.activeElement as HTMLElement | null;
     if (!ref.current?.open) ref.current?.showModal();
-    return () => previous?.focus({ preventScroll: true });
+    return () => {
+      if (ref.current?.open) ref.current.close();
+    };
   }, []);
+  const close = () => {
+    onClose();
+    requestAnimationFrame(() => {
+      const dialog = ref.current;
+      if (dialog?.isConnected && dialog.open) return;
+      if (restoreFocus.current?.isConnected) restoreFocus.current.focus({ preventScroll: true });
+    });
+  };
   const content = <>
     <div className="dialog-body">{children}</div>
     {footer && <footer className="dialog-footer">{footer}</footer>}
   </>;
-  return <dialog ref={ref} className={`dialog dialog-${size} ${className}`} aria-labelledby={label ? undefined : titleId} aria-label={label} onCancel={event => { event.preventDefault(); onClose(); }}>
+  return <dialog ref={ref} className={`dialog dialog-${size} ${className}`} aria-labelledby={label ? undefined : titleId} aria-label={label} onCancel={event => { event.preventDefault(); close(); }}>
     <header className="dialog-header">
       <h2 id={titleId}>{title}</h2>
-      <button type="button" className="icon-button" aria-label="Close dialog" onClick={onClose}><X size={16} /></button>
+      <button type="button" className="icon-button" aria-label="Close dialog" onClick={close}><X size={16} /></button>
     </header>
     {onSubmit ? <form className="dialog-form" onSubmit={event => { event.preventDefault(); onSubmit(event); }}>{content}</form> : content}
   </dialog>;
