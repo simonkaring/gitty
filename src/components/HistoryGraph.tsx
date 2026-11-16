@@ -117,9 +117,11 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const [messageResized, setMessageResized] = useState(false);
   const [widths, setWidths] = useState<Record<HistoryColumnId, number>>({ refs: 170, graph: MIN_GRAPH_WIDTH, message: 130, author: 110, hash: 90, date: 120 });
   type Column = HistoryColumnId;
+  const dateResized = useRef(false);
   const limits: Record<Column, [number, number]> = { refs: [90, 420], graph: [minGraphWidth, 600], message: [100, Math.max(600, viewportWidth)], author: [70, 260], hash: [70, 180], date: [80, 220] };
   function resize(column: Column, delta: number, initial: number) {
     if (column === 'message') setMessageResized(true);
+    if (column === 'date') dateResized.current = true;
     setWidths(current => ({ ...current, [column]: Math.max(limits[column][0], Math.min(limits[column][1], initial + delta)) }));
   }
   function resizeHandle(column: Column) {
@@ -376,6 +378,19 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   // Drop an active control whose element is gone (row scrolled out, refs or columns changed) so aria-activedescendant never dangles.
   useLayoutEffect(() => { if (activeControlId && !scroller.current?.querySelector(`[id="${activeControlId}"]`)) setActiveControl(null); });
   const columnWidth = (id: Column) => (id === 'graph' ? graphWidth : widths[id]);
+  // Until the user drags the Date column, it grows (never shrinks, so scrolling doesn't jitter) to show the whole date.
+  const dateVisible = visibleColumns.some(c => c.id === 'date');
+  useLayoutEffect(() => {
+    if (!dateVisible || dateResized.current) return;
+    let needed = 0;
+    const range = document.createRange();
+    scroller.current?.querySelectorAll<HTMLElement>('.row-date').forEach(cell => {
+      range.selectNodeContents(cell);
+      needed = Math.max(needed, range.getBoundingClientRect().width + parseFloat(getComputedStyle(cell).paddingLeft));
+    });
+    needed = Math.min(Math.ceil(needed) + 12, 320);
+    if (needed > widths.date) setWidths(current => ({ ...current, date: needed }));
+  }, [dateVisible, start, end, commits, widths.date, settings.fontSize, settings.monoFont]);
 
   const gridTemplateColumns = useMemo(
     () =>

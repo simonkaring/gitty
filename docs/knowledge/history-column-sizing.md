@@ -29,7 +29,9 @@ grid track, so shrinking and growing move the visible boundary immediately.
 The header and commit rows share the grid template. When columns are reordered,
 canvas positioning (inside the scrolled content, at the graph column's offset) accounts for message fill only before manual resizing.
 Message widths are bounded from 100px to the greater of 600px or the viewport
-width.[^graph]
+width. Until its handle is used, the Date column measures the widest rendered
+date and grows (never shrinks, capped at 320px) so no date is ellipsized; a
+manual resize ends the auto-fit.[^graph]
 
 Narrow windows shrink the history pane instead of covering it: side panes stay
 in the workspace flow rather than becoming overlays. At or below 1100px the
