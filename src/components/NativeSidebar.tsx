@@ -18,6 +18,7 @@ interface NativeSidebarProps {
   onFolderOpen: (key: string, open: boolean) => void;
   openFolderMenu?: (folder: BranchFolder, x: number, y: number, trigger: HTMLElement) => void;
   worktrees?: ReactNode;
+  onHoverRef?: (ref: string | null) => void;
 }
 
 const GROUPS = [
@@ -52,7 +53,7 @@ export function buildRefTree(refs: RepositoryState['refs'], prefix: string, remo
   return root;
 }
 
-export function NativeSidebar({ state, commits, filters, busy, reveal, switchBranch, openMenu, onAction, folderOpen, onFolderOpen, openFolderMenu, worktrees }: NativeSidebarProps) {
+export function NativeSidebar({ state, commits, filters, busy, reveal, switchBranch, openMenu, onAction, folderOpen, onFolderOpen, openFolderMenu, worktrees, onHoverRef }: NativeSidebarProps) {
   const { session } = state;
   return <aside className="sidebar native-sidebar" aria-label="Repository references">
     <div className="workspace-label"><FolderGit2 size={22} /><span>{session.name}<small title={session.root}>{session.root}</small></span></div>
@@ -72,7 +73,7 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
       const prefix = kind === 'local' ? 'refs/heads/' : kind === 'remote' ? 'refs/remotes/' : 'refs/tags/';
       const tree = buildRefTree(refs, prefix, state.remotes);
       const renderTree = (node: RefTree, parts: string[] = []): ReactNode => <>
-        {[...node.refs].sort((a, b) => a.fullName < b.fullName ? -1 : a.fullName > b.fullName ? 1 : 0).map(ref => <div className={`ref-action-row${ref.fullName === session.headRef ? ' current' : ''}`} key={ref.fullName} onContextMenu={event => { event.preventDefault(); openMenu({ oid: ref.commitId, ref: ref.fullName }, event.clientX, event.clientY, event.currentTarget.querySelector('button')!); }}>
+        {[...node.refs].sort((a, b) => a.fullName < b.fullName ? -1 : a.fullName > b.fullName ? 1 : 0).map(ref => <div className={`ref-action-row${ref.fullName === session.headRef ? ' current' : ''}`} key={ref.fullName} onMouseEnter={() => onHoverRef?.(ref.fullName)} onMouseLeave={() => onHoverRef?.(null)} onFocus={() => onHoverRef?.(ref.fullName)} onBlur={() => onHoverRef?.(null)} onContextMenu={event => { event.preventDefault(); openMenu({ oid: ref.commitId, ref: ref.fullName }, event.clientX, event.clientY, event.currentTarget.querySelector('button')!); }}>
           <button className="ref-item" title={ref.fullName} aria-label={`${kind} ${ref.fullName}`} aria-current={ref.fullName === session.headRef ? 'true' : undefined} disabled={busy} draggable={ref.kind !== 'tag'}
             onDragStart={event => { event.stopPropagation(); if (ref.kind === 'tag') { event.preventDefault(); return; } event.dataTransfer.clearData(COMMIT_DRAG_TYPE); event.dataTransfer.setData(REF_DRAG_TYPE, ref.fullName); event.dataTransfer.effectAllowed = 'copy'; }}
             onDragOver={event => { if (!busy && acceptsGraphDrop(event.dataTransfer, ref, session.headRef)) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}

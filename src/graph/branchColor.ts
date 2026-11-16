@@ -39,6 +39,8 @@ export function assignBranchColors(commits: readonly GraphCommit[], refs: readon
   const better = (a: Owner, b: Owner) => Number(trunk(b.name) && b.named) - Number(trunk(a.name) && a.named)
     || Number(b.named) - Number(a.named) || compare(a.name, b.name);
   const rows = new Uint8Array(commits.length);
+  /** Name of the branch each row belongs to (null for unnamed history), so highlights match by branch rather than shared color. */
+  const owned: (string | null)[] = new Array(commits.length).fill(null);
   commits.forEach((commit, row) => {
     if (commit.id === workingId) return;
     const inherited = owners.get(commit.id), name = tips.get(commit.id);
@@ -47,13 +49,14 @@ export function assignBranchColors(commits: readonly GraphCommit[], refs: readon
     const owner = own && (!inherited || !(inherited.named && trunk(inherited.name)) || (trunk(own.name) && compare(own.name, inherited.name) <= 0))
       ? own : inherited ?? { name: commit.id, named: false };
     rows[row] = owner.named ? branches.get(owner.name)! : hashIndex(owner.name);
+    if (owner.named) owned[row] = owner.name;
     const parent = commit.parents[0], prior = owners.get(parent);
     if (parent && (!prior || better(owner, prior) < 0)) owners.set(parent, owner);
   });
   const workingRow = commits.findIndex(commit => commit.id === workingId);
   if (workingRow >= 0) {
     const parentRow = commits.findIndex(commit => commit.id === commits[workingRow].parents[0]);
-    if (parentRow >= 0) rows[workingRow] = rows[parentRow];
+    if (parentRow >= 0) { rows[workingRow] = rows[parentRow]; owned[workingRow] = owned[parentRow]; }
   }
-  return { rows, branches };
+  return { rows, branches, owned };
 }

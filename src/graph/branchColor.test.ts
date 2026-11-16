@@ -24,6 +24,12 @@ describe('branch colors', () => {
     expect(branchName(ref('v1', 'x', 'tag'))).toBeNull();
   });
 
+  it('names the branch that owns each row, so hover highlights follow branches rather than shared colors', () => {
+    const { owned } = assignBranchColors(commits, refs, 'working');
+    expect(owned.slice(0, 5)).toEqual(['main', 'main', 'main', 'feat/git', 'feat/git']);
+    expect(owned[5]).toBeNull();
+  });
+
   it('keeps trunk, side chains, and working changes consistent independent of ref order', () => {
     const { rows, branches } = assignBranchColors(commits, refs, 'working');
     expect(assignBranchColors(commits, [...refs].reverse(), 'working').rows).toEqual(rows);

@@ -27,7 +27,7 @@ The commit-message column initially fills spare viewport width. Its first
 resize starts from its actual rendered width and switches it to a fixed-width
 grid track, so shrinking and growing move the visible boundary immediately.
 The header and commit rows share the grid template. When columns are reordered,
-canvas positioning accounts for message fill only before manual resizing.
+canvas positioning (inside the scrolled content, at the graph column's offset) accounts for message fill only before manual resizing.
 Message widths are bounded from 100px to the greater of 600px or the viewport
 width.[^graph]
 
