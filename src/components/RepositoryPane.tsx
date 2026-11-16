@@ -759,7 +759,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       onCherryPick={() => setActionContext({ oid: pickOrder[0], commits: pickOrder, initial: 'cherryPick' })}
       onClearPick={() => { setPickMode(false); setPickOrder([]); }}
       onStartPickMode={() => setPickMode(true)}
-      onOpenStash={() => setStashOpen(true)}
+      selectedOid={selected === WORKING_ID ? '' : selected}
       onRefresh={() => void refresh()}
       onWrite={remoteWrite}
       fetchStatus={fetchStatus}

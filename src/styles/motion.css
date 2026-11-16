@@ -265,6 +265,21 @@ svg.lucide-refresh-cw {
 .refresh-button[data-pending='true'] svg {
   animation: spin 0.9s linear infinite;
 }
+/* Stash sinks into the archive; pop lifts it back out. Pending work bobs both. */
+.sync-button.stash svg,
+.sync-button.pop svg {
+  transition: transform var(--dur-med) var(--ease-spring);
+}
+.sync-button.stash:hover:not(:disabled) svg {
+  transform: translateY(2px) scale(0.95);
+}
+.sync-button.pop:hover:not(:disabled) svg {
+  transform: translateY(-2px) scale(1.05);
+}
+.sync-button.stash[data-pending='true'] svg,
+.sync-button.pop[data-pending='true'] svg {
+  animation: bob-down 900ms ease-in-out infinite;
+}
 /* Chevrons follow their disclosure state. */
 svg.lucide-chevron-down {
   transition: transform var(--dur-med) var(--ease-spring);
