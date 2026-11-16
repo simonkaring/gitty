@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useIcons } from './icons';
+import { Icons } from './icons';
 import type { PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
 import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
@@ -72,7 +72,6 @@ export interface RepositoryPaneProps {
 }
 
 export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, onClosePalette = () => {}, workspaceCommands = [], onOpenWorktree = () => {}, tabId, location, active, sidebarOpen, inspectorOpen, inspectorWidth, sidebarWidth, setInspectorWidth, setSidebarWidth, setInspectorOpen, onIdentity, onBusyChange, onMeta }: RepositoryPaneProps) {
-  const { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus, GitCommitHorizontal, Globe2, Laptop, LocateFixed, RefreshCw, ScrollText, Search, Tag, Upload, X, ZoomIn, ZoomOut } = useIcons();
   const { theme, settings, updateSettings } = useSettings();
   const [scale, changeScale] = useScale();
   const stepScale = (dir: number) => changeScale(SCALES[Math.min(SCALES.length - 1, Math.max(0, SCALES.indexOf(scale as typeof SCALES[number]) + dir))]);
@@ -717,15 +716,15 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   const filters = <div className="native-filters">
     <div className="filter-primary">
       <div className="search-field">
-        <Search size={14} aria-hidden="true" />
+        <Icons.Search size={14} aria-hidden="true" />
         <input ref={search} aria-label="Search full history" placeholder="Search commits…" value={text} onChange={event => setText(event.target.value)} />
-        {text ? <button className="icon-button sm" aria-label="Clear search" onClick={() => setText('')}><X size={13} /></button> : <kbd>/</kbd>}
+        {text ? <button className="icon-button sm" aria-label="Clear search" onClick={() => setText('')}><Icons.X size={13} /></button> : <kbd>/</kbd>}
       </div>
       <select aria-label="Branch scope" title={branch ? state?.refs.find(ref => ref.fullName === branch)?.name ?? branch : 'All branches'} value={branch} onChange={event => setBranch(event.target.value)}>
         <option value="">All branches</option>
         {state?.refs.filter(ref => ref.kind !== 'stash').map(ref => <option key={ref.fullName} value={ref.fullName}>{ref.name}</option>)}
       </select>
-      <button className="head-button" title="Jump to HEAD" disabled={busy || !state?.session.head} onClick={() => state?.session.head && reveal(state.session.head)}><LocateFixed size={15} />HEAD</button>
+      <button className="head-button" title="Jump to HEAD" disabled={busy || !state?.session.head} onClick={() => state?.session.head && reveal(state.session.head)}><Icons.LocateFixed size={15} />HEAD</button>
     </div>
     <div className="filter-secondary">
       <details><summary>Date &amp; path{(since || until || path) && <span className="count">Active</span>}</summary>
@@ -744,19 +743,19 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     const { head, headRef } = state.session;
     const repo: PaletteCommand[] = [
       commitGraphCommand(() => void speedUpHistory(), !state || commitGraphBusy),
-      { id: 'fetch', group: 'Repository', label: 'Fetch', icon: <RefreshCw size={15} />, disabled: writeBlocked, run: () => void runMenuRemote({ kind: 'fetch' }) },
-      { id: 'pull', group: 'Repository', label: 'Pull', icon: <Download size={15} />, disabled: writeBlocked || !headRef, run: () => void runMenuRemote({ kind: 'pull', pullMode: DEFAULT_PULL_MODE }) },
-      { id: 'push', group: 'Repository', label: 'Push', icon: <Upload size={15} />, disabled: writeBlocked || !headRef, run: () => { if (headRef) void pushFromMenu(headRef); } },
-      { id: 'new-branch', group: 'Repository', label: 'New branch…', icon: <GitBranchPlus size={15} />, disabled: writeBlocked, run: () => setActionContext({ oid: head ?? '', ref: headRef ?? undefined, initial: 'createBranch' }) },
-      { id: 'switch-branch', group: 'Repository', label: 'Switch branch…', icon: <GitBranch size={15} />, disabled: writeBlocked, run: () => setActionContext({ oid: head ?? '', initial: 'switchBranch' }) },
-      { id: 'stash', group: 'Repository', label: 'Stash…', icon: <Archive size={15} />, disabled: writeBlocked, run: () => setStashOpen(true) },
-      { id: 'working', group: 'Repository', label: 'Show working changes', icon: <FileDiff size={15} />, disabled: !status?.entries.length, run: () => reveal(WORKING_ID) },
-      { id: 'search', group: 'Repository', label: 'Search history', hint: '/', icon: <Search size={15} />, run: () => requestAnimationFrame(() => search.current?.focus()) },
-      { id: 'refresh', group: 'Repository', label: 'Refresh', icon: <RefreshCw size={15} />, disabled: busy, run: () => void refresh() },
-      ...(head ? [{ id: 'copy-head', group: 'Repository', label: 'Copy HEAD commit SHA', hint: head.slice(0, 7), icon: <Copy size={15} />, run: () => void copyMenuValue(head, 'Commit SHA') }] : []),
+      { id: 'fetch', group: 'Repository', label: 'Fetch', icon: <Icons.RefreshCw size={15} />, disabled: writeBlocked, run: () => void runMenuRemote({ kind: 'fetch' }) },
+      { id: 'pull', group: 'Repository', label: 'Pull', icon: <Icons.Download size={15} />, disabled: writeBlocked || !headRef, run: () => void runMenuRemote({ kind: 'pull', pullMode: DEFAULT_PULL_MODE }) },
+      { id: 'push', group: 'Repository', label: 'Push', icon: <Icons.Upload size={15} />, disabled: writeBlocked || !headRef, run: () => { if (headRef) void pushFromMenu(headRef); } },
+      { id: 'new-branch', group: 'Repository', label: 'New branch…', icon: <Icons.GitBranchPlus size={15} />, disabled: writeBlocked, run: () => setActionContext({ oid: head ?? '', ref: headRef ?? undefined, initial: 'createBranch' }) },
+      { id: 'switch-branch', group: 'Repository', label: 'Switch branch…', icon: <Icons.GitBranch size={15} />, disabled: writeBlocked, run: () => setActionContext({ oid: head ?? '', initial: 'switchBranch' }) },
+      { id: 'stash', group: 'Repository', label: 'Stash…', icon: <Icons.Archive size={15} />, disabled: writeBlocked, run: () => setStashOpen(true) },
+      { id: 'working', group: 'Repository', label: 'Show working changes', icon: <Icons.FileDiff size={15} />, disabled: !status?.entries.length, run: () => reveal(WORKING_ID) },
+      { id: 'search', group: 'Repository', label: 'Search history', hint: '/', icon: <Icons.Search size={15} />, run: () => requestAnimationFrame(() => search.current?.focus()) },
+      { id: 'refresh', group: 'Repository', label: 'Refresh', icon: <Icons.RefreshCw size={15} />, disabled: busy, run: () => void refresh() },
+      ...(head ? [{ id: 'copy-head', group: 'Repository', label: 'Copy HEAD commit SHA', hint: head.slice(0, 7), icon: <Icons.Copy size={15} />, run: () => void copyMenuValue(head, 'Commit SHA') }] : []),
     ];
-    const branches = state.refs.filter(ref => ref.kind === 'local' && ref.fullName !== headRef).map(ref => ({ id: `switch:${ref.fullName}`, group: 'Switch to branch', label: `Switch to ${ref.name}`, icon: <Laptop size={15} />, disabled: writeBlocked, run: () => void switchBranch(ref.fullName) }));
-    const goTo = state.refs.filter(ref => ref.kind !== 'local').map(ref => ({ id: `goto:${ref.fullName}`, group: 'Go to', label: `Go to ${ref.kind === 'stash' ? 'latest stash' : ref.name}`, hint: ref.kind, icon: ref.kind === 'tag' ? <Tag size={15} /> : ref.kind === 'stash' ? <Archive size={15} /> : <Globe2 size={15} />, run: () => reveal(ref.commitId) }));
+    const branches = state.refs.filter(ref => ref.kind === 'local' && ref.fullName !== headRef).map(ref => ({ id: `switch:${ref.fullName}`, group: 'Switch to branch', label: `Switch to ${ref.name}`, icon: <Icons.Laptop size={15} />, disabled: writeBlocked, run: () => void switchBranch(ref.fullName) }));
+    const goTo = state.refs.filter(ref => ref.kind !== 'local').map(ref => ({ id: `goto:${ref.fullName}`, group: 'Go to', label: `Go to ${ref.kind === 'stash' ? 'latest stash' : ref.name}`, hint: ref.kind, icon: ref.kind === 'tag' ? <Icons.Tag size={15} /> : ref.kind === 'stash' ? <Icons.Archive size={15} /> : <Icons.Globe2 size={15} />, run: () => reveal(ref.commitId) }));
     return [...repo, ...branches, ...goTo, ...workspaceCommands];
   }
   return <>
@@ -799,7 +798,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
             <section className="diff-view-pane" aria-label={`Diff for ${activeDiff.path}`}>
               <div className="diff-view-header">
                 <div className="diff-view-file">
-                  <FileCode2 size={16} />
+                  <Icons.FileCode2 size={16} />
                   <span className="diff-view-filepath">{activeDiff.path}</span>
                   {activeDiff.group && <span className="badge" data-tone={GROUP_TONE[activeDiff.group]}>{activeDiff.group}</span>}
                 </div>
@@ -811,7 +810,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
                   )}
                   <Segmented label="Diff layout" value={split ? 'split' : 'unified'} options={[['unified', 'Unified'], ['split', 'Split']]} onChange={value => setSplit(value === 'split')} />
                   <button className="icon-button" aria-label="Close diff and show tree" title="Close diff" onClick={() => setActiveDiff(null)}>
-                    <X size={17} />
+                    <Icons.X size={17} />
                   </button>
                 </div>
               </div>
@@ -831,10 +830,10 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
             </section>
           ) : (
             <section className="history-pane" aria-label="Repository history">
-              {filtering && <><div className="search-results-header"><span role="status"><strong>Search results</strong><small>{searchBusy ? 'Searching…' : searchError ? 'Search failed' : `${result?.commits.length ?? 0}${result?.truncated ? '+' : ''} matching commits`}</small></span><Segmented label="Search view" value={searchView} options={[[ 'results', 'Results' ], [ 'graph', 'Graph' ]]} onChange={setSearchView} /><button className="icon-button sm" aria-label="Close search and clear filters" onClick={clearFilters}><X size={15} /></button></div>
+              {filtering && <><div className="search-results-header"><span role="status"><strong>Search results</strong><small>{searchBusy ? 'Searching…' : searchError ? 'Search failed' : `${result?.commits.length ?? 0}${result?.truncated ? '+' : ''} matching commits`}</small></span><Segmented label="Search view" value={searchView} options={[[ 'results', 'Results' ], [ 'graph', 'Graph' ]]} onChange={setSearchView} /><button className="icon-button sm" aria-label="Close search and clear filters" onClick={clearFilters}><Icons.X size={15} /></button></div>
                 <div className="search-results-container" hidden={searchView !== 'results'}><SearchResults result={result} loading={searchBusy} error={searchError} query={text} refs={state.refs} selected={selected} onSelect={id => { navigation.current++; setSelected(id); setActiveDiff(null); setInspectorOpen(true); }} onReveal={id => { setSearchView('graph'); requestAnimationFrame(() => reveal(id)); }} onRetry={() => setSearchRetry(value => value + 1)} onClear={clearFilters} /></div></>}
               <div className="search-history-container" hidden={filtering && searchView === 'results'}>
-              {!graphCommits.length && <div className="empty-state"><GitCommitHorizontal size={28} /><h2>No commits yet</h2><p>This repository has no commits or working changes. Add files, stage them, and make your first commit.</p></div>}
+              {!graphCommits.length && <div className="empty-state"><Icons.GitCommitHorizontal size={28} /><h2>No commits yet</h2><p>This repository has no commits or working changes. Add files, stage them, and make your first commit.</p></div>}
                 <HistoryGraph ref={graph} highlightRef={hoverRef} commits={graphCommits} layout={layout} refs={state.refs} selectedId={selected} head={state.session.head ?? ''} headRef={state.session.headRef} onActions={context => setActionContext(context)} onContextActions={openMenu} onSwitchBranch={ref => void switchBranch(ref)} pickOrder={pickOrder} onTogglePick={pickMode ? id => setPickOrder(order => toggleCommit(order, id)) : undefined} matches={matches} onSelect={id => reveal(id)} onLoadMore={() => void load()} onOpenDetails={() => setInspectorOpen(true)} theme={theme} hasMore={!!cursor} paging={busy} shallow={state.session.shallow} />
               </div>
             </section>
@@ -888,7 +887,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
         </div>
       </div>
     </main>}
-    <footer className="statusbar"><span><button type="button" className="text-button" onClick={() => setActivityLogOpen(true)}><ScrollText size={13} /> Activity</button><span className="live-dot" /><span className="workspace-status">{mutationBusy ? 'Updating repository…' : isDemoHandle(state?.session.handle) ? 'Demo workspace · changes are simulated in memory' : 'Local workspace · automatic refresh'}</span></span><span className="status-keys"><span className="scale-control"><button className="icon-button sm" aria-label="Zoom out" disabled={scale === SCALES[0]} onClick={() => stepScale(-1)}><ZoomOut size={13} /></button><select className="scale-value" aria-label="Interface zoom" value={scale} onChange={event => changeScale(Number(event.target.value))}>{SCALES.map(s => <option key={s} value={s}>{s}%</option>)}</select><button className="icon-button sm" aria-label="Zoom in" disabled={scale === SCALES[SCALES.length - 1]} onClick={() => stepScale(1)}><ZoomIn size={13} /></button></span><button className="text-button" disabled={!state} onClick={() => search.current?.focus()}><Search size={13} /><span className="footer-search-label">History</span><kbd>/</kbd></button><CommandSearchButton onClick={onOpenPalette} /></span></footer>
+    <footer className="statusbar"><span><button type="button" className="text-button" onClick={() => setActivityLogOpen(true)}><Icons.ScrollText size={13} /> Activity</button><span className="live-dot" /><span className="workspace-status">{mutationBusy ? 'Updating repository…' : isDemoHandle(state?.session.handle) ? 'Demo workspace · changes are simulated in memory' : 'Local workspace · automatic refresh'}</span></span><span className="status-keys"><span className="scale-control"><button className="icon-button sm" aria-label="Zoom out" disabled={scale === SCALES[0]} onClick={() => stepScale(-1)}><Icons.ZoomOut size={13} /></button><select className="scale-value" aria-label="Interface zoom" value={scale} onChange={event => changeScale(Number(event.target.value))}>{SCALES.map(s => <option key={s} value={s}>{s}%</option>)}</select><button className="icon-button sm" aria-label="Zoom in" disabled={scale === SCALES[SCALES.length - 1]} onClick={() => stepScale(1)}><Icons.ZoomIn size={13} /></button></span><button className="text-button" disabled={!state} onClick={() => search.current?.focus()}><Icons.Search size={13} /><span className="footer-search-label">History</span><kbd>/</kbd></button><CommandSearchButton onClick={onOpenPalette} /></span></footer>
     {activityLogOpen && <ActivityLogDialog onClose={() => setActivityLogOpen(false)} />}
      {state && menuTarget && <GraphContextMenu target={menuTarget} state={state} busy={mutationBusy || mutationBlocked} hasTrackedChanges={status?.entries.some(entry => !entry.untracked)} onClose={() => setMenuTarget(null)} onOperation={context => { setMenuTarget(null); setActionContext(context); }} onSwitchBranch={ref => { setMenuTarget(null); void switchBranch(ref); }} onShowDetails={oid => { reveal(oid); setInspectorOpen(true); setMenuTarget(null); }} onSetBase={oid => setComparison(oid, 'base')} onSetTarget={oid => setComparison(oid, 'target')} onCompare={compareWithCurrent} onPullRequest={ref => { setMenuTarget(null); setPrSource(ref); }} onRemoteAction={action => void runMenuRemote(action)} onPush={ref => void pushFromMenu(ref)} onResetToOrigin={ref => { setMenuTarget(null); setOriginReset(ref); }} onDeleteBranch={(fullName, scope) => { setMenuTarget(null); const target = branchDeleteTargets(state, fullName); setDeleteBranch(target ? { target, scope } : null); }} onCopy={(value, label) => void copyMenuValue(value, label)} onStash={action => { setMenuTarget(null); void stashAction(action); }} />}
      {state && folderMenu && <BranchFolderMenu target={folderMenu} state={state} busy={mutationBusy || mutationBlocked} onClose={() => setFolderMenu(null)} onDelete={(folder, scope) => { setFolderMenu(null); setDeleteFolder({ folder, scope, targets: folderDeleteTargets(state, folder, scope) }); }} />}

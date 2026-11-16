@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useIcons } from './icons';
+import { Icons } from './icons';
 import { errorMessage, native } from '../model/native';
 import { useSettings } from '../model/settings';
 import { REPOSITORY_PROVIDER_LABELS, type ProviderAccount, type ProviderRepository, type ProviderRepositoryPage, type RepositoryProvider } from '../model/providerRepositories';
@@ -7,7 +7,6 @@ import { REPOSITORY_PROVIDER_LABELS, type ProviderAccount, type ProviderReposito
 type SelectRepository = (repository: ProviderRepository | null, accountId?: string) => void;
 
 export function RepositoryBrowser({ disabled, onSelect }: { disabled: boolean; onSelect: SelectRepository }) {
-  const { FolderGit2, Lock, Search } = useIcons();
   const { openSettings, isSettingsOpen } = useSettings();
   const [accounts, setAccounts] = useState<ProviderAccount[]>([]);
   const [accountId, setAccountId] = useState('');
@@ -118,11 +117,11 @@ function RepositoryList({ accountId, organization, disabled, onSelect }: { accou
   const projects = [...new Set(repositories.flatMap(repo => repo.project ? [repo.project] : []))].sort();
   return <>
     {!!organization && !!projects.length && <label className="field">Project<select value={project} disabled={disabled} onChange={e => { setProject(e.target.value); setSelected(''); onSelect(null); }}><option value="">All projects</option>{projects.map(name => <option key={name}>{name}</option>)}</select></label>}
-    <label className="search-field"><Search size={14} aria-hidden="true" /><input aria-label="Filter repositories" placeholder="Filter repositories by name or namespace" value={filter} disabled={disabled} onChange={e => setFilter(e.target.value)} /></label>
+    <label className="search-field"><Icons.Search size={14} aria-hidden="true" /><input aria-label="Filter repositories" placeholder="Filter repositories by name or namespace" value={filter} disabled={disabled} onChange={e => setFilter(e.target.value)} /></label>
     <ul className="start-list provider-repository-list" aria-label="Provider repositories" aria-busy={loading}>
       {shown.map(repo => <li key={repo.id}><button type="button" className="start-item" aria-pressed={selected === repo.id} disabled={disabled} onClick={() => { setSelected(repo.id); onSelect(repo, accountId); }}>
-        <FolderGit2 size={16} /><span><strong>{repo.name}</strong><small>{repo.namespace}</small></span>
-        {repo.private && <span className="badge"><Lock size={11} aria-hidden="true" />Private</span>}
+        <Icons.FolderGit2 size={16} /><span><strong>{repo.name}</strong><small>{repo.namespace}</small></span>
+        {repo.private && <span className="badge"><Icons.Lock size={11} aria-hidden="true" />Private</span>}
       </button></li>)}
     </ul>
     {loading && <p className="muted small" role="status">Reading repositories…</p>}

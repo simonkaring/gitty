@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useIcons } from './icons';
+import { Icons } from './icons';
 import { Dialog } from './ui';
 import { clearActivityLog, useActivityLog, type ActivityEntry } from '../model/activity';
 
@@ -33,7 +33,6 @@ function entryText(entry: ActivityEntry): string {
 }
 
 export function ActivityLogDialog({ onClose }: { onClose: () => void }) {
-  const { Copy, Trash2, Search, Check } = useIcons();
   const entries = useActivityLog();
   const [filter, setFilter] = useState('');
   const [copied, setCopied] = useState(false);
@@ -64,10 +63,10 @@ export function ActivityLogDialog({ onClose }: { onClose: () => void }) {
   const footer = (
     <>
       <button type="button" className="secondary-button" onClick={clearActivityLog} disabled={entries.length === 0}>
-        <Trash2 size={14} /> Clear
+        <Icons.Trash2 size={14} /> Clear
       </button>
       <button type="button" className="secondary-button" onClick={handleCopy} disabled={entries.length === 0}>
-        {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy'}
+        {copied ? <Icons.Check size={14} /> : <Icons.Copy size={14} />} {copied ? 'Copied' : 'Copy'}
       </button>
       <button type="button" className="primary-button" onClick={onClose}>Done</button>
     </>
@@ -77,7 +76,7 @@ export function ActivityLogDialog({ onClose }: { onClose: () => void }) {
     <Dialog title="Activity log" onClose={onClose} size="lg" className="activity-log-dialog" footer={footer}>
       <div className="activity-toolbar">
         <div className="search-input-wrapper">
-          <Search size={14} className="search-icon" />
+          <Icons.Search size={14} className="search-icon" />
           <input
             type="search"
             placeholder="Filter commands, paths, messages…"

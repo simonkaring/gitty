@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useIcons } from './icons';
+import { Icons } from './icons';
 import { indexEdges, laneX, LANE_WIDTH, ROW_HEIGHT, type GraphEdge, type GraphLayout } from '../graph/layout';
 import { assignBranchColors, branchName, stashBranches } from '../graph/branchColor';
 import { WORKING_ID } from '../model/native';
@@ -32,7 +32,6 @@ export interface GraphHandle { scrollTo: (row: number) => void; anchor: () => Gr
 export const REF_DRAG_TYPE = 'application/x-gitty-ref';
 export const COMMIT_DRAG_TYPE = 'application/x-gitty-commit';
 export function acceptsGraphDrop(data: DataTransfer, target: GraphRef, headRef: string | null | undefined): boolean {
-  const { Check, GitMerge, Globe2, Laptop, Settings, Tag } = useIcons();
   if (!headRef || !target.fullName || target.kind !== 'local') return false;
   const branchDrag = data.types.includes(REF_DRAG_TYPE), commitDrag = data.types.includes(COMMIT_DRAG_TYPE);
   return branchDrag !== commitDrag && (branchDrag || target.fullName === headRef);
@@ -214,7 +213,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                       onDrop={event => { event.preventDefault(); event.stopPropagation(); stopDrag(); const action = graphDropAction(event.dataTransfer, ref.fullName, headRef, commits, refs); if (action) onActions?.(action); }}
                       onContextMenu={event => { if (onContextActions && ref.fullName) { event.preventDefault(); event.stopPropagation(); onContextActions({ oid: commit.id, ref: ref.fullName }, event.clientX, event.clientY, scroller.current ?? event.currentTarget); } }} onClick={event => { event.stopPropagation(); onSelect(commit.id); scroller.current?.focus(); }}
                       onDoubleClick={event => { if (ref.fullName && (ref.kind === 'local' || (ref.kind === 'remote' && ref.fullName.startsWith('refs/remotes/origin/') && ref.fullName !== 'refs/remotes/origin/HEAD')) && onSwitchBranch) { event.stopPropagation(); onSwitchBranch(ref.fullName); } }}>
-                      {!!headRef && ref.fullName === headRef && <Check size={10} strokeWidth={3} aria-hidden="true" />}{ref.kind === 'tag' ? <Tag size={10} /> : ref.kind === 'remote' ? <Globe2 size={10} /> : ref.kind === 'stash' ? <Archive size={10} /> : <Laptop size={10} />}{remote && <Globe2 size={10} />}<span className="ref-pill-name">{ref.name}</span>
+                      {!!headRef && ref.fullName === headRef && <Icons.Check size={10} strokeWidth={3} aria-hidden="true" />}{ref.kind === 'tag' ? <Icons.Tag size={10} /> : ref.kind === 'remote' ? <Icons.Globe2 size={10} /> : ref.kind === 'stash' ? <Icons.Archive size={10} /> : <Icons.Laptop size={10} />}{remote && <Icons.Globe2 size={10} />}<span className="ref-pill-name">{ref.name}</span>
                     </span>;
   }
 
@@ -458,7 +457,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
           title="Customize columns"
           onClick={() => setMenuOpen(open => !open)}
         >
-          <SettingsIcon size={14} />
+          <Icons.Settings size={14} />
         </button>
       </div>
     </div>
@@ -543,7 +542,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                   return <div key="message" className="commit-message">
                     {day && <span className="day-label" aria-hidden="true">{day.label}<i>{dayStarts.counts.get(day.key)}</i></span>}
                     {onTogglePick && commit.id !== WORKING_ID && (() => { const control = rowControl(commit.id, controls); return <input id={control.id} data-row-control="" tabIndex={-1} className={`graph-pick${control.active ? ' row-control-active' : ''}`} type="checkbox" aria-label={`Cherry-pick ${commit.id.slice(0, 7)}`} checked={pickOrder?.includes(commit.id) ?? false} onClick={event => event.stopPropagation()} onChange={() => { onTogglePick(commit.id); scroller.current?.focus(); }} />; })()}
-                    {commit.parents.length > 1 && !stash && <GitMerge size={13} className="merge-icon" />}
+                    {commit.parents.length > 1 && !stash && <Icons.GitMerge size={13} className="merge-icon" />}
                     <span className="subject" title={commit.subject} draggable={!!onActions && commit.id !== WORKING_ID}
                       onDragStart={event => { event.stopPropagation(); if (!onActions || commit.id === WORKING_ID) { event.preventDefault(); return; } event.dataTransfer.clearData(REF_DRAG_TYPE); event.dataTransfer.setData(COMMIT_DRAG_TYPE, commit.id); event.dataTransfer.effectAllowed = 'copy'; }} onDragEnd={stopDrag}>{stash ? commit.subject.replace(/^On .*?: /, '') : commit.subject}</span>
                     {onActions && commit.id !== WORKING_ID && (() => { const control = rowControl(commit.id, controls); return <button id={control.id} data-row-control="" tabIndex={-1} className={`icon-button sm graph-action-button${control.active ? ' row-control-active' : ''}`} aria-label={`Actions for ${commit.id.slice(0, 7)}`} onClick={event => { event.stopPropagation(); scroller.current?.focus(); onActions({ oid: commit.id }); }}>…</button>; })()}

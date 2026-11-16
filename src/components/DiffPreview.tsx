@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { useIcons } from './icons';
+import { Icons } from './icons';
 import type { DiffLine, FileDiff, RepositoryMutation } from '../model/repository';
 import { diffRows, rowAt, rowOffsets, visibleRows, type DiffRow, type SplitDiffLine, type SplitDiffRow } from '../model/splitDiff';
 
@@ -50,7 +50,6 @@ function resetMetrics(m: Metrics, rows: DiffRow[], split: boolean) {
 const rowBox = (element: Element) => (element.classList.contains('split-row') ? element.firstElementChild : element) as HTMLElement | null;
 
 export function DiffPreview({
-  const { Check } = useIcons();
   diff,
   split,
   hunkAction,
@@ -374,7 +373,7 @@ export function DiffPreview({
   // ----- Rendering -----
   function lineToggle(index: number, side: Side | null, number: number | null | undefined, hunkIndex: number, lineIndex: number, isSelected: boolean) {
     const verb = isSelected ? 'Deselect' : 'Select';
-    return <button type="button" id={`${rowId(index)}${side ? `-${side}` : ''}-toggle`} tabIndex={-1} className="line-select-toggle" aria-pressed={isSelected} disabled={busy} title={`${verb} line for ${actionVerb}`} aria-label={`${verb} line ${number ?? ''} for ${actionVerb}${side ? ` (${side})` : ''}`} onClick={() => { toggleLine(hunkIndex, lineIndex); setActive(index, side ?? 'before', false); }}>{isSelected && <Check size={10} strokeWidth={3} aria-hidden="true" />}</button>;
+    return <button type="button" id={`${rowId(index)}${side ? `-${side}` : ''}-toggle`} tabIndex={-1} className="line-select-toggle" aria-pressed={isSelected} disabled={busy} title={`${verb} line for ${actionVerb}`} aria-label={`${verb} line ${number ?? ''} for ${actionVerb}${side ? ` (${side})` : ''}`} onClick={() => { toggleLine(hunkIndex, lineIndex); setActive(index, side ?? 'before', false); }}>{isSelected && <Icons.Check size={10} strokeWidth={3} aria-hidden="true" />}</button>;
   }
 
   function splitCell(item: SplitDiffLine | undefined, side: Side, hunkIndex: number, index: number) {

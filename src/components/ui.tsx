@@ -1,12 +1,11 @@
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, type FormEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { useIcons } from './icons';
+import { Icons } from './icons';
 
 /** Shared UI primitives: one dialog frame, one popover dismissal, one toast region. */
 
 /** First + last initial of a name, e.g. "Anna Maria Lopez" -> "AL". */
 export function initials(name: string): string {
-  const { X } = useIcons();
   const words = name.trim().split(/\s+/).filter(Boolean).map(word => [...word][0]);
   return (words.length ? words[0] + (words.length > 1 ? words[words.length - 1] : '') : '?').toUpperCase();
 }
@@ -90,7 +89,7 @@ export function Dialog({ title, onClose, size = 'md', footer, onSubmit, classNam
   return <dialog ref={ref} className={`dialog dialog-${size} ${className}`} aria-labelledby={label ? undefined : titleId} aria-label={label} onCancel={event => { event.preventDefault(); close(); }}>
     <header className="dialog-header">
       <h2 id={titleId}>{title}</h2>
-      <button type="button" className="icon-button" aria-label="Close dialog" onClick={close}><X size={16} /></button>
+      <button type="button" className="icon-button" aria-label="Close dialog" onClick={close}><Icons.X size={16} /></button>
     </header>
     {onSubmit ? <form className="dialog-form" onSubmit={event => { event.preventDefault(); onSubmit(event); }}>{content}</form> : content}
   </dialog>;
@@ -111,7 +110,7 @@ export function Toast({ tone = 'info', action, onDismiss, children }: { tone?: '
   return createPortal(<div className="toast" data-tone={tone} role={tone === 'error' ? 'alert' : 'status'}>
     <div className="toast-body">{children}</div>
     {action}
-    {onDismiss && <button type="button" className="icon-button sm" aria-label="Dismiss notification" onClick={onDismiss}><X size={14} /></button>}
+    {onDismiss && <button type="button" className="icon-button sm" aria-label="Dismiss notification" onClick={onDismiss}><Icons.X size={14} /></button>}
   </div>, root);
 }
 

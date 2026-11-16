@@ -33,7 +33,6 @@
     "@fontsource-variable/geist": "^5.3.0",
     "@fontsource-variable/geist-mono": "^5.2.6",
     "@fontsource/jetbrains-mono": "^5.3.0",
-    "@fontsource/material-symbols-rounded": "^5.3.9",
     "@fontsource/roboto": "^5.3.0",
     "@tauri-apps/api": "^2.12.4",
     "lucide-react": "^0.468.0",

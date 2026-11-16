@@ -1,6 +1,6 @@
 import { useRef, type RefObject } from 'react';
 import { useDismiss } from './ui';
-import { useIcons } from './icons';
+import { Icons } from './icons';
 
 export interface OrderItem<Id extends string> { id: Id; visible: boolean }
 
@@ -34,7 +34,7 @@ export function OrderMenu<Id extends string>({ items, labels, defaults, title, a
   return <div ref={menuRef} className={`menu history-column-menu${className ? ` ${className}` : ''}`} role="dialog" aria-label={ariaLabel} onClick={event => event.stopPropagation()}>
     <div className="history-column-menu-header">
       <span>{title}</span>
-      <button type="button" className="icon-button sm" aria-label={closeLabel} onClick={onClose}><X size={14} /></button>
+      <button type="button" className="icon-button sm" aria-label={closeLabel} onClick={onClose}><Icons.X size={14} /></button>
     </div>
     <div className="history-column-menu-list">
       {items.map((item, index) => <div key={item.id} className="history-column-menu-item">
@@ -43,13 +43,13 @@ export function OrderMenu<Id extends string>({ items, labels, defaults, title, a
           <span>{labels[item.id]}</span>
         </label>
         <div className="history-column-menu-actions">
-          <button type="button" className="icon-button sm" aria-label={`Move ${labels[item.id]} up`} disabled={index === 0} onClick={() => move(index, -1)}><ArrowUp size={12} /></button>
-          <button type="button" className="icon-button sm" aria-label={`Move ${labels[item.id]} down`} disabled={index === items.length - 1} onClick={() => move(index, 1)}><ArrowDown size={12} /></button>
+          <button type="button" className="icon-button sm" aria-label={`Move ${labels[item.id]} up`} disabled={index === 0} onClick={() => move(index, -1)}><Icons.ArrowUp size={12} /></button>
+          <button type="button" className="icon-button sm" aria-label={`Move ${labels[item.id]} down`} disabled={index === items.length - 1} onClick={() => move(index, 1)}><Icons.ArrowDown size={12} /></button>
         </div>
       </div>)}
     </div>
     <div className="history-column-menu-footer">
-      <button type="button" className="text-button history-column-reset-btn" onClick={() => onChange(defaults.map(item => ({ ...item })))}><RotateCcw size={12} /> Reset to default</button>
+      <button type="button" className="text-button history-column-reset-btn" onClick={() => onChange(defaults.map(item => ({ ...item })))}><Icons.RotateCcw size={12} /> Reset to default</button>
     </div>
   </div>;
 }

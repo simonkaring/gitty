@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { useIcons } from './icons';
+import { Icons } from './icons';
 import type { DirectoryEntry, RepositoryLocation, WslDistribution } from '../model/repository';
 import { errorMessage, native } from '../model/native';
 import { suggestedCloneName, type CloneRequest } from '../model/clone';
@@ -30,7 +30,6 @@ const parentPath = (path: string) => path.replace(/\/?[^/]+\/?$/, '') || '/';
 /** The start page: shown with no tabs open and in every new tab. Opening a
  * repository from a tab replaces that tab (see `tabsReducer` 'open'). */
 export function StartPage({ onOpen, onClone, cloneBusy, cloneParent }: {
-  const { ArrowUp, Clock3, Download, Folder, FolderGit2, FolderOpen, Search, Server, SquareTerminal } = useIcons();
   onOpen: (location: RepositoryLocation) => void; onClone: (request: CloneRequest) => void; cloneBusy: boolean; cloneParent?: string;
 }) {
   const [view, setView] = useState<View>('recent');
@@ -168,7 +167,7 @@ export function StartPage({ onOpen, onClone, cloneBusy, cloneParent }: {
     } catch (e) { if (token === sshBrowseRequest.current) setError(errorMessage(e)); }
     finally { if (token === sshBrowseRequest.current) setSshBrowseBusy(false); }
   }
-  const views: [View, string, typeof Clock3][] = [['recent', 'Recent', Clock3], ['clone', 'Clone', Download], ['ssh', 'Open over SSH', Server], ...((distributions.length || wslError) ? [['wsl', 'Browse WSL', SquareTerminal] as [View, string, typeof Clock3]] : [])];
+  const views: [View, string, typeof Icons.Clock3][] = [['recent', 'Recent', Icons.Clock3], ['clone', 'Clone', Icons.Download], ['ssh', 'Open over SSH', Icons.Server], ...((distributions.length || wslError) ? [['wsl', 'Browse WSL', Icons.SquareTerminal] as [View, string, typeof Icons.Clock3]] : [])];
   function navKey(event: KeyboardEvent) {
     const index = views.findIndex(([id]) => id === view);
     const next = event.key === 'ArrowDown' ? index + 1 : event.key === 'ArrowUp' ? index - 1 : null;
@@ -185,26 +184,26 @@ export function StartPage({ onOpen, onClone, cloneBusy, cloneParent }: {
     <GraphArt />
     <div className="start-card">
       <header className="start-header">
-        <span className="welcome-mark"><FolderGit2 size={22} /></span>
+        <span className="welcome-mark"><Icons.FolderGit2 size={22} /></span>
         <div><h1>Open a repository</h1><p>See every branch as a graph, stage exactly what you mean, and commit with confidence.</p></div>
       </header>
       <div className="start-body">
         <nav className="start-nav" aria-label="Ways to open a repository">
-          <button className="primary-button" onClick={() => void pick('repository_pick')}><FolderOpen size={16} />Open folder…</button>
+          <button className="primary-button" onClick={() => void pick('repository_pick')}><Icons.FolderOpen size={16} />Open folder…</button>
           <div role="tablist" aria-orientation="vertical" onKeyDown={navKey}>
             {views.map(([id, label, Icon]) => <button key={id} id={`start-${id}`} role="tab" aria-selected={view === id} aria-controls="start-panel" tabIndex={view === id ? 0 : -1} onClick={() => show(id)}><Icon size={15} />{label}</button>)}
           </div>
         </nav>
         <section id="start-panel" className="start-panel" role="tabpanel" aria-labelledby={`start-${view}`}>
           {view === 'recent' && <>
-            {(recent?.length ?? 0) > 5 && <label className="search-field start-filter"><Search size={14} aria-hidden="true" /><input aria-label="Filter recent repositories" placeholder="Filter recent repositories" value={filter} onChange={e => setFilter(e.target.value)} /></label>}
+            {(recent?.length ?? 0) > 5 && <label className="search-field start-filter"><Icons.Search size={14} aria-hidden="true" /><input aria-label="Filter recent repositories" placeholder="Filter recent repositories" value={filter} onChange={e => setFilter(e.target.value)} /></label>}
             {alert}
             {recent === null ? <p className="muted" role="status">Reading recent repositories…</p>
-              : !recent.length ? <div className="empty-state compact"><Clock3 size={20} /><p>No recent repositories yet.<br />Open a folder or clone one to get started.</p></div>
+              : !recent.length ? <div className="empty-state compact"><Icons.Clock3 size={20} /><p>No recent repositories yet.<br />Open a folder or clone one to get started.</p></div>
               : !shown.length ? <p className="muted">No recent repositories match “{filter}”.</p>
               : <ul className="start-list" aria-label="Recent repositories">{shown.map(location => <li key={JSON.stringify(location)}>
                 <button className="start-item" onClick={() => onOpen(location)}>
-                  <FolderGit2 size={16} />
+                  <Icons.FolderGit2 size={16} />
                   <span><strong>{baseName(location.path)}</strong><small>{location.path}</small></span>
                   {location.kind === 'wsl' && <span className="badge">WSL · {location.distribution}</span>}
                   {location.kind === 'ssh' && <span className="badge">SSH · {sshDestination(location)}</span>}
@@ -247,10 +246,10 @@ export function StartPage({ onOpen, onClone, cloneBusy, cloneParent }: {
                 {sshBrowseBusy ? <p className="muted small" role="status">Reading folders…</p>
                   : !sshFolders.length ? <p className="muted small">No subfolders here. Open this folder, or go up.</p>
                   : <ul className="start-list" aria-label="Remote folders">
-                    {sshFolders.map(folder => <li key={folder.path}><button type="button" className="start-item" disabled={sshBrowseBusy} onClick={() => void browseSsh(folder.path)}><Folder size={16} /><span><strong>{folder.name}</strong><small>{folder.path}</small></span></button></li>)}
+                    {sshFolders.map(folder => <li key={folder.path}><button type="button" className="start-item" disabled={sshBrowseBusy} onClick={() => void browseSsh(folder.path)}><Icons.Folder size={16} /><span><strong>{folder.name}</strong><small>{folder.path}</small></span></button></li>)}
                   </ul>}
                 <div className="start-actions">
-                  {sshPath !== '/' && <button type="button" className="secondary-button" disabled={sshBrowseBusy} onClick={() => void browseSsh(parentPath(sshPath))}><ArrowUp size={14} />Parent folder</button>}
+                  {sshPath !== '/' && <button type="button" className="secondary-button" disabled={sshBrowseBusy} onClick={() => void browseSsh(parentPath(sshPath))}><Icons.ArrowUp size={14} />Parent folder</button>}
                   <button type="button" className="primary-button" disabled={sshBrowseBusy} onClick={() => setSshBrowsing(false)}>Use this folder</button>
                 </div>
               </div>}
@@ -272,8 +271,8 @@ export function StartPage({ onOpen, onClone, cloneBusy, cloneParent }: {
             </form>
             {alert}
             <ul className="start-list" aria-label="Folders">
-              {path !== '/' && <li><button className="start-item" disabled={busy || !distribution} onClick={() => void browse(parentPath(path))}><ArrowUp size={16} /><span><strong>Parent folder</strong></span></button></li>}
-              {entries.map(entry => <li key={entry.path}><button className="start-item" disabled={busy} onClick={() => void browse(entry.path)}><Folder size={16} /><span><strong>{entry.name}</strong></span></button></li>)}
+              {path !== '/' && <li><button className="start-item" disabled={busy || !distribution} onClick={() => void browse(parentPath(path))}><Icons.ArrowUp size={16} /><span><strong>Parent folder</strong></span></button></li>}
+              {entries.map(entry => <li key={entry.path}><button className="start-item" disabled={busy} onClick={() => void browse(entry.path)}><Icons.Folder size={16} /><span><strong>{entry.name}</strong></span></button></li>)}
             </ul>
             <div className="start-actions">
               <button className="secondary-button" disabled={!distribution} onClick={() => { setCloneMethod('url'); selectRepository(null); setCloneKind('wsl'); show('clone'); }}>Clone into this folder</button>

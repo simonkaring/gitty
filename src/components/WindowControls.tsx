@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { useIcons } from './icons';
+import { Icons } from './icons';
 import { errorMessage } from '../model/native';
 
 type WindowButton = 'minimize' | 'maximize' | 'close';
@@ -8,7 +8,6 @@ export const DEFAULT_BUTTON_LAYOUT = ':minimize,maximize,close';
 const RESIZE_DIRECTIONS = ['North', 'South', 'East', 'West', 'NorthEast', 'NorthWest', 'SouthEast', 'SouthWest'] as const;
 
 export function WindowResizeHandles({ onError }: { onError: (message: string) => void }) {
-  const { Copy, Minus, Square, X } = useIcons();
   return <div aria-hidden="true">{RESIZE_DIRECTIONS.map(direction => <div key={direction} className={`window-resize window-resize-${direction}`} data-tauri-drag-region="false" onMouseDown={event => {
     if (event.button !== 0) return;
     event.preventDefault();
@@ -41,9 +40,9 @@ export function WindowControls({ onError, buttons = ['minimize', 'maximize', 'cl
   };
   return <div className="window-controls" role="group" aria-label="Window controls">
     {buttons.map(button => button === 'minimize'
-      ? <button key={button} type="button" aria-label="Minimize window" title="Minimize" onClick={() => run('minimize')}><Minus size={16} /></button>
+      ? <button key={button} type="button" aria-label="Minimize window" title="Minimize" onClick={() => run('minimize')}><Icons.Minus size={16} /></button>
       : button === 'maximize'
-        ? <button key={button} type="button" aria-label={maximized ? 'Restore window' : 'Maximize window'} title={maximized ? 'Restore' : 'Maximize'} onClick={() => run('toggleMaximize')}>{maximized ? <Copy size={13} /> : <Square size={13} />}</button>
-        : <button key={button} type="button" className="window-close" aria-label="Close window" title="Close" onClick={() => run('close')}><X size={17} /></button>)}
+        ? <button key={button} type="button" aria-label={maximized ? 'Restore window' : 'Maximize window'} title={maximized ? 'Restore' : 'Maximize'} onClick={() => run('toggleMaximize')}>{maximized ? <Icons.Copy size={13} /> : <Icons.Square size={13} />}</button>
+        : <button key={button} type="button" className="window-close" aria-label="Close window" title="Close" onClick={() => run('close')}><Icons.X size={17} /></button>)}
   </div>;
 }

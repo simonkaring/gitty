@@ -1,5 +1,5 @@
 import { useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
-import { useIcons } from './icons';
+import { Icons } from './icons';
 
 export interface RepositoryTabSummary { id: string; title: string; busy: boolean; branch: string | null; dirty: boolean; start?: boolean }
 
@@ -21,7 +21,6 @@ function handleTablistKeyDown(event: KeyboardEvent<HTMLElement>, ids: string[], 
 }
 
 export function RepositoryTabs({ tabs, activeId, onSelect, onClose, onMove, onNew }: {
-  const { FolderGit2, Loader2, Plus, X } = useIcons();
   tabs: RepositoryTabSummary[]; activeId: string | null; onSelect: (id: string) => void; onClose: (id: string) => void; onMove: (id: string, targetId: string) => void; onNew: () => void;
 }) {
   const ids = tabs.map(tab => tab.id);
@@ -89,17 +88,17 @@ export function RepositoryTabs({ tabs, activeId, onSelect, onClose, onMove, onNe
               }
             }}
             title={`${tab.branch ? `${tab.title} · ${tab.branch}` : tab.title} — Drag to reorder; Alt+Left/Right to move`}>
-            {tab.start ? <Plus size={14} className="repository-tab-icon" /> : <FolderGit2 size={14} className="repository-tab-icon" />}
+            {tab.start ? <Icons.Plus size={14} className="repository-tab-icon" /> : <Icons.FolderGit2 size={14} className="repository-tab-icon" />}
             {tab.busy && <span className="repository-tab-busy" aria-hidden="true" title="An operation is running" />}
             {tab.dirty && !tab.busy && <span className="repository-tab-dirty" aria-hidden="true" title="Uncommitted changes" />}
             <span className="repository-tab-text"><span className="repository-tab-title">{tab.title}</span>{tab.branch && <span className="repository-tab-branch">{tab.branch}</span>}</span>
           </button>
           <button className="icon-button sm repository-tab-close" tabIndex={selected ? 0 : -1} aria-label={tab.busy ? `Cannot close ${tab.title}: an operation is running` : `Close ${tab.title}`} disabled={tab.busy} title={tab.busy ? 'An operation is running in this tab' : 'Close tab'} onClick={() => onClose(tab.id)}>
-            {tab.busy ? <Loader2 size={13} className="spin" /> : <X size={13} />}
+            {tab.busy ? <Icons.Loader2 size={13} className="spin" /> : <Icons.X size={13} />}
           </button>
         </div>;
       })}
     </nav>
-    <button className="icon-button repository-tab-new" aria-label="New tab" title="New tab" onClick={onNew}><Plus size={16} /></button>
+    <button className="icon-button repository-tab-new" aria-label="New tab" title="New tab" onClick={onNew}><Icons.Plus size={16} /></button>
   </div>;
 }

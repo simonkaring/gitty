@@ -19,6 +19,7 @@ okf_version: "0.2"
 - [History search and workspace entry points](history-search.md) - Search result inspection, graph and working-row reveal, footer commands, and settings-based demo switching.
 - [Split diff review](split-diff-review.md) - Paired before/after rows, fixed gutters, shared horizontal scrolling, virtualized rows, roving line focus, and original line-selection identity.
 - [Working changes at scale](working-changes-at-scale.md) - Memoized working-file data, measured viewport-only rows, and targeted native patch reads.
+- [Design family icons](design-family-icons.md) - How every in-app icon switches between Lucide and animated Material-style glyphs for the Material Google design family.
 
 # Verification and upkeep
 

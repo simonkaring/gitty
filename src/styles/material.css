@@ -11,6 +11,23 @@
 @import '@fontsource/roboto/500.css';
 @import '@fontsource/roboto/700.css';
 
+/* Icon motion (see the "Icons" block below): small parts of each glyph move on
+   hover, so a branch curve draws itself, an arrow slides, a gear turns. */
+@keyframes ai-draw { from { stroke-dasharray: 24; stroke-dashoffset: 24; } }
+@keyframes ai-pop { from { transform: scale(0); } }
+@keyframes ai-pulse { 40% { transform: scale(1.28); } }
+@keyframes ai-bounce { 40% { transform: translateY(-3px); } }
+@keyframes ai-up { 45% { transform: translateY(-8px); opacity: 0; } 46% { transform: translateY(8px); opacity: 0; } 100% { transform: none; opacity: 1; } }
+@keyframes ai-down { 45% { transform: translateY(8px); opacity: 0; } 46% { transform: translateY(-8px); opacity: 0; } 100% { transform: none; opacity: 1; } }
+@keyframes ai-spin { to { transform: rotate(360deg); } }
+@keyframes ai-blink { 50% { opacity: 0; } }
+@keyframes ai-wobble { 35% { transform: translate(-1.5px, -1.5px) rotate(-12deg); } 65% { transform: translate(1px, 1px) rotate(6deg); } }
+@keyframes ai-tilt { 40% { transform: rotate(-16deg); } }
+@keyframes ai-turn { to { transform: rotate(90deg); } }
+@keyframes ai-drop { from { transform: translateY(-9px) scale(0.5); opacity: 0; } }
+@keyframes ai-swing { 40% { transform: rotate(-26deg); } }
+@keyframes ai-swing-l { 40% { transform: rotate(26deg); } }
+
 @property --rr { syntax: '<length>'; inherits: false; initial-value: 0px; }
 @property --ra { syntax: '<number>'; inherits: false; initial-value: 0; }
 @keyframes m-ripple {
@@ -69,6 +86,123 @@ html[data-design='material'] {
 
   font-family: var(--ui);
   letter-spacing: 0.01em;
+
+  /* ---- Icons (animated glyphs, see src/components/icons.tsx) -------- */
+  & .ai {
+    overflow: visible;
+  }
+  & .ai * {
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+  /* Any interactive ancestor: buttons, section rows, menu items, file rows, tabs. */
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-draw {
+    animation: ai-draw 0.6s var(--m-decel) both;
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-node {
+    animation: ai-pop 0.5s var(--m-spring) 0.25s both;
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-arrow,
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-lift {
+    animation: ai-up 0.7s var(--m-decel);
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-drop-in {
+    animation: ai-down 0.7s var(--m-decel);
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-swing {
+    transform: rotate(-26deg);
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-swing-l {
+    transform: rotate(26deg);
+  }
+  & .ai-swing,
+  & .ai-swing-l,
+  & .ai-lid {
+    transition: transform var(--dur-med) var(--m-spring);
+  }
+  & .ai-lid {
+    transform-origin: 0 100%;
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-lid {
+    transform: rotate(-16deg) translateY(-1px);
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-cursor {
+    animation: ai-blink 0.7s steps(1) infinite;
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-lens {
+    animation: ai-wobble 0.6s var(--m-spring);
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-turn {
+    transform: rotate(90deg);
+  }
+  & .ai-turn {
+    transition: transform 0.7s var(--m-spring);
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-spin {
+    animation: ai-spin 0.8s var(--m-decel);
+  }
+  /* Busy spinners (className="spin") turn forever. */
+  & .ai .spin,
+  & .ai.spin .ai-spin {
+    animation: ai-spin 0.9s linear infinite;
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-pulse {
+    animation: ai-pulse 0.6s var(--m-spring);
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-bounce {
+    animation: ai-bounce 0.5s var(--m-spring);
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-pulse,
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-tilt,
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-write,
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-clock,
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-send,
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-grow,
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-drop,
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-twinkle {
+    animation-duration: 0.6s;
+    animation-timing-function: var(--m-spring);
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-tilt {
+    animation-name: ai-tilt;
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-clock {
+    animation-name: ai-spin;
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-send {
+    animation-name: ai-up;
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-grow {
+    animation-name: ai-pulse;
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-drop {
+    animation-name: ai-drop;
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-twinkle {
+    animation-name: ai-pulse;
+    animation-delay: 0.15s;
+  }
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-caret,
+  & :is(button, summary, [role='menuitem'], [role='tab'], [role='option'], .palette-item, .ref-action-row, .file-row, .working-file, .start-item, .repository-tab):is(:hover, :focus-visible) .ai-write {
+    transform: rotate(-16deg);
+  }
+  & .ai-caret,
+  & .ai-write {
+    transition: transform var(--dur-med) var(--m-spring);
+  }
+  /* Expanded disclosures point their caret the other way, like Google's. */
+  & [aria-expanded='true'] > .ai .ai-caret,
+  & [open] > summary .ai .ai-caret {
+    transform: rotate(180deg);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    & .ai *,
+    & .ai .spin,
+    & .ai.spin .ai-spin {
+      animation: none !important;
+      transition: none !important;
+    }
+  }
 
   /* ---- Frame ---------------------------------------------------------- */
   & body,

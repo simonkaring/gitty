@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps, type CSSProperties } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { useIcons } from './icons';
+import { Icons } from './icons';
 import type { PaletteCommand } from './CommandPalette';
 import { CommandPalette, SettingsDialog, preloadLazyDialogs } from './lazyDialogs';
 import { useSettings } from '../model/settings';
@@ -43,7 +43,6 @@ function initialTabsState(demo: boolean, initialLocation?: RepositoryLocation): 
 }
 
 export function NativeWorkspace({ demo, onToggleDemo, initialLocation, cloneParent }: { demo: boolean; onToggleDemo?: () => void; initialLocation?: RepositoryLocation; cloneParent?: string }) {
-  const { FolderOpen, Palette, PanelLeft, PanelRight, Settings, Sparkles } = useIcons();
   // `tabsReducer` is a pure function: opening, deduping, closing, and
   // meta/busy updates never call `notify`/`setActiveId` as a side effect of
   // computing the next state. Under React StrictMode a `setTabs(current =>
@@ -188,12 +187,12 @@ export function NativeWorkspace({ demo, onToggleDemo, initialLocation, clonePare
   }
 
   const workspaceCommands: PaletteCommand[] = [
-    { id: 'open', group: 'Workspace', label: 'Open repository…', icon: <FolderOpen size={15} />, run: () => dispatch({ type: 'start' }) },
-    { id: 'sidebar', group: 'Workspace', label: `${sidebarOpen ? 'Hide' : 'Show'} references sidebar`, icon: <PanelLeft size={15} />, run: () => setPane('sidebar', !sidebarOpen) },
-    { id: 'inspector', group: 'Workspace', label: `${inspectorOpen ? 'Hide' : 'Show'} inspector`, icon: <PanelRight size={15} />, run: () => setPane('inspector', !inspectorOpen) },
-    { id: 'settings', group: 'Workspace', label: 'Open settings', icon: <SettingsIcon size={15} />, run: () => openSettings() },
-    ...(onToggleDemo ? [{ id: 'demo', group: 'Workspace', label: demo ? 'Exit demo workspace' : 'Explore demo workspace', icon: <Sparkles size={15} />, disabled: anyBusy, run: requestDemo }] : []),
-    ...themes.filter(t => t.id !== theme.id).map(t => ({ id: `theme:${t.id}`, group: 'Theme', label: `Theme: ${t.name}`, hint: t.mode, icon: <Palette size={15} />, run: () => updateSettings({ themeMode: 'fixed', themeId: t.id }) })),
+    { id: 'open', group: 'Workspace', label: 'Open repository…', icon: <Icons.FolderOpen size={15} />, run: () => dispatch({ type: 'start' }) },
+    { id: 'sidebar', group: 'Workspace', label: `${sidebarOpen ? 'Hide' : 'Show'} references sidebar`, icon: <Icons.PanelStart size={15} />, run: () => setPane('sidebar', !sidebarOpen) },
+    { id: 'inspector', group: 'Workspace', label: `${inspectorOpen ? 'Hide' : 'Show'} inspector`, icon: <Icons.PanelEnd size={15} />, run: () => setPane('inspector', !inspectorOpen) },
+    { id: 'settings', group: 'Workspace', label: 'Open settings', icon: <Icons.Settings size={15} />, run: () => openSettings() },
+    ...(onToggleDemo ? [{ id: 'demo', group: 'Workspace', label: demo ? 'Exit demo workspace' : 'Explore demo workspace', icon: <Icons.Sparkles size={15} />, disabled: anyBusy, run: requestDemo }] : []),
+    ...themes.filter(t => t.id !== theme.id).map(t => ({ id: `theme:${t.id}`, group: 'Theme', label: `Theme: ${t.name}`, hint: t.mode, icon: <Icons.Palette size={15} />, run: () => updateSettings({ themeMode: 'fixed', themeId: t.id }) })),
   ];
   const customWindowControls = (document.documentElement.dataset.platform === 'windows' && isDesktopHost()) || isLinux;
   const [leftButtons, rightButtons] = parseWindowButtonLayout(buttonLayout);
@@ -208,8 +207,8 @@ export function NativeWorkspace({ demo, onToggleDemo, initialLocation, clonePare
       <RepositoryTabs tabs={tabSummaries} activeId={activeId} onSelect={selectTab} onClose={closeTab} onMove={(tabId, targetId) => dispatch({ type: 'move', tabId, targetId })} onNew={() => dispatch({ type: 'start' })} />
       <div className="native-actions">
         <SettingsButton />
-        <button className="icon-button" aria-label="Toggle references sidebar" aria-pressed={sidebarOpen} onClick={() => setPane('sidebar', !sidebarOpen)}><PanelLeft size={18} /></button>
-        <button className="icon-button" aria-label="Toggle working changes and inspector" aria-pressed={inspectorOpen} onClick={() => setPane('inspector', !inspectorOpen)}><PanelRight size={18} /></button>
+        <button className="icon-button" aria-label="Toggle references sidebar" aria-pressed={sidebarOpen} onClick={() => setPane('sidebar', !sidebarOpen)}><Icons.PanelStart size={18} /></button>
+        <button className="icon-button" aria-label="Toggle working changes and inspector" aria-pressed={inspectorOpen} onClick={() => setPane('inspector', !inspectorOpen)}><Icons.PanelEnd size={18} /></button>
       </div>
       {customWindowControls && (!isLinux || rightButtons.length > 0) && <WindowControls buttons={isLinux ? rightButtons : undefined} onError={notify} />}
     </header>

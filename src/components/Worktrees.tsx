@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useIcons } from './icons';
+import { Icons } from './icons';
 import type { RepositorySession } from '../model/repository';
 import { errorMessage, isDemoHandle, native } from '../model/native';
 import { worktreeEvents, worktreeLocation, worktreeName, type Worktree, type WorktreeAction, type WorktreeRequest, type WorktreeReview } from '../model/worktrees';
@@ -8,7 +8,6 @@ import { Dialog } from './ui';
 const labels: Record<WorktreeAction, string> = { create: 'Create worktree', move: 'Move worktree', remove: 'Remove worktree', lock: 'Lock worktree', unlock: 'Unlock worktree', prune: 'Prune worktrees' };
 
 export function Worktrees({ session, stateRevision, active, busy, onOpen, onWrite }: {
-  const { Check, FolderGit2, LockKeyhole, Plus, RefreshCw } = useIcons();
   session: RepositorySession; stateRevision: number; active: boolean; busy: boolean;
   onOpen: (location: RepositorySession['location']) => void;
   onWrite: (command: string, args: Record<string, unknown>) => Promise<void>;
@@ -35,18 +34,18 @@ export function Worktrees({ session, stateRevision, active, busy, onOpen, onWrit
   return <>
     <details className="reference-group" data-section="worktrees" aria-label="Worktrees" open={open} onToggle={e => setOpen(e.currentTarget.open)}>
       <summary>
-        <FolderGit2 size={15} aria-hidden="true" />
+        <Icons.FolderGit2 size={15} aria-hidden="true" />
         Worktrees
         <span className="count">{items.length}</span>
         <span className="reference-group-actions">
-          <button className="icon-button sm" aria-label="Refresh worktrees" title="Refresh worktrees" onClick={e => { e.preventDefault(); e.stopPropagation(); void reload(); }} onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') e.stopPropagation(); }} disabled={busy}><RefreshCw size={13} /></button>
-          <button className="icon-button sm" aria-label="Create worktree" title="Create worktree" disabled={busy || demo} onClick={e => { e.preventDefault(); e.stopPropagation(); setEditing({ action: 'create' }); }} onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') e.stopPropagation(); }}><Plus size={15} /></button>
+          <button className="icon-button sm" aria-label="Refresh worktrees" title="Refresh worktrees" onClick={e => { e.preventDefault(); e.stopPropagation(); void reload(); }} onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') e.stopPropagation(); }} disabled={busy}><Icons.RefreshCw size={13} /></button>
+          <button className="icon-button sm" aria-label="Create worktree" title="Create worktree" disabled={busy || demo} onClick={e => { e.preventDefault(); e.stopPropagation(); setEditing({ action: 'create' }); }} onKeyDown={e => { if (e.key === ' ' || e.key === 'Enter') e.stopPropagation(); }}><Icons.Plus size={15} /></button>
         </span>
       </summary>
       <div className="reference-tree">
         {items.map(item => <div className={`ref-action-row worktree-row${item.path === session.root ? ' current' : ''}`} key={item.path}>
           <button className="ref-item" title={item.path} aria-current={item.path === session.root ? 'true' : undefined} disabled={busy || item.bare || item.prunable !== null} onClick={() => onOpen(worktreeLocation(session.location, item.path))}>
-            {item.path === session.root ? <Check className="current-branch-check" size={14} aria-hidden="true" /> : item.locked !== null ? <LockKeyhole size={14} aria-hidden="true" /> : <FolderGit2 size={14} aria-hidden="true" />}<span><span className="worktree-name">{worktreeName(item.path)}</span><small>{item.bare ? 'Bare repository' : item.branch?.replace('refs/heads/', '') ?? `Detached · ${item.head?.slice(0, 7) ?? 'unborn'}`}{item.prunable !== null ? ' · missing / stale' : ''}{item.locked !== null ? ' · locked' : ''}</small></span>
+            {item.path === session.root ? <Icons.Check className="current-branch-check" size={14} aria-hidden="true" /> : item.locked !== null ? <Icons.LockKeyhole size={14} aria-hidden="true" /> : <Icons.FolderGit2 size={14} aria-hidden="true" />}<span><span className="worktree-name">{worktreeName(item.path)}</span><small>{item.bare ? 'Bare repository' : item.branch?.replace('refs/heads/', '') ?? `Detached · ${item.head?.slice(0, 7) ?? 'unborn'}`}{item.prunable !== null ? ' · missing / stale' : ''}{item.locked !== null ? ' · locked' : ''}</small></span>
           </button>
           <button className="icon-button sm" aria-label={`Manage worktree ${item.path}`} disabled={busy || demo || item.main || item.bare} onClick={() => setEditing({ action: item.locked !== null ? 'unlock' : 'move', target: item })}>…</button>
         </div>)}

@@ -1,4 +1,4 @@
-import { useIcons } from './icons';
+import { Icons } from './icons';
 import { useRef, type Dispatch, type SetStateAction } from 'react';
 import { useSettings } from '../model/settings';
 import { AppMark } from './AppMark';
@@ -9,7 +9,6 @@ export const INSPECTOR_MIN_WIDTH = 300;
 export const INSPECTOR_MAX_WIDTH = 760;
 
 export function usePaneWidth(name: 'sidebar' | 'inspector', fallback: number, min: number, max: number) {
-  const { Search } = useIcons();
   const { settings, updateSettings } = useSettings();
   const clamp = (value: number) => Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
   const width = clamp(settings.paneWidths[name]);
@@ -24,7 +23,7 @@ export function Brand({ demo = false }: { demo?: boolean }) {
 }
 export function CommandSearchButton({ onClick }: { onClick: () => void }) {
   const isMac = document.documentElement.dataset.platform === 'macos' || /Mac/.test(navigator.platform);
-  return <button className="text-button footer-command-search" aria-label="Search commands" aria-keyshortcuts={isMac ? 'Meta+K' : 'Control+K'} onClick={onClick}><Search size={13} /><span>Commands</span><kbd>{isMac ? '⌘ K' : 'Ctrl K'}</kbd></button>;
+  return <button className="text-button footer-command-search" aria-label="Search commands" aria-keyshortcuts={isMac ? 'Meta+K' : 'Control+K'} onClick={onClick}><Icons.Search size={13} /><span>Commands</span><kbd>{isMac ? '⌘ K' : 'Ctrl K'}</kbd></button>;
 }
 export function PaneResizer({ label, width, onChange, min = INSPECTOR_MIN_WIDTH, max = INSPECTOR_MAX_WIDTH, direction = -1 }: { label: string; width: number; onChange: (width: number) => void; min?: number; max?: number; direction?: 1 | -1 }) {
   const drag = useRef({ x: 0, width });

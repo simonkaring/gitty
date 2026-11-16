@@ -1,5 +1,5 @@
 import { Fragment, useRef, useState, type ReactNode } from 'react';
-import { useIcons } from './icons';
+import { Icons } from './icons';
 import type { CommitSummary, RepositoryState } from '../model/repository';
 import { acceptsGraphDrop, graphDropAction, REF_DRAG_TYPE, COMMIT_DRAG_TYPE } from './HistoryGraph';
 import type { ActionContext } from './OperationDialog';
@@ -32,15 +32,14 @@ interface NativeSidebarProps {
 export const SECTION_LABELS: Record<SidebarSectionId, string> = { worktrees: 'Worktrees', local: 'Local branches', remote: 'Remote branches', tag: 'Tags', stash: 'Stashes', remotes: 'Remotes' };
 
 const GROUPS = [
-  { kind: 'local', label: 'Local branches', Icon: Laptop },
-  { kind: 'remote', label: 'Remote branches', Icon: Globe2 },
-  { kind: 'tag', label: 'Tags', Icon: Tag },
-  { kind: 'stash', label: 'Stashes', Icon: Archive },
+  { kind: 'local', label: 'Local branches', Icon: Icons.Laptop },
+  { kind: 'remote', label: 'Remote branches', Icon: Icons.Globe2 },
+  { kind: 'tag', label: 'Tags', Icon: Icons.Tag },
+  { kind: 'stash', label: 'Stashes', Icon: Icons.Archive },
 ] as const;
 
 /** `git stash list` message as shown in the sidebar: "On main: fixed login" is just "fixed login". */
 export function stashMessage(message: string): string {
-  const { Check, ChevronRight, Cloud, Folder, FolderOpen, FolderGit2, GitBranch, Globe2, Laptop, Settings, Tag } = useIcons();
   return message.replace(/^On .*?: /, '') || message;
 }
 
@@ -78,7 +77,7 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
   const optionsButton = useRef<HTMLButtonElement>(null);
   const nodes: Record<SidebarSectionId, ReactNode> = {    worktrees,
     local: null, remote: null, tag: null, stash: null,
-    remotes: state.remotes.length > 0 && <details className="reference-group" data-section="remotes"><summary><Cloud size={15} aria-hidden="true" />Remotes<span className="count">{state.remotes.length}</span></summary>{state.remotes.map(remote => <p key={remote}>{remote}</p>)}</details>,
+    remotes: state.remotes.length > 0 && <details className="reference-group" data-section="remotes"><summary><Icons.Cloud size={15} aria-hidden="true" />Remotes<span className="count">{state.remotes.length}</span></summary>{state.remotes.map(remote => <p key={remote}>{remote}</p>)}</details>,
   };
   for (const { kind, label, Icon } of GROUPS) {
     const refs = state.refs.filter(ref => ref.kind === kind && !(kind === 'remote' && ref.fullName === 'refs/remotes/origin/HEAD'));
@@ -92,10 +91,10 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
           onDrop={event => { event.preventDefault(); event.stopPropagation(); const action = graphDropAction(event.dataTransfer, ref.fullName, session.headRef, commits, state.refs); if (action) onAction(action); }}
           onClick={() => reveal(ref.commitId)} onDoubleClick={() => { if (ref.kind === 'local' || (ref.kind === 'remote' && ref.fullName.startsWith('refs/remotes/origin/') && ref.fullName !== 'refs/remotes/origin/HEAD')) switchBranch(ref.fullName); }}
           onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openMenu({ oid: ref.commitId, ref: ref.fullName }, rect.left, rect.bottom, event.currentTarget); } }}>
-          {kind === 'tag' || kind === 'stash' ? <Icon size={14} aria-hidden="true" /> : ref.fullName === session.headRef ? <Check className="current-branch-check" size={14} aria-hidden="true" /> : <GitBranch size={14} aria-hidden="true" />}<span>{kind === 'tag' || kind === 'stash' ? (kind === 'stash' ? stashMessage(ref.name) : ref.name) : ref.name.split('/').at(-1)}</span>
+          {kind === 'tag' || kind === 'stash' ? <Icon size={14} aria-hidden="true" /> : ref.fullName === session.headRef ? <Icons.Check className="current-branch-check" size={14} aria-hidden="true" /> : <Icons.GitBranch size={14} aria-hidden="true" />}<span>{kind === 'tag' || kind === 'stash' ? (kind === 'stash' ? stashMessage(ref.name) : ref.name) : ref.name.split('/').at(-1)}</span>
         </button>{kind === 'stash' && onStash ? <>
-          <button className="icon-button sm" aria-label="Pop stash" title="Pop stash" disabled={busy} onClick={() => onStash({ kind: 'pop', oid: ref.commitId, restoreIndex: true })}><ArchiveRestore size={13} /></button>
-          <button className="icon-button sm" data-danger={confirmDrop === ref.commitId ? 'true' : undefined} aria-label={confirmDrop === ref.commitId ? 'Confirm drop stash' : 'Drop stash'} title={confirmDrop === ref.commitId ? 'Click again to drop' : 'Drop stash'} disabled={busy} onClick={() => { if (confirmDrop === ref.commitId) { setConfirmDrop(null); onStash({ kind: 'drop', oid: ref.commitId }); } else setConfirmDrop(ref.commitId); }}><Trash2 size={13} /></button>
+          <button className="icon-button sm" aria-label="Pop stash" title="Pop stash" disabled={busy} onClick={() => onStash({ kind: 'pop', oid: ref.commitId, restoreIndex: true })}><Icons.ArchiveRestore size={13} /></button>
+          <button className="icon-button sm" data-danger={confirmDrop === ref.commitId ? 'true' : undefined} aria-label={confirmDrop === ref.commitId ? 'Confirm drop stash' : 'Drop stash'} title={confirmDrop === ref.commitId ? 'Click again to drop' : 'Drop stash'} disabled={busy} onClick={() => { if (confirmDrop === ref.commitId) { setConfirmDrop(null); onStash({ kind: 'drop', oid: ref.commitId }); } else setConfirmDrop(ref.commitId); }}><Icons.Trash2 size={13} /></button>
         </> : <button className="icon-button sm" aria-label={`Actions for ${ref.fullName}`} aria-haspopup="menu" onClick={event => { const rect = event.currentTarget.getBoundingClientRect(); openMenu({ oid: ref.commitId, ref: ref.fullName }, rect.left, rect.bottom, event.currentTarget); }}>…</button>}
       </div>)}
       {[...node.folders].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, child]) => {
@@ -109,8 +108,8 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
           <summary title={path.join('/')}
             onContextMenu={folder && openFolderMenu ? event => { event.preventDefault(); openFolderMenu(folder, event.clientX, event.clientY, event.currentTarget); } : undefined}
             onKeyDown={folder && openFolderMenu ? event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openFolderMenu(folder, rect.left, rect.bottom, event.currentTarget); } } : undefined}>
-            <ChevronRight className="reference-folder-chevron" size={12} aria-hidden="true" />
-            {kind === 'remote' && parts.length === 0 ? <Globe2 className="reference-folder-icon" size={14} aria-hidden="true" /> : <><Folder className="reference-folder-icon folder-closed" size={14} aria-hidden="true" /><FolderOpen className="reference-folder-icon folder-open" size={14} aria-hidden="true" /></>}
+            <Icons.ChevronRight className="reference-folder-chevron" size={12} aria-hidden="true" />
+            {kind === 'remote' && parts.length === 0 ? <Icons.Globe2 className="reference-folder-icon" size={14} aria-hidden="true" /> : <><Icons.Folder className="reference-folder-icon folder-closed" size={14} aria-hidden="true" /><Icons.FolderOpen className="reference-folder-icon folder-open" size={14} aria-hidden="true" /></>}
             <span className="reference-folder-name">{name}</span>
             {folder && openFolderMenu && <button type="button" className="icon-button sm reference-folder-actions" aria-label={`Actions for folder ${folderLabel(folder)}`} aria-haspopup="menu" onClick={event => { event.preventDefault(); event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); openFolderMenu(folder, rect.left, rect.bottom, event.currentTarget); }}>…</button>}
           </summary>
@@ -125,14 +124,14 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
     </details>;
   }
   return <aside className="sidebar native-sidebar" aria-label="Repository references">
-    <div className="workspace-label"><FolderGit2 size={22} /><span>{session.name}<small title={session.root}>{session.root}</small></span>
+    <div className="workspace-label"><Icons.FolderGit2 size={22} /><span>{session.name}<small title={session.root}>{session.root}</small></span>
       {onSectionsChange && <div className="sidebar-options">
-        <button ref={optionsButton} type="button" className="icon-button sm" aria-label="Customize sidebar sections" title="Customize sidebar sections" aria-haspopup="dialog" aria-expanded={optionsOpen} onClick={() => setOptionsOpen(open => !open)}><SettingsIcon size={15} /></button>
+        <button ref={optionsButton} type="button" className="icon-button sm" aria-label="Customize sidebar sections" title="Customize sidebar sections" aria-haspopup="dialog" aria-expanded={optionsOpen} onClick={() => setOptionsOpen(open => !open)}><Icons.Settings size={15} /></button>
         {optionsOpen && <OrderMenu className="sidebar-section-menu" items={sections} labels={SECTION_LABELS} defaults={DEFAULT_SIDEBAR_SECTIONS} title="Sections" ariaLabel="Sidebar sections settings" closeLabel="Close sidebar section settings" minVisible={0} triggerRef={optionsButton} onChange={onSectionsChange} onClose={() => setOptionsOpen(false)} />}
       </div>}
     </div>
     <div className="native-sidebar-meta">
-      <span className="badge" data-tone="accent"><Laptop size={14} />{session.headRef?.replace('refs/heads/', '') ?? 'Detached / unborn HEAD'}</span>
+      <span className="badge" data-tone="accent"><Icons.Laptop size={14} />{session.headRef?.replace('refs/heads/', '') ?? 'Detached / unborn HEAD'}</span>
       {session.location.kind === 'wsl' && <span>WSL · {session.location.distribution}</span>}
       {session.location.kind === 'ssh' && <span>SSH · {session.location.host}{session.location.user ? ` (${session.location.user})` : ''}</span>}
       {session.linkedWorktree && <span>Linked worktree</span>}

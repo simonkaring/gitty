@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { useIcons } from './icons';
+import { Icons } from './icons';
 import type { CommitDetail, DiffSpec, FileDiff, RepositoryMutation, RepositorySession, RepositoryStatus, StatusEntry } from '../model/repository';
 import { errorMessage, isDemoHandle, native, statusGroups, type WorkingGroup } from '../model/native';
 import { clearSubmittedDraft, commitMessage, discardableEntries, draftFromCommitMessage, draftKey, operationPaths, readDraft, saveDraft, type CommitDraft, type MutationOutcome } from '../model/workflow';
@@ -41,7 +41,6 @@ export interface ActiveDiffState {
 }
 
 export function WorkingChanges({ session, status, revision, busy, mutationBlocked = false, onMutation, onRefresh, onResolve, loadDiff = readDiff, activePath, onActiveDiffChange, onClose, disclosure, onDisclosureChange }: {
-  const { AlertTriangle, Check, ChevronDown, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, Minus, Plus, RotateCw, Undo2, User, X } = useIcons();
   session: RepositorySession; status: RepositoryStatus | null; revision: number; busy: boolean;
   onMutation: (mutation: RepositoryMutation) => Promise<MutationOutcome>; onRefresh: () => Promise<void>;
   loadDiff?: typeof readDiff;
@@ -81,7 +80,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   const identityName = selectedProfile?.name ?? 'Repository default';
   const identityControl = <details className="composer-identity" open={ui.identityOpen}>
     <summary title={selectedProfile ? `${selectedProfile.name} <${selectedProfile.email}>` : 'Uses the repository’s own Git identity'} onClick={event => { event.preventDefault(); updateUi(current => ({ ...current, identityOpen: !current.identityOpen })); }}>
-      <User size={12} aria-hidden="true" /><span className="composer-identity-role">{amending ? 'Committer' : 'Commit as'}</span>{' '}<span className="composer-identity-name">{identityName}</span><ChevronDown size={12} className="composer-identity-chevron" aria-hidden="true" />
+      <Icons.User size={12} aria-hidden="true" /><span className="composer-identity-role">{amending ? 'Committer' : 'Commit as'}</span>{' '}<span className="composer-identity-name">{identityName}</span><Icons.ChevronDown size={12} className="composer-identity-chevron" aria-hidden="true" />
     </summary>
     <div className="composer-identity-panel"><label htmlFor={`${composerId}-identity`}>{amending ? 'Committer profile' : 'Commit as'}</label><select id={`${composerId}-identity`} value={selectedProfile?.id ?? ''} disabled={!!operation || busy || mutationBlocked} onChange={event => { const id = event.target.value; updateSettings(current => { const selections = { ...current.repositoryCommitProfiles }; if (id) selections[profileKey] = id; else delete selections[profileKey]; return { repositoryCommitProfiles: selections }; }); }}>
       <option value="">Repository Git identity (default)</option>
@@ -241,28 +240,28 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
         </div>
         <div className="working-sidebar-actions">
           <button className="icon-button" disabled={busy || !!operation} title="Refresh changes" aria-label="Refresh changes" onClick={() => void refresh()}>
-            <RotateCw size={14} className={busy || !!operation ? 'spin' : ''} />
+            <Icons.RotateCw size={14} className={busy || !!operation ? 'spin' : ''} />
           </button>
-          {onClose && <button className="icon-button" aria-label="Close working changes" title="Close" onClick={onClose}><X size={15} /></button>}
+          {onClose && <button className="icon-button" aria-label="Close working changes" title="Close" onClick={onClose}><Icons.X size={15} /></button>}
         </div>
       </div>
       {session.bare && <div className="workflow-alert" role="status">Bare repository.</div>}
-      {!!groups.conflict.length && <div className="workflow-alert" role="status"><AlertTriangle size={15} />Unresolved conflicts.</div>}
+      {!!groups.conflict.length && <div className="workflow-alert" role="status"><Icons.AlertTriangle size={15} />Unresolved conflicts.</div>}
       {outcome?.error && <div className="workflow-alert error" role="alert">{outcome.error}</div>}
       {outcome?.refreshError && <div className="workflow-alert error" role="alert">Refresh failed: {outcome.refreshError} <button className="text-button" onClick={() => void refresh()}>Retry</button></div>}
       <div className="working-feedback" role="status" aria-live="polite" aria-atomic="true" data-pending={busy || !!operation || undefined} title={operation || success || undefined}>
-        {operation ? <><RotateCw size={12} className="spin" aria-hidden="true" /><span>{operation}</span></> : success ? <><Check size={12} aria-hidden="true" /><span>{success}</span></> : busy ? <span>Updating repository…</span> : null}
+        {operation ? <><Icons.RotateCw size={12} className="spin" aria-hidden="true" /><span>{operation}</span></> : success ? <><Icons.Check size={12} aria-hidden="true" /><span>{success}</span></> : busy ? <span>Updating repository…</span> : null}
       </div>
       <div className="working-sidebar-content">
         <div className="file-list-actions">
           <button className="secondary-button" disabled={blocked || !unstagedCount} onClick={() => void perform({ kind: 'stage', paths: stagePaths }, unstagedCount)}>
-            <Plus size={13} />Stage all ({unstagedCount})
+            <Icons.Plus size={13} />Stage all ({unstagedCount})
           </button>
           <button className="secondary-button" disabled={blocked || !stagedCount} onClick={() => void perform({ kind: 'unstage', paths: stagedPaths }, stagedCount)}>
-            <Minus size={13} />Unstage all ({stagedCount})
+            <Icons.Minus size={13} />Unstage all ({stagedCount})
           </button>
           <button className="secondary-button" data-danger="true" disabled={blocked || !discardable.length} onClick={() => requestDiscard(discardable)}>
-            <Undo2 size={13} />Discard all ({discardable.length})
+            <Icons.Undo2 size={13} />Discard all ({discardable.length})
           </button>
         </div>
         <div className="working-files-list">
@@ -273,7 +272,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
             const holdsSelection = !!active && (active.group === sectionKind || (sectionKind === 'unstaged' && active.group === 'untracked'));
             return <section className={`working-category ${sectionKind}${entries.length ? ' has-entries' : ' is-empty'}${collapsed ? ' is-collapsed' : ''}`} key={sectionKind} aria-label={`${labels[sectionKind]} files`} hidden={sectionKind === 'conflict' && !entries.length}>
             <h2><button type="button" className="working-category-toggle" aria-expanded={!collapsed} aria-controls={listId} aria-label={`${labels[sectionKind]}, ${entries.length} ${entries.length === 1 ? 'file' : 'files'}`} data-holds-selection={holdsSelection || undefined} onClick={() => toggleSection(sectionKind)}>
-              <ChevronDown size={13} className="working-category-chevron" aria-hidden="true" />{labels[sectionKind]}<span className="count">{entries.length}</span>
+              <Icons.ChevronDown size={13} className="working-category-chevron" aria-hidden="true" />{labels[sectionKind]}<span className="count">{entries.length}</span>
             </button></h2>
             <div className="working-category-files" id={listId} hidden={collapsed}>
             {!entries.length && <p className="empty-category">No {labels[sectionKind].toLowerCase()} files</p>}
@@ -283,7 +282,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
               const isDeleted = fileStatus === 'D';
               const isNew = !isDeleted && (entry.untracked || entry.indexStatus === 'A');
               const iconStatus = entry.conflicted ? 'conflict' : isDeleted ? 'deleted' : isNew ? 'added' : fileStatus === 'C' ? 'copied' : fileStatus === 'R' ? 'renamed' : fileStatus === 'M' ? 'modified' : 'changed';
-              const FileIcon = iconStatus === 'conflict' ? AlertTriangle : iconStatus === 'deleted' ? FileMinus2 : iconStatus === 'added' || iconStatus === 'copied' ? FilePlus2 : iconStatus === 'renamed' ? FileSymlink : iconStatus === 'modified' ? FilePenLine : FileCode2;
+              const FileIcon = iconStatus === 'conflict' ? Icons.AlertTriangle : iconStatus === 'deleted' ? Icons.FileMinus2 : iconStatus === 'added' || iconStatus === 'copied' ? Icons.FilePlus2 : iconStatus === 'renamed' ? Icons.FileSymlink : iconStatus === 'modified' ? Icons.FilePenLine : Icons.FileCode2;
               const partial = files.paths.staged.has(entry.path) && files.paths.unstaged.has(entry.path);
               const isSelected = active?.group === kind && active.path === entry.path;
               return <div className={`working-file ${isSelected ? 'selected' : ''}`} key={entry.path} onContextMenu={event => { event.preventDefault(); openMenu(entry, kind, event.clientX, event.clientY, event.currentTarget.querySelector('button')!); }}>
@@ -296,7 +295,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
                   </span>
                 </button>
                 {kind === 'conflict' && onResolve && <button className="secondary-button compact" tabIndex={tabIndex} disabled={busy} onClick={() => onResolve(entry.path)}>Resolve…</button>}
-                {kind !== 'conflict' && <button className="icon-button sm file-stage-button" tabIndex={tabIndex} disabled={blocked} title={partial ? kind === 'staged' ? 'Unstage all indexed changes for this path' : 'Stage the remaining working-tree changes for this path' : undefined} aria-label={`${kind === 'staged' ? 'Unstage' : 'Stage'} ${entry.path}`} onClick={() => { const operationKind = kind === 'staged' ? 'unstage' : 'stage'; void perform({ kind: operationKind, paths: operationPaths([entry], operationKind) }); }}>{kind === 'staged' ? <Minus size={16} /> : <Plus size={16} />}</button>}
+                {kind !== 'conflict' && <button className="icon-button sm file-stage-button" tabIndex={tabIndex} disabled={blocked} title={partial ? kind === 'staged' ? 'Unstage all indexed changes for this path' : 'Stage the remaining working-tree changes for this path' : undefined} aria-label={`${kind === 'staged' ? 'Unstage' : 'Stage'} ${entry.path}`} onClick={() => { const operationKind = kind === 'staged' ? 'unstage' : 'stage'; void perform({ kind: operationKind, paths: operationPaths([entry], operationKind) }); }}>{kind === 'staged' ? <Icons.Minus size={16} /> : <Icons.Plus size={16} />}</button>}
               </div>;
             }}</WorkingFileWindow>
             </div>
@@ -304,10 +303,10 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
         </div>
         <form className={`commit-composer${ui.composerCollapsed ? ' is-collapsed' : ''}`} aria-label="Commit composer" onSubmit={event => { event.preventDefault(); if (!composerDraft.subject.trim() || groups.conflict.length) return; if (amending && amendReady && status && session.head) void perform({ kind: 'amend', message: commitMessage(composerDraft), identity, expectedHead: session.head, expectedHeadRef: session.headRef, expectedStatusFingerprint: status.fingerprint }); else if (!amending && stagedCount) void perform({ kind: 'commit', message: commitMessage(composerDraft), identity }); }}>
           <div className="composer-heading">
-            <h2><GitCommitHorizontal size={16} />{amending ? 'Rewrite last commit' : 'Create commit'}</h2>
+            <h2><Icons.GitCommitHorizontal size={16} />{amending ? 'Rewrite last commit' : 'Create commit'}</h2>
             <span>{stagedCount} staged</span>
             {ui.composerCollapsed && !amending && !!(draft.subject.trim() || draft.body.trim()) && <em className="composer-draft" title="A commit message draft is waiting in the collapsed composer">Draft</em>}
-            <button type="button" className="icon-button composer-toggle" aria-label={ui.composerCollapsed ? 'Expand commit composer' : 'Collapse commit composer'} aria-expanded={!ui.composerCollapsed} aria-controls={`${composerId}-composer-body`} onClick={() => updateUi(current => ({ ...current, composerCollapsed: !current.composerCollapsed }))}><ChevronDown size={14} aria-hidden="true" /></button>
+            <button type="button" className="icon-button composer-toggle" aria-label={ui.composerCollapsed ? 'Expand commit composer' : 'Collapse commit composer'} aria-expanded={!ui.composerCollapsed} aria-controls={`${composerId}-composer-body`} onClick={() => updateUi(current => ({ ...current, composerCollapsed: !current.composerCollapsed }))}><Icons.ChevronDown size={14} aria-hidden="true" /></button>
           </div>
           {((amending && !amendDraft && !amendError) || !!amendError || !persisted) && <div className="composer-feedback">
             {amending && !amendDraft && !amendError && <p role="status">Loading last commit…</p>}
@@ -326,7 +325,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
             <textarea id={`${composerId}-body`} name="body" placeholder="Add context: why was this change needed?" rows={2} value={composerDraft.body} disabled={!!operation || (amending && !amendDraft)} onChange={event => edit({ ...composerDraft, body: event.target.value })} />
             <div className="composer-footer">
               <button className="primary-button commit-button" data-working={operation.startsWith('Rewriting') || operation.startsWith('Creating')} type="submit" disabled={blocked || (!amending && !stagedCount) || (amending && !amendReady) || !composerDraft.subject.trim() || !!groups.conflict.length}>
-                <GitCommitHorizontal size={16} />{operation.startsWith('Rewriting') ? 'Amending…' : operation.startsWith('Creating') ? 'Committing…' : amending ? 'Rewrite last commit' : 'Commit staged changes'}
+                <Icons.GitCommitHorizontal size={16} />{operation.startsWith('Rewriting') ? 'Amending…' : operation.startsWith('Creating') ? 'Committing…' : amending ? 'Rewrite last commit' : 'Commit staged changes'}
               </button>
             </div>
           </div>

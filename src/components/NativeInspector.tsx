@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { CommitDetail, CommitEditEligibility, DiffFile, FileDiff, RepositorySession } from '../model/repository';
 import { errorMessage, inspectorSpec, native } from '../model/native';
-import { useIcons } from './icons';
+import { Icons } from './icons';
 import type { ActiveDiffState } from './WorkingChanges';
 import { AuthorAvatar } from './AuthorAvatar';
 import { commitIsoString, formatCommitDate } from '../model/dates';
@@ -11,11 +11,11 @@ import { commitDescription, commitMessage, draftFromCommitMessage, type Mutation
 /** Pause before fetching a newly selected commit, so rapid keyboard navigation only loads where it lands. */
 export const SELECTION_DEBOUNCE_MS = 120;
 
-const FILE_KINDS = { A: [FilePlus2, 'added'], D: [FileMinus2, 'deleted'], R: [FileSymlink, 'renamed'], C: [FilePlus2, 'modified'], U: [AlertTriangle, 'conflict'] } as const;
+const FILE_KINDS = { A: [Icons.FilePlus2, 'added'], D: [Icons.FileMinus2, 'deleted'], R: [Icons.FileSymlink, 'renamed'], C: [Icons.FilePlus2, 'modified'], U: [Icons.AlertTriangle, 'conflict'] } as const;
 
 /** Icon and icon status per status letter; only added and deleted get their own letter color, everything else reads as modified. */
 function fileKind(status: string) {
-  const [Icon, name] = FILE_KINDS[(status[0]?.toUpperCase() ?? '') as keyof typeof FILE_KINDS] ?? [FilePenLine, 'modified'];
+  const [Icon, name] = FILE_KINDS[(status[0]?.toUpperCase() ?? '') as keyof typeof FILE_KINDS] ?? [Icons.FilePenLine, 'modified'];
   return { Icon, name, letterClass: name === 'added' || name === 'deleted' ? name : 'modified' };
 }
 
@@ -24,7 +24,6 @@ function statusLabel(status: string): string {
 }
 
 export function NativeInspector({
-  const { AlertTriangle, ArrowUpRight, Check, ChevronDown, Copy, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, GitMerge, Info, Pencil, X } = useIcons();
   session,
   selected,
   revision,
@@ -356,14 +355,14 @@ export function NativeInspector({
               <div className="commit-summary">
                 <div className="commit-eyebrow">
                   <span>
-                    {detail && detail.parents.length > 1 ? <GitMerge size={14} /> : <GitCommitHorizontal size={15} />}
+                    {detail && detail.parents.length > 1 ? <Icons.GitMerge size={14} /> : <Icons.GitCommitHorizontal size={15} />}
                     {viewId.slice(0, 7)}
                   </span>
                   {!!session.head && viewId === session.head && <span className="badge" data-tone="accent">HEAD</span>}
                   <div className="commit-actions">
                     {!isEditing && editNote && (
                       <span className="icon-button commit-edit-note" tabIndex={0} role="img" aria-label={editNote}>
-                        <Info size={14} aria-hidden="true" />
+                        <Icons.Info size={14} aria-hidden="true" />
                         <span className="commit-edit-note-tooltip" role="tooltip">{editNote}</span>
                       </span>
                     )}
@@ -374,14 +373,14 @@ export function NativeInspector({
                         title="Edit commit message"
                         onClick={startEditing}
                       >
-                        <Pencil size={14} />
+                        <Icons.Pencil size={14} />
                       </button>
                     )}
                     <button className="icon-button" aria-label="Copy full commit SHA" title="Copy full commit SHA" onClick={copy}>
-                      {copied ? <Check size={14} /> : <Copy size={14} />}
+                      {copied ? <Icons.Check size={14} /> : <Icons.Copy size={14} />}
                     </button>
                     <button className="icon-button" aria-label="Close commit inspector" title="Close commit inspector" onClick={onClose}>
-                      <X size={15} />
+                      <Icons.X size={15} />
                     </button>
                   </div>
                 </div>
@@ -516,7 +515,7 @@ export function NativeInspector({
                         detail.parents.map(id => (
                           <button className="parent-link" key={id} disabled={stale} onClick={() => onJump(id)}>
                             {id.slice(0, 7)}
-                            <ArrowUpRight size={11} />
+                            <Icons.ArrowUpRight size={11} />
                           </button>
                         ))
                       ) : (
@@ -584,7 +583,7 @@ export function NativeInspector({
 
         <section className="changed-files" aria-label="Changed files">
           <div className="section-heading">
-            <span><ChevronDown size={13} /> Changed files {!filesLoading && <span className="count">{files.length}</span>}</span>
+            <span><Icons.ChevronDown size={13} /> Changed files {!filesLoading && <span className="count">{files.length}</span>}</span>
             <span className="change-totals">
               {additions > 0 && <span className="added">+{additions}</span>}
               {deletions > 0 && <span className="removed">−{deletions}</span>}
@@ -631,7 +630,7 @@ export function NativeInspector({
         )}
 
         <div className="inspector-tip">
-          <FileCode2 size={17} />
+          <Icons.FileCode2 size={17} />
           <p>{activePath ? <>Viewing <strong>{activePath.split('/').at(-1)}</strong> in the main pane.</> : 'Select a file above to inspect its diff in the main pane.'}</p>
         </div>
       </div>
