@@ -301,14 +301,15 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       }
       ctx.globalAlpha = alpha;
       if (commit.id === head) {
-        if (material && avatarNode) traceShape(ctx, shapeOf(commit.author), x, cy, radius + 5); else { ctx.beginPath(); ctx.arc(x, cy, radius + (avatars ? 5 : 4), 0, Math.PI * 2); }
+        // Material rings HEAD with a scalloped (cookie) outline, even around a small merge dot.
+        if (material) traceShape(ctx, 'cookie', x, cy, 13 * (commit.id === selectedId ? 1.2 : 1) + 6, 0.12); else { ctx.beginPath(); ctx.arc(x, cy, radius + (avatars ? 5 : 4), 0, Math.PI * 2); }
         ctx.strokeStyle = theme.colors.graphHead; ctx.stroke();
       }
       if (avatarNode) continue;
       ctx.beginPath();
       if (working) {
-        // Uncommitted work is a dashed, hollow marker.
-        ctx.roundRect(x - 5, cy - 5, 10, 10, 2.5);
+        // Uncommitted work is a dashed, hollow marker (a round one in Material).
+        if (material) { ctx.arc(x, cy, 10, 0, Math.PI * 2); ctx.lineWidth = 2.5; } else ctx.roundRect(x - 5, cy - 5, 10, 10, 2.5);
         ctx.fillStyle = bg; ctx.fill();
         ctx.setLineDash([3, 3]); ctx.strokeStyle = lane; ctx.stroke(); ctx.setLineDash([]);
       } else {

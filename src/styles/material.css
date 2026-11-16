@@ -732,6 +732,10 @@ html[data-design='material'] {
   & .commit-message::before {
     display: none;
   }
+  & .commit-row.working .subject {
+    font-style: italic;
+    font-weight: 400;
+  }
   & .graph-avatar-node {
     border-radius: 0;
     box-shadow: none;

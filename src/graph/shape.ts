@@ -9,7 +9,7 @@ export function shapeOf(author: string): AvatarShape {
 }
 
 /** Traces a shape of radius `r` around (x, y); matches the CSS clip-paths in material.css. */
-export function traceShape(ctx: CanvasRenderingContext2D, shape: AvatarShape, x: number, y: number, r: number) {
+export function traceShape(ctx: CanvasRenderingContext2D, shape: AvatarShape, x: number, y: number, r: number, lobe = 0.09) {
   ctx.beginPath();
   if (shape === 'squircle') ctx.roundRect(x - r, y - r, 2 * r, 2 * r, r * 0.5);
   else if (shape === 'diamond') {
@@ -21,7 +21,7 @@ export function traceShape(ctx: CanvasRenderingContext2D, shape: AvatarShape, x:
     ctx.restore();
   } else if (shape === 'cookie') {
     for (let i = 0; i <= 72; i++) {
-      const t = (i / 72) * Math.PI * 2, rr = r * (0.93 + 0.09 * Math.cos(8 * t)) / 1.02;
+      const t = (i / 72) * Math.PI * 2, rr = r * (1.02 - lobe + lobe * Math.cos(8 * t)) / 1.02;
       if (i) ctx.lineTo(x + rr * Math.cos(t), y + rr * Math.sin(t)); else ctx.moveTo(x + rr * Math.cos(t), y + rr * Math.sin(t));
     }
     ctx.closePath();
