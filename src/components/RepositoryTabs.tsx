@@ -1,5 +1,5 @@
 import { useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
-import { FolderGit2, Loader2, Plus, X } from 'lucide-react';
+import { useIcons } from './icons';
 
 export interface RepositoryTabSummary { id: string; title: string; busy: boolean; branch: string | null; dirty: boolean; start?: boolean }
 
@@ -21,6 +21,7 @@ function handleTablistKeyDown(event: KeyboardEvent<HTMLElement>, ids: string[], 
 }
 
 export function RepositoryTabs({ tabs, activeId, onSelect, onClose, onMove, onNew }: {
+  const { FolderGit2, Loader2, Plus, X } = useIcons();
   tabs: RepositoryTabSummary[]; activeId: string | null; onSelect: (id: string) => void; onClose: (id: string) => void; onMove: (id: string, targetId: string) => void; onNew: () => void;
 }) {
   const ids = tabs.map(tab => tab.id);

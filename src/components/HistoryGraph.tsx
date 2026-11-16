@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Check, GitMerge, Globe2, Laptop, Settings as SettingsIcon, Tag } from 'lucide-react';
+import { useIcons } from './icons';
 import { indexEdges, laneX, LANE_WIDTH, ROW_HEIGHT, type GraphEdge, type GraphLayout } from '../graph/layout';
-import { assignBranchColors, branchName } from '../graph/branchColor';
+import { assignBranchColors, branchName, stashBranches } from '../graph/branchColor';
 import { WORKING_ID } from '../model/native';
 import type { Commit, GitRef } from '../model/types';
 import type { ActionContext } from './OperationDialog';
@@ -32,6 +32,7 @@ export interface GraphHandle { scrollTo: (row: number) => void; anchor: () => Gr
 export const REF_DRAG_TYPE = 'application/x-gitty-ref';
 export const COMMIT_DRAG_TYPE = 'application/x-gitty-commit';
 export function acceptsGraphDrop(data: DataTransfer, target: GraphRef, headRef: string | null | undefined): boolean {
+  const { Check, GitMerge, Globe2, Laptop, Settings, Tag } = useIcons();
   if (!headRef || !target.fullName || target.kind !== 'local') return false;
   const branchDrag = data.types.includes(REF_DRAG_TYPE), commitDrag = data.types.includes(COMMIT_DRAG_TYPE);
   return branchDrag !== commitDrag && (branchDrag || target.fullName === headRef);
@@ -177,7 +178,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const colors = useMemo(() => Array.from({ length: 8 }, (_, index) => theme.colors[`graphLane${index + 1}`]), [theme]);
   const palette = useMemo(() => [...colors, theme.colors.accent], [colors, theme]);
   const currentBranch = headRef?.startsWith('refs/heads/') ? headRef.slice(11) : null;
-  const branchColors = useMemo(() => assignBranchColors(commits, refs, WORKING_ID, currentBranch), [commits, refs, currentBranch]);
+  const branchColors = useMemo(() => assignBranchColors(commits, refs, WORKING_ID, currentBranch, stashBranches(commits, refs)), [commits, refs, currentBranch]);
   // The commits of a hovered branch (a tag only marks its own commit). Overrides search dimming while it lasts.
   const focus = useMemo(() => {
     const target = highlightRef ? refs.find(item => item.fullName === highlightRef) : undefined;
@@ -202,7 +203,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   function renderRef({ ref, remote }: { ref: GitRef & { fullName?: string }; remote?: GitRef }, commit: Commit, controls: RowControls) {
     const name = branchName(ref);
     const control = ref.fullName ? rowControl(commit.id, controls) : null;
-    return <span key={ref.fullName ?? ref.name} id={control?.id} data-row-control={control ? '' : undefined} className={`ref-pill ${ref.kind === 'tag' ? 'tag-ref' : ref.kind === 'remote' ? 'remote-ref' : ''}${control?.active ? ' row-control-active' : ''}`}
+    return <span key={ref.fullName ?? ref.name} id={control?.id} data-row-control={control ? '' : undefined} className={`ref-pill ${ref.kind === 'tag' ? 'tag-ref' : ref.kind === 'remote' ? 'remote-ref' : ref.kind === 'stash' ? 'stash-ref' : ''}${control?.active ? ' row-control-active' : ''}`}
                       style={name !== null ? { '--branch-color': palette[branchColors.branches.get(name)!] } as React.CSSProperties : undefined}
                       data-name={ref.name} title={remote ? `${ref.fullName} + ${remote.name}` : ref.fullName ?? ref.name}
                       role={ref.fullName ? 'button' : undefined} tabIndex={ref.fullName ? -1 : undefined} aria-label={ref.fullName ? `Select tip of ${ref.fullName}; right-click or press Shift+F10 for actions` : undefined}
@@ -213,7 +214,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                       onDrop={event => { event.preventDefault(); event.stopPropagation(); stopDrag(); const action = graphDropAction(event.dataTransfer, ref.fullName, headRef, commits, refs); if (action) onActions?.(action); }}
                       onContextMenu={event => { if (onContextActions && ref.fullName) { event.preventDefault(); event.stopPropagation(); onContextActions({ oid: commit.id, ref: ref.fullName }, event.clientX, event.clientY, scroller.current ?? event.currentTarget); } }} onClick={event => { event.stopPropagation(); onSelect(commit.id); scroller.current?.focus(); }}
                       onDoubleClick={event => { if (ref.fullName && (ref.kind === 'local' || (ref.kind === 'remote' && ref.fullName.startsWith('refs/remotes/origin/') && ref.fullName !== 'refs/remotes/origin/HEAD')) && onSwitchBranch) { event.stopPropagation(); onSwitchBranch(ref.fullName); } }}>
-                      {!!headRef && ref.fullName === headRef && <Check size={10} strokeWidth={3} aria-hidden="true" />}{ref.kind === 'tag' ? <Tag size={10} /> : ref.kind === 'remote' ? <Globe2 size={10} /> : <Laptop size={10} />}{remote && <Globe2 size={10} />}<span className="ref-pill-name">{ref.name}</span>
+                      {!!headRef && ref.fullName === headRef && <Check size={10} strokeWidth={3} aria-hidden="true" />}{ref.kind === 'tag' ? <Tag size={10} /> : ref.kind === 'remote' ? <Globe2 size={10} /> : ref.kind === 'stash' ? <Archive size={10} /> : <Laptop size={10} />}{remote && <Globe2 size={10} />}<span className="ref-pill-name">{ref.name}</span>
                     </span>;
   }
 
@@ -296,7 +297,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       const lane = palette[branchColors.rows[row] ?? node.lane % colors.length];
       const alpha = shown && !shown.has(node.id) ? (focus ? 0.25 : 0.3) : 1;
       // Solid dots are bigger than merge dots; the selected node grows like its avatar counterpart does.
-      const merge = commit.parents.length > 1, avatarNode = avatars && !working && !(material && merge);
+      // A stash record is a two-parent commit whose index parent is not drawn; it is not a user merge.
+      const merge = commit.parents.length > 1 && !refsByCommit.get(commit.id)?.some(ref => ref.kind === 'stash'), avatarNode = avatars && !working && !(material && merge);
       const radius = (avatarNode ? (material ? 13 : 11) : merge ? 5.5 : 7) * (commit.id === selectedId ? 1.2 : 1);
       ctx.lineWidth = 2;
       if (joinRefs && refsByCommit.has(commit.id) && x - radius - 3 > graphX) {
@@ -507,12 +509,14 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
             const lane = node?.lane ?? 0;
             const branchColor = palette[branchColors.rows[row] ?? lane % colors.length];
             const badges = refsByCommit.get(commit.id) ?? NO_REFS;
+            // refs/stash points at the stash commit, not at the index/tree helper commits it parents.
+            const stash = badges.find(ref => ref.kind === 'stash');
             const groups = groupRefs(badges, headRef);
             const controls: RowControls = { n: 0 };
             return <div key={commit.id} id={`${uid}-commit-${commit.id}`} role="option" aria-selected={commit.id === selectedId}
               aria-posinset={row + 1} aria-setsize={commits.length}
-              aria-label={`${commit.subject}, ${commit.author}, ${commit.id.slice(0, 7)}${commit.parents.length > 1 ? ', merge commit' : ''}${commit.id === head ? ', HEAD' : ''}${badges.length ? `, ${badges.map(b => b.name).join(', ')}` : ''}`}
-              className={`commit-row ${commit.id === selectedId ? 'selected' : ''} ${shown && !shown.has(commit.id) ? 'dimmed' : ''} ${freshIds.has(commit.id) ? 'fresh' : ''} ${commit.id === WORKING_ID ? 'working' : ''} ${joinRefs && badges.length ? 'connect' : ''} ${row > 0 && dayStarts.starts.has(row) ? 'day-start' : ''}`}
+              aria-label={`${commit.subject}, ${commit.author}, ${commit.id.slice(0, 7)}${commit.parents.length > 1 && !stash ? ', merge commit' : ''}${commit.id === head ? ', HEAD' : ''}${badges.length ? `, ${badges.map(b => b.name).join(', ')}` : ''}`}
+              className={`commit-row ${commit.id === selectedId ? 'selected' : ''} ${shown && !shown.has(commit.id) ? 'dimmed' : ''} ${freshIds.has(commit.id) ? 'fresh' : ''} ${commit.id === WORKING_ID ? 'working' : ''} ${stash ? 'stash-commit' : ''} ${joinRefs && badges.length ? 'connect' : ''} ${row > 0 && dayStarts.starts.has(row) ? 'day-start' : ''}`}
               style={{
                 top: row * rowHeight,
                 height: rowHeight,
@@ -529,7 +533,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                 }
                 if (col.id === 'graph') {
                   return <div key="graph" className="commit-graph-cell" aria-hidden="true">
-                    {avatars && node && commit.id !== WORKING_ID && !(material && commit.parents.length > 1) && <span className={`graph-avatar-node${commit.parents.length > 1 ? ' merge' : ''}`} data-shape={shapeOf(commit.author)} style={{ left: graphLaneX(node.lane) - graphX }}>
+                    {avatars && node && commit.id !== WORKING_ID && !(material && commit.parents.length > 1 && !stash) && <span className={`graph-avatar-node${commit.parents.length > 1 && !stash ? ' merge' : ''}`} data-shape={shapeOf(commit.author)} style={{ left: graphLaneX(node.lane) - graphX }}>
                       <AuthorAvatar name={commit.author} email={commit.email} mode={settings.authorAvatarMode} tiny />
                     </span>}
                   </div>;
@@ -539,11 +543,11 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                   return <div key="message" className="commit-message">
                     {day && <span className="day-label" aria-hidden="true">{day.label}<i>{dayStarts.counts.get(day.key)}</i></span>}
                     {onTogglePick && commit.id !== WORKING_ID && (() => { const control = rowControl(commit.id, controls); return <input id={control.id} data-row-control="" tabIndex={-1} className={`graph-pick${control.active ? ' row-control-active' : ''}`} type="checkbox" aria-label={`Cherry-pick ${commit.id.slice(0, 7)}`} checked={pickOrder?.includes(commit.id) ?? false} onClick={event => event.stopPropagation()} onChange={() => { onTogglePick(commit.id); scroller.current?.focus(); }} />; })()}
-                    {commit.parents.length > 1 && <GitMerge size={13} className="merge-icon" />}
+                    {commit.parents.length > 1 && !stash && <GitMerge size={13} className="merge-icon" />}
                     <span className="subject" title={commit.subject} draggable={!!onActions && commit.id !== WORKING_ID}
-                      onDragStart={event => { event.stopPropagation(); if (!onActions || commit.id === WORKING_ID) { event.preventDefault(); return; } event.dataTransfer.clearData(REF_DRAG_TYPE); event.dataTransfer.setData(COMMIT_DRAG_TYPE, commit.id); event.dataTransfer.effectAllowed = 'copy'; }} onDragEnd={stopDrag}>{commit.subject}</span>
+                      onDragStart={event => { event.stopPropagation(); if (!onActions || commit.id === WORKING_ID) { event.preventDefault(); return; } event.dataTransfer.clearData(REF_DRAG_TYPE); event.dataTransfer.setData(COMMIT_DRAG_TYPE, commit.id); event.dataTransfer.effectAllowed = 'copy'; }} onDragEnd={stopDrag}>{stash ? commit.subject.replace(/^On .*?: /, '') : commit.subject}</span>
                     {onActions && commit.id !== WORKING_ID && (() => { const control = rowControl(commit.id, controls); return <button id={control.id} data-row-control="" tabIndex={-1} className={`icon-button sm graph-action-button${control.active ? ' row-control-active' : ''}`} aria-label={`Actions for ${commit.id.slice(0, 7)}`} onClick={event => { event.stopPropagation(); scroller.current?.focus(); onActions({ oid: commit.id }); }}>…</button>; })()}
-                    {hasMore !== undefined && commit.parents.some(parent => !loadedIds.has(parent)) && <span className="boundary-label">{hasMore ? 'unloaded parent' : shallow ? 'shallow boundary' : 'unavailable parent'}</span>}
+                    {hasMore !== undefined && commit.parents.some(parent => !loadedIds.has(parent)) && !stash && <span className="boundary-label">{hasMore ? 'unloaded parent' : shallow ? 'shallow boundary' : 'unavailable parent'}</span>}
                   </div>;
                 }
                 if (col.id === 'author') {

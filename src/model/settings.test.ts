@@ -30,8 +30,14 @@ describe('local preferences', () => {
     expect(persistSettings(store, settings)).toBeNull();
     expect(readSettings(store).settings).toMatchObject({ themeId: 'dracula', diffWrap: true });
   });
-  it('keeps corrupt and future stored data untouched and reports fallback', () => {
-    for (const value of ['{broken', JSON.stringify({ ...DEFAULT_SETTINGS, version: 2 }), JSON.stringify({ ...DEFAULT_SETTINGS, diffWrap: 'yes' }), JSON.stringify({ ...DEFAULT_SETTINGS, authorAvatarMode: 'remote' })]) {
+  it('adds the stashes section to settings saved before it existed', () => {
+    const older = { ...DEFAULT_SETTINGS, sidebarSections: DEFAULT_SETTINGS.sidebarSections.filter(section => section.id !== 'stash') };
+    expect(validateSettings({ ...DEFAULT_SETTINGS }).sidebarSections.map(section => section.id)).toContain('stash');
+    const { settings, error } = readSettings(storage({ [SETTINGS_KEY]: JSON.stringify(older) }));
+    expect(error).toBeNull();
+    expect(settings.sidebarSections.find(section => section.id === 'stash')).toEqual({ id: 'stash', visible: true });
+  });
+  it('keeps corrupt and future stored data untouched and reports fallback', () => {    for (const value of ['{broken', JSON.stringify({ ...DEFAULT_SETTINGS, version: 2 }), JSON.stringify({ ...DEFAULT_SETTINGS, diffWrap: 'yes' }), JSON.stringify({ ...DEFAULT_SETTINGS, authorAvatarMode: 'remote' })]) {
       const store = storage({ [SETTINGS_KEY]: value });
       expect(readSettings(store).error).toBeTruthy();
       expect(readSettings(store).settings).toEqual(DEFAULT_SETTINGS);

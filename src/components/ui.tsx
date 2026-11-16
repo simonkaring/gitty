@@ -1,11 +1,12 @@
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, type FormEvent, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { X } from 'lucide-react';
+import { useIcons } from './icons';
 
 /** Shared UI primitives: one dialog frame, one popover dismissal, one toast region. */
 
 /** First + last initial of a name, e.g. "Anna Maria Lopez" -> "AL". */
 export function initials(name: string): string {
+  const { X } = useIcons();
   const words = name.trim().split(/\s+/).filter(Boolean).map(word => [...word][0]);
   return (words.length ? words[0] + (words.length > 1 ? words[words.length - 1] : '') : '?').toUpperCase();
 }

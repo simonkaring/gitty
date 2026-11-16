@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState, type ComponentProps, type CSSProperties } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { FolderOpen, Palette, PanelLeft, PanelRight, Settings as SettingsIcon, Sparkles } from 'lucide-react';
+import { useIcons } from './icons';
 import type { PaletteCommand } from './CommandPalette';
 import { CommandPalette, SettingsDialog, preloadLazyDialogs } from './lazyDialogs';
 import { useSettings } from '../model/settings';
@@ -43,6 +43,7 @@ function initialTabsState(demo: boolean, initialLocation?: RepositoryLocation): 
 }
 
 export function NativeWorkspace({ demo, onToggleDemo, initialLocation, cloneParent }: { demo: boolean; onToggleDemo?: () => void; initialLocation?: RepositoryLocation; cloneParent?: string }) {
+  const { FolderOpen, Palette, PanelLeft, PanelRight, Settings, Sparkles } = useIcons();
   // `tabsReducer` is a pure function: opening, deduping, closing, and
   // meta/busy updates never call `notify`/`setActiveId` as a side effect of
   // computing the next state. Under React StrictMode a `setTabs(current =>

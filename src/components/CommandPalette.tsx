@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { CornerDownLeft, Search } from 'lucide-react';
+import { useIcons } from './icons';
 
 export interface PaletteCommand { id: string; label: string; group: string; hint?: string; icon?: ReactNode; disabled?: boolean; run: () => void }
 
 /** Subsequence match. Returns matched indices (for highlighting) and a score
  * where lower is better: contiguous, early, word-start hits rank first. */
 export function fuzzy(label: string, query: string): { score: number; hits: number[] } | null {
+  const { CornerDownLeft, Search } = useIcons();
   const text = label.toLowerCase(), q = query.toLowerCase().trim();
   if (!q) return { score: 0, hits: [] };
   const direct = text.indexOf(q);

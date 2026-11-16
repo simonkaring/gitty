@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Check, ChevronDown, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, Minus, Plus, RotateCw, Undo2, User, X } from 'lucide-react';
+import { useIcons } from './icons';
 import type { CommitDetail, DiffSpec, FileDiff, RepositoryMutation, RepositorySession, RepositoryStatus, StatusEntry } from '../model/repository';
 import { errorMessage, isDemoHandle, native, statusGroups, type WorkingGroup } from '../model/native';
 import { clearSubmittedDraft, commitMessage, discardableEntries, draftFromCommitMessage, draftKey, operationPaths, readDraft, saveDraft, type CommitDraft, type MutationOutcome } from '../model/workflow';
@@ -41,6 +41,7 @@ export interface ActiveDiffState {
 }
 
 export function WorkingChanges({ session, status, revision, busy, mutationBlocked = false, onMutation, onRefresh, onResolve, loadDiff = readDiff, activePath, onActiveDiffChange, onClose, disclosure, onDisclosureChange }: {
+  const { AlertTriangle, Check, ChevronDown, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, Minus, Plus, RotateCw, Undo2, User, X } = useIcons();
   session: RepositorySession; status: RepositoryStatus | null; revision: number; busy: boolean;
   onMutation: (mutation: RepositoryMutation) => Promise<MutationOutcome>; onRefresh: () => Promise<void>;
   loadDiff?: typeof readDiff;

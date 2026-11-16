@@ -9,7 +9,7 @@ export const SETTINGS_KEY = 'gitty:settings';
 export const MONO_FONTS = ['Geist Mono Variable', 'JetBrains Mono'] as const;
 export const HISTORY_COLUMN_IDS = ['refs', 'graph', 'message', 'author', 'hash', 'date'] as const;
 export type HistoryColumnId = typeof HISTORY_COLUMN_IDS[number];
-export const SIDEBAR_SECTION_IDS = ['worktrees', 'local', 'remote', 'tag', 'remotes'] as const;
+export const SIDEBAR_SECTION_IDS = ['worktrees', 'local', 'remote', 'tag', 'stash', 'remotes'] as const;
 export type SidebarSectionId = typeof SIDEBAR_SECTION_IDS[number];
 export type AuthorAvatarMode = 'initials' | 'gravatar';
 export interface HistoryColumnConfig {
@@ -72,7 +72,8 @@ export function validateSettings(value: unknown): Settings {
     if (!col || typeof col !== 'object' || !HISTORY_COLUMN_IDS.includes(col.id as HistoryColumnId) || typeof col.visible !== 'boolean' || columnIds.has(col.id)) throw new Error('Invalid history column configuration.');
     columnIds.add(col.id);
   }
-  if (!Array.isArray(s.sidebarSections) || s.sidebarSections.length !== SIDEBAR_SECTION_IDS.length) throw new Error('Invalid sidebar sections.');
+  if (!Array.isArray(s.sidebarSections)) throw new Error('Invalid sidebar sections.');
+  if (s.sidebarSections.length !== SIDEBAR_SECTION_IDS.length) throw new Error('Invalid sidebar sections.');
   const sectionIds = new Set<string>();
   for (const section of s.sidebarSections) {
     if (!section || typeof section !== 'object' || !SIDEBAR_SECTION_IDS.includes(section.id as SidebarSectionId) || typeof section.visible !== 'boolean' || sectionIds.has(section.id)) throw new Error('Invalid sidebar section configuration.');
@@ -91,6 +92,8 @@ export function readSettings(storage: PreferenceStorage): { settings: Settings; 
       // opted in to a non-default value (Gravatar, for example), so it gets the
       // default; an explicit stored value is preserved.
       if (parsed && typeof parsed === 'object') for (const [key, fallback] of Object.entries(DEFAULT_SETTINGS)) if (!(key in parsed)) parsed[key] = fallback;
+      // Mirrors the default backfill for the list's own new entry: a section saved before it existed gains its default.
+      if (parsed && Array.isArray(parsed.sidebarSections) && !parsed.sidebarSections.some((section: { id?: string }) => section?.id === 'stash')) parsed.sidebarSections.push({ id: 'stash', visible: true });
       return { settings: validateSettings(parsed), error: null };
     }
     const legacy = storage.getItem('gitty:theme');

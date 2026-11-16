@@ -1,6 +1,6 @@
 import { useRef, type RefObject } from 'react';
 import { useDismiss } from './ui';
-import { ArrowDown, ArrowUp, RotateCcw, X } from 'lucide-react';
+import { useIcons } from './icons';
 
 export interface OrderItem<Id extends string> { id: Id; visible: boolean }
 

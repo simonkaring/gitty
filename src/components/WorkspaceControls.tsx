@@ -1,4 +1,4 @@
-import { Search } from 'lucide-react';
+import { useIcons } from './icons';
 import { useRef, type Dispatch, type SetStateAction } from 'react';
 import { useSettings } from '../model/settings';
 import { AppMark } from './AppMark';
@@ -9,6 +9,7 @@ export const INSPECTOR_MIN_WIDTH = 300;
 export const INSPECTOR_MAX_WIDTH = 760;
 
 export function usePaneWidth(name: 'sidebar' | 'inspector', fallback: number, min: number, max: number) {
+  const { Search } = useIcons();
   const { settings, updateSettings } = useSettings();
   const clamp = (value: number) => Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
   const width = clamp(settings.paneWidths[name]);

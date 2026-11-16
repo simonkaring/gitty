@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { FolderGit2, Lock, Search } from 'lucide-react';
+import { useIcons } from './icons';
 import { errorMessage, native } from '../model/native';
 import { useSettings } from '../model/settings';
 import { REPOSITORY_PROVIDER_LABELS, type ProviderAccount, type ProviderRepository, type ProviderRepositoryPage, type RepositoryProvider } from '../model/providerRepositories';
@@ -7,6 +7,7 @@ import { REPOSITORY_PROVIDER_LABELS, type ProviderAccount, type ProviderReposito
 type SelectRepository = (repository: ProviderRepository | null, accountId?: string) => void;
 
 export function RepositoryBrowser({ disabled, onSelect }: { disabled: boolean; onSelect: SelectRepository }) {
+  const { FolderGit2, Lock, Search } = useIcons();
   const { openSettings, isSettingsOpen } = useSettings();
   const [accounts, setAccounts] = useState<ProviderAccount[]>([]);
   const [accountId, setAccountId] = useState('');

@@ -3,7 +3,7 @@ import { demoCommittedFiles, demoFileDiff, demoStatus, demoWorkingFiles, type De
 import { diffLines } from './diff';
 import { statusGroups } from './native';
 import type { CommitDetail, DiffFile, DiffSpec, FileDiff, RepositoryLocation, RepositoryState } from './repository';
-import type { ChangedFile, Commit } from './types';
+import type { ChangedFile, Commit, GitRef } from './types';
 
 /** In-memory stand-in for the Tauri backend so the demo runs through the real
  * workspace UI. Supports reads plus stage/unstage/commit; every other write
@@ -16,7 +16,7 @@ export const DEMO_REPOS = [
 ];
 export const demoLocation = (name: string): RepositoryLocation => ({ kind: 'native', path: `~/Developer/${name}` });
 
-interface DemoRepo { name: string; commits: Commit[]; refs: { name: string; commitId: string; kind: 'local' | 'remote' | 'tag' }[]; head: string; files: DemoFile[]; ahead: number; commitGraph?: boolean }
+interface DemoRepo { name: string; commits: Commit[]; refs: { name: string; commitId: string; kind: GitRef['kind'] }[]; head: string; files: DemoFile[]; ahead: number; commitGraph?: boolean }
 const repos = new Map<string, DemoRepo>();
 
 function repo(handle: unknown): DemoRepo {

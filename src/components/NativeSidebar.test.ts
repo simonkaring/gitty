@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildRefTree } from './NativeSidebar';
+import { buildRefTree, stashMessage } from './NativeSidebar';
 import type { RepositoryState } from '../model/repository';
 
 const refs: RepositoryState['refs'] = [
@@ -19,6 +19,7 @@ describe('sidebar branch folders', () => {
     expect(tags.refs[0].name).toBe('v1/release');
   });
   it('treats a slash-containing configured remote as one folder and excludes origin HEAD alias', () => {
+
     const remoteRefs: RepositoryState['refs'] = [
       { name: 'foo/bar/feature/topic', fullName: 'refs/remotes/foo/bar/feature/topic', commitId: 'a', kind: 'remote' },
       { name: 'origin/HEAD', fullName: 'refs/remotes/origin/HEAD', commitId: 'b', kind: 'remote' },
@@ -28,5 +29,11 @@ describe('sidebar branch folders', () => {
     expect([...tree.folders.get('foo/bar')!.folders.keys()]).toEqual(['feature']);
     expect(tree.folders.get('foo/bar')!.folders.get('feature')!.refs[0].fullName).toBe('refs/remotes/foo/bar/feature/topic');
     expect(tree.refs).toEqual([]);
+  });
+  it('renders the stash tip as a single flat row described by its message', () => {
+    const tree = buildRefTree([{ name: 'stash', fullName: 'refs/stash', commitId: 's', kind: 'stash' }], 'refs/stash');
+    expect(tree.refs.map(ref => ref.fullName)).toEqual(['refs/stash']);
+    expect(stashMessage('On main: fixed login')).toBe('fixed login');
+    expect(stashMessage('WIP on main')).toBe('WIP on main');
   });
 });

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { CommitDetail, CommitEditEligibility, DiffFile, FileDiff, RepositorySession } from '../model/repository';
 import { errorMessage, inspectorSpec, native } from '../model/native';
-import { AlertTriangle, ArrowUpRight, Check, ChevronDown, Copy, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, GitMerge, Info, Pencil, X } from 'lucide-react';
+import { useIcons } from './icons';
 import type { ActiveDiffState } from './WorkingChanges';
 import { AuthorAvatar } from './AuthorAvatar';
 import { commitIsoString, formatCommitDate } from '../model/dates';
@@ -24,6 +24,7 @@ function statusLabel(status: string): string {
 }
 
 export function NativeInspector({
+  const { AlertTriangle, ArrowUpRight, Check, ChevronDown, Copy, FileCode2, FileMinus2, FilePenLine, FilePlus2, FileSymlink, GitCommitHorizontal, GitMerge, Info, Pencil, X } = useIcons();
   session,
   selected,
   revision,

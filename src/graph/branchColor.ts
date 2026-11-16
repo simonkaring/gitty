@@ -8,7 +8,7 @@ const trunk = (name: string) => name === 'main' || name === 'master';
 const compare = (a: string, b: string) => Number(trunk(b)) - Number(trunk(a)) || (a < b ? -1 : a > b ? 1 : 0);
 
 export function branchName(ref: GitRef): string | null {
-  if (ref.kind === 'tag' || (ref.kind === 'remote' && ref.name.endsWith('/HEAD'))) return null;
+  if (ref.kind === 'tag' || ref.kind === 'stash' || (ref.kind === 'remote' && ref.name.endsWith('/HEAD'))) return null;
   return ref.kind === 'remote' ? ref.name.slice(ref.name.indexOf('/') + 1) : ref.name;
 }
 
@@ -18,7 +18,19 @@ function hashIndex(name: string): number {
   return (hash >>> 0) % PALETTE_SIZE;
 }
 
-export function assignBranchColors(commits: readonly GraphCommit[], refs: readonly GitRef[], workingId?: string, current?: string | null) {
+/** Row → branch name for stash entries: Git writes "On <branch>: …" into every stash
+ * message, so a stash keeps the colour of the branch it was taken on. */
+export function stashBranches(commits: readonly (GraphCommit & { subject: string })[], refs: readonly GitRef[]): Map<number, string> {
+  const stashIds = new Set(refs.filter(ref => ref.kind === 'stash').map(ref => ref.commitId));
+  const owners = new Map<number, string>();
+  commits.forEach((commit, row) => {
+    const on = stashIds.has(commit.id) && /^On (?:a detached HEAD|[^:]+): /.exec(commit.subject);
+    if (on) owners.set(row, on[0].slice(3, -2));
+  });
+  return owners;
+}
+
+export function assignBranchColors(commits: readonly GraphCommit[], refs: readonly GitRef[], workingId?: string, current?: string | null, rowOwners?: ReadonlyMap<number, string>) {
   const names = [...new Set(refs.map(branchName).filter((name): name is string => name !== null))].sort(compare);
   const branches = new Map<string, number>();
   for (const name of names) {
@@ -44,12 +56,16 @@ export function assignBranchColors(commits: readonly GraphCommit[], refs: readon
   commits.forEach((commit, row) => {
     if (commit.id === workingId) return;
     const inherited = owners.get(commit.id), name = tips.get(commit.id);
-    const own = name === undefined ? undefined : { name, named: true };
+    // An explicit owner (a stash colours by the branch it was taken on) is
+    // applied after the walk, so it never shifts other branches' colours.
+    const own = rowOwners?.has(row) ? { name: rowOwners.get(row)!, named: true } : name === undefined ? undefined : { name, named: true };
     // An own ref wins over an inherited ordinary branch; trunk always wins.
     const owner = own && (!inherited || !(inherited.named && trunk(inherited.name)) || (trunk(own.name) && compare(own.name, inherited.name) <= 0))
       ? own : inherited ?? { name: commit.id, named: false };
-    rows[row] = owner.named ? branches.get(owner.name)! : hashIndex(owner.name);
+    rows[row] = owner.named ? branches.get(owner.name) ?? hashIndex(owner.name) : hashIndex(owner.name);
     if (owner.named) owned[row] = owner.name;
+    // A stash entry borrows its branch's colour but owns no history.
+    if (rowOwners?.has(row)) return;
     const parent = commit.parents[0], prior = owners.get(parent);
     if (parent && (!prior || better(owner, prior) < 0)) owners.set(parent, owner);
   });

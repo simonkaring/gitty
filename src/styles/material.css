@@ -636,6 +636,9 @@ html[data-design='material'] {
   & .ref-pill.tag-ref {
     background: var(--raised);
   }
+  & .ref-pill.stash-ref {
+    background: var(--raised);
+  }
   & .ref-pill[data-current='true'] {
     background: var(--branch-color, var(--accent-text));
     color: var(--button-foreground);

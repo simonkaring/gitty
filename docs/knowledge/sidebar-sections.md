@@ -18,13 +18,18 @@ sources:
 
 # Sidebar sections
 
-The repository sidebar renders five sections: Worktrees, Local branches, Remote
-branches, Tags and Remotes. The gear in the sidebar header opens an options menu
-(the same `OrderMenu` the history columns use) to show/hide and move sections, or
-reset them. Order and visibility persist as `sidebarSections` in settings; an
-older stored object without the key backfills the default, and validation
+The repository sidebar renders six sections: Worktrees, Local branches, Remote
+branches, Tags, Stashes and Remotes. The gear in the sidebar header opens an
+options menu (the same `OrderMenu` the history columns use) to show/hide and move
+sections, or reset them. Order and visibility persist as `sidebarSections` in
+settings; an older stored object backfills a missing key from its default, and a
+list saved before the Stashes section existed gains it once when read. Validation
 requires every section exactly once. Unlike history columns, every section may be
 hidden.[^sidebar][^menu][^settings]
+
+The Stashes section lists the single `refs/stash` tip (labeled by its
+`git stash list` message without the `On <branch>: ` prefix); its row's button
+reveals the stash commit and its two icon buttons pop or drop it.[^stash]
 
 Each section sets `--section` from a theme graph lane color (`data-section` on
 its `<details>`): the icon tile, count pill, branch/folder icons, and the current
@@ -34,11 +39,13 @@ Rows share one geometry: 8px horizontal padding, 8px icon gap, 28px minimum
 height (two-line worktree rows add vertical padding), and the current-branch
 check sits in the icon slot rather than outside it.[^styles]
 
-Tests cover ordering, hiding, the menu callbacks and settings validation. Visual
-spacing was checked in a Chromium demo only.[^tests]
+Tests cover ordering, hiding, the menu callbacks, settings validation and the
+stash row's message label. Visual spacing was last checked in a Chromium demo;
+the stash section's own spacing is unverified visually.[^tests]
 
 [^sidebar]: Section nodes, ordering and the options button.
 [^menu]: Shared show/hide and reorder popover.
 [^settings]: Defaults, validation and migration of `sidebarSections`.
 [^styles]: Section colors, tiles and row spacing.
 [^tests]: Section order/hide and menu behavior.
+[^stash]: `refs/stash` is listed by `repository_state` as kind `stash` so the same ref drives the section and the history row.

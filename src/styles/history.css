@@ -475,6 +475,19 @@
 .ref-pill.tag-ref svg {
   color: var(--amber);
 }
+/* A stash is a record, not a branch: muted, dashed, and its row's subject reads as one. */
+.ref-pill.stash-ref {
+  color: var(--secondary);
+  background: transparent;
+  border-style: dashed;
+}
+.ref-pill.stash-ref svg {
+  color: var(--muted);
+}
+.commit-row.stash-commit .subject {
+  font-style: italic;
+  color: var(--secondary);
+}
 .ref-pill[draggable='true'] {
   cursor: grab;
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useDismiss, useMenuKeyboard } from './ui';
-import { Archive, ArchiveRestore, Check, ChevronDown, Download, GitBranch, RefreshCw, Upload, UserRound } from 'lucide-react';
+import { useIcons } from './icons';
 import { native, errorMessage } from '../model/native';
 import { autoStashMessage, DEFAULT_PULL_MODE, PULL_MODE_LABELS, remoteSuccessMessage, needsPublish, sortStashes, stashSuccessMessage, syncSummary, type PullMode, type RemoteActionRequest, type StashActionRequest, type StashEntry, type SyncInfo } from '../model/remote';
 import { PublishDialog } from './PublishDialog';
@@ -37,6 +37,7 @@ const IDLE_FETCH: FetchStatus = { kind: 'idle' };
  * passive, local-only read refetched when the active repository changes.
  * RepositoryPane separately schedules background fetches of remote refs. */
 export function RepositoryToolbar({ handle, active, revision, stateRevision, busy, pickCount, pickMode, onCreateBranch, onSwitchBranch, onCherryPick, onClearPick, onStartPickMode, selectedOid, onRefresh, onWrite, notify, fetchStatus = IDLE_FETCH }: RepositoryToolbarProps) {
+  const { Archive, ArchiveRestore, Check, ChevronDown, Download, GitBranch, RefreshCw, Upload, UserRound } = useIcons();
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return;
@@ -147,7 +148,7 @@ export function RepositoryToolbar({ handle, active, revision, stateRevision, bus
           </> : <button role="menuitem" onClick={() => branchAction(onStartPickMode)}>Start cherry-pick sequence…</button>}
         </div>}
       </div>
-      <button className="sync-button stash" data-pending={pending === 'stash'} disabled={disabled || !!pending} title="Stash all working changes" onClick={() => void stashAction({ kind: 'save', message: autoStashMessage() }, 'stash')}><Archive size={15} />{pending === 'stash' ? 'Stashing…' : 'Stash'}</button>
+      <button className="sync-button stash" data-pending={pending === 'stash'} disabled={disabled || !!pending} title="Stash all working changes" onClick={() => void stashAction({ kind: 'save', message: autoStashMessage(sync?.branch ?? null) }, 'stash')}><Archive size={15} />{pending === 'stash' ? 'Stashing…' : 'Stash'}</button>
       <button className="sync-button pop" data-pending={pending === 'pop'} disabled={disabled || !!pending} title={selectedOid ? 'Pop the selected stash, or the latest stash' : 'Pop the latest stash'} onClick={() => void popStash()}><ArchiveRestore size={15} />{pending === 'pop' ? 'Popping…' : 'Pop'}</button>
 
     </div>

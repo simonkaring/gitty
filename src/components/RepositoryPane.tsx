@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus, GitCommitHorizontal, Globe2, Laptop, LocateFixed, RefreshCw, ScrollText, Search, Tag, Upload, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { useIcons } from './icons';
 import type { PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
 import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
@@ -26,7 +26,7 @@ import { locationLabel, sessionKey } from '../model/tabs';
 import { useSettings } from '../model/settings';
 import { SCALES, useScale } from '../model/scale';
 import { AUTO_FETCH_CHECK, autoFetchDue, backgroundFetchAllowed, createChangeRefresher, isFetchingAction, routineRefreshInterval, watchSupported, type FetchStatus, type WatchStatus } from '../model/autoFetch';
-import { DEFAULT_PULL_MODE, branchPushRequest, remoteSuccessMessage, needsPublish, type RemoteActionRequest, type SyncInfo } from '../model/remote';
+import { DEFAULT_PULL_MODE, branchPushRequest, remoteSuccessMessage, needsPublish, stashSuccessMessage, type RemoteActionRequest, type StashActionRequest, type SyncInfo } from '../model/remote';
 import { branchBatchDeleteMessage, branchBatchRemovedOids, branchDeleteTargets, branchDeleteMessage, folderDeleteTargets, type BranchDeleteScope, type BranchFolder, type FolderDeleteTargets } from '../model/branchDelete';
 import { BranchFolderMenu, type FolderMenuTarget } from './BranchFolderMenu';
 import type { BranchBatchDeleteExecution, BranchBatchDeleteRequest, BranchBatchDeleteResult, BranchDeleteExecution, BranchDeleteRequest, BranchDeleteResult, BranchDeleteTargetResult } from '../model/operations';
@@ -72,6 +72,7 @@ export interface RepositoryPaneProps {
 }
 
 export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, onClosePalette = () => {}, workspaceCommands = [], onOpenWorktree = () => {}, tabId, location, active, sidebarOpen, inspectorOpen, inspectorWidth, sidebarWidth, setInspectorWidth, setSidebarWidth, setInspectorOpen, onIdentity, onBusyChange, onMeta }: RepositoryPaneProps) {
+  const { Archive, Copy, Download, FileCode2, FileDiff, GitBranch, GitBranchPlus, GitCommitHorizontal, Globe2, Laptop, LocateFixed, RefreshCw, ScrollText, Search, Tag, Upload, X, ZoomIn, ZoomOut } = useIcons();
   const { theme, settings, updateSettings } = useSettings();
   const [scale, changeScale] = useScale();
   const stepScale = (dir: number) => changeScale(SCALES[Math.min(SCALES.length - 1, Math.max(0, SCALES.indexOf(scale as typeof SCALES[number]) + dir))]);
@@ -449,6 +450,10 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       throw e;
     } finally { if (holdsLock) endMutation(isCurrent); }
   }
+  async function stashAction(action: StashActionRequest) {
+    try { setNotice(stashSuccessMessage(action, await remoteWrite('repository_stash_action', { action }))); }
+    catch { /* remoteWrite shows the error on this pane. */ }
+  }
   async function speedUpHistory() {
     const handle = session.current?.session.handle;
     if (!handle || commitGraphLock.current) return;
@@ -576,7 +581,10 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     if (!handle) return;
     setWorkingDisclosure(current => ({ handle, value: update(current?.handle === handle ? current.value : DEFAULT_WORKING_DISCLOSURE) }));
   }
-  const baseGraphCommits = useMemo(() => commits.map(graphCommit), [commits]);
+  // The stash record's second parent is Git's index commit: it never appears in
+  // history, so the graph branches the stash from the commit it was taken from.
+  const stashOids = useMemo(() => new Set(state?.refs.filter(ref => ref.kind === 'stash').map(ref => ref.commitId) ?? []), [state?.refs]);
+  const baseGraphCommits = useMemo(() => commits.map(commit => stashOids.has(commit.id) ? { ...graphCommit(commit), parents: commit.parents.slice(0, 1) } : graphCommit(commit)), [commits, stashOids]);
   const graphCommits = useMemo(() => {
     // Never attach live working status to a different pinned HEAD. Only the working
     // row is rebuilt when status changes; loaded history is not remapped again.
@@ -715,7 +723,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       </div>
       <select aria-label="Branch scope" title={branch ? state?.refs.find(ref => ref.fullName === branch)?.name ?? branch : 'All branches'} value={branch} onChange={event => setBranch(event.target.value)}>
         <option value="">All branches</option>
-        {state?.refs.map(ref => <option key={ref.fullName} value={ref.fullName}>{ref.name}</option>)}
+        {state?.refs.filter(ref => ref.kind !== 'stash').map(ref => <option key={ref.fullName} value={ref.fullName}>{ref.name}</option>)}
       </select>
       <button className="head-button" title="Jump to HEAD" disabled={busy || !state?.session.head} onClick={() => state?.session.head && reveal(state.session.head)}><LocateFixed size={15} />HEAD</button>
     </div>
@@ -748,7 +756,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       ...(head ? [{ id: 'copy-head', group: 'Repository', label: 'Copy HEAD commit SHA', hint: head.slice(0, 7), icon: <Copy size={15} />, run: () => void copyMenuValue(head, 'Commit SHA') }] : []),
     ];
     const branches = state.refs.filter(ref => ref.kind === 'local' && ref.fullName !== headRef).map(ref => ({ id: `switch:${ref.fullName}`, group: 'Switch to branch', label: `Switch to ${ref.name}`, icon: <Laptop size={15} />, disabled: writeBlocked, run: () => void switchBranch(ref.fullName) }));
-    const goTo = state.refs.filter(ref => ref.kind !== 'local').map(ref => ({ id: `goto:${ref.fullName}`, group: 'Go to', label: `Go to ${ref.name}`, hint: ref.kind === 'tag' ? 'tag' : 'remote', icon: ref.kind === 'tag' ? <Tag size={15} /> : <Globe2 size={15} />, run: () => reveal(ref.commitId) }));
+    const goTo = state.refs.filter(ref => ref.kind !== 'local').map(ref => ({ id: `goto:${ref.fullName}`, group: 'Go to', label: `Go to ${ref.kind === 'stash' ? 'latest stash' : ref.name}`, hint: ref.kind, icon: ref.kind === 'tag' ? <Tag size={15} /> : ref.kind === 'stash' ? <Archive size={15} /> : <Globe2 size={15} />, run: () => reveal(ref.commitId) }));
     return [...repo, ...branches, ...goTo, ...workspaceCommands];
   }
   return <>
@@ -783,7 +791,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
         {!error && Array.from({ length: 12 }, (_, i) => <div key={i} className="skeleton-row" aria-hidden="true" style={{ animationDelay: `${i * 60}ms` }}><span className="skeleton-node" style={{ marginLeft: `${[0, 18, 0, 36, 18, 0][i % 6]}px` }} /><span className="skeleton" style={{ width: `${40 + ((i * 37) % 45)}%` }} /><span className="skeleton" style={{ width: 70 }} /></div>)}
       </div>
     </main> : <main className="workspace">
-        {sidebarOpen && <><NativeSidebar onHoverRef={setHoverRef} sections={settings.sidebarSections} onSectionsChange={sidebarSections => updateSettings({ sidebarSections })} state={state} commits={commits} filters={filters} busy={busy} reveal={reveal} switchBranch={ref => void switchBranch(ref)} openMenu={openMenu} onAction={setActionContext} folderOpen={folderOpen} onFolderOpen={(key, open) => setFolderOpen(current => ({ ...current, [key]: open }))} openFolderMenu={(folder, x, y, trigger) => setFolderMenu({ folder, x, y, trigger })} worktrees={<Worktrees session={state.session} stateRevision={stateRevision} active={active} busy={mutationBusy || mutationBlocked} onOpen={onOpenWorktree} onWrite={operationWrite} />} /><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
+        {sidebarOpen && <><NativeSidebar onHoverRef={setHoverRef} sections={settings.sidebarSections} onSectionsChange={sidebarSections => updateSettings({ sidebarSections })} state={state} commits={commits} filters={filters} busy={busy} reveal={reveal} switchBranch={ref => void switchBranch(ref)} openMenu={openMenu} onAction={setActionContext} folderOpen={folderOpen} onFolderOpen={(key, open) => setFolderOpen(current => ({ ...current, [key]: open }))} openFolderMenu={(folder, x, y, trigger) => setFolderMenu({ folder, x, y, trigger })} worktrees={<Worktrees session={state.session} stateRevision={stateRevision} active={active} busy={mutationBusy || mutationBlocked} onOpen={onOpenWorktree} onWrite={operationWrite} />} onStash={action => void stashAction(action)} /><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
       <div className="workspace-main">
         {!sidebarOpen && filters}
         <div className="history-workspace">
@@ -882,7 +890,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     </main>}
     <footer className="statusbar"><span><button type="button" className="text-button" onClick={() => setActivityLogOpen(true)}><ScrollText size={13} /> Activity</button><span className="live-dot" /><span className="workspace-status">{mutationBusy ? 'Updating repository…' : isDemoHandle(state?.session.handle) ? 'Demo workspace · changes are simulated in memory' : 'Local workspace · automatic refresh'}</span></span><span className="status-keys"><span className="scale-control"><button className="icon-button sm" aria-label="Zoom out" disabled={scale === SCALES[0]} onClick={() => stepScale(-1)}><ZoomOut size={13} /></button><select className="scale-value" aria-label="Interface zoom" value={scale} onChange={event => changeScale(Number(event.target.value))}>{SCALES.map(s => <option key={s} value={s}>{s}%</option>)}</select><button className="icon-button sm" aria-label="Zoom in" disabled={scale === SCALES[SCALES.length - 1]} onClick={() => stepScale(1)}><ZoomIn size={13} /></button></span><button className="text-button" disabled={!state} onClick={() => search.current?.focus()}><Search size={13} /><span className="footer-search-label">History</span><kbd>/</kbd></button><CommandSearchButton onClick={onOpenPalette} /></span></footer>
     {activityLogOpen && <ActivityLogDialog onClose={() => setActivityLogOpen(false)} />}
-     {state && menuTarget && <GraphContextMenu target={menuTarget} state={state} busy={mutationBusy || mutationBlocked} hasTrackedChanges={status?.entries.some(entry => !entry.untracked)} onClose={() => setMenuTarget(null)} onOperation={context => { setMenuTarget(null); setActionContext(context); }} onSwitchBranch={ref => { setMenuTarget(null); void switchBranch(ref); }} onShowDetails={oid => { reveal(oid); setInspectorOpen(true); setMenuTarget(null); }} onSetBase={oid => setComparison(oid, 'base')} onSetTarget={oid => setComparison(oid, 'target')} onCompare={compareWithCurrent} onPullRequest={ref => { setMenuTarget(null); setPrSource(ref); }} onRemoteAction={action => void runMenuRemote(action)} onPush={ref => void pushFromMenu(ref)} onResetToOrigin={ref => { setMenuTarget(null); setOriginReset(ref); }} onDeleteBranch={(fullName, scope) => { setMenuTarget(null); const target = branchDeleteTargets(state, fullName); setDeleteBranch(target ? { target, scope } : null); }} onCopy={(value, label) => void copyMenuValue(value, label)} />}
+     {state && menuTarget && <GraphContextMenu target={menuTarget} state={state} busy={mutationBusy || mutationBlocked} hasTrackedChanges={status?.entries.some(entry => !entry.untracked)} onClose={() => setMenuTarget(null)} onOperation={context => { setMenuTarget(null); setActionContext(context); }} onSwitchBranch={ref => { setMenuTarget(null); void switchBranch(ref); }} onShowDetails={oid => { reveal(oid); setInspectorOpen(true); setMenuTarget(null); }} onSetBase={oid => setComparison(oid, 'base')} onSetTarget={oid => setComparison(oid, 'target')} onCompare={compareWithCurrent} onPullRequest={ref => { setMenuTarget(null); setPrSource(ref); }} onRemoteAction={action => void runMenuRemote(action)} onPush={ref => void pushFromMenu(ref)} onResetToOrigin={ref => { setMenuTarget(null); setOriginReset(ref); }} onDeleteBranch={(fullName, scope) => { setMenuTarget(null); const target = branchDeleteTargets(state, fullName); setDeleteBranch(target ? { target, scope } : null); }} onCopy={(value, label) => void copyMenuValue(value, label)} onStash={action => { setMenuTarget(null); void stashAction(action); }} />}
      {state && folderMenu && <BranchFolderMenu target={folderMenu} state={state} busy={mutationBusy || mutationBlocked} onClose={() => setFolderMenu(null)} onDelete={(folder, scope) => { setFolderMenu(null); setDeleteFolder({ folder, scope, targets: folderDeleteTargets(state, folder, scope) }); }} />}
      {state && deleteFolder && <BranchFolderDeleteDialog key={`${state.session.handle}:${deleteFolder.folder.kind}:${deleteFolder.folder.path}:${deleteFolder.scope}`} state={state} folder={deleteFolder.folder} scope={deleteFolder.scope} targets={deleteFolder.targets} onClose={() => setDeleteFolder(null)} onComplete={finishFolderDelete} onDelete={deleteBranchesWrite} />}
      {state && deleteBranch && <BranchDeleteDialog key={`${state.session.handle}:${deleteBranch.target.branch}:${deleteBranch.scope}`} state={state} target={deleteBranch.target} scope={deleteBranch.scope} onClose={() => setDeleteBranch(null)} onComplete={finishBranchDelete} onDelete={deleteBranchWrite} />}
@@ -892,6 +900,6 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     {state && blockedSwitch && <SwitchBlockedDialog branch={blockedSwitch.branch} reason={blockedSwitch.reason} hasChanges={!!status?.entries.length} onReview={() => { reveal(WORKING_ID); setBlockedSwitch(null); }} onOperations={() => { setActionContext({ oid: blockedSwitch.oid, ref: blockedSwitch.ref, initial: 'switchBranch' }); setBlockedSwitch(null); }} onClose={() => setBlockedSwitch(null)} />}
     {state && conflictPath && <ConflictEditor key={`${state.session.handle}:${conflictPath}`} handle={state.session.handle} path={conflictPath} revision={revision} busy={mutationBusy || mutationBlocked} onWrite={operationWrite} onClose={() => setConflictPath(null)} />}
     {state && prSource && <PullRequestDialog key={state.session.handle} handle={state.session.handle} source={prSource} onClose={() => setPrSource(null)} />}
-    {state && stashOpen && <RemoteStashDialog key={`${state.session.handle}:stash`} handle={state.session.handle} onWrite={remoteWrite} onClose={() => setStashOpen(false)} notify={setNotice} />}
+    {state && stashOpen && <RemoteStashDialog key={`${state.session.handle}:stash`} handle={state.session.handle} onWrite={async (_, args) => { await stashAction(args.action as StashActionRequest); return ''; }} onClose={() => setStashOpen(false)} notify={setNotice} />}
   </>;
 }

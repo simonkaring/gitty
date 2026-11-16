@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowUpRight, Check, ChevronRight, KeyRound, LockKeyhole, Monitor, ShieldCheck } from 'lucide-react';
+import { useIcons } from './icons';
 import { errorMessage, isDesktopHost, native } from '../model/native';
 import type { ProviderAccount as Account } from '../model/providerRepositories';
 import githubIcon from '../assets/providers/github.svg';
@@ -24,6 +24,7 @@ function ProviderIcon({ provider }: { provider: Provider }) {
 }
 
 export function IntegrationsSettings() {
+  const { ArrowUpRight, Check, ChevronRight, KeyRound, LockKeyhole, Monitor, ShieldCheck } = useIcons();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [provider, setProvider] = useState<Provider>('github');
   const [username, setUsername] = useState('');

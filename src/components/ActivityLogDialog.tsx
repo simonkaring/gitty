@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Copy, Trash2, Search, Check } from 'lucide-react';
+import { useIcons } from './icons';
 import { Dialog } from './ui';
 import { clearActivityLog, useActivityLog, type ActivityEntry } from '../model/activity';
 
@@ -33,6 +33,7 @@ function entryText(entry: ActivityEntry): string {
 }
 
 export function ActivityLogDialog({ onClose }: { onClose: () => void }) {
+  const { Copy, Trash2, Search, Check } = useIcons();
   const entries = useActivityLog();
   const [filter, setFilter] = useState('');
   const [copied, setCopied] = useState(false);

@@ -94,10 +94,10 @@ export function remoteSuccessMessage(action: RemoteActionRequest, output: string
   return `Pulled updates${action.remote ? ` from ${action.remote}${action.branch ? `/${action.branch}` : ''}` : ''}.`;
 }
 
-/** A one-click stash names itself, so unlabelled stashes in `git stash list`
- * stay distinguishable instead of all reading "WIP on <branch>". */
-export function autoStashMessage(now = new Date()): string {
-  return `Gitty: ${now.toLocaleString()}`;
+/** A one-click stash names itself `<branch> - stash - <date>`, so unlabelled
+ * stashes in `git stash list` stay distinguishable instead of all reading "WIP on <branch>". */
+export function autoStashMessage(branch: string | null, now = new Date()): string {
+  return `${branch || 'HEAD'} - stash - ${now.toLocaleString()}`;
 }
 
 export function stashSuccessMessage(action: StashActionRequest, output: string): string {

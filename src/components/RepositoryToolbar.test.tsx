@@ -44,7 +44,7 @@ it('pops the selected stash entry, else the newest stash, and stashes with a gen
     root.render(<RepositoryToolbar handle="repo" active revision={0} stateRevision={0} busy={false} pickCount={0} pickMode={false} onCreateBranch={() => {}} onSwitchBranch={() => {}} onCherryPick={() => {}} onClearPick={() => {}} onStartPickMode={() => {}} selectedOid="" onRefresh={() => {}} onWrite={onWrite} notify={() => {}} />);
   });
   await act(async () => { button('Stash').click(); });
-  expect((onWrite.mock.lastCall as unknown[])[1]).toEqual({ action: { kind: 'save', message: expect.stringMatching(/^Gitty: /) } });
+  expect((onWrite.mock.lastCall as unknown[])[1]).toEqual({ action: { kind: 'save', message: expect.stringMatching(/^main - stash - /) } });
 });
 
 it('focuses the first pull-menu item on open and moves with arrows, Home and End', async () => {

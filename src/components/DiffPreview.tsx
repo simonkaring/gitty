@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { Check } from 'lucide-react';
+import { useIcons } from './icons';
 import type { DiffLine, FileDiff, RepositoryMutation } from '../model/repository';
 import { diffRows, rowAt, rowOffsets, visibleRows, type DiffRow, type SplitDiffLine, type SplitDiffRow } from '../model/splitDiff';
 
@@ -50,6 +50,7 @@ function resetMetrics(m: Metrics, rows: DiffRow[], split: boolean) {
 const rowBox = (element: Element) => (element.classList.contains('split-row') ? element.firstElementChild : element) as HTMLElement | null;
 
 export function DiffPreview({
+  const { Check } = useIcons();
   diff,
   split,
   hunkAction,

@@ -1,3 +1,4 @@
+/** `parents` are only the parents the graph draws: a stash record's internal index commit is not one. */
 export interface GraphCommit { id: string; parents: readonly string[] }
 export interface GraphNode { id: string; row: number; lane: number }
 export interface GraphEdge { from: string; to: string; fromRow: number; toRow: number; fromLane: number; toLane: number; track: number }

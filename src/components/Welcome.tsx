@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { ArrowUp, Clock3, Download, Folder, FolderGit2, FolderOpen, Search, Server, SquareTerminal } from 'lucide-react';
+import { useIcons } from './icons';
 import type { DirectoryEntry, RepositoryLocation, WslDistribution } from '../model/repository';
 import { errorMessage, native } from '../model/native';
 import { suggestedCloneName, type CloneRequest } from '../model/clone';
@@ -30,6 +30,7 @@ const parentPath = (path: string) => path.replace(/\/?[^/]+\/?$/, '') || '/';
 /** The start page: shown with no tabs open and in every new tab. Opening a
  * repository from a tab replaces that tab (see `tabsReducer` 'open'). */
 export function StartPage({ onOpen, onClone, cloneBusy, cloneParent }: {
+  const { ArrowUp, Clock3, Download, Folder, FolderGit2, FolderOpen, Search, Server, SquareTerminal } = useIcons();
   onOpen: (location: RepositoryLocation) => void; onClone: (request: CloneRequest) => void; cloneBusy: boolean; cloneParent?: string;
 }) {
   const [view, setView] = useState<View>('recent');

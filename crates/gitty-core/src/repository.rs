@@ -104,9 +104,16 @@ pub struct Walk {
     pub cached_count: usize,
     oid_width: usize,
     pub shallow: bool,
+    /// Second parents of stash records: Git's internal index commits, which are not history rows.
+    stash_indexes: Vec<String>,
 }
 impl Walk {
-    fn new(location: &RepositoryLocation, tips: Vec<String>, shallow: bool) -> Result<Self> {
+    fn new(
+        location: &RepositoryLocation,
+        tips: Vec<String>,
+        shallow: bool,
+        stash_indexes: Vec<String>,
+    ) -> Result<Self> {
         let cache = tempfile::tempfile()?;
         let stream = if tips.is_empty() {
             None
@@ -124,6 +131,7 @@ impl Walk {
             cached_count: 0,
             oid_width: 0,
             shallow,
+            stash_indexes,
         })
     }
     pub(crate) fn page(&mut self, start: usize, limit: usize) -> Result<(Vec<String>, bool)> {
@@ -132,6 +140,7 @@ impl Walk {
         let wanted = start
             .checked_add(limit + 1)
             .ok_or_else(|| Error::new("invalidCursor", "History offset overflow"))?;
+        let mut skipped = false;
         while self.cached_count < wanted {
             let Some(stream) = self.stream.as_mut() else {
                 break;
@@ -149,19 +158,29 @@ impl Walk {
                     "Invalid object ID in pinned history stream",
                 ));
             }
+            // The stash record stays a row; only the index commit it points at is plumbing.
+            if self
+                .stash_indexes
+                .iter()
+                .any(|index| index.as_bytes() == id.as_slice())
+            {
+                skipped = true;
+                continue;
+            }
             self.oid_width = id.len();
             self.cache.seek(SeekFrom::End(0))?;
             self.cache.write_all(&id)?;
             self.cache.write_all(b"\n")?;
             self.cached_count += 1;
         }
+        // Skipped records never reach the spool, so a page still ends where the spool ends.
         let end = (start + limit).min(self.cached_count);
         self.cache
             .seek(SeekFrom::Start((start * (self.oid_width + 1)) as u64))?;
         let mut bytes = vec![0; (end - start) * (self.oid_width + 1)];
         self.cache.read_exact(&mut bytes)?;
         let ids = process::text(bytes)?.lines().map(String::from).collect();
-        Ok((ids, end < self.cached_count))
+        Ok((ids, skipped || end < self.cached_count))
     }
 }
 pub struct Repository {
@@ -744,7 +763,7 @@ impl Repository {
         let [shallow, raw, remotes]: [Result<Option<String>>; 3] =
             process::parallel(vec![
                 required(&["rev-parse", "--is-shallow-repository"]),
-                required(&["for-each-ref", "--format=%(refname)%00%(objecttype)%00%(objectname)%00%(*objecttype)%00%(*objectname)%00%(HEAD)", "refs/heads", "refs/remotes", "refs/tags"]),
+                required(&["for-each-ref", "--format=%(refname)%00%(objecttype)%00%(objectname)%00%(*objecttype)%00%(*objectname)%00%(HEAD)", "refs/heads", "refs/remotes", "refs/tags", "refs/stash"]),
                 required(&["remote"]),
             ])
             .try_into()
@@ -798,6 +817,9 @@ impl Repository {
                 ("refs/heads/", "local")
             } else if f[0].starts_with("refs/remotes/") {
                 ("refs/remotes/", "remote")
+            } else if f[0] == "refs/stash" {
+                // The stash reflog's tip; the sidebar and graph show it apart from branches.
+                ("refs/", "stash")
             } else {
                 ("refs/tags/", "tag")
             };
@@ -890,8 +912,31 @@ impl Repository {
             } else {
                 self.tips(query.branch.as_deref())?
             };
+            let fetched = if state.is_none() {
+                Some(self.state()?)
+            } else {
+                None
+            };
+            let stash_tips: Vec<_> = state
+                .or(fetched.as_ref())
+                .into_iter()
+                .flat_map(|state| state.refs.iter())
+                .filter(|r| r.kind == "stash")
+                .map(|r| r.commit_id.clone())
+                .collect();
+            let stash_indexes = stash_tips
+                .iter()
+                .filter_map(|tip| {
+                    optional(
+                        self.location(),
+                        &["rev-parse", "-q", "--verify", &format!("{tip}^2")],
+                    )
+                    .ok()
+                    .flatten()
+                })
+                .collect();
             let generation = token();
-            let walk = Walk::new(self.location(), tips, shallow)?;
+            let walk = Walk::new(self.location(), tips, shallow, stash_indexes)?;
             history.walks.insert(generation.clone(), walk);
             (generation, 0)
         };

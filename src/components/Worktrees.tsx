@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, FolderGit2, LockKeyhole, Plus, RefreshCw } from 'lucide-react';
+import { useIcons } from './icons';
 import type { RepositorySession } from '../model/repository';
 import { errorMessage, isDemoHandle, native } from '../model/native';
 import { worktreeEvents, worktreeLocation, worktreeName, type Worktree, type WorktreeAction, type WorktreeRequest, type WorktreeReview } from '../model/worktrees';
@@ -8,6 +8,7 @@ import { Dialog } from './ui';
 const labels: Record<WorktreeAction, string> = { create: 'Create worktree', move: 'Move worktree', remove: 'Remove worktree', lock: 'Lock worktree', unlock: 'Unlock worktree', prune: 'Prune worktrees' };
 
 export function Worktrees({ session, stateRevision, active, busy, onOpen, onWrite }: {
+  const { Check, FolderGit2, LockKeyhole, Plus, RefreshCw } = useIcons();
   session: RepositorySession; stateRevision: number; active: boolean; busy: boolean;
   onOpen: (location: RepositorySession['location']) => void;
   onWrite: (command: string, args: Record<string, unknown>) => Promise<void>;

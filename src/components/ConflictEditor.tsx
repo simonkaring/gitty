@@ -3,10 +3,11 @@ import type { ConflictFile, ConflictResolution } from '../model/operations';
 import { native, errorMessage } from '../model/native';
 import { acceptBlock, conflictBlocks, editConflictText } from '../model/operationUi';
 import type { OperationWrite } from './OperationDialog';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { useIcons } from './icons';
 import { Dialog } from './ui';
 
 export function ConflictEditor({ handle, path, revision, busy, onWrite, onClose }: { handle: string; path: string; revision: number; busy: boolean; onWrite: OperationWrite; onClose: () => void }) {
+  const { ChevronDown, ChevronUp } = useIcons();
   const [file, setFile] = useState<ConflictFile | null>(null);
   const [text, setText] = useState('');
   const [dirty, setDirty] = useState(false);

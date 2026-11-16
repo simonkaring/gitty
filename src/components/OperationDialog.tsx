@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowDown, ArrowUp, X } from 'lucide-react';
+import { useIcons } from './icons';
 import { Dialog } from './ui';
 import { errorMessage } from '../model/native';
 import type { GitAction, OperationRequest, OperationState, RebaseStep } from '../model/operations';
@@ -13,6 +13,7 @@ export type OperationWrite = (command: string, args: Record<string, unknown>) =>
 
 /** Follow the checked-out branch rather than the interleaved graph row order. */
 export function linearRebaseRange(head: string, base: string, commits: CommitSummary[]): CommitSummary[] | null {
+  const { ArrowDown, ArrowUp, X } = useIcons();
   const byId = new Map(commits.map(commit => [commit.id, commit]));
   const range: CommitSummary[] = [];
   const seen = new Set<string>();

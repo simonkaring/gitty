@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { Copy, Minus, Square, X } from 'lucide-react';
+import { useIcons } from './icons';
 import { errorMessage } from '../model/native';
 
 type WindowButton = 'minimize' | 'maximize' | 'close';
@@ -8,6 +8,7 @@ export const DEFAULT_BUTTON_LAYOUT = ':minimize,maximize,close';
 const RESIZE_DIRECTIONS = ['North', 'South', 'East', 'West', 'NorthEast', 'NorthWest', 'SouthEast', 'SouthWest'] as const;
 
 export function WindowResizeHandles({ onError }: { onError: (message: string) => void }) {
+  const { Copy, Minus, Square, X } = useIcons();
   return <div aria-hidden="true">{RESIZE_DIRECTIONS.map(direction => <div key={direction} className={`window-resize window-resize-${direction}`} data-tauri-drag-region="false" onMouseDown={event => {
     if (event.button !== 0) return;
     event.preventDefault();

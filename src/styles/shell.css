@@ -640,6 +640,7 @@ button[data-danger='true']:hover:not(:disabled) {
 .reference-group[data-section='remote'] { --section: var(--graph-lane5, var(--accent-text)); }
 .reference-group[data-section='tag'] { --section: var(--graph-lane4, var(--accent-text)); }
 .reference-group[data-section='remotes'] { --section: var(--graph-lane7, var(--accent-text)); }
+.reference-group[data-section='stash'] { --section: var(--graph-lane3, var(--accent-text)); }
 .reference-group > summary {
   width: 100%;
   display: flex;

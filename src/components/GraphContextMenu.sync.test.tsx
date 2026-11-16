@@ -25,7 +25,7 @@ async function open(target: MenuTarget, state: RepositoryState) {
   nativeCall.mockResolvedValue([1, 1]);
   const onRemoteAction = vi.fn(); const onResetToOrigin = vi.fn();
   const host = document.createElement('div'); const root = createRoot(host);
-  await act(async () => root.render(<GraphContextMenu target={target} state={state} busy={false} onOperation={noop} onSwitchBranch={noop} onShowDetails={noop} onSetBase={noop} onSetTarget={noop} onCompare={noop} onPullRequest={noop} onRemoteAction={onRemoteAction} onPush={noop} onResetToOrigin={onResetToOrigin} onCopy={noop} onDeleteBranch={noop} onClose={noop} />));
+  await act(async () => root.render(<GraphContextMenu target={target} state={state} busy={false} onOperation={noop} onSwitchBranch={noop} onShowDetails={noop} onSetBase={noop} onSetTarget={noop} onCompare={noop} onPullRequest={noop} onRemoteAction={onRemoteAction} onPush={noop} onResetToOrigin={onResetToOrigin} onCopy={noop} onDeleteBranch={noop} onStash={noop} onClose={noop} />));
   const item = (prefix: string) => [...host.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button => button.textContent?.startsWith(prefix));
   return { item, onRemoteAction, onResetToOrigin, close: () => act(async () => root.unmount()) };
 }

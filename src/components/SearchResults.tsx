@@ -1,11 +1,12 @@
 import { useRef, type ReactNode } from 'react';
-import { GitBranch, GitCommitHorizontal, LocateFixed, Search } from 'lucide-react';
+import { useIcons } from './icons';
 import type { RepositoryRef, SearchResult } from '../model/repository';
 import { commitIsoString, formatCommitDate } from '../model/dates';
 
 const SEARCH_DATE: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', year: 'numeric' };
 
 export function highlightMatch(value: string, query: string): ReactNode {
+  const { GitBranch, GitCommitHorizontal, LocateFixed, Search } = useIcons();
   if (!query) return value;
   const lower = value.toLocaleLowerCase();
   const needle = query.toLocaleLowerCase();
