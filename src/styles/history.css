@@ -258,12 +258,15 @@
 .commit-refs > .ref-pill {
   flex: 0 1 auto;
 }
-/* Continues as a canvas line from the graph column to the commit's node. */
+/* Runs flush to the graph column and continues as a canvas line to the commit's node. */
+.commit-row.connect .commit-refs {
+  padding-right: 0;
+}
 .commit-row.connect .commit-refs::after {
   content: '';
   flex: 1 0 8px;
   height: 2px;
-  margin-left: 2px;
+  margin: 0 -1px 0 2px;
   border-radius: var(--r-sm);
   background: var(--branch-color);
   opacity: 0.75;

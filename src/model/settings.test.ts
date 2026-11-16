@@ -44,7 +44,7 @@ describe('local preferences', () => {
     expect(persistSettings(broken, DEFAULT_SETTINGS)).toContain('session');
   });
   it('rejects invalid ranges, references, modes, fonts and duplicates', () => {
-    for (const patch of [{ fontSize: 10 }, { fontSize: 13.5 }, { monoFont: 'https://font' }, { paneWidths: { sidebar: Infinity, inspector: 400 } }, { themeId: 'missing' }, { lightThemeId: 'gitty-dark' }, { customThemes: [custom(), custom()] }, { customThemes: Array(31).fill(custom()) }, { historyColumns: [] }, { historyColumns: [{ id: 'unknown', visible: true }] }, { historyColumns: DEFAULT_SETTINGS.historyColumns.slice(0, 5) }]) expect(() => validateSettings({ ...DEFAULT_SETTINGS, ...patch })).toThrow();
+    for (const patch of [{ fontSize: 10 }, { fontSize: 13.5 }, { monoFont: 'https://font' }, { paneWidths: { sidebar: Infinity, inspector: 400 } }, { themeId: 'missing' }, { lightThemeId: 'gitty-dark' }, { customThemes: [custom(), custom()] }, { customThemes: Array(31).fill(custom()) }, { historyColumns: [] }, { historyColumns: [{ id: 'unknown', visible: true }] }, { historyColumns: DEFAULT_SETTINGS.historyColumns.slice(0, 5) }, { sidebarSections: [] }, { sidebarSections: DEFAULT_SETTINGS.sidebarSections.map(section => ({ ...section, id: 'local' })) }, { sidebarSections: DEFAULT_SETTINGS.sidebarSections.map(section => ({ ...section, visible: 'yes' })) }]) expect(() => validateSettings({ ...DEFAULT_SETTINGS, ...patch })).toThrow();
   });
   it('migrates older settings missing historyColumns to default columns', () => {
     const withoutCols = { ...DEFAULT_SETTINGS };

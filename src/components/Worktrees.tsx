@@ -32,7 +32,7 @@ export function Worktrees({ session, stateRevision, active, busy, onOpen, onWrit
   }, [active, stateRevision, reload]);
   const demo = isDemoHandle(session.handle);
   return <>
-    <details className="reference-group" aria-label="Worktrees" open={open} onToggle={e => setOpen(e.currentTarget.open)}>
+    <details className="reference-group" data-section="worktrees" aria-label="Worktrees" open={open} onToggle={e => setOpen(e.currentTarget.open)}>
       <summary>
         <FolderGit2 size={15} aria-hidden="true" />
         Worktrees

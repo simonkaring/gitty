@@ -9,9 +9,15 @@ export const SETTINGS_KEY = 'gitty:settings';
 export const MONO_FONTS = ['Geist Mono Variable', 'JetBrains Mono'] as const;
 export const HISTORY_COLUMN_IDS = ['refs', 'graph', 'message', 'author', 'hash', 'date'] as const;
 export type HistoryColumnId = typeof HISTORY_COLUMN_IDS[number];
+export const SIDEBAR_SECTION_IDS = ['worktrees', 'local', 'remote', 'tag', 'remotes'] as const;
+export type SidebarSectionId = typeof SIDEBAR_SECTION_IDS[number];
 export type AuthorAvatarMode = 'initials' | 'gravatar';
 export interface HistoryColumnConfig {
   id: HistoryColumnId;
+  visible: boolean;
+}
+export interface SidebarSectionConfig {
+  id: SidebarSectionId;
   visible: boolean;
 }
 export interface Settings {
@@ -27,6 +33,7 @@ export interface Settings {
   monoFont: string;
   paneWidths: { sidebar: number; inspector: number };
   historyColumns: HistoryColumnConfig[];
+  sidebarSections: SidebarSectionConfig[];
   commitProfiles: CommitProfile[];
   repositoryCommitProfiles: Record<string, string>;
   authorAvatarMode: AuthorAvatarMode;
@@ -40,7 +47,8 @@ export const DEFAULT_HISTORY_COLUMNS: HistoryColumnConfig[] = [
   { id: 'hash', visible: true },
   { id: 'date', visible: false },
 ];
-export const DEFAULT_SETTINGS: Settings = { version: 1, themeMode: 'fixed', themeId: 'gitty-dark', lightThemeId: 'gitty-light', darkThemeId: 'gitty-dark', customThemes: [], diffView: 'unified', diffWrap: false, fontSize: 13, monoFont: MONO_FONTS[0], paneWidths: { sidebar: 240, inspector: 400 }, historyColumns: DEFAULT_HISTORY_COLUMNS, commitProfiles: [], repositoryCommitProfiles: {}, authorAvatarMode: 'initials', graphAuthorAvatars: false };
+export const DEFAULT_SIDEBAR_SECTIONS: SidebarSectionConfig[] = SIDEBAR_SECTION_IDS.map(id => ({ id, visible: true }));
+export const DEFAULT_SETTINGS: Settings = { version: 1, themeMode: 'fixed', themeId: 'gitty-dark', lightThemeId: 'gitty-light', darkThemeId: 'gitty-dark', customThemes: [], diffView: 'unified', diffWrap: false, fontSize: 13, monoFont: MONO_FONTS[0], paneWidths: { sidebar: 240, inspector: 400 }, historyColumns: DEFAULT_HISTORY_COLUMNS, sidebarSections: DEFAULT_SIDEBAR_SECTIONS, commitProfiles: [], repositoryCommitProfiles: {}, authorAvatarMode: 'initials', graphAuthorAvatars: false };
 export function validateSettings(value: unknown): Settings {
   if (!value || typeof value !== 'object') throw new Error('Invalid settings.');
   const s = value as Settings;
@@ -64,7 +72,13 @@ export function validateSettings(value: unknown): Settings {
     if (!col || typeof col !== 'object' || !HISTORY_COLUMN_IDS.includes(col.id as HistoryColumnId) || typeof col.visible !== 'boolean' || columnIds.has(col.id)) throw new Error('Invalid history column configuration.');
     columnIds.add(col.id);
   }
-  return { ...s, customThemes, commitProfiles, repositoryCommitProfiles: { ...s.repositoryCommitProfiles }, paneWidths: { ...s.paneWidths }, historyColumns: s.historyColumns.map(c => ({ ...c })) };
+  if (!Array.isArray(s.sidebarSections) || s.sidebarSections.length !== SIDEBAR_SECTION_IDS.length) throw new Error('Invalid sidebar sections.');
+  const sectionIds = new Set<string>();
+  for (const section of s.sidebarSections) {
+    if (!section || typeof section !== 'object' || !SIDEBAR_SECTION_IDS.includes(section.id as SidebarSectionId) || typeof section.visible !== 'boolean' || sectionIds.has(section.id)) throw new Error('Invalid sidebar section configuration.');
+    sectionIds.add(section.id);
+  }
+  return { ...s, customThemes, commitProfiles, repositoryCommitProfiles: { ...s.repositoryCommitProfiles }, paneWidths: { ...s.paneWidths }, historyColumns: s.historyColumns.map(c => ({ ...c })), sidebarSections: s.sidebarSections.map(c => ({ ...c })) };
 }
 export interface PreferenceStorage { getItem(key: string): string | null; setItem(key: string, value: string): void }
 export function readSettings(storage: PreferenceStorage): { settings: Settings; error: string | null } {

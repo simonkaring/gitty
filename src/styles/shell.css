@@ -607,21 +607,45 @@ button[data-danger='true']:hover:not(:disabled) {
   background: var(--border);
   flex-shrink: 0;
 }
-.current-branch-check {
-  position: absolute;
-  left: 5px;
+/* Header options: gear that opens the section order/visibility menu. */
+.workspace-label > span {
+  flex: 1;
+  min-width: 0;
+}
+.sidebar-options {
+  position: relative;
+  flex-shrink: 0;
+}
+.sidebar-options .history-column-menu {
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+}
+.sidebar-options > .icon-button svg {
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+.sidebar-options > .icon-button:hover svg,
+.sidebar-options > .icon-button[aria-expanded='true'] svg {
+  transform: rotate(45deg);
 }
 
 /* Reference tree: section headers in UI type, entries in mono. */
+/* Each section carries one theme lane color: icon tile, count, branch icons and the selected-row accent. */
 .reference-group {
-  margin: 0 8px 6px;
+  --section: var(--accent-text);
+  margin: 0 8px 8px;
 }
+.reference-group[data-section='worktrees'] { --section: var(--graph-lane6, var(--accent-text)); }
+.reference-group[data-section='local'] { --section: var(--graph-lane1, var(--accent-text)); }
+.reference-group[data-section='remote'] { --section: var(--graph-lane5, var(--accent-text)); }
+.reference-group[data-section='tag'] { --section: var(--graph-lane4, var(--accent-text)); }
+.reference-group[data-section='remotes'] { --section: var(--graph-lane7, var(--accent-text)); }
 .reference-group > summary {
   width: 100%;
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: var(--h-compact);
+  min-height: 32px;
   margin: 0;
   padding: 0 8px;
   font-size: var(--fs-sm);
@@ -651,8 +675,19 @@ button[data-danger='true']:hover:not(:disabled) {
 .reference-group[open] > summary::before {
   transform: rotate(45deg) translate(-2px, -1px);
 }
+.reference-group > summary > svg:first-child {
+  flex: none;
+  box-sizing: content-box;
+  width: 16px;
+  height: 16px;
+  padding: 4px;
+  border-radius: var(--r-md);
+  color: var(--section);
+  background: color-mix(in srgb, var(--section) 16%, transparent);
+}
 .reference-group > summary .count {
   margin-left: auto;
+  background: color-mix(in srgb, var(--section) 14%, transparent);
   transition:
     background-color var(--dur-fast),
     color var(--dur-fast);
@@ -685,7 +720,7 @@ button[data-danger='true']:hover:not(:disabled) {
 }
 .reference-group > p {
   margin: 0;
-  padding: 4px 12px 4px 24px;
+  padding: 4px 8px 4px 16px;
   overflow-wrap: anywhere;
   font-family: var(--mono);
   font-size: var(--fs-xs);
@@ -696,7 +731,7 @@ button[data-danger='true']:hover:not(:disabled) {
   color: var(--muted);
 }
 .reference-tree {
-  padding: 4px 0 4px 12px;
+  padding: 4px 0 4px 8px;
   min-width: 0;
 }
 .reference-folder {
@@ -705,9 +740,9 @@ button[data-danger='true']:hover:not(:disabled) {
 .reference-folder > summary {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-height: 28px;
-  padding: 0 8px 0 2px;
+  padding: 0 8px;
   border-radius: var(--r-sm);
   color: var(--secondary);
   font-family: var(--mono);
@@ -727,6 +762,7 @@ button[data-danger='true']:hover:not(:disabled) {
 }
 .reference-folder-chevron,
 .reference-folder-icon { flex-shrink: 0; color: var(--muted); }
+.reference-folder-icon { color: color-mix(in srgb, var(--section) 70%, var(--muted)); }
 .reference-folder[open] > summary > .reference-folder-chevron { transform: rotate(90deg); }
 .reference-folder > summary > .folder-open,
 .reference-folder[open] > summary > .folder-closed { display: none; }
@@ -752,7 +788,6 @@ button[data-danger='true']:hover:not(:disabled) {
   padding-left: 12px;
   border-left: 1px solid var(--border);
 }
-.reference-tree .ref-item { gap: 6px; padding-left: 20px; }
 .reference-tree .ref-item > svg { flex-shrink: 0; }
 .ref-item {
   position: relative;
@@ -761,7 +796,7 @@ button[data-danger='true']:hover:not(:disabled) {
   gap: 8px;
   align-items: center;
   min-height: 28px;
-  padding: 0 8px 0 24px;
+  padding: 0 8px;
   color: var(--secondary);
   text-align: left;
   border-radius: var(--r-sm);
@@ -769,7 +804,7 @@ button[data-danger='true']:hover:not(:disabled) {
   font-size: var(--fs-sm);
 }
 .ref-item svg {
-  color: var(--muted);
+  color: color-mix(in srgb, var(--section) 70%, var(--muted));
 }
 .ref-item > span:first-of-type {
   overflow: hidden;
@@ -778,8 +813,10 @@ button[data-danger='true']:hover:not(:disabled) {
   transition: transform var(--dur-med) var(--ease-out);
 }
 .ref-action-row {
+  position: relative;
   display: flex;
   align-items: center;
+  margin: 1px 0;
   border-radius: var(--r-sm);
   transition: background-color var(--dur-fast) ease;
 }

@@ -39,7 +39,8 @@
 .worktree-row .ref-item > span { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; }
 .worktree-name, .worktree-row small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .worktree-row small { color: var(--muted); font-size: var(--fs-2xs); }
-.worktree-prune { margin: 6px 0 4px 6px; font-size: var(--fs-2xs); }
+.worktree-row .ref-item { padding-block: 4px; }
+.worktree-prune { margin: 4px 0 4px 8px; font-size: var(--fs-2xs); }
 .worktree-path, .worktree-preview { overflow-wrap: anywhere; white-space: pre-wrap; }
 .worktree-preview { max-height: 240px; overflow: auto; font-size: var(--fs-xs); }
 
@@ -61,13 +62,23 @@
   transform: translateX(2px);
 }
 .ref-action-row.current {
-  background: var(--selected);
+  background: color-mix(in srgb, var(--section) 14%, transparent);
+}
+.ref-action-row.current::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: var(--r-sm);
+  background: var(--section);
 }
 .ref-action-row.current .ref-item {
   color: var(--text);
 }
 .ref-item .current-branch-check {
-  color: var(--accent-text);
+  color: var(--section);
   transform-origin: 50% 100%;
 }
 /* Hover: the check hops, lands with a squash, and settles with a wiggle. */

@@ -50,7 +50,7 @@ inventing avatar positions.[^graph]
 In both modes the canvas draws 2.5px opaque branch lines (the working tree hangs
 off HEAD by a dotted line), a `graphHead` ring around the HEAD commit, and, when
 the refs column sits directly before the graph, a connector from each ref pill to
-its node. Dot mode draws solid dots (smaller for merges) with a 3px background
+its node (the pill's CSS line runs flush to the column edge and the canvas line continues from it, so they read as one). Dot mode draws solid dots (smaller for merges) with a 3px background
 ring. Each message cell carries a branch-colored tick, replaced by the
 `graphSelection` color on the selected row.[^graph]
 
