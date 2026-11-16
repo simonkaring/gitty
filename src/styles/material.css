@@ -45,7 +45,8 @@ html[data-design='material'] {
   --m-decel: cubic-bezier(0.05, 0.7, 0.1, 1);
   --m-accel: cubic-bezier(0.3, 0, 0.8, 0.15);
   --ease-out: var(--m-standard);
-  --ease-spring: var(--m-decel);
+  --m-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-spring: var(--m-spring);
   --dur-fast: 150ms;
   --dur-med: 250ms;
   --dur-slow: 400ms;
@@ -96,39 +97,51 @@ html[data-design='material'] {
     font-size: var(--fs-xs);
   }
 
-  /* ---- The sheet ------------------------------------------------------ */
+  /* ---- Floating panes -------------------------------------------------- */
   & .workspace {
-    padding: 0 12px 0 0;
+    padding: 0 12px 4px;
     gap: 0;
   }
   & .workspace-main {
-    border-radius: var(--m-xl);
-    overflow: hidden;
-    background: var(--bg);
-  }
-  & .workspace > .pane-resizer {
-    width: 8px;
-    margin-inline: -4px;
     background: transparent;
-    outline: 0;
-    border-radius: 4px;
   }
-  & .workspace > .pane-resizer:hover,
-  & .workspace > .pane-resizer[data-dragging] {
-    background: color-mix(in srgb, var(--accent) 55%, transparent);
-    outline: 0;
-  }
-  & .history-workspace > .pane-resizer {
-    background: var(--border);
-    outline: 0;
-  }
+  & .sidebar,
+  & .history-pane,
+  & .diff-view-pane,
   & .inspector,
   & .native-inspector {
-    background: var(--bg);
-    border-left: 1px solid var(--border);
+    border-radius: var(--m-xl);
+    overflow: hidden;
   }
-  & .history-pane {
+  & .sidebar,
+  & .inspector,
+  & .native-inspector {
+    background: var(--sidebar);
+    border: 0;
+  }
+  & .sidebar {
+    overflow: auto;
+    padding: 8px;
+  }
+  & .history-pane,
+  & .diff-view-pane {
     background: var(--bg);
+  }
+  & .pane-resizer {
+    width: 12px;
+    background: transparent;
+    outline: 0;
+  }
+  & .pane-resizer::after {
+    left: 4px;
+    right: 4px;
+    border-radius: 2px;
+    transition: background-color var(--dur-fast) linear;
+  }
+  & .pane-resizer:hover::after,
+  & .pane-resizer[data-dragging]::after,
+  & .pane-resizer:focus-visible::after {
+    background: color-mix(in srgb, var(--accent) 55%, transparent);
   }
   & .history-bottom {
     border-top: 1px solid var(--border);
@@ -221,15 +234,6 @@ html[data-design='material'] {
     background: var(--selected);
     color: var(--text);
   }
-  & .icon-button:not([aria-expanded]) svg {
-    transition: transform var(--dur-med) var(--m-decel);
-  }
-  & .icon-button:not([aria-expanded]):hover:not(:disabled) svg {
-    transform: scale(1.1);
-  }
-  & .icon-button:not([aria-expanded]):active:not(:disabled) svg {
-    transform: scale(0.9);
-  }
   & .segmented {
     padding: 0;
     gap: 0;
@@ -312,10 +316,6 @@ html[data-design='material'] {
   }
 
   /* ---- Sidebar (navigation drawer) ------------------------------------ */
-  & .sidebar {
-    background: transparent;
-    padding-bottom: 8px;
-  }
   & .workspace-label > svg {
     border: 0;
     border-radius: 14px;
@@ -366,6 +366,146 @@ html[data-design='material'] {
   }
   & .reference-folder-children {
     border-left-color: var(--border);
+  }
+
+  /* ---- Sidebar content ------------------------------------------------ */
+  & .workspace-label {
+    align-items: center;
+    gap: 12px;
+    padding: 12px 8px 8px 12px;
+    font-size: var(--fs-lg);
+    font-weight: 500;
+  }
+  & .workspace-label > svg {
+    width: 48px;
+    height: 48px;
+    padding: 12px;
+    border-radius: 16px;
+    transition: border-radius var(--dur-med) var(--m-spring);
+  }
+  & .workspace-label:hover > svg {
+    border-radius: 24px;
+  }
+  & .workspace-label small {
+    font-family: var(--ui);
+    font-size: var(--fs-xs);
+    letter-spacing: 0.01em;
+  }
+  & .native-sidebar-meta {
+    padding: 0 12px 8px;
+  }
+  & .native-sidebar-meta .badge {
+    border: 0;
+    border-radius: 8px;
+    background: var(--accent-wash);
+    color: var(--accent-text);
+  }
+  & .sidebar-divider {
+    margin: 4px 12px 12px;
+  }
+  & .native-filters {
+    padding: 0 4px 12px;
+  }
+  & .native-filters :is(.filter-primary select, .head-button) {
+    height: 40px;
+    border-color: transparent;
+    border-radius: 999px;
+    background: var(--raised);
+    color: var(--text);
+  }
+  & .native-filters :is(.filter-primary select, .head-button):hover:not(:disabled) {
+    background: var(--subtle);
+  }
+  & .filter-secondary summary {
+    padding: 8px 12px;
+    border-radius: 999px;
+    font-weight: 500;
+  }
+  & .filter-secondary summary:hover {
+    background: var(--m-hover);
+  }
+  & .reference-group {
+    margin: 0 0 4px;
+    --section-tone: color-mix(in srgb, var(--section) 22%, transparent);
+  }
+  & .reference-group > summary {
+    gap: 10px;
+    min-height: 48px;
+    padding: 0 12px 0 8px;
+    border-radius: 999px;
+    color: var(--text);
+    font-size: var(--fs-md);
+    white-space: nowrap;
+  }
+  & .reference-group > summary::before {
+    order: 3;
+    margin: 0 2px 0 4px;
+    color: var(--secondary);
+  }
+  & .reference-group > summary > svg:first-child {
+    width: 18px;
+    height: 18px;
+    padding: 7px;
+    border-radius: 50%;
+    background: var(--section-tone);
+    transition: border-radius var(--dur-med) var(--m-spring);
+  }
+  & .reference-group > summary:hover > svg:first-child,
+  & .reference-group[open] > summary > svg:first-child {
+    border-radius: 14px;
+  }
+  & .reference-group > summary .count {
+    padding: 2px 10px;
+    border-radius: 12px;
+    background: var(--subtle);
+    color: var(--secondary);
+    font-size: var(--fs-xs);
+  }
+  & .reference-group > summary .count:has(+ .reference-group-actions) {
+    margin-left: 0;
+  }
+  & .reference-group-actions {
+    margin-left: auto;
+  }
+  & .reference-tree {
+    padding: 4px 0;
+  }
+  & .reference-folder > summary,
+  & .ref-item {
+    min-height: 40px;
+    padding: 0 12px;
+    gap: 12px;
+    border-radius: 999px;
+    font-family: var(--ui);
+    font-size: var(--fs-md);
+  }
+  & .reference-folder > summary:hover {
+    background: var(--m-hover);
+  }
+  & .reference-folder-children {
+    margin-left: 0;
+    padding-left: 16px;
+    border-left: 0;
+  }
+  & .ref-action-row {
+    margin: 1px 0;
+    border-radius: 999px;
+  }
+  & .ref-action-row.current {
+    background: var(--selected);
+  }
+  & .ref-action-row.current::before {
+    display: none;
+  }
+  & .ref-action-row.current .ref-item svg,
+  & .ref-item .current-branch-check {
+    color: currentColor;
+  }
+  & .ref-action-row.current:hover {
+    background: color-mix(in srgb, var(--text) 8%, var(--selected));
+  }
+  & .worktree-row .ref-item {
+    padding-block: 6px;
   }
 
   /* ---- Search, filters, fields --------------------------------------- */
@@ -483,21 +623,23 @@ html[data-design='material'] {
   & .ref-pill {
     height: 24px;
     padding: 0 10px;
-    border: 1px solid var(--border);
+    border: 0;
     border-radius: 8px;
-    background: transparent;
+    background: color-mix(in srgb, var(--branch-color, var(--subtle)) 26%, var(--bg));
     font-family: var(--ui);
     font-size: var(--fs-xs);
     font-weight: 500;
   }
   & .ref-pill.remote-ref {
-    border-color: transparent;
+    background: transparent;
+  }
+  & .ref-pill.tag-ref {
+    background: var(--raised);
   }
   & .ref-pill[data-current='true'] {
-    border-color: transparent;
-    background: var(--selected);
-    color: var(--text);
-    font-weight: 500;
+    background: var(--branch-color, var(--accent-text));
+    color: var(--button-foreground);
+    font-weight: 600;
   }
 
   /* ---- History -------------------------------------------------------- */
@@ -507,18 +649,77 @@ html[data-design='material'] {
     letter-spacing: 0.01em;
     text-transform: none;
   }
-  & .commit-row {
-    clip-path: inset(1px 8px round 12px);
-    transition: background-color var(--dur-fast) linear;
+  /* Row highlights are a rounded ::before behind the canvas; clip-path would trap avatar nodes below it. */
+  & .history-spacer {
+    isolation: isolate;
   }
-  & .commit-row:hover {
-    background: var(--m-hover);
-    box-shadow: none;
-  }
+  & .commit-row,
+  & .commit-row:hover,
   & .commit-row.selected,
   & .commit-row.selected:hover {
-    background: var(--accent-wash);
+    background: transparent;
     box-shadow: none;
+  }
+  & .commit-row::before {
+    content: '';
+    position: absolute;
+    inset: 1px 8px;
+    z-index: -1;
+    border-radius: 16px;
+    transition: background-color var(--dur-fast) linear;
+  }
+  & .commit-row:hover::before {
+    background: var(--m-hover);
+  }
+  & .commit-row.selected::before,
+  & .commit-row.selected:hover::before {
+    background: var(--selected);
+  }
+
+  /* ---- Graph ----------------------------------------------------------- */
+  & .history-column-viewport {
+    background: var(--bg);
+    border-bottom: 0;
+  }
+  & .history-column-settings-anchor {
+    background: linear-gradient(to right, transparent, var(--bg) 30%);
+  }
+  & .history-column-resize::after {
+    height: 12px;
+    margin-block: 10px;
+    background: var(--border);
+  }
+  & .commit-message::before {
+    display: none;
+  }
+  & .graph-avatar-node {
+    border-radius: 0;
+    box-shadow: none;
+    filter: drop-shadow(0 0 1.5px var(--bg)) drop-shadow(0 0 1.5px var(--bg));
+    transition: transform var(--dur-med) var(--m-spring);
+  }
+  & .graph-avatar-node .avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0;
+  }
+  & .graph-avatar-node[data-shape='squircle'] .avatar {
+    border-radius: 36%;
+  }
+  & .graph-avatar-node[data-shape='cookie'] .avatar {
+    clip-path: polygon(100% 50%, 98.5% 54.8%, 94.7% 58.9%, 90.6% 62.3%, 88% 65.8%, 87.5% 70%, 87.9% 75.3%, 87.7% 80.9%, 85.4% 85.4%, 80.9% 87.7%, 75.3% 87.9%, 70% 87.5%, 65.8% 88%, 62.3% 90.6%, 58.9% 94.7%, 54.8% 98.5%, 50% 100%, 45.2% 98.5%, 41.1% 94.7%, 37.7% 90.6%, 34.2% 88%, 30% 87.5%, 24.7% 87.9%, 19.1% 87.7%, 14.6% 85.4%, 12.3% 80.9%, 12.1% 75.3%, 12.5% 70%, 12% 65.8%, 9.4% 62.3%, 5.3% 58.9%, 1.5% 54.8%, 0% 50%, 1.5% 45.2%, 5.3% 41.1%, 9.4% 37.7%, 12% 34.2%, 12.5% 30%, 12.1% 24.7%, 12.3% 19.1%, 14.6% 14.6%, 19.1% 12.3%, 24.7% 12.1%, 30% 12.5%, 34.2% 12%, 37.7% 9.4%, 41.1% 5.3%, 45.2% 1.5%, 50% 0%, 54.8% 1.5%, 58.9% 5.3%, 62.3% 9.4%, 65.8% 12%, 70% 12.5%, 75.3% 12.1%, 80.9% 12.3%, 85.4% 14.6%, 87.7% 19.1%, 87.9% 24.7%, 87.5% 30%, 88% 34.2%, 90.6% 37.7%, 94.7% 41.1%, 98.5% 45.2%);
+  }
+  & .graph-avatar-node[data-shape='diamond'] .avatar {
+    clip-path: polygon(68.2% 92.5%, 62.9% 96.6%, 56.7% 99.1%, 50% 100%, 43.3% 99.1%, 37.1% 96.6%, 31.8% 92.5%, 7.5% 68.2%, 3.4% 62.9%, 0.9% 56.7%, 0% 50%, 0.9% 43.3%, 3.4% 37.1%, 7.5% 31.8%, 31.8% 7.5%, 37.1% 3.4%, 43.3% 0.9%, 50% 0%, 56.7% 0.9%, 62.9% 3.4%, 68.2% 7.5%, 92.5% 31.8%, 96.6% 37.1%, 99.1% 43.3%, 100% 50%, 99.1% 56.7%, 96.6% 62.9%, 92.5% 68.2%);
+  }
+  & .commit-row:hover .graph-avatar-node {
+    transform: translate(-50%, -50%) scale(1.1);
+  }
+  & .commit-row.selected .graph-avatar-node {
+    transform: translate(-50%, -50%) scale(1.2);
   }
 
   /* ---- Inspector, files ---------------------------------------------- */

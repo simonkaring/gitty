@@ -35,7 +35,7 @@ export const BUILTIN_THEMES: ThemeDefinition[] = [
     mode: 'dark',
     design: 'material',
     colors: {
-      bg: '#1e1f20', chrome: '#131314', sidebar: '#131314', raised: '#282a2c', subtle: '#333537', hover: '#3b3d3f', border: '#444746', borderStrong: '#8e918f', text: '#e3e3e3', secondary: '#c4c7c5', muted: '#a2a5a4', accent: '#a8c7fa', accentText: '#a8c7fa', accentWash: '#1f3358', selected: '#004a77', green: '#6dd58c', greenWash: '#153322', red: '#f2b8b5', redWash: '#40201f', buttonForeground: '#062e6f', shadow: '#00000099', backdrop: '#00000080', graphLane1: '#8ab4f8', graphLane2: '#f28b82', graphLane3: '#81c995', graphLane4: '#fdd663', graphLane5: '#d7aefb', graphLane6: '#78d9ec', graphLane7: '#fcad70', graphLane8: '#ff8bcb', graphSelection: '#a8c7fa', graphMerge: '#fdd663', graphHead: '#6dd58c',
+      bg: '#1a1c25', chrome: '#0c0d12', sidebar: '#15171e', raised: '#232630', subtle: '#2d303b', hover: '#373a45', border: '#3f424d', borderStrong: '#767a87', text: '#e6e7ef', secondary: '#c0c3d1', muted: '#a7aab8', accent: '#aab9fc', accentText: '#aab9fc', accentWash: '#262c47', selected: '#383e58', green: '#81c995', greenWash: '#213c27', red: '#f28b82', redWash: '#4f2825', buttonForeground: '#1f2557', shadow: '#00000099', backdrop: '#00000080', graphLane1: '#8ab4f8', graphLane2: '#f28b82', graphLane3: '#81c995', graphLane4: '#fdd663', graphLane5: '#d7aefb', graphLane6: '#78d9ec', graphLane7: '#fcad70', graphLane8: '#ff8bcb', graphSelection: '#aab9fc', graphMerge: '#fdd663', graphHead: '#e6e7ef',
     },
   },
   {
@@ -44,7 +44,7 @@ export const BUILTIN_THEMES: ThemeDefinition[] = [
     mode: 'light',
     design: 'material',
     colors: {
-      bg: '#ffffff', chrome: '#f6f8fc', sidebar: '#f6f8fc', raised: '#f0f4f9', subtle: '#e9eef6', hover: '#dde3ea', border: '#c7c7c7', borderStrong: '#747775', text: '#1f1f1f', secondary: '#444746', muted: '#5f6368', accent: '#0b57d0', accentText: '#0b57d0', accentWash: '#d3e3fd', selected: '#c2e7ff', green: '#146c2e', greenWash: '#c4eed0', red: '#b3261e', redWash: '#f9dedc', buttonForeground: '#ffffff', shadow: '#00000040', backdrop: '#00000052', graphLane1: '#1a73e8', graphLane2: '#d93025', graphLane3: '#188038', graphLane4: '#b06000', graphLane5: '#9334e6', graphLane6: '#129eaf', graphLane7: '#e8710a', graphLane8: '#c2185b', graphSelection: '#0b57d0', graphMerge: '#b06000', graphHead: '#188038',
+      bg: '#eef0f8', chrome: '#f9fafe', sidebar: '#f4f5fc', raised: '#e7e9f2', subtle: '#e0e2ed', hover: '#d7dae6', border: '#c1c4ce', borderStrong: '#717481', text: '#191a20', secondary: '#444753', muted: '#575a66', accent: '#444dbd', accentText: '#444dbd', accentWash: '#e1e7fe', selected: '#d4ddfd', green: '#146c2e', greenWash: '#c4eed0', red: '#b3261e', redWash: '#f9dedc', buttonForeground: '#ffffff', shadow: '#00000040', backdrop: '#00000052', graphLane1: '#1a73e8', graphLane2: '#d93025', graphLane3: '#188038', graphLane4: '#b06000', graphLane5: '#9334e6', graphLane6: '#129eaf', graphLane7: '#e8710a', graphLane8: '#c2185b', graphSelection: '#444dbd', graphMerge: '#b06000', graphHead: '#191a20',
     },
   },
 ];

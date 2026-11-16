@@ -9,6 +9,7 @@ import { DEFAULT_HISTORY_COLUMNS, useSettings, type HistoryColumnId, type ThemeD
 import { COLUMN_LABELS, HistoryColumnMenu } from './HistoryColumnMenu';
 import { AuthorAvatar } from './AuthorAvatar';
 import { commitIsoString, formatCommitDate } from '../model/dates';
+import { shapeOf, traceShape } from '../graph/shape';
 
 const ROW_DATE: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false };
 
@@ -92,7 +93,10 @@ const MIN_GRAPH_WIDTH = laneX(2) + 14; // three lanes plus padding; also fits th
 export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onContextActions, onSwitchBranch, pickOrder, onTogglePick, highlightRef }, ref) {
   const uid = useId();
   const { settings, updateSettings } = useSettings();
-  const graphLaneWidth = settings.graphAuthorAvatars ? 30 : LANE_WIDTH;
+  // Material draws every node as a shaped author avatar; other designs follow the setting.
+  const material = theme.design === 'material';
+  const avatars = settings.graphAuthorAvatars || material;
+  const graphLaneWidth = avatars ? 30 : LANE_WIDTH;
   const graphLaneX = useMemo(() => (lane: number) => laneX(0) + lane * graphLaneWidth, [graphLaneWidth]);
   const minGraphWidth = graphLaneX(2) + 14;
   const scroller = useRef<HTMLDivElement>(null);
@@ -267,7 +271,6 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     // The worker can still be laying out newly loaded history when this effect
     // runs. Rows remain visible, but their canvas nodes must wait for layout.
     ctx.setLineDash([]);
-    const avatars = settings.graphAuthorAvatars;
     for (let row = firstRow; row < Math.min(lastRow, layout.nodes.length, commits.length); row++) {
       const node = layout.nodes[row];
       const commit = commits[row];
@@ -276,7 +279,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       const lane = palette[branchColors.rows[row] ?? node.lane % colors.length];
       const alpha = shown && !shown.has(node.id) ? (focus ? 0.25 : 0.3) : 1;
       // Solid dots are bigger than merge dots; the selected node grows like its avatar counterpart does.
-      const radius = (avatars && !working ? 11 : commit.parents.length > 1 ? 5.5 : 7) * (commit.id === selectedId ? 1.2 : 1);
+      const merge = commit.parents.length > 1, avatarNode = avatars && !working && !(material && merge);
+      const radius = (avatarNode ? (material ? 13 : 11) : merge ? 5.5 : 7) * (commit.id === selectedId ? 1.2 : 1);
       ctx.lineWidth = 2;
       if (joinRefs && refsByCommit.has(commit.id) && x - radius - 3 > graphX) {
         ctx.globalAlpha = alpha * 0.75; ctx.strokeStyle = lane;
@@ -284,10 +288,10 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       }
       ctx.globalAlpha = alpha;
       if (commit.id === head) {
-        ctx.beginPath(); ctx.arc(x, cy, radius + (avatars ? 5 : 4), 0, Math.PI * 2);
+        if (material && avatarNode) traceShape(ctx, shapeOf(commit.author), x, cy, radius + 5); else { ctx.beginPath(); ctx.arc(x, cy, radius + (avatars ? 5 : 4), 0, Math.PI * 2); }
         ctx.strokeStyle = theme.colors.graphHead; ctx.stroke();
       }
-      if (avatars && !working) continue;
+      if (avatarNode) continue;
       ctx.beginPath();
       if (working) {
         // Uncommitted work is a dashed, hollow marker.
@@ -302,7 +306,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       }
     }
     ctx.globalAlpha = 1;
-  }, [commits, layout, visibleEdges, windowTop, windowHeight, graphWidth, graphX, theme, matches, focus, shown, loaded, colors, palette, branchColors, settings.graphAuthorAvatars, graphLaneX, joinRefs, refsByCommit, selectedId, head]);
+  }, [commits, layout, visibleEdges, windowTop, windowHeight, graphWidth, graphX, theme, matches, focus, shown, loaded, colors, palette, branchColors, avatars, material, graphLaneX, joinRefs, refsByCommit, selectedId, head]);
 
   useEffect(() => {
     const node = layout.nodes[selectedIndex];
@@ -494,7 +498,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                 }
                 if (col.id === 'graph') {
                   return <div key="graph" className="commit-graph-cell" aria-hidden="true">
-                    {settings.graphAuthorAvatars && node && commit.id !== WORKING_ID && <span className={`graph-avatar-node${commit.parents.length > 1 ? ' merge' : ''}`} style={{ left: graphLaneX(node.lane) - graphX }}>
+                    {avatars && node && commit.id !== WORKING_ID && !(material && commit.parents.length > 1) && <span className={`graph-avatar-node${commit.parents.length > 1 ? ' merge' : ''}`} data-shape={shapeOf(commit.author)} style={{ left: graphLaneX(node.lane) - graphX }}>
                       <AuthorAvatar name={commit.author} email={commit.email} mode={settings.authorAvatarMode} tiny />
                     </span>}
                   </div>;
