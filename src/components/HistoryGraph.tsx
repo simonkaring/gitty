@@ -96,6 +96,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   // Material draws every node as a shaped author avatar; other designs follow the setting.
   const material = theme.design === 'material';
   const avatars = settings.graphAuthorAvatars || material;
+  // Material uses roomier rows so avatars, the HEAD ring and day dividers don't crowd each other.
+  const rowHeight = material ? 52 : ROW_HEIGHT;
   const graphLaneWidth = avatars ? 30 : LANE_WIDTH;
   const graphLaneX = useMemo(() => (lane: number) => laneX(0) + lane * graphLaneWidth, [graphLaneWidth]);
   const minGraphWidth = graphLaneX(2) + 14;
@@ -146,13 +148,13 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const graphScrollMax = Math.max(0, graphContent - graphWidth);
   const graphX = Math.min(graphScroll, graphScrollMax);
   const loaded = commits.length;
-  const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - 8);
-  const end = Math.min(loaded, Math.ceil((scrollTop + height) / ROW_HEIGHT) + 8);
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - 8);
+  const end = Math.min(loaded, Math.ceil((scrollTop + height) / rowHeight) + 8);
   // The canvas is a window of the scrolled content that moves natively with the rows, so scrolling never
   // lags behind a redraw; it is only repainted when scrolling leaves the buffered window.
-  const BUFFER = ROW_HEIGHT * 10;
+  const BUFFER = rowHeight * 10;
   const windowTop = Math.max(0, Math.floor(scrollTop / BUFFER) * BUFFER - BUFFER);
-  const windowHeight = Math.max(0, Math.min(height + BUFFER * 3, loaded * ROW_HEIGHT - windowTop));
+  const windowHeight = Math.max(0, Math.min(height + BUFFER * 3, loaded * rowHeight - windowTop));
   const selectedIndex = useMemo(() => commits.findIndex(commit => commit.id === selectedId), [commits, selectedId]);
   const refsByCommit = useMemo(() => groupRefsByCommit(refs), [refs]);
   // First loaded commit of each calendar day, with that day's loaded count (shown as a divider label by the Material design).
@@ -216,19 +218,19 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   function scrollTo(row: number) {
     const el = scroller.current;
     if (!el) return;
-    const top = row * ROW_HEIGHT;
-    if (top < el.scrollTop || top + ROW_HEIGHT > el.scrollTop + el.clientHeight) {
+    const top = row * rowHeight;
+    if (top < el.scrollTop || top + rowHeight > el.scrollTop + el.clientHeight) {
       el.scrollTop = Math.max(0, top - el.clientHeight / 3);
       setScrollTop(el.scrollTop);
     }
   }
   useImperativeHandle(ref, () => ({ scrollTo, anchor: () => {
     const top = scroller.current?.scrollTop ?? 0;
-    const commit = commits[Math.floor(top / ROW_HEIGHT)];
-    return commit ? { id: commit.id, offset: top % ROW_HEIGHT } : null;
+    const commit = commits[Math.floor(top / rowHeight)];
+    return commit ? { id: commit.id, offset: top % rowHeight } : null;
   }, restore: anchor => {
     const row = commits.findIndex(commit => commit.id === anchor.id);
-    if (row >= 0 && scroller.current) { scroller.current.scrollTop = row * ROW_HEIGHT + anchor.offset; setScrollTop(scroller.current.scrollTop); }
+    if (row >= 0 && scroller.current) { scroller.current.scrollTop = row * rowHeight + anchor.offset; setScrollTop(scroller.current.scrollTop); }
   } }));
   useLayoutEffect(() => {
     const el = scroller.current!;
@@ -252,8 +254,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     const pixelWidth = Math.floor(graphWidth * dpr), pixelHeight = Math.floor(windowHeight * dpr);
     if (element.width !== pixelWidth) element.width = pixelWidth;
     if (element.height !== pixelHeight) element.height = pixelHeight;
-    const y = (row: number) => row * ROW_HEIGHT + ROW_HEIGHT / 2 - windowTop;
-    const firstRow = Math.max(0, Math.floor(windowTop / ROW_HEIGHT) - 1), lastRow = Math.min(loaded, Math.ceil((windowTop + windowHeight) / ROW_HEIGHT) + 1);
+    const y = (row: number) => row * rowHeight + rowHeight / 2 - windowTop;
+    const firstRow = Math.max(0, Math.floor(windowTop / rowHeight) - 1), lastRow = Math.min(loaded, Math.ceil((windowTop + windowHeight) / rowHeight) + 1);
     const bg = theme.colors.bg;
     ctx.setTransform(dpr, 0, 0, dpr, -graphX * dpr, 0);
     ctx.clearRect(graphX, 0, graphWidth, windowHeight);
@@ -275,7 +277,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       ctx.setLineDash(commits[edge.fromRow]?.id === WORKING_ID ? [0.01, 6] : []);
       ctx.beginPath();
       ctx.moveTo(x1, y1);
-      const bend = ROW_HEIGHT / 4, reach = ROW_HEIGHT * 5 / 12;
+      const bend = rowHeight / 4, reach = rowHeight * 5 / 12;
       ctx.bezierCurveTo(x1, y1 + bend, xt, y1 + bend, xt, y1 + reach);
       ctx.lineTo(xt, y2 - reach);
       ctx.bezierCurveTo(xt, y2 - bend, x2, y2 - bend, x2, y2);
@@ -302,14 +304,14 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       ctx.globalAlpha = alpha;
       if (commit.id === head) {
         // Material rings HEAD with a scalloped (cookie) outline, even around a small merge dot.
-        if (material) traceShape(ctx, 'cookie', x, cy, 13 * (commit.id === selectedId ? 1.2 : 1) + 6, 0.12); else { ctx.beginPath(); ctx.arc(x, cy, radius + (avatars ? 5 : 4), 0, Math.PI * 2); }
+        if (material) traceShape(ctx, 'cookie', x, cy, (commit.id === selectedId ? 13 * 1.2 + 4 : 13 + 5), 0.12); else { ctx.beginPath(); ctx.arc(x, cy, radius + (avatars ? 5 : 4), 0, Math.PI * 2); }
         ctx.strokeStyle = theme.colors.graphHead; ctx.stroke();
       }
       if (avatarNode) continue;
       ctx.beginPath();
       if (working) {
         // Uncommitted work is a dashed, hollow marker (a round one in Material).
-        if (material) { ctx.arc(x, cy, 10, 0, Math.PI * 2); ctx.lineWidth = 2.5; } else ctx.roundRect(x - 5, cy - 5, 10, 10, 2.5);
+        if (material) { ctx.arc(x, cy, 9, 0, Math.PI * 2); ctx.lineWidth = 2.5; } else ctx.roundRect(x - 5, cy - 5, 10, 10, 2.5);
         ctx.fillStyle = bg; ctx.fill();
         ctx.setLineDash([3, 3]); ctx.strokeStyle = lane; ctx.stroke(); ctx.setLineDash([]);
       } else {
@@ -478,11 +480,11 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
           }
           if ((event.key === 'Enter' || event.key === ' ') && active) { event.preventDefault(); active.click(); return; }
           if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && selectedId !== WORKING_ID && onContextActions) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); onContextActions({ oid: selectedId }, rect.left + 24, rect.top + 24, event.currentTarget); }
-          const moves: Record<string, number> = { ArrowDown: selectedIndex + 1, ArrowUp: selectedIndex - 1, Home: 0, End: loaded - 1, PageDown: selectedIndex + Math.floor(height / ROW_HEIGHT), PageUp: selectedIndex - Math.floor(height / ROW_HEIGHT) };
+          const moves: Record<string, number> = { ArrowDown: selectedIndex + 1, ArrowUp: selectedIndex - 1, Home: 0, End: loaded - 1, PageDown: selectedIndex + Math.floor(height / rowHeight), PageUp: selectedIndex - Math.floor(height / rowHeight) };
           if (event.key in moves) { event.preventDefault(); setActiveControl(null); navigate(moves[event.key]); }
           if (event.key === 'Enter') { event.preventDefault(); onOpenDetails(); }
         }}>
-        <div className="history-spacer" style={{ height: loaded * ROW_HEIGHT }}>
+        <div className="history-spacer" style={{ height: loaded * rowHeight }}>
           {isGraphVisible && <canvas ref={canvas} className="graph-canvas" aria-hidden="true" style={{ width: graphWidth, height: windowHeight, left: graphOffset, top: windowTop }} />}
           {commits.slice(start, end).map((commit, offset) => {
             const row = start + offset;
@@ -497,8 +499,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
               aria-label={`${commit.subject}, ${commit.author}, ${commit.id.slice(0, 7)}${commit.parents.length > 1 ? ', merge commit' : ''}${commit.id === head ? ', HEAD' : ''}${badges.length ? `, ${badges.map(b => b.name).join(', ')}` : ''}`}
               className={`commit-row ${commit.id === selectedId ? 'selected' : ''} ${shown && !shown.has(commit.id) ? 'dimmed' : ''} ${freshIds.has(commit.id) ? 'fresh' : ''} ${commit.id === WORKING_ID ? 'working' : ''} ${joinRefs && badges.length ? 'connect' : ''} ${row > 0 && dayStarts.starts.has(row) ? 'day-start' : ''}`}
               style={{
-                top: row * ROW_HEIGHT,
-                height: ROW_HEIGHT,
+                top: row * rowHeight,
+                height: rowHeight,
                 gridTemplateColumns,
                 '--branch-color': branchColor,
                } as React.CSSProperties} onContextMenu={event => { if (onContextActions && commit.id !== WORKING_ID) { event.preventDefault(); onContextActions({ oid: commit.id }, event.clientX, event.clientY, scroller.current ?? event.currentTarget); } }} onClick={() => { onSelect(commit.id); scroller.current?.focus(); }} onDoubleClick={onOpenDetails}>

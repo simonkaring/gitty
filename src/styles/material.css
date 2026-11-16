@@ -690,7 +690,7 @@ html[data-design='material'] {
   }
   & .day-label {
     position: absolute;
-    top: -9px;
+    top: -3px;
     left: 8px;
     z-index: 4;
     display: inline-flex;
