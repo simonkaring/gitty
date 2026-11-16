@@ -147,6 +147,11 @@ describe('theme files and render tokens', () => {
     expect(importTheme(exportTheme(material)).design).toBe('material');
     expect(() => validateTheme({ ...custom(), design: 'nope' })).toThrow();
   });
+  it('ships the Apple presets in both modes on the Apple design family', () => {
+    expect(BUILTIN_THEMES.filter(t => t.design === 'apple').map(t => [t.id, t.name, t.mode])).toEqual([['apple-light', 'Apple', 'light'], ['apple-dark', 'Apple Dark', 'dark']]);
+    expect(importTheme(exportTheme({ ...BUILTIN_THEMES.at(-1)!, id: 'custom-apple' })).design).toBe('apple');
+    expect(() => validateTheme({ ...custom(), design: 'apple' })).not.toThrow();
+  });
   it('generates readable Material palettes from any seed color', () => {
     for (const seed of ['#6750a4', '#0b57d0', '#ff0000', '#00ff00', '#ffee00', '#808080'] as const) for (const mode of ['light', 'dark'] as const) {
       const colors = materialColors(seed, mode);
@@ -166,7 +171,7 @@ describe('theme files and render tokens', () => {
     expect(() => importTheme(' '.repeat(100_001))).toThrow();
   });
   it('renders complete semantic and graph tokens for all builtins', () => {
-    expect(BUILTIN_THEMES).toHaveLength(10);
+    expect(BUILTIN_THEMES).toHaveLength(12);
     for (const theme of BUILTIN_THEMES) {
       expect(Object.keys(theme.colors)).toEqual([...COLOR_KEYS]);
       expect(() => validateTheme({ ...theme, id: 'custom-check' })).not.toThrow();
@@ -181,6 +186,12 @@ describe('theme files and render tokens', () => {
     for (const { colors } of BUILTIN_THEMES.slice(0, 2)) {
       for (const fg of ['text', 'secondary', 'muted']) for (const bg of ['bg', 'chrome', 'sidebar', 'raised', 'subtle']) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
       for (const [fg, bg] of [['buttonForeground', 'accentText'], ['accentText', 'accentWash'], ['accentText', 'selected'], ['green', 'greenWash'], ['red', 'redWash']]) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+  it('keeps Apple presets at WCAG AA for text on every surface', () => {
+    for (const { colors } of BUILTIN_THEMES.slice(-2)) {
+      for (const fg of ['text', 'secondary', 'muted']) for (const bg of ['bg', 'chrome', 'sidebar', 'raised', 'subtle']) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
+      for (const [fg, bg] of [['accentText', 'accentWash'], ['accentText', 'selected'], ['green', 'greenWash'], ['red', 'redWash']]) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
     }
   });
   it('computes WCAG luminance contrast with symmetry and known endpoints', () => {

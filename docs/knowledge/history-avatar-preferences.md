@@ -38,7 +38,7 @@ provider.[^settings][^controls]
 
 When enabled, visible, laid-out commit rows render 22px `AuthorAvatar`
 elements (the author-column size) centered on 30px-spaced graph lanes above
-canvas connections. Dot mode uses 24px lane spacing and 40px rows. The graph column's
+canvas connections. Dot mode uses 24px lane spacing and 40px rows (44px under the Apple design, 52px under Material). The graph column's
 minimum width expands to fit three avatar lanes. Horizontal
 graph panning shifts their positions; row virtualization limits rendered
 avatars. Search-dimmed rows also dim their avatar nodes. Avatars are filled with

@@ -485,7 +485,7 @@ export function NativeInspector({
               </div>
 
               <dl className="commit-metadata">
-                <div>
+                <div className="meta-sha">
                   <dt>Commit</dt>
                   <dd className="full-sha" title={viewId}>
                     <code className="native-sha">{viewId}</code>

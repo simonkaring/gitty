@@ -1,4 +1,4 @@
-import { Fragment, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Icons } from './icons';
 import type { CommitSummary, RepositoryState } from '../model/repository';
 import { acceptsGraphDrop, graphDropAction, REF_DRAG_TYPE, COMMIT_DRAG_TYPE } from './HistoryGraph';
@@ -7,6 +7,8 @@ import { folderLabel, type BranchFolder } from '../model/branchDelete';
 import { DEFAULT_SIDEBAR_SECTIONS, type SidebarSectionConfig, type SidebarSectionId } from '../model/settings';
 import type { StashActionRequest } from '../model/remote';
 import { OrderMenu } from './OrderMenu';
+import type { GitRef } from '../model/types';
+import { assignBranchColors, branchName } from '../graph/branchColor';
 
 interface NativeSidebarProps {
   state: RepositoryState;
@@ -75,9 +77,18 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
   // Matching the stash dialog: a second click on the same stash confirms a drop.
   const [confirmDrop, setConfirmDrop] = useState<string | null>(null);
   const optionsButton = useRef<HTMLButtonElement>(null);
+  // Apple lists show the branch's graph colour on its icon and a trailing check on HEAD; other designs keep the leading check.
+  const apple = document.documentElement.dataset.design === 'apple';
+  const currentBranch = session.headRef?.startsWith('refs/heads/') ? session.headRef.slice(11) : null;
+  // Colour assignment depends only on the refs, so it matches the graph's without walking the commits.
+  const branchColors = useMemo(() => assignBranchColors([], state.refs, undefined, currentBranch).branches, [state.refs, currentBranch]);
   const nodes: Record<SidebarSectionId, ReactNode> = {    worktrees,
     local: null, remote: null, tag: null, stash: null,
     remotes: state.remotes.length > 0 && <details className="reference-group" data-section="remotes"><summary><Icons.Cloud size={15} aria-hidden="true" />Remotes<span className="count">{state.remotes.length}</span></summary>{state.remotes.map(remote => <p key={remote}>{remote}</p>)}</details>,
+  };
+  const branchStyle = (ref: GitRef): CSSProperties | undefined => {
+    const index = branchColors.get(branchName(ref) ?? '');
+    return index === undefined ? undefined : { '--branch-color': index >= 8 ? 'var(--accent)' : `var(--graph-lane${index + 1})` } as CSSProperties;
   };
   for (const { kind, label, Icon } of GROUPS) {
     const refs = state.refs.filter(ref => ref.kind === kind && !(kind === 'remote' && ref.fullName === 'refs/remotes/origin/HEAD'));
@@ -85,13 +96,13 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
     const tree = buildRefTree(refs, prefix, state.remotes);
     const renderTree = (node: RefTree, parts: string[] = []): ReactNode => <>
       {[...node.refs].sort((a, b) => a.fullName < b.fullName ? -1 : a.fullName > b.fullName ? 1 : 0).map(ref => <div className={`ref-action-row${ref.fullName === session.headRef ? ' current' : ''}`} key={ref.fullName} onMouseEnter={() => onHoverRef?.(ref.fullName)} onMouseLeave={() => onHoverRef?.(null)} onFocus={() => onHoverRef?.(ref.fullName)} onBlur={() => onHoverRef?.(null)} onContextMenu={event => { event.preventDefault(); openMenu({ oid: ref.commitId, ref: ref.fullName }, event.clientX, event.clientY, event.currentTarget.querySelector('button')!); }}>
-        <button className="ref-item" title={kind === 'stash' ? `${ref.fullName}: ${stashMessage(ref.name)}` : ref.fullName} aria-label={`${kind} ${ref.fullName}`} aria-current={ref.fullName === session.headRef ? 'true' : undefined} disabled={busy} draggable={ref.kind === 'local' || ref.kind === 'remote'}
+        <button className="ref-item" title={kind === 'stash' ? `${ref.fullName}: ${stashMessage(ref.name)}` : ref.fullName} aria-label={`${kind} ${ref.fullName}`} aria-current={ref.fullName === session.headRef ? 'true' : undefined} style={branchStyle(ref)} disabled={busy} draggable={ref.kind === 'local' || ref.kind === 'remote'}
           onDragStart={event => { event.stopPropagation(); if (ref.kind !== 'local' && ref.kind !== 'remote') { event.preventDefault(); return; } event.dataTransfer.clearData(COMMIT_DRAG_TYPE); event.dataTransfer.setData(REF_DRAG_TYPE, ref.fullName); event.dataTransfer.effectAllowed = 'copy'; }}
           onDragOver={event => { if (!busy && acceptsGraphDrop(event.dataTransfer, ref, session.headRef)) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
           onDrop={event => { event.preventDefault(); event.stopPropagation(); const action = graphDropAction(event.dataTransfer, ref.fullName, session.headRef, commits, state.refs); if (action) onAction(action); }}
           onClick={() => reveal(ref.commitId)} onDoubleClick={() => { if (ref.kind === 'local' || (ref.kind === 'remote' && ref.fullName.startsWith('refs/remotes/origin/') && ref.fullName !== 'refs/remotes/origin/HEAD')) switchBranch(ref.fullName); }}
           onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openMenu({ oid: ref.commitId, ref: ref.fullName }, rect.left, rect.bottom, event.currentTarget); } }}>
-          {kind === 'tag' || kind === 'stash' ? <Icon size={14} aria-hidden="true" /> : ref.fullName === session.headRef ? <Icons.Check className="current-branch-check" size={14} aria-hidden="true" /> : <Icons.GitBranch size={14} aria-hidden="true" />}<span>{kind === 'tag' || kind === 'stash' ? (kind === 'stash' ? stashMessage(ref.name) : ref.name) : ref.name.split('/').at(-1)}</span>
+          {kind === 'tag' || kind === 'stash' ? <Icon size={14} aria-hidden="true" /> : ref.fullName === session.headRef && !apple ? <Icons.Check className="current-branch-check" size={14} aria-hidden="true" /> : <Icons.GitBranch size={14} aria-hidden="true" />}<span>{kind === 'tag' || kind === 'stash' ? (kind === 'stash' ? stashMessage(ref.name) : ref.name) : ref.name.split('/').at(-1)}</span>{ref.fullName === session.headRef && apple && <Icons.Check className="current-branch-check" size={14} aria-hidden="true" />}
         </button>{kind === 'stash' && onStash ? <>
           <button className="icon-button sm" aria-label="Pop stash" title="Pop stash" disabled={busy} onClick={() => onStash({ kind: 'pop', oid: ref.commitId, restoreIndex: true })}><Icons.ArchiveRestore size={13} /></button>
           <button className="icon-button sm" data-danger={confirmDrop === ref.commitId ? 'true' : undefined} aria-label={confirmDrop === ref.commitId ? 'Confirm drop stash' : 'Drop stash'} title={confirmDrop === ref.commitId ? 'Click again to drop' : 'Drop stash'} disabled={busy} onClick={() => { if (confirmDrop === ref.commitId) { setConfirmDrop(null); onStash({ kind: 'drop', oid: ref.commitId }); } else setConfirmDrop(ref.commitId); }}><Icons.Trash2 size={13} /></button>
@@ -109,7 +120,7 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
             onContextMenu={folder && openFolderMenu ? event => { event.preventDefault(); openFolderMenu(folder, event.clientX, event.clientY, event.currentTarget); } : undefined}
             onKeyDown={folder && openFolderMenu ? event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openFolderMenu(folder, rect.left, rect.bottom, event.currentTarget); } } : undefined}>
             <Icons.ChevronRight className="reference-folder-chevron" size={12} aria-hidden="true" />
-            {kind === 'remote' && parts.length === 0 ? <Icons.Globe2 className="reference-folder-icon" size={14} aria-hidden="true" /> : <><Icons.Folder className="reference-folder-icon folder-closed" size={14} aria-hidden="true" /><Icons.FolderOpen className="reference-folder-icon folder-open" size={14} aria-hidden="true" /></>}
+            {kind === 'remote' && parts.length === 0 ? (apple ? <Icons.Cloud className="reference-folder-icon remote-root" size={14} aria-hidden="true" /> : <Icons.Globe2 className="reference-folder-icon" size={14} aria-hidden="true" />) : <><Icons.Folder className="reference-folder-icon folder-closed" size={14} aria-hidden="true" /><Icons.FolderOpen className="reference-folder-icon folder-open" size={14} aria-hidden="true" /></>}
             <span className="reference-folder-name">{name}</span>
             {folder && openFolderMenu && <button type="button" className="icon-button sm reference-folder-actions" aria-label={`Actions for folder ${folderLabel(folder)}`} aria-haspopup="menu" onClick={event => { event.preventDefault(); event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); openFolderMenu(folder, rect.left, rect.bottom, event.currentTarget); }}>…</button>}
           </summary>

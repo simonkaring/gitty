@@ -1,4 +1,4 @@
-export type DesignFamily = 'default' | 'material';
+export type DesignFamily = 'default' | 'material' | 'apple';
 export interface ThemeDefinition {
   id: string;
   name: string;
@@ -48,6 +48,26 @@ export const BUILTIN_THEMES: ThemeDefinition[] = [
     },
   },
 ];
+// Apple: macOS/iOS system palette. Surfaces, separators and washes are the reference's
+// translucent values flattened onto their base; accent/green/red text are darkened or
+// lightened to reach WCAG AA on washes and selection.
+const apple = (mode: 'light' | 'dark', colors: Record<string, string>): ThemeDefinition => ({ id: `apple-${mode}`, name: mode === 'dark' ? 'Apple Dark' : 'Apple', mode, design: 'apple', colors } as ThemeDefinition);
+BUILTIN_THEMES.push(
+  apple('light', {
+    bg: '#ffffff', chrome: '#f2f2f7', sidebar: '#f1f1f5', raised: '#ffffff', subtle: '#f4f4f4', hover: '#ebebeb', border: '#e6e6e6', borderStrong: '#bbbbbc',
+    text: '#1d1d1f', secondary: '#696970', muted: '#5e5e63', accent: '#007aff', accentText: '#00438c', accentWash: '#e0efff', selected: '#c2dfff',
+    green: '#187a34', greenWash: '#e3f7e8', red: '#d70015', redWash: '#ffe7e6', buttonForeground: '#ffffff', shadow: '#0000002e', backdrop: '#00000052',
+    graphLane1: '#007aff', graphLane2: '#af52de', graphLane3: '#ff2d55', graphLane4: '#ff9500', graphLane5: '#34c759', graphLane6: '#30b0c7', graphLane7: '#5856d6', graphLane8: '#6d6d72',
+    graphSelection: '#007aff', graphMerge: '#ff9500', graphHead: '#007aff',
+  }),
+  apple('dark', {
+    bg: '#1c1c1e', chrome: '#141416', sidebar: '#262628', raised: '#202023', subtle: '#2b2b2d', hover: '#38383a', border: '#333335', borderStrong: '#5d5d5f',
+    text: '#f5f5f7', secondary: '#c7c7cc', muted: '#a1a1a6', accent: '#0a84ff', accentText: '#57abff', accentWash: '#192f47', selected: '#163d66',
+    green: '#3ddb64', greenWash: '#1f3526', red: '#ff7a70', redWash: '#3e2222', buttonForeground: '#ffffff', shadow: '#00000080', backdrop: '#000000a6',
+    graphLane1: '#0a84ff', graphLane2: '#bf5af2', graphLane3: '#ff375f', graphLane4: '#ff9f0a', graphLane5: '#30d158', graphLane6: '#40c8e0', graphLane7: '#5e5ce6', graphLane8: '#a8a8b3',
+    graphSelection: '#0a84ff', graphMerge: '#ff9f0a', graphHead: '#0a84ff',
+  }),
+);
 export const MAX_CUSTOM_THEMES = 30;
 export const MAX_THEME_FILE_BYTES = 100_000;
 export function isColor(value: unknown, alpha = false): value is string {
@@ -56,7 +76,7 @@ export function isColor(value: unknown, alpha = false): value is string {
 export function validateTheme(value: unknown): ThemeDefinition {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Theme must be an object.');
   const t = value as ThemeDefinition;
-  if (Object.keys(t).some(k => !['id', 'name', 'mode', 'design', 'colors'].includes(k)) || typeof t.id !== 'string' || !/^custom-[a-zA-Z0-9-]{1,80}$/.test(t.id) || typeof t.name !== 'string' || !t.name.trim() || t.name.length > 60 || /[\u0000-\u001f]/.test(t.name) || !['light', 'dark'].includes(t.mode) || (t.design !== undefined && !['default', 'material'].includes(t.design as string))) throw new Error('Invalid custom theme identity, name, mode, or design family.');
+  if (Object.keys(t).some(k => !['id', 'name', 'mode', 'design', 'colors'].includes(k)) || typeof t.id !== 'string' || !/^custom-[a-zA-Z0-9-]{1,80}$/.test(t.id) || typeof t.name !== 'string' || !t.name.trim() || t.name.length > 60 || /[\u0000-\u001f]/.test(t.name) || !['light', 'dark'].includes(t.mode) || (t.design !== undefined && !['default', 'material', 'apple'].includes(t.design as string))) throw new Error('Invalid custom theme identity, name, mode, or design family.');
   if (!t.colors || Array.isArray(t.colors) || typeof t.colors !== 'object' || Object.keys(t.colors).length !== COLOR_KEYS.length || COLOR_KEYS.some(k => !Object.hasOwn(t.colors, k) || !isColor(t.colors[k], k === 'shadow' || k === 'backdrop'))) throw new Error('Theme must contain every supported color, no unknown colors, using #RRGGBB (shadow/backdrop may use #RRGGBBAA).');
   return { id: t.id, name: t.name.trim(), mode: t.mode, ...(t.design ? { design: t.design } : {}), colors: { ...t.colors } };
 }

@@ -95,9 +95,10 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const { settings, updateSettings } = useSettings();
   // Material draws every node as a shaped author avatar; other designs follow the setting.
   const material = theme.design === 'material';
+  const apple = theme.design === 'apple';
   const avatars = settings.graphAuthorAvatars || material;
   // Material uses roomier rows so avatars, the HEAD ring and day dividers don't crowd each other.
-  const rowHeight = material ? 52 : ROW_HEIGHT;
+  const rowHeight = material ? 52 : apple ? 44 : ROW_HEIGHT;
   const graphLaneWidth = avatars ? 30 : LANE_WIDTH;
   const graphLaneX = useMemo(() => (lane: number) => laneX(0) + lane * graphLaneWidth, [graphLaneWidth]);
   const minGraphWidth = graphLaneX(2) + 14;
@@ -261,7 +262,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     const bg = theme.colors.bg;
     ctx.setTransform(dpr, 0, 0, dpr, -graphX * dpr, 0);
     ctx.clearRect(graphX, 0, graphWidth, windowHeight);
-    ctx.lineWidth = 2.5;
+    ctx.lineWidth = apple ? 1.75 : 2.5;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     const colorRowOf = (edge: GraphEdge) => commits[edge.fromRow]?.parents[0] === edge.to ? edge.fromRow : edge.toRow;
@@ -298,7 +299,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       // Solid dots are bigger than merge dots; the selected node grows like its avatar counterpart does.
       // A stash record is a two-parent commit whose index parent is not drawn; it is not a user merge.
       const merge = commit.parents.length > 1 && !refsByCommit.get(commit.id)?.some(ref => ref.kind === 'stash'), avatarNode = avatars && !working && !(material && merge);
-      const radius = (avatarNode ? (material ? 13 : 11) : merge ? 5.5 : 7) * (commit.id === selectedId ? 1.2 : 1);
+      const radius = (avatarNode ? (material ? 13 : 11) : apple ? (merge ? 4 : 5) : merge ? 5.5 : 7) * (commit.id === selectedId ? 1.2 : 1);
       ctx.lineWidth = 2;
       if (joinRefs && refsByCommit.has(commit.id) && x - radius - 3 > graphX) {
         ctx.globalAlpha = alpha * 0.75; ctx.strokeStyle = lane;
@@ -308,7 +309,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       if (commit.id === head) {
         // Material rings HEAD with a scalloped (cookie) outline, even around a small merge dot.
         if (material) traceShape(ctx, 'cookie', x, cy, (commit.id === selectedId ? 13 * 1.2 + 4 : 13 + 5), 0.12); else { ctx.beginPath(); ctx.arc(x, cy, radius + (avatars ? 5 : 4), 0, Math.PI * 2); }
-        ctx.strokeStyle = theme.colors.graphHead; ctx.stroke();
+        ctx.strokeStyle = apple ? theme.colors.text : theme.colors.graphHead; ctx.stroke();
       }
       if (avatarNode) continue;
       ctx.beginPath();
@@ -325,7 +326,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       }
     }
     ctx.globalAlpha = 1;
-  }, [commits, layout, visibleEdges, windowTop, windowHeight, graphWidth, graphX, theme, matches, focus, shown, loaded, colors, palette, branchColors, avatars, material, graphLaneX, joinRefs, refsByCommit, selectedId, head]);
+  }, [commits, layout, visibleEdges, windowTop, windowHeight, graphWidth, graphX, theme, matches, focus, shown, loaded, colors, palette, branchColors, avatars, material, apple, graphLaneX, joinRefs, refsByCommit, selectedId, head]);
 
   useEffect(() => {
     const node = layout.nodes[selectedIndex];
@@ -501,6 +502,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
           if (event.key === 'Enter') { event.preventDefault(); onOpenDetails(); }
         }}>
         <div className="history-spacer" style={{ height: loaded * rowHeight }}>
+          {/* Apple design: the reference draws one rounded blue rect behind the selected row, spanning the whole row. */}
+          {theme.design === 'apple' && selectedIndex >= 0 && <div className="history-selection" aria-hidden="true" style={{ top: selectedIndex * rowHeight, height: rowHeight - 2, left: 10, right: 10 }} />}
           {isGraphVisible && <canvas ref={canvas} className="graph-canvas" aria-hidden="true" style={{ width: graphWidth, height: windowHeight, left: graphOffset, top: windowTop }} />}
           {commits.slice(start, end).map((commit, offset) => {
             const row = start + offset;

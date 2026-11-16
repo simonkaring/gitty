@@ -16,6 +16,7 @@ const presets = [
   ['dracula', 'dark', '#282a36', '#bd93f9'], ['nord', 'dark', '#2e3440', '#88c0d0'],
   ['catppuccin-latte', 'light', '#eff1f5', '#8839ef'], ['catppuccin-mocha', 'dark', '#1e1e2e', '#cba6f7'],
   ['material-google-dark', 'dark', '#1a1c25', '#8ab4f8'], ['material-google-light', 'light', '#eef0f8', '#1a73e8'],
+  ['apple-light', 'light', '#ffffff', '#007aff'], ['apple-dark', 'dark', '#1c1c1e', '#0a84ff'],
 ];
 const check = async (name, run) => { await run(); checks.push(name); console.log(`PASS ${name}`); };
 const stored = page => page.evaluate(() => localStorage.getItem('gitty:settings'));

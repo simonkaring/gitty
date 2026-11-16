@@ -37,7 +37,17 @@ outside `SettingsProvider` still work.
 - anything else renders the Lucide SVG component.
 
 `MATERIAL` maps each Lucide name to a glyph in `PARTS`; names without a mapping keep
-their Lucide icon. Adding a glyph means adding its 24x24 inner markup to `PARTS`,
+their Lucide icon. The Apple design family swaps Lucide for `APPLE_PARTS`, the
+reference's own 24px symbol set with 1.6px rounded strokes (redrawn in the same
+language where the reference has no glyph), and shares `MATERIAL`'s name coverage.
+Its SVG keeps two class families so existing CSS keeps working: `apple-glyph` plus
+the `lucide lucide-<name>` marker that the sidebar hover animations in `motion.css`
+target, and the caller's own class. `APPLE_PARTS` is deliberately separate from
+`PARTS` so Material geometry and glyph animation stay untouched.
+Hover-rotating Apple parts use `rot`, not `spin`: the global `.spin` in `tokens.css` is the
+busy-icon animation and would turn a part forever.
+
+Adding a glyph means adding its 24x24 inner markup to `PARTS`,
 tagging moving parts with `ai-*` classes, and mapping the Lucide name in `MATERIAL`.
 
 ## Motion
@@ -56,6 +66,8 @@ No icon font or extra asset is shipped; the glyphs are drawn by the app.
 
 ## Verification
 
-`npm test` and `npm run build` cover the swap; `settings.smoke.mjs` selects both Material
-presets and asserts paint. Per-icon animation is CSS only and not covered by unit tests,
-so check a Material preset and hover the toolbar and sidebar in `npm run dev`.
+`npm test` and `npm run build` cover the swap; `icons.test.tsx` asserts the Apple
+glyph, stroke width and class contract. `settings.smoke.mjs` selects both Material and
+Apple presets and asserts paint. Per-icon animation is CSS only and not covered by
+unit tests, so check a Material or Apple preset and hover the toolbar and sidebar in
+`npm run dev`.
