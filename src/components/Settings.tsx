@@ -3,6 +3,7 @@ import { Dialog } from './ui';
 import { DEFAULT_SETTINGS, MONO_FONTS, useSettings, type DesignFamily } from '../model/settings';
 import { COLOR_KEYS, MAX_CUSTOM_THEMES, MAX_THEME_FILE_BYTES, contrastRatio, exportTheme, importTheme, isColor, validateTheme, type ThemeDefinition } from '../model/themes';
 import { MAX_COMMIT_PROFILES, validateCommitProfile, type CommitProfile } from '../model/commitProfiles';
+import { materialColors } from '../model/materialPalette';
 import { IntegrationsSettings } from './IntegrationsSettings';
 
 const newId = () => `custom-${crypto.randomUUID()}`;
@@ -24,6 +25,7 @@ export function SettingsDialog({ demo = false, onToggleDemo, demoBusy = false }:
   const [colorErrors, setColorErrors] = useState<Record<string, string>>({});
   const importGeneration = useRef(0);
   const [importing, setImporting] = useState(false);
+  const [seed, setSeed] = useState('#0b57d0');
   const dirty = draft !== null && (JSON.stringify(draft) !== JSON.stringify(baseline) || !settings.customThemes.some(t => t.id === draft.id) || Object.keys(colorErrors).length > 0);
   useEffect(() => { if (api.isSettingsOpen && api.settingsSection) setSection(api.settingsSection); }, [api.isSettingsOpen, api.settingsSection]);
   function finish() {
@@ -104,6 +106,7 @@ export function SettingsDialog({ demo = false, onToggleDemo, demoBusy = false }:
         <button className="text-button" disabled={Object.keys(colorErrors).length > 0} onClick={download}>Export {draft ? 'preview' : 'active theme'} JSON</button>
         {draft && <div className="theme-editor"><h3>Custom theme editor</h3><label className="settings-field">Theme name<input value={draft.name} maxLength={60} onChange={e => changeDraft({ ...draft, name: e.target.value })} /></label><label className="settings-field">Appearance<select value={draft.mode} onChange={e => changeDraft({ ...draft, mode: e.target.value as 'light' | 'dark' })}><option value="light">Light</option><option value="dark">Dark</option></select></label>
           <label className="settings-field">Design family<select value={draft.design ?? 'default'} onChange={e => changeDraft({ ...draft, design: e.target.value as DesignFamily })}><option value="default">Gitty default</option><option value="material">Material Google</option></select></label>
+          <div className="settings-actions"><label className="theme-color"><span>Seed color</span><input type="color" aria-label="Seed color" value={seed} onChange={e => setSeed(e.target.value)} /></label><button className="secondary-button" onClick={() => { setColorErrors({}); changeDraft({ ...draft, design: 'material', colors: materialColors(seed, draft.mode) }); }}>Generate Material palette</button></div>
           <p>Colors use #RRGGBB; shadow and backdrop also accept #RRGGBBAA.</p>
           <div className="theme-color-grid">{COLOR_KEYS.map(key => <label key={key} className="theme-color"><span>{key.replace(/([A-Z])/g, ' $1')}</span><input type="color" aria-label={`${key} color picker`} value={draft.colors[key].slice(0, 7)} onChange={e => { const next = { ...colorErrors }; delete next[key]; setColorErrors(next); changeDraft({ ...draft, colors: { ...draft.colors, [key]: e.target.value } }); }} /><input aria-label={`${key} hex color`} aria-invalid={Object.hasOwn(colorErrors, key)} value={colorErrors[key] ?? draft.colors[key]} onChange={e => { const value = e.target.value; if (isColor(value, key === 'shadow' || key === 'backdrop')) { const next = { ...colorErrors }; delete next[key]; setColorErrors(next); changeDraft({ ...draft, colors: { ...draft.colors, [key]: value } }); } else setColorErrors({ ...colorErrors, [key]: value }); }} /></label>)}</div>
           {Object.keys(colorErrors).length > 0 && <p role="alert">Invalid hex colors: {Object.keys(colorErrors).join(', ')}. Preview retains their last valid values.</p>}

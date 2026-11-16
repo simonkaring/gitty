@@ -35,7 +35,16 @@ export const BUILTIN_THEMES: ThemeDefinition[] = [
     mode: 'dark',
     design: 'material',
     colors: {
-      bg: '#202124', chrome: '#171717', sidebar: '#1a1a1a', raised: '#292a2d', subtle: '#303134', hover: '#3c3d41', border: '#3c4043', borderStrong: '#5f6368', text: '#e8eaed', secondary: '#bdc1c6', muted: '#9aa0a6', accent: '#8ab4f8', accentText: '#8ab4f8', accentWash: '#1a2a4a', selected: '#2a3a5a', green: '#81c995', greenWash: '#1e2e24', red: '#f28b82', redWash: '#3a2020', buttonForeground: '#202124', shadow: '#00000080', backdrop: '#000000a6', graphLane1: '#8ab4f8', graphLane2: '#f28b82', graphLane3: '#81c995', graphLane4: '#fdd663', graphLane5: '#d7aefb', graphLane6: '#78d9ec', graphLane7: '#fcad70', graphLane8: '#bdc1c6', graphSelection: '#8ab4f8', graphMerge: '#fdd663', graphHead: '#81c995',
+      bg: '#1e1f20', chrome: '#131314', sidebar: '#131314', raised: '#282a2c', subtle: '#333537', hover: '#3b3d3f', border: '#444746', borderStrong: '#8e918f', text: '#e3e3e3', secondary: '#c4c7c5', muted: '#a2a5a4', accent: '#a8c7fa', accentText: '#a8c7fa', accentWash: '#1f3358', selected: '#004a77', green: '#6dd58c', greenWash: '#153322', red: '#f2b8b5', redWash: '#40201f', buttonForeground: '#062e6f', shadow: '#00000099', backdrop: '#00000080', graphLane1: '#8ab4f8', graphLane2: '#f28b82', graphLane3: '#81c995', graphLane4: '#fdd663', graphLane5: '#d7aefb', graphLane6: '#78d9ec', graphLane7: '#fcad70', graphLane8: '#ff8bcb', graphSelection: '#a8c7fa', graphMerge: '#fdd663', graphHead: '#6dd58c',
+    },
+  },
+  {
+    id: 'material-google-light',
+    name: 'Material Google Light',
+    mode: 'light',
+    design: 'material',
+    colors: {
+      bg: '#ffffff', chrome: '#f6f8fc', sidebar: '#f6f8fc', raised: '#f0f4f9', subtle: '#e9eef6', hover: '#dde3ea', border: '#c7c7c7', borderStrong: '#747775', text: '#1f1f1f', secondary: '#444746', muted: '#5f6368', accent: '#0b57d0', accentText: '#0b57d0', accentWash: '#d3e3fd', selected: '#c2e7ff', green: '#146c2e', greenWash: '#c4eed0', red: '#b3261e', redWash: '#f9dedc', buttonForeground: '#ffffff', shadow: '#00000040', backdrop: '#00000052', graphLane1: '#1a73e8', graphLane2: '#d93025', graphLane3: '#188038', graphLane4: '#b06000', graphLane5: '#9334e6', graphLane6: '#129eaf', graphLane7: '#e8710a', graphLane8: '#c2185b', graphSelection: '#0b57d0', graphMerge: '#b06000', graphHead: '#188038',
     },
   },
 ];

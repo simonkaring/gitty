@@ -15,7 +15,7 @@ const presets = [
   ['gruvbox-light', 'light', '#fbf1c7', '#076678'], ['gruvbox-dark', 'dark', '#282828', '#8ec07c'],
   ['dracula', 'dark', '#282a36', '#bd93f9'], ['nord', 'dark', '#2e3440', '#88c0d0'],
   ['catppuccin-latte', 'light', '#eff1f5', '#8839ef'], ['catppuccin-mocha', 'dark', '#1e1e2e', '#cba6f7'],
-  ['material-google-dark', 'dark', '#202124', '#8ab4f8'],
+  ['material-google-dark', 'dark', '#1e1f20', '#8ab4f8'], ['material-google-light', 'light', '#ffffff', '#1a73e8'],
 ];
 const check = async (name, run) => { await run(); checks.push(name); console.log(`PASS ${name}`); };
 const stored = page => page.evaluate(() => localStorage.getItem('gitty:settings'));
@@ -103,7 +103,7 @@ try {
   await open(page);
   assert.equal(await dialog(page).evaluate(el => el.getBoundingClientRect().width), 1000, 'desktop settings width must survive global dialog styles');
   assert.equal(await dialog(page).evaluate(el => el.scrollWidth <= el.clientWidth), true, 'desktop settings must not overflow horizontally');
-  await check('all eight presets repaint CSS and actual history canvas pixels', async () => {
+  await check('all presets repaint CSS and actual history canvas pixels', async () => {
     await select(page, 'Theme behavior').selectOption('fixed');
     for (const [id, mode, bg, graph] of presets) {
       await select(page, 'Theme').selectOption(id);

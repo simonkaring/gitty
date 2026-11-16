@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { attachRipple } from './ripple';
 import { BUILTIN_THEMES, MAX_CUSTOM_THEMES, themeTokens, validateTheme, type ThemeDefinition } from './themes';
 import { MAX_COMMIT_PROFILES, validateCommitProfile, type CommitProfile } from './commitProfiles';
 export type { ThemeDefinition } from './themes';
@@ -130,6 +131,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     root.style.setProperty('--mono', `'${settings.monoFont}', monospace`);
     root.style.setProperty('--editor-font-size', `${settings.fontSize}px`);
   }, [theme, settings.diffWrap, settings.fontSize, settings.monoFont]);
+  useEffect(() => theme.design === 'material' ? attachRipple() : undefined, [theme.design]);
   const resetWorkspace = () => {
     const paneWidths = { ...DEFAULT_SETTINGS.paneWidths };
     updateSettings({ paneWidths });

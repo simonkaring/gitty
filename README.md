@@ -144,9 +144,9 @@ Branch creation and merges preserve local changes when Git can safely carry them
 
 Open the gear button or **Cmd/Ctrl+,** from either workspace, including the native welcome screen.
 
-- **Presets:** Gitty Light/Dark, Gruvbox Light/Dark, Dracula, Nord, Catppuccin Latte/Mocha.
+- **Presets:** Gitty Light/Dark, Gruvbox Light/Dark, Dracula, Nord, Catppuccin Latte/Mocha, Material Google Light/Dark.
 - **System appearance:** choose separate light and dark themes, or use one fixed theme.
-- **Design family:** Material Google Dark restyles shapes, typography (bundled **Roboto**), elevation and controls, not just colors. Custom themes can pick the Gitty default or Material family in the editor; it is saved in exported theme JSON.
+- **Design family:** the Material Google themes restyle shapes, typography (bundled **Roboto**), elevation, state layers, press ripples and the layout (a rounded content sheet on the surface), not just colors. Custom themes can pick the Gitty default or Material family in the editor, and **Generate Material palette** builds a full light or dark palette from any seed color. The family is saved in exported theme JSON.
 - **Custom themes:** duplicate a preset, edit UI/diff/graph colors with a live preview and contrast feedback, then save a named theme. Import/export versioned local JSON; edits can be reset or canceled.
 - **Editor preferences:** bundled code font, code size, line wrapping, and default unified/side-by-side diffs.
 - **Author avatars:** Initials (no network requests) by default; opt in to Gravatar images in the history author column and commit details via Settings → Appearance. Enable **Show author avatars as graph nodes** to replace commit dots with author-column-sized avatars and branch-colored borders; graph avatar nodes are off by default. Graph lanes widen to fit the avatars. Merge nodes use a double border, and the working-tree marker remains square. Gravatar requests send a SHA-256 hash of the author's email (and your IP address) to gravatar.com; missing images fall back to initials and are not re-requested for ten minutes.

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_SETTINGS, SETTINGS_KEY, persistSettings, readSettings, resolveTheme, validateSettings } from './settings';
 import { BUILTIN_THEMES, COLOR_KEYS, contrastRatio, exportTheme, importTheme, themeTokens, validateTheme } from './themes';
+import { materialColors } from './materialPalette';
 import { commitProfileRepositoryKey, validateCommitProfile } from './commitProfiles';
 import type { RepositorySession } from './repository';
 
@@ -140,6 +141,15 @@ describe('theme files and render tokens', () => {
     expect(importTheme(exportTheme(material)).design).toBe('material');
     expect(() => validateTheme({ ...custom(), design: 'nope' })).toThrow();
   });
+  it('generates readable Material palettes from any seed color', () => {
+    for (const seed of ['#6750a4', '#0b57d0', '#ff0000', '#00ff00', '#ffee00', '#808080'] as const) for (const mode of ['light', 'dark'] as const) {
+      const colors = materialColors(seed, mode);
+      expect(() => validateTheme({ ...custom(), mode, design: 'material', colors })).not.toThrow();
+      expect(contrastRatio(colors.text, colors.bg)).toBeGreaterThan(10);
+      expect(contrastRatio(colors.muted, colors.bg)).toBeGreaterThan(4.5);
+      expect(contrastRatio(colors.buttonForeground, colors.accentText)).toBeGreaterThan(4.5);
+    }
+  });
   it('rejects missing or unknown tokens, CSS injection, oversized files and future versions', () => {
     const missing = custom(); delete missing.colors.graphHead;
     const unknown = custom(); unknown.colors.remote = '#ffffff';
@@ -150,7 +160,7 @@ describe('theme files and render tokens', () => {
     expect(() => importTheme(' '.repeat(100_001))).toThrow();
   });
   it('renders complete semantic and graph tokens for all builtins', () => {
-    expect(BUILTIN_THEMES).toHaveLength(9);
+    expect(BUILTIN_THEMES).toHaveLength(10);
     for (const theme of BUILTIN_THEMES) {
       expect(Object.keys(theme.colors)).toEqual([...COLOR_KEYS]);
       expect(() => validateTheme({ ...theme, id: 'custom-check' })).not.toThrow();
