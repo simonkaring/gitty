@@ -660,12 +660,18 @@ html[data-design='material'] {
     background: transparent;
     box-shadow: none;
   }
+  & .commit-refs {
+    padding-left: 20px;
+  }
+  & .history-columns > span:first-child {
+    padding-left: 20px;
+  }
   & .commit-row::before {
     content: '';
     position: absolute;
-    inset: 1px 8px;
+    inset: 2px 8px;
     z-index: -1;
-    border-radius: 16px;
+    border-radius: 26px;
     transition: background-color var(--dur-fast) linear;
   }
   & .commit-row:hover::before {
