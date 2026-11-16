@@ -15,6 +15,7 @@ const presets = [
   ['gruvbox-light', 'light', '#fbf1c7', '#076678'], ['gruvbox-dark', 'dark', '#282828', '#8ec07c'],
   ['dracula', 'dark', '#282a36', '#bd93f9'], ['nord', 'dark', '#2e3440', '#88c0d0'],
   ['catppuccin-latte', 'light', '#eff1f5', '#8839ef'], ['catppuccin-mocha', 'dark', '#1e1e2e', '#cba6f7'],
+  ['material-google-dark', 'dark', '#202124', '#8ab4f8'],
 ];
 const check = async (name, run) => { await run(); checks.push(name); console.log(`PASS ${name}`); };
 const stored = page => page.evaluate(() => localStorage.getItem('gitty:settings'));

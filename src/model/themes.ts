@@ -1,7 +1,9 @@
+export type DesignFamily = 'default' | 'material';
 export interface ThemeDefinition {
   id: string;
   name: string;
   mode: 'light' | 'dark';
+  design?: DesignFamily;
   colors: Record<string, string>;
 }
 
@@ -27,6 +29,15 @@ export const BUILTIN_THEMES: ThemeDefinition[] = [
   family('nord', 'Nord', 'dark', '#2e3440', '#272d38', '#3b4252', '#eceff4', '#d8dee9', '#88c0d0', '#bf616a', '#a3be8c'),
   family('catppuccin-latte', 'Catppuccin Latte', 'light', '#eff1f5', '#e6e9ef', '#ffffff', '#4c4f69', '#5c5f77', '#8839ef', '#d20f39', '#40722f'),
   family('catppuccin-mocha', 'Catppuccin Mocha', 'dark', '#1e1e2e', '#181825', '#313244', '#cdd6f4', '#bac2de', '#cba6f7', '#f38ba8', '#a6e3a1'),
+  {
+    id: 'material-google-dark',
+    name: 'Material Google Dark',
+    mode: 'dark',
+    design: 'material',
+    colors: {
+      bg: '#202124', chrome: '#171717', sidebar: '#1a1a1a', raised: '#292a2d', subtle: '#303134', hover: '#3c3d41', border: '#3c4043', borderStrong: '#5f6368', text: '#e8eaed', secondary: '#bdc1c6', muted: '#9aa0a6', accent: '#8ab4f8', accentText: '#8ab4f8', accentWash: '#1a2a4a', selected: '#2a3a5a', green: '#81c995', greenWash: '#1e2e24', red: '#f28b82', redWash: '#3a2020', buttonForeground: '#202124', shadow: '#00000080', backdrop: '#000000a6', graphLane1: '#8ab4f8', graphLane2: '#f28b82', graphLane3: '#81c995', graphLane4: '#fdd663', graphLane5: '#d7aefb', graphLane6: '#78d9ec', graphLane7: '#fcad70', graphLane8: '#bdc1c6', graphSelection: '#8ab4f8', graphMerge: '#fdd663', graphHead: '#81c995',
+    },
+  },
 ];
 export const MAX_CUSTOM_THEMES = 30;
 export const MAX_THEME_FILE_BYTES = 100_000;
@@ -36,9 +47,9 @@ export function isColor(value: unknown, alpha = false): value is string {
 export function validateTheme(value: unknown): ThemeDefinition {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Theme must be an object.');
   const t = value as ThemeDefinition;
-  if (Object.keys(t).some(k => !['id', 'name', 'mode', 'colors'].includes(k)) || typeof t.id !== 'string' || !/^custom-[a-zA-Z0-9-]{1,80}$/.test(t.id) || typeof t.name !== 'string' || !t.name.trim() || t.name.length > 60 || /[\u0000-\u001f]/.test(t.name) || !['light', 'dark'].includes(t.mode)) throw new Error('Invalid custom theme identity, name, or mode.');
+  if (Object.keys(t).some(k => !['id', 'name', 'mode', 'design', 'colors'].includes(k)) || typeof t.id !== 'string' || !/^custom-[a-zA-Z0-9-]{1,80}$/.test(t.id) || typeof t.name !== 'string' || !t.name.trim() || t.name.length > 60 || /[\u0000-\u001f]/.test(t.name) || !['light', 'dark'].includes(t.mode) || (t.design !== undefined && !['default', 'material'].includes(t.design as string))) throw new Error('Invalid custom theme identity, name, mode, or design family.');
   if (!t.colors || Array.isArray(t.colors) || typeof t.colors !== 'object' || Object.keys(t.colors).length !== COLOR_KEYS.length || COLOR_KEYS.some(k => !Object.hasOwn(t.colors, k) || !isColor(t.colors[k], k === 'shadow' || k === 'backdrop'))) throw new Error('Theme must contain every supported color, no unknown colors, using #RRGGBB (shadow/backdrop may use #RRGGBBAA).');
-  return { id: t.id, name: t.name.trim(), mode: t.mode, colors: { ...t.colors } };
+  return { id: t.id, name: t.name.trim(), mode: t.mode, ...(t.design ? { design: t.design } : {}), colors: { ...t.colors } };
 }
 export function importTheme(json: string): ThemeDefinition {
   if (new TextEncoder().encode(json).length > MAX_THEME_FILE_BYTES) throw new Error('Theme file is too large (100 KB maximum).');

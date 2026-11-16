@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState
 import { BUILTIN_THEMES, MAX_CUSTOM_THEMES, themeTokens, validateTheme, type ThemeDefinition } from './themes';
 import { MAX_COMMIT_PROFILES, validateCommitProfile, type CommitProfile } from './commitProfiles';
 export type { ThemeDefinition } from './themes';
+export type { DesignFamily } from './themes';
 
 export const SETTINGS_KEY = 'gitty:settings';
 export const MONO_FONTS = ['Geist Mono Variable', 'JetBrains Mono'] as const;
@@ -121,6 +122,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   useLayoutEffect(() => {
     const root = document.documentElement;
     root.dataset.theme = theme.mode;
+    root.dataset.themeId = theme.id;
+    root.dataset.design = theme.design ?? 'default';
     root.dataset.diffWrap = String(settings.diffWrap);
     root.style.colorScheme = theme.mode;
     for (const [key, value] of Object.entries(themeTokens(theme))) root.style.setProperty(key, value);

@@ -1,0 +1,143 @@
+/* ==========================================================================
+   Material Google design system. Only active when a Material Google theme is
+   selected; everything is scoped to html[data-design="material"] so the other
+   themes keep Gitty's own visual language.
+   ========================================================================== */
+@import '@fontsource/roboto/400.css';
+@import '@fontsource/roboto/500.css';
+@import '@fontsource/roboto/700.css';
+
+html[data-design='material'] {
+  /* Typography */
+  --ui: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --mono: 'Geist Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
+
+  /* Shape */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+
+  /* Motion: Material standard easing */
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-spring: cubic-bezier(0.2, 0, 0, 1);
+  --dur-fast: 150ms;
+  --dur-med: 250ms;
+  --dur-slow: 350ms;
+
+  /* Elevation */
+  --shadow-raised: 0 1px 2px var(--shadow-color), 0 1px 3px 1px var(--shadow-color);
+  --edge-highlight: none;
+  --elev-0: none;
+  --elev-1: 0 1px 2px var(--shadow-color), 0 1px 3px 1px var(--shadow-color);
+  --elev-2: 0 1px 2px var(--shadow-color), 0 2px 6px 2px var(--shadow-color);
+  --elev-3: 0 1px 3px var(--shadow-color), 0 4px 12px 4px var(--shadow-color);
+  --elev-4: 0 2px 4px var(--shadow-color), 0 8px 24px 8px var(--shadow-color);
+  font-family: var(--ui);
+}
+
+/* Typography: Material uses medium weight headlines. */
+html[data-design='material'] h1,
+html[data-design='material'] h2 {
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+html[data-design='material'] h3 {
+  font-weight: 500;
+}
+
+/* Elevation: rounded, soft shadows instead of the inset highlight. */
+html[data-design='material'] .menu,
+html[data-design='material'] .dialog,
+html[data-design='material'] [role='dialog'] {
+  border-radius: 28px;
+  box-shadow: var(--elev-3);
+  border-color: var(--border);
+}
+
+/* Buttons: pill-shaped filled/tonal controls. */
+html[data-design='material'] :where(.primary-button, .secondary-button, .repository-toolbar button) {
+  border-radius: 20px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+html[data-design='material'] .primary-button {
+  box-shadow: var(--elev-1);
+}
+html[data-design='material'] .icon-button {
+  border-radius: 50%;
+}
+html[data-design='material'] .search-field {
+  border-radius: 28px;
+}
+
+/* Chips/badges become fully rounded pills. */
+html[data-design='material'] .badge,
+html[data-design='material'] .count {
+  border-radius: var(--r-pill);
+}
+
+/* Cards and raised surfaces. */
+html[data-design='material'] .workspace-label > svg {
+  border-radius: 12px;
+  box-shadow: var(--elev-1);
+}
+html[data-design='material'] .repository-tab {
+  border-radius: 16px;
+}
+html[data-design='material'] .repository-tab[data-selected='true'] {
+  box-shadow: var(--elev-1);
+}
+html[data-design='material'] .repository-toolbar-group {
+  border-radius: 28px;
+}
+
+/* Inputs: slightly more rounded, filled surface. */
+html[data-design='material'] :where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color']), select, textarea) {
+  border-radius: 12px;
+  background: var(--subtle);
+  border-color: transparent;
+}
+html[data-design='material'] :where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color']), select, textarea):hover:not(:disabled) {
+  background: var(--hover);
+}
+html[data-design='material'] :where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color']), select, textarea):focus-visible {
+  background: var(--raised);
+  border-color: var(--accent);
+}
+
+/* Icon buttons: press feedback. Skipped for toggles so their own chevron rotation is kept. */
+html[data-design='material'] .icon-button:not([aria-expanded]) svg {
+  transition: transform var(--dur-med) var(--ease-out);
+}
+html[data-design='material'] .icon-button:not([aria-expanded]):hover:not(:disabled) svg {
+  transform: scale(1.12);
+}
+html[data-design='material'] .icon-button:not([aria-expanded]):active:not(:disabled) svg {
+  transform: scale(0.92);
+}
+
+/* Cards and panels. */
+html[data-design='material'] .native-diff,
+html[data-design='material'] .theme-preview,
+html[data-design='material'] .preview-graph,
+html[data-design='material'] .dialog-body {
+  border-radius: 16px;
+}
+html[data-design='material'] .native-diff {
+  box-shadow: var(--elev-1);
+}
+
+/* Navigation drawer items. */
+html[data-design='material'] .ref-item,
+html[data-design='material'] .reference-group > summary,
+html[data-design='material'] .reference-folder > summary {
+  border-radius: 28px;
+  margin: 2px 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-design='material'] .icon-button svg {
+    transition: none;
+    transform: none !important;
+  }
+}

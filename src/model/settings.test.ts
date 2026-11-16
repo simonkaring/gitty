@@ -135,6 +135,11 @@ describe('local preferences', () => {
 });
 describe('theme files and render tokens', () => {
   it('round trips a complete versioned custom theme', () => { expect(importTheme(exportTheme(custom()))).toEqual(custom()); });
+  it('keeps a valid design family through export/import and rejects unknown ones', () => {
+    const material = { ...custom(), design: 'material' as const };
+    expect(importTheme(exportTheme(material)).design).toBe('material');
+    expect(() => validateTheme({ ...custom(), design: 'nope' })).toThrow();
+  });
   it('rejects missing or unknown tokens, CSS injection, oversized files and future versions', () => {
     const missing = custom(); delete missing.colors.graphHead;
     const unknown = custom(); unknown.colors.remote = '#ffffff';
@@ -145,7 +150,7 @@ describe('theme files and render tokens', () => {
     expect(() => importTheme(' '.repeat(100_001))).toThrow();
   });
   it('renders complete semantic and graph tokens for all builtins', () => {
-    expect(BUILTIN_THEMES).toHaveLength(8);
+    expect(BUILTIN_THEMES).toHaveLength(9);
     for (const theme of BUILTIN_THEMES) {
       expect(Object.keys(theme.colors)).toEqual([...COLOR_KEYS]);
       expect(() => validateTheme({ ...theme, id: 'custom-check' })).not.toThrow();
