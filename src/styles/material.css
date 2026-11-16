@@ -676,6 +676,46 @@ html[data-design='material'] {
     background: var(--selected);
   }
 
+  /* ---- Day dividers ---------------------------------------------------- */
+  & .commit-message {
+    overflow: visible;
+  }
+  & .commit-row.day-start::after {
+    content: '';
+    position: absolute;
+    inset: 0 16px auto;
+    height: 1px;
+    background: var(--border);
+    pointer-events: none;
+  }
+  & .day-label {
+    position: absolute;
+    top: -9px;
+    left: 8px;
+    z-index: 4;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 18px;
+    padding: 0 8px;
+    border-radius: 9px;
+    background: var(--bg);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    pointer-events: none;
+    animation: m-fade var(--dur-med) linear;
+  }
+  & .day-label i {
+    font-family: var(--mono);
+    font-style: normal;
+    font-weight: 500;
+    letter-spacing: 0;
+    color: var(--secondary);
+  }
+
   /* ---- Graph ----------------------------------------------------------- */
   & .history-column-viewport {
     background: var(--bg);

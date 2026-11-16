@@ -573,3 +573,8 @@
   font-size: var(--fs-2xs);
 }
 
+
+/* Day dividers are only drawn by designs that opt in (Material). */
+.day-label {
+  display: none;
+}

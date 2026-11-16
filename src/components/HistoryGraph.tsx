@@ -8,7 +8,7 @@ import type { ActionContext } from './OperationDialog';
 import { DEFAULT_HISTORY_COLUMNS, useSettings, type HistoryColumnId, type ThemeDefinition } from '../model/settings';
 import { COLUMN_LABELS, HistoryColumnMenu } from './HistoryColumnMenu';
 import { AuthorAvatar } from './AuthorAvatar';
-import { commitIsoString, formatCommitDate } from '../model/dates';
+import { commitDay, commitIsoString, formatCommitDate } from '../model/dates';
 import { shapeOf, traceShape } from '../graph/shape';
 
 const ROW_DATE: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false };
@@ -155,6 +155,19 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const windowHeight = Math.max(0, Math.min(height + BUFFER * 3, loaded * ROW_HEIGHT - windowTop));
   const selectedIndex = useMemo(() => commits.findIndex(commit => commit.id === selectedId), [commits, selectedId]);
   const refsByCommit = useMemo(() => groupRefsByCommit(refs), [refs]);
+  // First loaded commit of each calendar day, with that day's loaded count (shown as a divider label by the Material design).
+  const dayStarts = useMemo(() => {
+    const counts = new Map<string, number>(), starts = new Map<number, { label: string; key: string }>();
+    let previous = '';
+    commits.forEach((commit, row) => {
+      const day = commit.id === WORKING_ID ? null : commitDay(commit.timestamp);
+      if (!day) return;
+      counts.set(day.key, (counts.get(day.key) ?? 0) + 1);
+      if (day.key !== previous) starts.set(row, day);
+      previous = day.key;
+    });
+    return { counts, starts };
+  }, [commits]);
   const loadedIds = useMemo(() => new Set(commits.map(commit => commit.id)), [commits]);
   const visibleEdges = useMemo(() => indexEdges(layout.edges, layout.edgeMaxTo), [layout.edges, layout.edgeMaxTo]);
   const colors = useMemo(() => Array.from({ length: 8 }, (_, index) => theme.colors[`graphLane${index + 1}`]), [theme]);
@@ -481,7 +494,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
             return <div key={commit.id} id={`${uid}-commit-${commit.id}`} role="option" aria-selected={commit.id === selectedId}
               aria-posinset={row + 1} aria-setsize={commits.length}
               aria-label={`${commit.subject}, ${commit.author}, ${commit.id.slice(0, 7)}${commit.parents.length > 1 ? ', merge commit' : ''}${commit.id === head ? ', HEAD' : ''}${badges.length ? `, ${badges.map(b => b.name).join(', ')}` : ''}`}
-              className={`commit-row ${commit.id === selectedId ? 'selected' : ''} ${shown && !shown.has(commit.id) ? 'dimmed' : ''} ${freshIds.has(commit.id) ? 'fresh' : ''} ${commit.id === WORKING_ID ? 'working' : ''} ${joinRefs && badges.length ? 'connect' : ''}`}
+              className={`commit-row ${commit.id === selectedId ? 'selected' : ''} ${shown && !shown.has(commit.id) ? 'dimmed' : ''} ${freshIds.has(commit.id) ? 'fresh' : ''} ${commit.id === WORKING_ID ? 'working' : ''} ${joinRefs && badges.length ? 'connect' : ''} ${row > 0 && dayStarts.starts.has(row) ? 'day-start' : ''}`}
               style={{
                 top: row * ROW_HEIGHT,
                 height: ROW_HEIGHT,
@@ -504,7 +517,9 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                   </div>;
                 }
                 if (col.id === 'message') {
+                  const day = row > 0 ? dayStarts.starts.get(row) : undefined;
                   return <div key="message" className="commit-message">
+                    {day && <span className="day-label" aria-hidden="true">{day.label}<i>{dayStarts.counts.get(day.key)}</i></span>}
                     {onTogglePick && commit.id !== WORKING_ID && (() => { const control = rowControl(commit.id, controls); return <input id={control.id} data-row-control="" tabIndex={-1} className={`graph-pick${control.active ? ' row-control-active' : ''}`} type="checkbox" aria-label={`Cherry-pick ${commit.id.slice(0, 7)}`} checked={pickOrder?.includes(commit.id) ?? false} onClick={event => event.stopPropagation()} onChange={() => { onTogglePick(commit.id); scroller.current?.focus(); }} />; })()}
                     {commit.parents.length > 1 && <GitMerge size={13} className="merge-icon" />}
                     <span className="subject" title={commit.subject} draggable={!!onActions && commit.id !== WORKING_ID}
