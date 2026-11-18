@@ -39,6 +39,15 @@ Rows share one geometry: 8px horizontal padding, 8px icon gap, 28px minimum
 height (two-line worktree rows add vertical padding), and the current-branch
 check sits in the icon slot rather than outside it.[^styles]
 
+Under the Apple design the list behaves like a macOS source list
+(`src/styles/apple.css`). Rows have no hover fill; a clicked reference becomes the
+selected row (accent fill, white content) only while its commit is still the
+graph's `selectedId`. HEAD keeps a trailing check beside the branch's graph-colored
+icon. Group headers show Finder-style "Hide"/"Show" on hover or focus in place of
+the count. Up/Down move between visible rows and Right/Left expand or collapse the
+focused group or folder; this handler is in `NativeSidebar` and runs in every
+design.[^sidebar]
+
 Tests cover ordering, hiding, the menu callbacks, settings validation and the
 stash row's message label. Visual spacing was last checked in a Chromium demo;
 the stash section's own spacing is unverified visually.[^tests]

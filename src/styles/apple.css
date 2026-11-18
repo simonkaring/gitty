@@ -1,9 +1,11 @@
 /* ==========================================================================
-   Apple design family (macOS / iOS). Everything is scoped to
-   html[data-design='apple'], so other designs are untouched. Colors still come
-   from the active theme; this file changes type and the sidebar's look:
-   translucent vibrancy material, grouped inset lists with rounded selection
-   fills, SF-style type and monochrome Lucide icons.
+   Apple design family, after the macOS 26 Human Interface Guidelines. Everything
+   is scoped to html[data-design='apple'], so other designs are untouched. Colors
+   still come from the active theme; this file sets SF type on the macOS type
+   ramp (13px body, 11px section titles), a floating rounded sidebar, chrome
+   that shares the content background with controls grouped on glass capsules,
+   inset rounded selections, System Settings-style forms with switches, and the
+   SF Symbols-style glyphs from icons.tsx.
    ========================================================================== */
 
 @media (prefers-reduced-transparency: no-preference) {
@@ -15,27 +17,33 @@
 }
 
 html[data-design='apple'] {
-  /* SF on Apple platforms; other systems fall back to the closest UI face. */
-  --ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', system-ui, 'Segoe UI', sans-serif;
+  /* The system font is SF Pro on Apple platforms, with optical sizes and tracking applied by the OS,
+     so no manual letter-spacing. Other systems fall back to their closest UI face. */
+  --ui: -apple-system, BlinkMacSystemFont, system-ui, 'SF Pro Text', 'Helvetica Neue', 'Segoe UI', sans-serif;
+  /* Hashes and paths use SF Mono like Xcode; diffs keep the user's editor font (--mono). */
+  --apple-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Glass capsule for grouped toolbar controls (Liquid Glass with transparency reduced to a frosted fill). */
+  --apple-glass: color-mix(in srgb, var(--raised) 92%, transparent);
+  --apple-glass-edge: 0 0 0 0.5px color-mix(in srgb, var(--text) 10%, transparent), 0 1px 2px color-mix(in srgb, #000 8%, transparent), 0 4px 14px color-mix(in srgb, #000 6%, transparent);
   --apple-fill: color-mix(in srgb, var(--text) 7%, transparent);
   --apple-fill-strong: color-mix(in srgb, var(--text) 13%, transparent);
   --apple-material: color-mix(in srgb, var(--chrome) 80%, transparent);
+  --apple-arrows: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='14' fill='none' stroke='%238e8e93' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m2 5 3-3 3 3M2 9l3 3 3-3'/%3E%3C/svg%3E");
   font-family: var(--ui);
-  letter-spacing: -0.003em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 
   .sidebar.native-sidebar {
-    border-right: 1px solid var(--border);
     padding-bottom: 8px;
   }
 
-  /* Header: recede, and let a native macOS traffic-light strip show through. */
+  /* Header: recede. */
   .workspace-label {
     align-items: center;
     padding: 14px 12px 8px;
     font-size: 13px;
     font-weight: 600;
-    letter-spacing: -0.01em;
   }
   .workspace-label > svg {
     width: 26px;
@@ -53,9 +61,18 @@ html[data-design='apple'] {
     font-size: 11px;
     color: var(--muted);
   }
-  [data-platform='macos'] .workspace-label {
-    min-height: 44px;
-    padding-left: 78px;
+
+  :is(h1, h2, h3, .workspace-label > span) {
+    letter-spacing: normal;
+  }
+  /* Numbers and dates in SF with tabular figures; hashes and paths in SF Mono. */
+  :is(.row-date, .change-totals, .count, .ref-more, .native-inspector .compare-summary p:first-child) {
+    font-family: var(--ui);
+    font-variant-numeric: tabular-nums;
+  }
+  :is(.row-hash, .commit-metadata dd.full-sha code, .commit-eyebrow > span:first-child, .diff-view-filepath) {
+    font-family: var(--apple-mono);
+    font-size: 11.5px;
   }
 
   /* Mono badges, counts and control glyphs become SF. */
@@ -159,7 +176,6 @@ html[data-design='apple'] {
     color: var(--muted);
     font-size: 12px;
     font-weight: 600;
-    letter-spacing: -0.01em;
   }
   .reference-group > summary:hover {
     background: transparent;
@@ -259,15 +275,16 @@ html[data-design='apple'] {
     position: absolute;
     z-index: 0;
     pointer-events: none;
-    border-radius: 10px;
+    border-radius: 7px;
     background: var(--accent);
     transition:
       top 200ms var(--ease-out),
       height 120ms var(--ease-out);
   }
+  /* The row must sit above the lane canvas (z-index 2) so avatar nodes inside it are not struck through by lines. */
   .commit-row {
-    z-index: 1;
-    border-radius: 10px;
+    z-index: 3;
+    border-radius: 7px;
   }
   .commit-row:hover:not(.selected) {
     background: var(--apple-fill);
@@ -310,21 +327,21 @@ html[data-design='apple'] {
     background: color-mix(in srgb, #fff 24%, transparent);
   }
 
-  /* ---- Toolbar: grouped command pills (reference .cap / .tbtn) ---- */
+  /* ---- Toolbar: one glass capsule of plain items (see Window chrome); hover is a soft fill ---- */
   .repository-toolbar-group {
-    gap: 2px;
-    padding: 2px;
+    gap: 0;
+    padding: 0;
     border: 0;
-    border-radius: 10px;
-    background: var(--apple-fill);
+    border-radius: 999px;
+    background: none;
     box-shadow: none;
   }
   .repository-toolbar button {
-    min-height: 26px;
+    min-height: 28px;
     gap: 6px;
-    padding: 0 10px;
+    padding: 0 12px;
     border: 0;
-    border-radius: 8px;
+    border-radius: 999px;
     background: transparent;
     color: var(--text);
     font-size: 13px;
@@ -333,27 +350,34 @@ html[data-design='apple'] {
   .repository-toolbar button svg {
     color: var(--secondary);
   }
-  .repository-toolbar button:hover:not(:disabled) {
-    background: var(--apple-fill-strong);
+  .repository-toolbar button:hover:not(:disabled),
+  .repository-toolbar button[aria-expanded='true'] {
+    background: var(--apple-fill);
     border: 0;
   }
   .repository-toolbar .pull-dropdown-toggle {
-    padding: 0 4px;
-    margin-left: -6px;
+    padding: 0 6px;
+    margin-left: -8px;
     color: var(--secondary);
   }
   .repository-toolbar .pull-dropdown-toggle svg {
     color: var(--secondary);
   }
-  .repository-toolbar .icon-button {
-    width: 30px;
-    height: 30px;
-  }
   .toolbar-sep {
-    width: 8px;
-    background: none;
+    width: 1px;
+    height: 16px;
+    margin: 0 4px;
+    background: var(--border);
+  }
+  .repository-toolbar .badge {
+    height: 22px;
+    padding: 0 9px;
+    border-radius: 999px;
+    color: var(--secondary);
+    font-size: 12px;
   }
   .repository-fetch-status {
+    color: var(--muted);
     font-size: 12px;
   }
 
@@ -373,17 +397,16 @@ html[data-design='apple'] {
   .commit-eyebrow > span:first-child {
     padding: 0;
     background: none;
-    font-family: var(--ui);
-    font-size: 12px;
+    font-family: var(--apple-mono);
+    font-size: 11.5px;
     color: var(--muted);
   }
   .commit-summary > h2,
   .commit-message-body h2 {
     margin: 6px 0 0;
-    font-size: 21px;
-    font-weight: 700;
-    line-height: 1.25;
-    letter-spacing: -0.022em;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.3;
   }
   .commit-summary > h2 {
     margin-bottom: 0;
@@ -397,8 +420,8 @@ html[data-design='apple'] {
   .commit-message-body h2 + p,
   .commit-message-body p {
     color: var(--secondary);
-    font-size: 13.5px;
-    line-height: 1.5;
+    font-size: 13px;
+    line-height: 1.45;
   }
   .commit-metadata {
     margin: 0;
@@ -446,8 +469,8 @@ html[data-design='apple'] {
     display: block;
   }
   .commit-metadata > div.meta-sha > dd.full-sha code {
-    font-family: var(--mono);
-    font-size: 12px;
+    font-family: var(--apple-mono);
+    font-size: 11.5px;
     color: var(--secondary);
     overflow-wrap: anywhere;
     user-select: all;
@@ -533,12 +556,15 @@ html[data-design='apple'] {
     border-radius: 10px;
   }
 
-  /* ---- Window chrome: titlebar and toolbar read as one translucent unified toolbar ---- */
-  .titlebar {
-    height: 52px;
-    padding-block: 0;
+  /* ---- Window chrome (macOS 26): bars share the content background, no separators; controls sit on glass capsules ---- */
+  .titlebar,
+  .repository-toolbar {
     border-bottom: 0;
-    background: var(--chrome);
+    background: var(--bg);
+  }
+  .titlebar {
+    height: 46px;
+    padding-block: 0;
   }
   .titlebar .brand {
     display: none;
@@ -546,10 +572,11 @@ html[data-design='apple'] {
   .repository-tabs-row {
     padding: 0;
   }
+  /* Tabs as in Safari/Finder: a quiet capsule row, the selected tab raised on glass. */
   .repository-tab {
     min-height: 30px;
     border: 0;
-    border-radius: 8px;
+    border-radius: 999px;
     color: var(--secondary);
     font-size: 13px;
     font-weight: 500;
@@ -558,8 +585,8 @@ html[data-design='apple'] {
     background: var(--apple-fill);
   }
   .repository-tab[data-selected='true'] {
-    background: var(--apple-fill-strong);
-    box-shadow: none;
+    background: var(--apple-glass);
+    box-shadow: var(--apple-glass-edge);
     color: var(--text);
   }
   .repository-tab[data-selected='true']::after {
@@ -568,25 +595,43 @@ html[data-design='apple'] {
   .repository-tab-branch {
     font-family: var(--ui);
   }
-  .titlebar .icon-button {
-    width: 30px;
-    height: 30px;
-    border-radius: 8px;
-  }
   .repository-toolbar {
-    padding: 6px 14px 8px;
-    background: var(--chrome);
-    border-bottom: 1px solid var(--border);
+    padding: 2px 14px 10px;
+  }
+  /* Grouped toolbar items share one capsule; groups are separated by space, not lines. */
+  .toolbar-end:has(button) {
+    justify-self: end;
+  }
+  .native-actions,
+  .toolbar-center,
+  .toolbar-end:has(button) {
+    gap: 0;
+    padding: 3px;
+    border-radius: 999px;
+    background: var(--apple-glass);
+    box-shadow: var(--apple-glass-edge);
+  }
+  .titlebar .icon-button,
+  .toolbar-end .icon-button {
+    width: 32px;
+    height: 28px;
+    border-radius: 999px;
+    color: var(--secondary);
+  }
+  .titlebar .icon-button[aria-pressed='true'],
+  .titlebar .icon-button[aria-pressed='true']:hover:not(:disabled) {
+    background: transparent;
+    color: var(--accent);
   }
   .badge {
     background: var(--apple-fill);
     font-family: var(--ui);
-    font-size: 11.5px;
+    font-size: 11px;
   }
   kbd {
     min-width: 0;
     height: 18px;
-    padding: 0 6px;
+    padding: 0 5px;
     border: 0;
     border-radius: 5px;
     background: var(--apple-fill);
@@ -594,41 +639,62 @@ html[data-design='apple'] {
     font: 500 11px var(--ui);
   }
   .statusbar {
-    min-height: 30px;
-    border-top: 1px solid var(--border);
-    background: var(--chrome);
+    min-height: 28px;
+    border-top: 0.5px solid var(--border);
+    background: var(--bg);
+    color: var(--muted);
     font-family: var(--ui);
-    font-size: 12px;
-  }
-  .statusbar kbd {
-    height: 18px;
-    min-width: 0;
-    padding: 0 6px;
     font-size: 11px;
   }
+  .statusbar kbd {
+    height: 16px;
+    min-width: 0;
+    padding: 0 5px;
+    font-size: 10px;
+  }
   .history-bottom {
+    border-top: 0.5px solid var(--border);
     background: var(--bg);
-    font-size: 12px;
+    color: var(--muted);
+    font-size: 11px;
   }
   @media (prefers-reduced-transparency: no-preference) {
-    .titlebar,
-    .repository-toolbar,
-    .statusbar {
-      background: var(--apple-material);
-      -webkit-backdrop-filter: saturate(1.8) blur(24px);
-      backdrop-filter: saturate(1.8) blur(24px);
+    .repository-tab[data-selected='true'],
+    .native-actions,
+    .toolbar-center,
+    .toolbar-end:has(button) {
+      -webkit-backdrop-filter: saturate(1.8) blur(20px);
+      backdrop-filter: saturate(1.8) blur(20px);
     }
   }
 
+  /* ---- Floating sidebar (macOS 26): an inset rounded glass panel beside the content ---- */
+  .sidebar.native-sidebar {
+    margin: 0 0 8px 8px;
+    border: 0;
+    border-radius: 16px;
+    box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--text) 9%, transparent), 0 6px 24px color-mix(in srgb, #000 7%, transparent);
+  }
+  /* The gap beside the floating sidebar is the resize handle; no divider line. */
+  .native-sidebar + .pane-resizer {
+    width: 8px;
+    background: transparent;
+  }
+  .native-sidebar + .pane-resizer:is(:hover, [data-dragging]) {
+    outline: 0;
+    background: transparent;
+  }
+
   /* ---- Controls: pill buttons, SF fields, system-style key caps ---- */
+  /* macOS 26 bordered buttons: capsules with regular-weight 13px labels. */
   .primary-button,
   .secondary-button {
-    min-height: 30px;
-    padding: 0 16px;
+    min-height: 28px;
+    padding: 0 14px;
     border: 0;
     border-radius: var(--r-pill);
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 500;
   }
   .primary-button,
   .primary-button:hover:not(:disabled) {
@@ -654,9 +720,9 @@ html[data-design='apple'] {
   .field > :is(input, select, textarea) {
     min-height: 28px;
     padding: 4px 10px;
-    border: 1px solid var(--border);
+    border: 0.5px solid var(--border-strong);
     border-radius: 8px;
-    background: var(--subtle);
+    background: var(--raised);
     font-size: 13px;
   }
   .dialog :is(input, select, textarea):focus-visible,
@@ -707,9 +773,10 @@ html[data-design='apple'] {
     border-radius: 14px;
     box-shadow: 0 12px 36px var(--shadow-color);
   }
+  /* Sheets and windows take the larger macOS 26 corner radius. */
   .dialog {
-    border-radius: 14px;
-    box-shadow: 0 24px 80px var(--shadow-color);
+    border-radius: 20px;
+    box-shadow: 0 0 0 0.5px color-mix(in srgb, #000 12%, transparent), 0 24px 80px var(--shadow-color);
   }
   .dialog-header {
     min-height: 52px;
@@ -761,19 +828,55 @@ html[data-design='apple'] {
     color: var(--muted);
     font: 500 12px var(--ui);
   }
-  .reference-group-actions {
-    order: 4;
+  /* Hover actions overlay the header instead of reserving width, so counts stay right-aligned. */
+  .reference-group > summary {
+    position: relative;
   }
+  .reference-group-actions {
+    position: absolute;
+    top: 50%;
+    right: 34px;
+    margin: 0;
+    transform: translateY(-50%);
+  }
+  /* Source-list rows: 28px, 13px, 16px symbols at SF weight. No hover fill (macOS lists have none);
+     the selected row is a 6px accent rect with white content, like the graph's selection. */
   .reference-folder > summary,
   .ref-item {
-    min-height: 30px;
-    gap: 10px;
-    font-size: 13.5px;
+    min-height: 28px;
+    gap: 8px;
+    font-size: 13px;
+    cursor: default;
   }
   .ref-item svg,
   .reference-folder-icon {
-    width: 17px;
-    height: 17px;
+    width: 16px;
+    height: 16px;
+    stroke-width: 2;
+  }
+  .reference-folder-chevron {
+    width: 10px;
+    height: 10px;
+    stroke-width: 2.6;
+  }
+  .ref-action-row,
+  .reference-folder > summary {
+    border-radius: 6px;
+  }
+  .reference-folder > summary:hover,
+  .ref-action-row:hover,
+  .ref-action-row:focus-within,
+  .ref-action-row .ref-item:hover:not(:disabled),
+  .ref-action-row.current,
+  .ref-action-row.current:hover {
+    background: transparent;
+  }
+  .reference-folder > summary:focus-visible {
+    outline: 0;
+    background: var(--apple-fill-strong);
+  }
+  .ref-item:focus-visible {
+    outline: 0;
   }
   .ref-item > svg:first-child,
   .ref-action-row.current .ref-item > svg:first-child {
@@ -786,21 +889,444 @@ html[data-design='apple'] {
     margin-left: auto;
     color: var(--accent);
   }
-  .ref-action-row.current,
-  .ref-action-row.current:hover {
-    background: transparent;
+  .ref-action-row:is(.selected, :has(.ref-item:focus-visible)) {
+    background: var(--accent);
   }
-  .ref-action-row.current:hover {
+  .ref-action-row:is(.selected, :has(.ref-item:focus-visible)) .ref-item,
+  .ref-action-row:is(.selected, :has(.ref-item:focus-visible)) .ref-item > svg,
+  .ref-action-row:is(.selected, :has(.ref-item:focus-visible)) .ref-item small,
+  .ref-action-row:is(.selected, :has(.ref-item:focus-visible)) .icon-button {
+    color: var(--button-foreground);
+  }
+  .ref-action-row:is(.selected, :has(.ref-item:focus-visible)) .icon-button:hover:not(:disabled) {
+    background: color-mix(in srgb, #fff 24%, transparent);
+  }
+
+  /* Group headers as in Finder: no disclosure arrow; "Hide"/"Show" fades in on hover or focus where the count sits. */
+  .reference-group > summary {
+    position: relative;
+    cursor: default;
+  }
+  .reference-group > summary::before {
+    display: none;
+  }
+  .reference-group > summary .count {
+    margin-left: auto;
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+  .reference-group > summary::after {
+    content: 'Hide';
+    position: absolute;
+    right: 10px;
+    color: var(--accent-text);
+    font: 500 11px var(--ui);
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+  .reference-group:not([open]) > summary::after {
+    content: 'Show';
+  }
+  .reference-group > summary:is(:hover, :focus-visible)::after {
+    opacity: 1;
+  }
+  .reference-group > summary:is(:hover, :focus-visible) .count {
+    opacity: 0;
+  }
+  .reference-group > summary:focus-visible {
+    outline: 0;
+    background: var(--apple-fill-strong);
+  }
+  /* Hover actions overlay the header instead of reserving width. */
+  .reference-group-actions {
+    position: absolute;
+    top: 50%;
+    right: 48px;
+    margin: 0;
+    transform: translateY(-50%);
+  }
+
+  /* ======== Left sidebar header: quiet, no tile; accent-tinted branch chip ======== */
+  .workspace-label {
+    padding: 12px 12px 6px;
+  }
+  .workspace-label > svg {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    background: none;
+    color: var(--accent);
+  }
+  .workspace-label > span:not(.badge) {
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .native-sidebar-meta .badge {
+    background: var(--accent-wash);
+    color: var(--accent-text);
+  }
+  .sidebar-divider {
+    display: none;
+  }
+  .reference-group > summary {
+    font-size: 11px;
+    letter-spacing: 0.01em;
+  }
+
+  /* ======== Right inspector: inset grouped lists, hue avatars, paired actions ======== */
+  .commit-eyebrow .badge[data-tone='accent'] {
+    background: var(--accent-wash);
+    color: var(--accent-text);
+    font-weight: 600;
+  }
+  .commit-actions .icon-button,
+  .working-sidebar-actions .icon-button {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+  }
+  .avatar {
+    background: hsl(var(--h, 210) 60% 45%);
+    color: #fff;
+  }
+  .button-row.inspector-block {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin: 0;
+  }
+  .button-row.inspector-block .secondary-button {
+    width: 100%;
+    padding: 0 8px;
+    font-size: 12.5px;
+  }
+  .section-heading {
+    margin-bottom: 6px;
+  }
+  .changed-files > .file-row {
+    min-height: 44px;
+    padding: 6px 12px;
+    border-radius: 0;
+    background: var(--subtle);
+  }
+  .changed-files > .section-heading + .file-row {
+    border-radius: 12px 12px 0 0;
+  }
+  .changed-files > .file-row:last-child {
+    border-bottom-left-radius: 12px;
+    border-bottom-right-radius: 12px;
+  }
+  .changed-files > .file-row + .file-row {
+    border-top: 1px solid var(--border);
+  }
+  .changed-files > .file-row:hover:not(.active) {
+    background: var(--hover);
+  }
+  .changed-files > .file-row.active {
+    background: var(--selected);
+  }
+  .file-list-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding: 10px 12px 6px;
+    border-bottom: 0;
+  }
+  .file-list-actions button {
+    min-height: 28px;
+    font-size: 12.5px;
+  }
+  .file-list-actions [data-danger='true'] {
+    grid-column: 1 / -1;
+    background: transparent;
+    color: var(--red);
+  }
+  .file-list-actions [data-danger='true']:hover:not(:disabled) {
+    background: var(--red-wash);
+    color: var(--red);
+  }
+  .working-files-list {
+    scrollbar-gutter: auto;
+  }
+  .working-feedback {
+    flex: 0 0 auto;
+    min-height: 8px;
+  }
+  .working-category {
+    padding-bottom: 10px;
+  }
+  .working-category-toggle {
+    padding-inline: 16px;
+  }
+  .working-category-files {
+    margin: 0 12px;
+  }
+  .working-file-window {
+    overflow: hidden;
+    border-radius: 12px;
+    background: var(--subtle);
+  }
+  .working-file-window > div + div {
+    border-top: 1px solid var(--border);
+  }
+  .working-file {
+    margin: 0;
+    border-radius: 0;
+  }
+  .working-file:hover {
+    background: var(--hover);
+  }
+  .commit-composer {
+    padding: 8px 12px 12px;
+  }
+
+  /* System checkboxes and radios: rounded fill that turns accent with a white mark. */
+  input[type='checkbox'],
+  input[type='radio'] {
+    appearance: none;
+    flex: none;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: 1px solid var(--border-strong);
+    background: var(--raised);
+    transition: background-color var(--dur-fast) var(--ease-out);
+  }
+  input[type='checkbox'] {
+    border-radius: 4.5px;
+  }
+  input[type='radio'] {
+    border-radius: 50%;
+  }
+  input[type='checkbox']:checked {
+    border-color: var(--accent);
+    background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3.5 8.5 3 3 6-7'/%3E%3C/svg%3E") center / 12px no-repeat;
+  }
+  input[type='radio']:checked {
+    border-color: var(--accent);
+    background: radial-gradient(circle, #fff 0 2.5px, var(--accent) 3px);
+  }
+
+  /* ======== Settings: System Settings layout. Centered title, tinted icon tiles, grouped rows with the control on the right ======== */
+  .settings-dialog .dialog-header {
+    min-height: 48px;
+    padding: 8px 12px 8px 52px;
+  }
+  .settings-dialog .dialog-header h2 {
+    font-size: 13px;
+    text-align: center;
+  }
+  .settings-dialog .dialog-header .icon-button {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
     background: var(--apple-fill);
+  }
+  /* One fixed window size, like System Settings, so switching panes doesn't resize it. */
+  .settings-dialog {
+    width: min(760px, calc(100vw - 32px));
+    height: min(640px, calc(100dvh - 64px));
+  }
+  .settings-layout {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+  .settings-layout > nav {
+    padding: 12px 10px;
+    background: color-mix(in srgb, var(--sidebar) 70%, transparent);
+  }
+  .settings-layout > nav button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 32px;
+    padding: 0 8px;
+    border-radius: 8px;
+    font-size: 13.5px;
+    transition: background-color var(--dur-fast) var(--ease-out);
+  }
+  .settings-layout > nav button:hover:not([aria-current]) {
+    background: var(--apple-fill);
+  }
+  .settings-layout > nav [aria-current] {
+    background: var(--accent);
+    color: var(--button-foreground);
+    font-weight: 500;
+  }
+  .settings-nav-icon {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    background: var(--tile, #8e8e93);
+    color: #fff;
+  }
+  .settings-nav-icon[data-section='Appearance'] { --tile: #007aff; }
+  .settings-nav-icon[data-section='Commit profiles'] { --tile: #30a14e; }
+  .settings-nav-icon[data-section='Integrations'] { --tile: #af52de; }
+  .settings-nav-icon[data-section='Editor & diffs'] { --tile: #e07b00; }
+  .settings-nav-icon[data-section='About / shortcuts'] { --tile: #5e5ce6; }
+  .settings-content {
+    padding: 20px 28px 28px;
+  }
+  .settings-content > section > h3:first-child {
+    margin: 0 0 18px;
+    font-size: 22px;
+    font-weight: 700;
+  }
+  .settings-content h3 {
+    margin: 24px 0 10px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .settings-content .integrations-header h3 {
+    margin: 0 0 8px;
+    font-size: 22px;
+    font-weight: 700;
+  }
+  :is(.settings-field, .settings-checkbox, .settings-import) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 230px);
+    align-items: center;
+    gap: 12px;
+    min-height: 44px;
+    margin: 0 0 12px;
+    padding: 6px 14px;
+    border-radius: 10px;
+    background: var(--subtle);
+    font-size: 13.5px;
+    font-weight: 400;
+  }
+  :is(.settings-field, .settings-checkbox, .settings-import):has(+ :is(.settings-field, .settings-checkbox, .settings-import)) {
+    margin-bottom: 0;
+    border-radius: 10px 10px 0 0;
+  }
+  :is(.settings-field, .settings-checkbox, .settings-import) + :is(.settings-field, .settings-checkbox, .settings-import) {
+    margin-bottom: 12px;
+    border-top: 1px solid var(--border);
+    border-radius: 0 0 10px 10px;
+  }
+  :is(.settings-field, .settings-checkbox, .settings-import) + :is(.settings-field, .settings-checkbox, .settings-import):has(+ :is(.settings-field, .settings-checkbox, .settings-import)) {
+    margin-bottom: 0;
+    border-radius: 0;
+  }
+  .settings-pair {
+    display: contents;
+  }
+  .settings-checkbox input {
+    order: 2;
+    justify-self: end;
+  }
+  /* Boolean settings are switches, as in System Settings. */
+  .settings-checkbox input[type='checkbox'] {
+    width: 32px;
+    height: 18px;
+    border: 0;
+    border-radius: 999px;
+    background: radial-gradient(circle at 9px 50%, #fff 0 7px, transparent 7.5px) var(--apple-fill-strong);
+    box-shadow: inset 0 0 0 0.5px color-mix(in srgb, #000 8%, transparent);
+    transition: background-color var(--dur-fast) var(--ease-out), background-position var(--dur-fast) var(--ease-out);
+  }
+  .settings-checkbox input[type='checkbox']:checked {
+    background: radial-gradient(circle at 23px 50%, #fff 0 7px, transparent 7.5px) var(--accent);
+  }
+  /* Form pop-up buttons as in System Settings: borderless, right-aligned, a fill only on hover. */
+  .settings-dialog .settings-field select {
+    width: 100%;
+    min-height: 28px;
+    border: 0;
+    border-radius: 7px;
+    background-color: transparent;
+    color: var(--text);
+    font-size: 13px;
+    text-align: right;
+    text-align-last: right;
+  }
+  .settings-dialog .settings-field select:hover {
+    background-color: var(--apple-fill);
+  }
+  .settings-field input:not([type='range'], [type='color'], [type='checkbox'], [type='radio']) {
+    min-height: 28px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font-size: 13px;
+    text-align: right;
+  }
+  .settings-import input[type='file'] {
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--muted);
+    font-size: 12px;
+    max-width: none;
+  }
+  .settings-import input[type='file']::file-selector-button {
+    margin-right: 8px;
+    padding: 4px 12px;
+    border: 0;
+    border-radius: var(--r-pill);
+    background: var(--apple-fill-strong);
+    color: var(--text);
+    font: 600 12px var(--ui);
+  }
+  .settings-content section > p {
+    margin: 0 0 14px;
+    padding: 0 14px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  .settings-actions {
+    margin: 14px 0;
+  }
+  .settings-actions .settings-import {
+    flex: 1 1 100%;
+  }
+  .commit-profile-row {
+    margin-bottom: 8px;
+    padding: 10px 14px;
+    border-bottom: 0;
+    border-radius: 10px;
+    background: var(--subtle);
+  }
+  .settings-notice {
+    border-radius: 10px;
+  }
+  .theme-preview {
+    overflow: hidden;
+    border: 0;
+    border-radius: 12px;
+    background: var(--subtle);
+  }
+  .integration-empty,
+  .integration-provider,
+  .integration-setup,
+  .integration-device {
+    border: 0;
+    border-radius: 12px;
+    background: var(--subtle);
+  }
+  .integration-provider:hover:not(:disabled) {
+    background: var(--hover);
+  }
+  .integration-provider[aria-pressed='true'] {
+    background: var(--accent-wash);
+    box-shadow: inset 0 0 0 1.5px var(--accent);
+  }
+  .integration-setup-heading {
+    border-bottom: 1px solid var(--border);
   }
 
   /* Pop-up button and disclosure in the system style instead of the browser's triangle and arrow. */
-  .filter-primary select {
+  .filter-primary select,
+  .settings-dialog .settings-field select {
     appearance: none;
-    padding-right: 22px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='14' fill='none' stroke='%238e8e93' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m2 5 3-3 3 3M2 9l3 3 3-3'/%3E%3C/svg%3E");
+    padding-right: 24px;
+    background-image: var(--apple-arrows);
     background-repeat: no-repeat;
-    background-position: right 7px center;
+    background-position: right 8px center;
   }
   .filter-secondary summary {
     display: flex;
@@ -848,7 +1374,6 @@ html[data-design='apple'] {
   .working-sidebar-header h2 {
     font-size: 17px;
     font-weight: 700;
-    letter-spacing: -0.015em;
   }
   .working-category h2 {
     background: var(--bg);
@@ -910,14 +1435,24 @@ html[data-design='apple'] {
   }
 
   /* ---- History details: flat SF rows, filled ref pills, SF column titles, thin lane lines ---- */
+  .history-column-viewport {
+    border-bottom: 0.5px solid var(--border);
+    background: var(--bg);
+  }
   .history-columns {
+    height: 28px;
+    color: var(--secondary);
     font-family: var(--ui);
-    font-size: 12px;
+    font-size: 11px;
+    font-weight: 500;
     letter-spacing: 0;
     text-transform: none;
   }
+  .history-column-resize::after {
+    background: var(--border);
+  }
   .commit-row {
-    font-size: 13.5px;
+    font-size: 13px;
   }
   .commit-message::before {
     display: none;
@@ -933,14 +1468,17 @@ html[data-design='apple'] {
   .commit-row:hover:not(.selected) {
     background: transparent;
   }
-  .commit-row:hover:not(.selected)::before {
-    content: '';
+  /* Hover is a soft fill drawn under the graph canvas (HistoryGraph positions it), matching the selection's shape. */
+  .history-hover {
     position: absolute;
-    inset: 0 10px 2px;
-    z-index: -1;
-    border-radius: 10px;
+    z-index: 0;
+    border-radius: 7px;
     background: var(--apple-fill);
     pointer-events: none;
+  }
+  /* Keep pills inside the inset selection and hover fills (which start 10px in). */
+  .commit-refs {
+    padding-left: 16px;
   }
   .ref-pill {
     height: 20px;
@@ -1010,4 +1548,10 @@ html[data-design='apple'] {
   html[data-design='apple'] .apple-glyph :is(.arrow, .chk, .b-curve, .b-node, .rot, .hand) {
     animation: none;
   }
+}
+
+/* Overlay-style thin scrollbars everywhere, as on macOS. Zero specificity so any component rule still wins. */
+:where(html[data-design='apple']) :where(*) {
+  scrollbar-width: thin;
+  scrollbar-color: var(--apple-fill-strong) transparent;
 }

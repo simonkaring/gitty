@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Dialog } from './ui';
+import { Icons } from './icons';
 import { DEFAULT_SETTINGS, MONO_FONTS, useSettings, type DesignFamily } from '../model/settings';
 import { COLOR_KEYS, MAX_CUSTOM_THEMES, MAX_THEME_FILE_BYTES, contrastRatio, exportTheme, importTheme, isColor, validateTheme, type ThemeDefinition } from '../model/themes';
 import { MAX_COMMIT_PROFILES, validateCommitProfile, type CommitProfile } from '../model/commitProfiles';
@@ -8,6 +9,7 @@ import { IntegrationsSettings } from './IntegrationsSettings';
 
 const newId = () => `custom-${crypto.randomUUID()}`;
 const sections = ['Appearance', 'Commit profiles', 'Integrations', 'Editor & diffs', 'Workspace reset', 'About / shortcuts'] as const;
+const SECTION_ICONS = { Appearance: Icons.Palette, 'Commit profiles': Icons.User, Integrations: Icons.KeyRound, 'Editor & diffs': Icons.FileCode2, 'Workspace reset': Icons.RotateCcw, 'About / shortcuts': Icons.Info } as const;
 type Section = typeof sections[number];
 
 export function SettingsDialog({ demo = false, onToggleDemo, demoBusy = false }: { demo?: boolean; onToggleDemo?: () => void; demoBusy?: boolean } = {}) {
@@ -91,7 +93,7 @@ export function SettingsDialog({ demo = false, onToggleDemo, demoBusy = false }:
   return <Dialog title="Settings" size="lg" className={`settings-dialog${section === 'Integrations' ? ' settings-integrations' : ''}`} onClose={requestClose}>
     {confirmClose && <div className="settings-notice" role="alert"><p>Discard your unsaved theme edits?</p><button className="secondary-button" onClick={() => setConfirmClose(false)} autoFocus>Keep editing</button> <button className="secondary-button" onClick={finish}>Discard and close</button></div>}
     {api.storageError && <div className="settings-notice" role="alert">{api.storageError} <button className="text-button" onClick={api.retryPersistence}>Retry saving</button></div>}
-    <div className="settings-layout"><nav aria-label="Settings sections">{sections.map(s => <button key={s} aria-current={section === s ? 'page' : undefined} onClick={() => setSection(s)}>{s}</button>)}</nav>
+    <div className="settings-layout"><nav aria-label="Settings sections">{sections.map(s => { const Glyph = SECTION_ICONS[s]; return <button key={s} aria-current={section === s ? 'page' : undefined} onClick={() => setSection(s)}>{theme.design === 'apple' && <span className="settings-nav-icon" data-section={s} aria-hidden="true"><Glyph size={14} /></span>}{s}</button>; })}</nav>
     <div className="settings-content">
       <div hidden={section !== 'Integrations'}><IntegrationsSettings /></div>
       <section hidden={section !== 'Appearance'} aria-labelledby="appearance-heading"><h3 id="appearance-heading">Appearance</h3>

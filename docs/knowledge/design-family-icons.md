@@ -37,9 +37,11 @@ outside `SettingsProvider` still work.
 - anything else renders the Lucide SVG component.
 
 `MATERIAL` maps each Lucide name to a glyph in `PARTS`; names without a mapping keep
-their Lucide icon. The Apple design family swaps Lucide for `APPLE_PARTS`, the
-reference's own 24px symbol set with 1.6px rounded strokes (redrawn in the same
-language where the reference has no glyph), and shares `MATERIAL`'s name coverage.
+their Lucide icon. The Apple design family swaps Lucide for `APPLE_PARTS`, 24px
+glyphs drawn after SF Symbols at a 1.8px rounded stroke with filled dots (gearshape,
+arrow.down/up.circle, archivebox, doc.on.doc, sidebar.left, info.circle and so on).
+They are app-drawn lookalikes, not Apple's SF Symbols artwork, whose license limits
+use to Apple platforms; they share `MATERIAL`'s name coverage.
 Its SVG keeps two class families so existing CSS keeps working: `apple-glyph` plus
 the `lucide lucide-<name>` marker that the sidebar hover animations in `motion.css`
 target, and the caller's own class. `APPLE_PARTS` is deliberately separate from

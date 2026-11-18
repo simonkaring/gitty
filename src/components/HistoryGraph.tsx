@@ -98,12 +98,13 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const apple = theme.design === 'apple';
   const avatars = settings.graphAuthorAvatars || material;
   // Material uses roomier rows so avatars, the HEAD ring and day dividers don't crowd each other.
-  const rowHeight = material ? 52 : apple ? 44 : ROW_HEIGHT;
+  const rowHeight = material ? 52 : apple ? 34 : ROW_HEIGHT;
   const graphLaneWidth = avatars ? 30 : LANE_WIDTH;
   const graphLaneX = useMemo(() => (lane: number) => laneX(0) + lane * graphLaneWidth, [graphLaneWidth]);
   const minGraphWidth = graphLaneX(2) + 14;
   const scroller = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
+  const hoverRect = useRef<HTMLDivElement>(null);
   const columnSettingsButton = useRef<HTMLButtonElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [scrollLeft, setScrollLeft] = useState(0);
@@ -259,7 +260,6 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     if (element.height !== pixelHeight) element.height = pixelHeight;
     const y = (row: number) => row * rowHeight + rowHeight / 2 - windowTop;
     const firstRow = Math.max(0, Math.floor(windowTop / rowHeight) - 1), lastRow = Math.min(loaded, Math.ceil((windowTop + windowHeight) / rowHeight) + 1);
-    const bg = theme.colors.bg;
     ctx.setTransform(dpr, 0, 0, dpr, -graphX * dpr, 0);
     ctx.clearRect(graphX, 0, graphWidth, windowHeight);
     ctx.lineWidth = apple ? 1.75 : 2.5;
@@ -270,22 +270,35 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     // With a branch hovered, its lines are drawn last so they sit on top of the dimmed ones.
     const onBranch = (edge: GraphEdge) => !!focus && focus.branch !== null && branchColors.owned[colorRowOf(edge)] === focus.branch;
     if (focus) edges.sort((a, b) => Number(onBranch(a)) - Number(onBranch(b)));
-    for (const edge of edges) {
+    const traceEdge = (edge: GraphEdge) => {
       const x1 = graphLaneX(edge.fromLane), xt = graphLaneX(edge.track), x2 = graphLaneX(edge.toLane);
       const y1 = y(edge.fromRow), y2 = y(edge.toRow);
-      const colorRow = colorRowOf(edge);
-      ctx.strokeStyle = palette[branchColors.rows[colorRow] ?? branchColors.rows[edge.fromRow] ?? edge.track % colors.length];
-      ctx.globalAlpha = focus ? (onBranch(edge) ? 1 : 0.18) : matches ? 0.3 : 1;
+      const bend = rowHeight / 4, reach = rowHeight * 5 / 12;
       // Uncommitted work hangs off HEAD by a dotted line (round caps turn near-zero dashes into dots).
       ctx.setLineDash(commits[edge.fromRow]?.id === WORKING_ID ? [0.01, 6] : []);
       ctx.beginPath();
       ctx.moveTo(x1, y1);
-      const bend = rowHeight / 4, reach = rowHeight * 5 / 12;
       ctx.bezierCurveTo(x1, y1 + bend, xt, y1 + bend, xt, y1 + reach);
       ctx.lineTo(xt, y2 - reach);
       ctx.bezierCurveTo(xt, y2 - bend, x2, y2 - bend, x2, y2);
       ctx.stroke();
+    };
+    for (const edge of edges) {
+      const colorRow = colorRowOf(edge);
+      ctx.strokeStyle = palette[branchColors.rows[colorRow] ?? branchColors.rows[edge.fromRow] ?? edge.track % colors.length];
+      ctx.globalAlpha = focus ? (onBranch(edge) ? 1 : 0.18) : matches ? 0.3 : 1;
+      traceEdge(edge);
     }
+    // Apple: content on the accent selection turns white, as in a selected macOS table row, so lines stay visible on it.
+    const selectedBand = apple && selectedIndex >= firstRow && selectedIndex < lastRow;
+    if (selectedBand) {
+      ctx.save();
+      ctx.beginPath(); ctx.rect(graphX, y(selectedIndex) - rowHeight / 2, graphWidth, rowHeight - 2); ctx.clip();
+      ctx.strokeStyle = '#fff'; ctx.globalAlpha = 0.9;
+      edges.forEach(traceEdge);
+      ctx.restore();
+    }
+    const erase = (paint: () => void) => { ctx.globalCompositeOperation = 'destination-out'; paint(); ctx.globalCompositeOperation = 'source-over'; };
     // The worker can still be laying out newly loaded history when this effect
     // runs. Rows remain visible, but their canvas nodes must wait for layout.
     ctx.setLineDash([]);
@@ -294,7 +307,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       const commit = commits[row];
       const working = commit.id === WORKING_ID;
       const x = graphLaneX(node.lane), cy = y(row);
-      const lane = palette[branchColors.rows[row] ?? node.lane % colors.length];
+      const onSelection = selectedBand && row === selectedIndex;
+      const lane = onSelection ? '#fff' : palette[branchColors.rows[row] ?? node.lane % colors.length];
       const alpha = shown && !shown.has(node.id) ? (focus ? 0.25 : 0.3) : 1;
       // Solid dots are bigger than merge dots; the selected node grows like its avatar counterpart does.
       // A stash record is a two-parent commit whose index parent is not drawn; it is not a user merge.
@@ -309,24 +323,26 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       if (commit.id === head) {
         // Material rings HEAD with a scalloped (cookie) outline, even around a small merge dot.
         if (material) traceShape(ctx, 'cookie', x, cy, (commit.id === selectedId ? 13 * 1.2 + 4 : 13 + 5), 0.12); else { ctx.beginPath(); ctx.arc(x, cy, radius + (avatars ? 5 : 4), 0, Math.PI * 2); }
-        ctx.strokeStyle = apple ? theme.colors.text : theme.colors.graphHead; ctx.stroke();
+        ctx.strokeStyle = onSelection ? '#fff' : apple ? theme.colors.text : theme.colors.graphHead; ctx.stroke();
       }
       if (avatarNode) continue;
       ctx.beginPath();
       if (working) {
         // Uncommitted work is a dashed, hollow marker (a round one in Material).
         if (material) { ctx.arc(x, cy, 9, 0, Math.PI * 2); ctx.lineWidth = 2.5; } else ctx.roundRect(x - 5, cy - 5, 10, 10, 2.5);
-        ctx.fillStyle = bg; ctx.fill();
+        erase(() => ctx.fill());
         ctx.setLineDash([3, 3]); ctx.strokeStyle = lane; ctx.stroke(); ctx.setLineDash([]);
       } else {
-        // Solid dot separated from lines behind it by a background-coloured ring.
+        // Solid dot separated from lines behind it by a gap cut out of the canvas, so the row's hover or selection fill shows through.
         ctx.arc(x, cy, radius, 0, Math.PI * 2);
+        ctx.lineWidth = 3;
+        erase(() => { ctx.fill(); ctx.stroke(); });
         ctx.fillStyle = lane; ctx.fill();
-        ctx.lineWidth = 3; ctx.strokeStyle = bg; ctx.stroke();
+        erase(() => ctx.stroke());
       }
     }
     ctx.globalAlpha = 1;
-  }, [commits, layout, visibleEdges, windowTop, windowHeight, graphWidth, graphX, theme, matches, focus, shown, loaded, colors, palette, branchColors, avatars, material, apple, graphLaneX, joinRefs, refsByCommit, selectedId, head]);
+  }, [commits, layout, visibleEdges, windowTop, windowHeight, graphWidth, graphX, theme, matches, focus, shown, loaded, colors, palette, branchColors, avatars, material, apple, graphLaneX, joinRefs, refsByCommit, selectedId, selectedIndex, head]);
 
   useEffect(() => {
     const node = layout.nodes[selectedIndex];
@@ -501,9 +517,13 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
           if (event.key in moves) { event.preventDefault(); setActiveControl(null); navigate(moves[event.key]); }
           if (event.key === 'Enter') { event.preventDefault(); onOpenDetails(); }
         }}>
-        <div className="history-spacer" style={{ height: loaded * rowHeight }}>
+        <div className="history-spacer" style={{ height: loaded * rowHeight }}
+          // Apple: the hover fill sits under the graph canvas like the selection, so lines and dots stay crisp. Moved directly, no re-render per row.
+          onMouseMove={apple ? event => { const el = hoverRect.current; if (!el) return; const row = Math.floor((event.clientY - event.currentTarget.getBoundingClientRect().top) / rowHeight); el.hidden = row < 0 || row >= loaded; el.style.top = `${row * rowHeight}px`; } : undefined}
+          onMouseLeave={apple ? () => { if (hoverRect.current) hoverRect.current.hidden = true; } : undefined}>
+          {apple && <div ref={hoverRect} className="history-hover" aria-hidden="true" hidden style={{ height: rowHeight - 2, left: 10, right: 10 }} />}
           {/* Apple design: the reference draws one rounded blue rect behind the selected row, spanning the whole row. */}
-          {theme.design === 'apple' && selectedIndex >= 0 && <div className="history-selection" aria-hidden="true" style={{ top: selectedIndex * rowHeight, height: rowHeight - 2, left: 10, right: 10 }} />}
+          {apple && selectedIndex >= 0 && <div className="history-selection" aria-hidden="true" style={{ top: selectedIndex * rowHeight, height: rowHeight - 2, left: 10, right: 10 }} />}
           {isGraphVisible && <canvas ref={canvas} className="graph-canvas" aria-hidden="true" style={{ width: graphWidth, height: windowHeight, left: graphOffset, top: windowTop }} />}
           {commits.slice(start, end).map((commit, offset) => {
             const row = start + offset;

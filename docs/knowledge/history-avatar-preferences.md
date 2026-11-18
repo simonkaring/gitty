@@ -50,8 +50,11 @@ inventing avatar positions.[^graph]
 In both modes the canvas draws 2.5px opaque branch lines (the working tree hangs
 off HEAD by a dotted line), a `graphHead` ring around the HEAD commit, and, when
 the refs column sits directly before the graph, a connector from each ref pill to
-its node (the pill's CSS line runs flush to the column edge and the canvas line continues from it, so they read as one). Dot mode draws solid dots (smaller for merges) with a 3px background
-ring. Each message cell carries a branch-colored tick, replaced by the
+its node (the pill's CSS line runs flush to the column edge and the canvas line continues from it, so they read as one). Dot mode draws solid dots (smaller for merges) with a 3px gap erased
+from the canvas (and the working square is erased before its dashed outline), so
+whatever row fill sits beneath shows through. The Apple design draws its hover and
+selection fills under the canvas (`.history-hover`, `.history-selection`) and
+repaints lines, the selected node and HEAD ring in white inside the selected row. Each message cell carries a branch-colored tick, replaced by the
 `graphSelection` color on the selected row.[^graph]
 
 The canvas is a buffered window (viewport plus 10 rows above and 20 below, snapped

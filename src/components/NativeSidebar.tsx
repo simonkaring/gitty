@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
 import { Icons } from './icons';
 import type { CommitSummary, RepositoryState } from '../model/repository';
 import { acceptsGraphDrop, graphDropAction, REF_DRAG_TYPE, COMMIT_DRAG_TYPE } from './HistoryGraph';
@@ -29,6 +29,8 @@ interface NativeSidebarProps {
   onSectionsChange?: (sections: SidebarSectionConfig[]) => void;
   /** Stash actions from the Stashes section; absent hides the actions button. */
   onStash?: (action: StashActionRequest) => void;
+  /** The commit selected in the graph; a clicked reference stays highlighted only while it is still the selection. */
+  selectedId?: string;
 }
 
 export const SECTION_LABELS: Record<SidebarSectionId, string> = { worktrees: 'Worktrees', local: 'Local branches', remote: 'Remote branches', tag: 'Tags', stash: 'Stashes', remotes: 'Remotes' };
@@ -71,12 +73,13 @@ export function buildRefTree(refs: RepositoryState['refs'], prefix: string, remo
   return root;
 }
 
-export function NativeSidebar({ state, commits, filters, busy, reveal, switchBranch, openMenu, onAction, folderOpen, onFolderOpen, openFolderMenu, worktrees, onHoverRef, sections = DEFAULT_SIDEBAR_SECTIONS, onSectionsChange, onStash }: NativeSidebarProps) {
+export function NativeSidebar({ state, commits, filters, busy, reveal, switchBranch, openMenu, onAction, folderOpen, onFolderOpen, openFolderMenu, worktrees, onHoverRef, sections = DEFAULT_SIDEBAR_SECTIONS, onSectionsChange, onStash, selectedId }: NativeSidebarProps) {
   const { session } = state;
   const [optionsOpen, setOptionsOpen] = useState(false);
   // Matching the stash dialog: a second click on the same stash confirms a drop.
   const [confirmDrop, setConfirmDrop] = useState<string | null>(null);
   const optionsButton = useRef<HTMLButtonElement>(null);
+  const [clicked, setClicked] = useState<string | null>(null);
   // Apple lists show the branch's graph colour on its icon and a trailing check on HEAD; other designs keep the leading check.
   const apple = document.documentElement.dataset.design === 'apple';
   const currentBranch = session.headRef?.startsWith('refs/heads/') ? session.headRef.slice(11) : null;
@@ -95,12 +98,12 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
     const prefix = kind === 'local' ? 'refs/heads/' : kind === 'remote' ? 'refs/remotes/' : kind === 'stash' ? 'refs/stash' : 'refs/tags/';
     const tree = buildRefTree(refs, prefix, state.remotes);
     const renderTree = (node: RefTree, parts: string[] = []): ReactNode => <>
-      {[...node.refs].sort((a, b) => a.fullName < b.fullName ? -1 : a.fullName > b.fullName ? 1 : 0).map(ref => <div className={`ref-action-row${ref.fullName === session.headRef ? ' current' : ''}`} key={ref.fullName} onMouseEnter={() => onHoverRef?.(ref.fullName)} onMouseLeave={() => onHoverRef?.(null)} onFocus={() => onHoverRef?.(ref.fullName)} onBlur={() => onHoverRef?.(null)} onContextMenu={event => { event.preventDefault(); openMenu({ oid: ref.commitId, ref: ref.fullName }, event.clientX, event.clientY, event.currentTarget.querySelector('button')!); }}>
+      {[...node.refs].sort((a, b) => a.fullName < b.fullName ? -1 : a.fullName > b.fullName ? 1 : 0).map(ref => <div className={`ref-action-row${ref.fullName === session.headRef ? ' current' : ''}${ref.fullName === clicked && ref.commitId === selectedId ? ' selected' : ''}`} key={ref.fullName} onMouseEnter={() => onHoverRef?.(ref.fullName)} onMouseLeave={() => onHoverRef?.(null)} onFocus={() => onHoverRef?.(ref.fullName)} onBlur={() => onHoverRef?.(null)} onContextMenu={event => { event.preventDefault(); openMenu({ oid: ref.commitId, ref: ref.fullName }, event.clientX, event.clientY, event.currentTarget.querySelector('button')!); }}>
         <button className="ref-item" title={kind === 'stash' ? `${ref.fullName}: ${stashMessage(ref.name)}` : ref.fullName} aria-label={`${kind} ${ref.fullName}`} aria-current={ref.fullName === session.headRef ? 'true' : undefined} style={branchStyle(ref)} disabled={busy} draggable={ref.kind === 'local' || ref.kind === 'remote'}
           onDragStart={event => { event.stopPropagation(); if (ref.kind !== 'local' && ref.kind !== 'remote') { event.preventDefault(); return; } event.dataTransfer.clearData(COMMIT_DRAG_TYPE); event.dataTransfer.setData(REF_DRAG_TYPE, ref.fullName); event.dataTransfer.effectAllowed = 'copy'; }}
           onDragOver={event => { if (!busy && acceptsGraphDrop(event.dataTransfer, ref, session.headRef)) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
           onDrop={event => { event.preventDefault(); event.stopPropagation(); const action = graphDropAction(event.dataTransfer, ref.fullName, session.headRef, commits, state.refs); if (action) onAction(action); }}
-          onClick={() => reveal(ref.commitId)} onDoubleClick={() => { if (ref.kind === 'local' || (ref.kind === 'remote' && ref.fullName.startsWith('refs/remotes/origin/') && ref.fullName !== 'refs/remotes/origin/HEAD')) switchBranch(ref.fullName); }}
+          onClick={() => { setClicked(ref.fullName); reveal(ref.commitId); }} onDoubleClick={() => { if (ref.kind === 'local' || (ref.kind === 'remote' && ref.fullName.startsWith('refs/remotes/origin/') && ref.fullName !== 'refs/remotes/origin/HEAD')) switchBranch(ref.fullName); }}
           onKeyDown={event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); openMenu({ oid: ref.commitId, ref: ref.fullName }, rect.left, rect.bottom, event.currentTarget); } }}>
           {kind === 'tag' || kind === 'stash' ? <Icon size={14} aria-hidden="true" /> : ref.fullName === session.headRef && !apple ? <Icons.Check className="current-branch-check" size={14} aria-hidden="true" /> : <Icons.GitBranch size={14} aria-hidden="true" />}<span>{kind === 'tag' || kind === 'stash' ? (kind === 'stash' ? stashMessage(ref.name) : ref.name) : ref.name.split('/').at(-1)}</span>{ref.fullName === session.headRef && apple && <Icons.Check className="current-branch-check" size={14} aria-hidden="true" />}
         </button>{kind === 'stash' && onStash ? <>
@@ -134,7 +137,21 @@ export function NativeSidebar({ state, commits, filters, busy, reveal, switchBra
       {!refs.length && <p className="empty-category">No references</p>}
     </details>;
   }
-  return <aside className="sidebar native-sidebar" aria-label="Repository references">
+  // Outline-view keys: Up/Down walk the visible rows, Right/Left expand or collapse the focused group or folder.
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement;
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key) || !target.matches('.ref-item, summary')) return;
+    const details = target.closest('summary')?.parentElement;
+    if ((event.key === 'ArrowRight' || event.key === 'ArrowLeft') && details instanceof HTMLDetailsElement && target.tagName === 'SUMMARY') {
+      if (details.open !== (event.key === 'ArrowRight')) { event.preventDefault(); details.open = event.key === 'ArrowRight'; }
+      return;
+    }
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') return;
+    const rows = [...event.currentTarget.querySelectorAll<HTMLElement>('.ref-item:not(:disabled), .reference-group > summary, .reference-folder > summary')].filter(row => row.offsetParent !== null);
+    const next = rows[rows.indexOf(target) + (event.key === 'ArrowDown' ? 1 : -1)];
+    if (next) { event.preventDefault(); next.focus(); }
+  };
+  return <aside className="sidebar native-sidebar" aria-label="Repository references" onKeyDown={onKeyDown}>
     <div className="workspace-label"><Icons.FolderGit2 size={22} /><span>{session.name}<small title={session.root}>{session.root}</small></span>
       {onSectionsChange && <div className="sidebar-options">
         <button ref={optionsButton} type="button" className="icon-button sm" aria-label="Customize sidebar sections" title="Customize sidebar sections" aria-haspopup="dialog" aria-expanded={optionsOpen} onClick={() => setOptionsOpen(open => !open)}><Icons.Settings size={15} /></button>
