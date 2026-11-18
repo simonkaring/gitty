@@ -294,37 +294,37 @@ html[data-design='apple'] {
   .commit-row.selected:hover {
     background: transparent;
     box-shadow: none;
-    color: #fff;
+    color: var(--button-foreground);
   }
   .commit-row.selected .subject,
   .commit-row.selected .commit-message,
   .commit-row.selected .row-hash,
   .commit-row.selected .row-date,
   .commit-row.selected .row-author {
-    color: #fff;
+    color: var(--button-foreground);
   }
   .commit-row.selected .row-date,
   .commit-row.selected .row-author {
-    color: color-mix(in srgb, #fff 78%, transparent);
+    color: color-mix(in srgb, var(--button-foreground) 78%, transparent);
   }
   .commit-row.selected .ref-pill,
   .commit-row.selected .ref-pill.remote-ref,
   .commit-row.selected .ref-pill.tag-ref,
   .commit-row.selected .ref-pill.stash-ref,
   .commit-row.selected .ref-more {
-    color: #fff;
-    background: color-mix(in srgb, #fff 24%, transparent);
+    color: var(--button-foreground);
+    background: color-mix(in srgb, var(--button-foreground) 24%, transparent);
     border-color: transparent;
   }
   .commit-row.selected .ref-pill svg,
   .commit-row.selected .ref-pill.tag-ref svg {
-    color: #fff;
+    color: var(--button-foreground);
   }
   .commit-row.selected .graph-action-button {
-    color: #fff;
+    color: var(--button-foreground);
   }
   .commit-row.selected .graph-action-button:hover:not(:disabled) {
-    background: color-mix(in srgb, #fff 24%, transparent);
+    background: color-mix(in srgb, var(--button-foreground) 24%, transparent);
   }
 
   /* ---- Toolbar: one glass capsule of plain items (see Window chrome); hover is a soft fill ---- */
@@ -899,7 +899,7 @@ html[data-design='apple'] {
     color: var(--button-foreground);
   }
   .ref-action-row:is(.selected, :has(.ref-item:focus-visible)) .icon-button:hover:not(:disabled) {
-    background: color-mix(in srgb, #fff 24%, transparent);
+    background: color-mix(in srgb, var(--button-foreground) 24%, transparent);
   }
 
   /* Group headers as in Finder: no disclosure arrow; "Hide"/"Show" fades in on hover or focus where the count sits. */
@@ -1103,7 +1103,7 @@ html[data-design='apple'] {
   }
   input[type='radio']:checked {
     border-color: var(--accent);
-    background: radial-gradient(circle, #fff 0 2.5px, var(--accent) 3px);
+    background: radial-gradient(circle, var(--button-foreground) 0 2.5px, var(--accent) 3px);
   }
 
   /* ======== Settings: System Settings layout. Centered title, tinted icon tiles, grouped rows with the control on the right ======== */

@@ -1,4 +1,4 @@
-import { COLOR_KEYS } from './themes';
+import { COLOR_KEYS, type ColorKey } from './themes';
 
 type Mode = 'light' | 'dark';
 const gamma = (x: number) => (x <= 0.0031308 ? 12.92 * x : 1.055 * x ** (1 / 2.4) - 0.055);
@@ -31,7 +31,7 @@ function lightness(L: number, hue: number, chroma: number): string {
 }
 
 /** Material 3 style tonal palette for a seed color, mapped onto every Gitty theme color. */
-export function materialColors(seed: string, mode: Mode): Record<string, string> {
+export function materialColors(seed: string, mode: Mode): Record<ColorKey, string> {
   const { hue, chroma } = seedOf(seed);
   const P = Math.min(0.2, Math.max(chroma, 0.12));
   const d = mode === 'dark';
@@ -43,13 +43,13 @@ export function materialColors(seed: string, mode: Mode): Record<string, string>
     chrome: S(0.16, 0.012), sidebar: S(0.205, 0.015), bg: S(0.23, 0.017), raised: S(0.27, 0.019), subtle: S(0.31, 0.02), hover: S(0.35, 0.02), border: S(0.38, 0.02), borderStrong: S(0.58, 0.02),
     text: S(0.93, 0.01), secondary: S(0.82, 0.02), muted: S(0.74, 0.02),
     accent: lightness(0.8, hue, P), accentText: lightness(0.8, hue, P), accentWash: lightness(0.3, hue, 0.05), selected: lightness(0.37, hue, 0.045), green: tone(80, 150, 0.15), greenWash: tone(22, 150, 0.05), red: tone(85, 25, 0.12), redWash: tone(22, 25, 0.06),
-    buttonForeground: lightness(0.29, hue, 0.09), shadow: '#00000099', backdrop: '#00000080', graphSelection: lightness(0.8, hue, P), graphMerge: tone(85, 95, 0.14), graphHead: S(0.93, 0.01),
+    buttonForeground: lightness(0.29, hue, 0.09), shadow: '#00000099', backdrop: '#00000080', graphSelection: lightness(0.8, hue, P), graphHead: S(0.93, 0.01),
   } : {
     chrome: S(0.985, 0.006), sidebar: S(0.972, 0.009), bg: S(0.955, 0.011), raised: S(0.935, 0.013), subtle: S(0.915, 0.015), hover: S(0.89, 0.016), border: S(0.82, 0.015), borderStrong: S(0.56, 0.02),
     text: S(0.22, 0.012), secondary: S(0.4, 0.02), muted: S(0.47, 0.02),
     accent: lightness(0.48, hue, P), accentText: lightness(0.48, hue, P), accentWash: lightness(0.93, hue, 0.035), selected: lightness(0.9, hue, 0.05), green: tone(35, 150, 0.12), greenWash: tone(90, 150, 0.06), red: tone(40, 25, 0.16), redWash: tone(92, 25, 0.05),
-    buttonForeground: N(100), shadow: '#00000040', backdrop: '#00000052', graphSelection: lightness(0.48, hue, P), graphMerge: tone(45, 70, 0.12), graphHead: S(0.22, 0.012),
+    buttonForeground: N(100), shadow: '#00000040', backdrop: '#00000052', graphSelection: lightness(0.48, hue, P), graphHead: S(0.22, 0.012),
   };
   for (let i = 0; i < 8; i++) values[`graphLane${i + 1}`] = lane(i);
-  return Object.fromEntries(COLOR_KEYS.map(key => [key, values[key]]));
+  return Object.fromEntries(COLOR_KEYS.map(key => [key, values[key]])) as Record<ColorKey, string>;
 }

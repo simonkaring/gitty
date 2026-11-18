@@ -142,6 +142,10 @@ describe('local preferences', () => {
 });
 describe('theme files and render tokens', () => {
   it('round trips a complete versioned custom theme', () => { expect(importTheme(exportTheme(custom()))).toEqual(custom()); });
+  it('accepts and drops the retired graphMerge color from older theme files', () => {
+    const legacy = custom(); (legacy.colors as Record<string, string>).graphMerge = '#123456';
+    expect(validateTheme(legacy)).toEqual(custom());
+  });
   it('keeps a valid design family through export/import and rejects unknown ones', () => {
     const material = { ...custom(), design: 'material' as const };
     expect(importTheme(exportTheme(material)).design).toBe('material');
@@ -162,8 +166,8 @@ describe('theme files and render tokens', () => {
     }
   });
   it('rejects missing or unknown tokens, CSS injection, oversized files and future versions', () => {
-    const missing = custom(); delete missing.colors.graphHead;
-    const unknown = custom(); unknown.colors.remote = '#ffffff';
+    const missing = custom(); delete (missing.colors as Partial<typeof missing.colors>).graphHead;
+    const unknown = custom(); (unknown.colors as Record<string, string>).remote = '#ffffff';
     const invalid = custom(); invalid.colors.bg = 'url(https://example.org)';
     const translucent = custom(); translucent.colors.text = '#ffffff88';
     for (const theme of [missing, unknown, invalid, translucent, { ...custom(), name: 'x'.repeat(61) }, { ...custom(), id: 'gitty-light' }]) expect(() => validateTheme(theme)).toThrow();
@@ -184,14 +188,14 @@ describe('theme files and render tokens', () => {
   });
   it('keeps Gitty presets at WCAG AA for text on every surface', () => {
     for (const { colors } of BUILTIN_THEMES.slice(0, 2)) {
-      for (const fg of ['text', 'secondary', 'muted']) for (const bg of ['bg', 'chrome', 'sidebar', 'raised', 'subtle']) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
-      for (const [fg, bg] of [['buttonForeground', 'accentText'], ['accentText', 'accentWash'], ['accentText', 'selected'], ['green', 'greenWash'], ['red', 'redWash']]) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
+      for (const fg of ['text', 'secondary', 'muted'] as const) for (const bg of ['bg', 'chrome', 'sidebar', 'raised', 'subtle'] as const) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
+      for (const [fg, bg] of [['buttonForeground', 'accentText'], ['accentText', 'accentWash'], ['accentText', 'selected'], ['green', 'greenWash'], ['red', 'redWash']] as const) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
     }
   });
   it('keeps Apple presets at WCAG AA for text on every surface', () => {
     for (const { colors } of BUILTIN_THEMES.slice(-2)) {
-      for (const fg of ['text', 'secondary', 'muted']) for (const bg of ['bg', 'chrome', 'sidebar', 'raised', 'subtle']) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
-      for (const [fg, bg] of [['accentText', 'accentWash'], ['accentText', 'selected'], ['green', 'greenWash'], ['red', 'redWash']]) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
+      for (const fg of ['text', 'secondary', 'muted'] as const) for (const bg of ['bg', 'chrome', 'sidebar', 'raised', 'subtle'] as const) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
+      for (const [fg, bg] of [['accentText', 'accentWash'], ['accentText', 'selected'], ['green', 'greenWash'], ['red', 'redWash']] as const) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
     }
   });
   it('computes WCAG luminance contrast with symmetry and known endpoints', () => {

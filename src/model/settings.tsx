@@ -126,7 +126,8 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [settingsSection, setSettingsSection] = useState<'Commit profiles' | 'Integrations' | null>(null);
   const [preview, previewTheme] = useState<ThemeDefinition | null>(null);
   const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches);
-  const theme = preview ?? resolveTheme(settings, systemDark);
+  const resolved = resolveTheme(settings, systemDark);
+  const theme = preview ?? resolved;
   const persist = (next: Settings) => { try { setStorageError(persistSettings(window.localStorage, next)); } catch { setStorageError('Local storage is unavailable. Preferences will last for this session.'); } };
   const updateSettings: SettingsContextValue['updateSettings'] = patch => { const next = validateSettings({ ...current.current, ...(typeof patch === 'function' ? patch(current.current) : patch) }); current.current = next; setSettings(next); persist(next); };
   useEffect(() => {
@@ -147,7 +148,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     for (const [key, value] of Object.entries(themeTokens(theme))) root.style.setProperty(key, value);
     root.style.setProperty('--mono', `'${settings.monoFont}', monospace`);
     root.style.setProperty('--editor-font-size', `${settings.fontSize}px`);
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme.colors.bg);
   }, [theme, settings.diffWrap, settings.fontSize, settings.monoFont]);
+  // Cache the saved (never previewed) theme for public/theme-boot.js, so the next launch paints in it.
+  useEffect(() => { try { localStorage.setItem('gitty:theme-boot', JSON.stringify({ mode: resolved.mode, design: resolved.design ?? 'default', tokens: themeTokens(resolved) })); } catch { /* boot cache is best effort */ } }, [resolved]);
   useEffect(() => theme.design === 'material' ? attachRipple() : undefined, [theme.design]);
   const resetWorkspace = () => {
     const paneWidths = { ...DEFAULT_SETTINGS.paneWidths };

@@ -176,7 +176,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   }, [commits]);
   const loadedIds = useMemo(() => new Set(commits.map(commit => commit.id)), [commits]);
   const visibleEdges = useMemo(() => indexEdges(layout.edges, layout.edgeMaxTo), [layout.edges, layout.edgeMaxTo]);
-  const colors = useMemo(() => Array.from({ length: 8 }, (_, index) => theme.colors[`graphLane${index + 1}`]), [theme]);
+  const colors = useMemo(() => Array.from({ length: 8 }, (_, index) => theme.colors[`graphLane${index + 1}` as keyof ThemeDefinition['colors']]), [theme]);
   const palette = useMemo(() => [...colors, theme.colors.accent], [colors, theme]);
   const currentBranch = headRef?.startsWith('refs/heads/') ? headRef.slice(11) : null;
   const branchColors = useMemo(() => assignBranchColors(commits, refs, WORKING_ID, currentBranch, stashBranches(commits, refs)), [commits, refs, currentBranch]);
@@ -294,7 +294,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     if (selectedBand) {
       ctx.save();
       ctx.beginPath(); ctx.rect(graphX, y(selectedIndex) - rowHeight / 2, graphWidth, rowHeight - 2); ctx.clip();
-      ctx.strokeStyle = '#fff'; ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = theme.colors.buttonForeground; ctx.globalAlpha = 0.9;
       edges.forEach(traceEdge);
       ctx.restore();
     }
@@ -308,7 +308,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       const working = commit.id === WORKING_ID;
       const x = graphLaneX(node.lane), cy = y(row);
       const onSelection = selectedBand && row === selectedIndex;
-      const lane = onSelection ? '#fff' : palette[branchColors.rows[row] ?? node.lane % colors.length];
+      const lane = onSelection ? theme.colors.buttonForeground : palette[branchColors.rows[row] ?? node.lane % colors.length];
       const alpha = shown && !shown.has(node.id) ? (focus ? 0.25 : 0.3) : 1;
       // Solid dots are bigger than merge dots; the selected node grows like its avatar counterpart does.
       // A stash record is a two-parent commit whose index parent is not drawn; it is not a user merge.
@@ -323,7 +323,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       if (commit.id === head) {
         // Material rings HEAD with a scalloped (cookie) outline, even around a small merge dot.
         if (material) traceShape(ctx, 'cookie', x, cy, (commit.id === selectedId ? 13 * 1.2 + 4 : 13 + 5), 0.12); else { ctx.beginPath(); ctx.arc(x, cy, radius + (avatars ? 5 : 4), 0, Math.PI * 2); }
-        ctx.strokeStyle = onSelection ? '#fff' : apple ? theme.colors.text : theme.colors.graphHead; ctx.stroke();
+        ctx.strokeStyle = onSelection ? theme.colors.buttonForeground : apple ? theme.colors.text : theme.colors.graphHead; ctx.stroke();
       }
       if (avatarNode) continue;
       ctx.beginPath();

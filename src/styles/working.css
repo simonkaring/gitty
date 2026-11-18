@@ -208,20 +208,20 @@
   color: var(--green);
 }
 .working-file .working-file-select svg[data-status='modified'] {
-  color: #e99445;
+  color: var(--amber);
 }
 .working-file .working-file-select svg[data-status='deleted'],
 .working-file .working-file-select svg[data-status='conflict'] {
   color: var(--red);
 }
 .working-file .working-file-select svg[data-status='renamed'] {
-  color: #60a5fa;
+  color: var(--graph-lane1);
 }
 .native-inspector .file-row svg[data-status='added'] { color: var(--green); }
-.native-inspector .file-row svg[data-status='modified'] { color: #e99445; }
+.native-inspector .file-row svg[data-status='modified'] { color: var(--amber); }
 .native-inspector .file-row svg[data-status='deleted'],
 .native-inspector .file-row svg[data-status='conflict'] { color: var(--red); }
-.native-inspector .file-row svg[data-status='renamed'] { color: #60a5fa; }
+.native-inspector .file-row svg[data-status='renamed'] { color: var(--graph-lane1); }
 .working-file-select span {
   min-width: 0;
 }
