@@ -737,3 +737,15 @@ impl ProcessObserver {
         unsafe { kill(self.0, 0) != 0 }
     }
 }
+#[test]
+fn terminal_cli_refuses_noninteractive_io_without_entering_raw_mode() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_gitty-cli"))
+        .arg("tui")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("requires interactive input and output")
+    );
+}

@@ -99,7 +99,10 @@ fn origin_skipped(local: &BranchDeleteTargetResult) -> BranchDeleteTargetResult 
 
 /// Finds the porcelain status line for one pushed destination ref:
 /// `<flag>\t<from>:<to>\t<summary>`.
-fn porcelain_status<'a>(stdout: &'a str, destination: &str) -> Option<(&'a str, &'a str)> {
+pub(crate) fn porcelain_status<'a>(
+    stdout: &'a str,
+    destination: &str,
+) -> Option<(&'a str, &'a str)> {
     stdout.lines().find_map(|line| {
         let mut fields = line.splitn(3, '\t');
         let flag = fields.next()?;

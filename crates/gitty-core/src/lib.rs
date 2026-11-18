@@ -31,6 +31,7 @@ pub mod repository;
 pub mod ssh;
 pub mod stash;
 pub mod stream;
+pub mod terminal;
 pub mod watcher;
 pub mod worktree_files;
 pub mod worktrees;

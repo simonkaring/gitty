@@ -58,7 +58,7 @@ pub struct ActionOutput {
     pub output: String,
 }
 
-#[derive(Debug, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StashEntry {
     pub oid: String,

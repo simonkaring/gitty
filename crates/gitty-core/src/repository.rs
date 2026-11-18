@@ -227,7 +227,16 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn lock_native_common_dir(common_dir: &Path) -> Result<File> {
+struct NativeMutationLock(File);
+
+impl Drop for NativeMutationLock {
+    fn drop(&mut self) {
+        // A concurrent fork can briefly hold a copy of the descriptor until exec.
+        let _ = self.0.unlock();
+    }
+}
+
+fn lock_native_common_dir(common_dir: &Path) -> Result<NativeMutationLock> {
     let file = OpenOptions::new()
         .create(true)
         .read(true)
@@ -243,7 +252,7 @@ fn lock_native_common_dir(common_dir: &Path) -> Result<File> {
         }
         Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
     }
-    Ok(file)
+    Ok(NativeMutationLock(file))
 }
 
 impl Service {
@@ -518,7 +527,7 @@ impl Service {
         }
         Ok(locks.entry(key).or_default().clone())
     }
-    fn process_mutation_lock(repo: &Repository) -> Result<Option<File>> {
+    fn process_mutation_lock(repo: &Repository) -> Result<Option<NativeMutationLock>> {
         let RepositoryLocation::Native { .. } = repo.session.location else {
             return Ok(None);
         };
@@ -1043,8 +1052,12 @@ impl Repository {
     /// files. Hash actual binary-capable patches so repeated same-size edits
     /// invalidate the inspector, including files with restored mtimes.
     fn tracked_content_hash(&self) -> Result<u64> {
+        self.tracked_content_hash_at(&[])
+    }
+
+    pub(crate) fn tracked_content_hash_at(&self, paths: &[String]) -> Result<u64> {
         let mut hash = DefaultHasher::new();
-        let a = args(&[
+        let mut a = args(&[
             "diff",
             "--ours",
             "--binary",
@@ -1056,6 +1069,7 @@ impl Repository {
             "--ignore-submodules=none",
             "--",
         ]);
+        a.extend_from_slice(paths);
         if matches!(self.location(), RepositoryLocation::Ssh { .. }) {
             let output = process::run(process::git_digest_command(self.location(), &a)?)?;
             if !output.success {
@@ -1140,7 +1154,7 @@ impl Repository {
         }
         Ok(())
     }
-    fn hash_untracked_patch(&self, hash: &mut DefaultHasher, path: &str) -> Result<()> {
+    pub(crate) fn hash_untracked_patch(&self, hash: &mut DefaultHasher, path: &str) -> Result<()> {
         let a = args(&[
             "diff",
             "--no-index",
@@ -1160,7 +1174,7 @@ impl Repository {
         Ok(())
     }
     // Internal diff validation needs paths/status only, not refresh fingerprints.
-    pub(crate) fn status_entries(&self) -> Result<RepositoryStatus> {
+    pub fn status_entries(&self) -> Result<RepositoryStatus> {
         self.status_entries_at(None)
     }
     /// Preview validation may inspect just one literal path; refreshes and writes

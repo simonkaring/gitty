@@ -447,16 +447,19 @@ pub(crate) fn without_read_deadline<T>(f: impl FnOnce() -> Result<T>) -> Result<
 /// caller's request deadline is carried into every worker thread.
 pub(crate) fn parallel<T: Send>(jobs: Vec<Box<dyn FnOnce() -> T + Send + '_>>) -> Vec<T> {
     let deadline = REQUEST_DEADLINE.with(|d| d.get());
+    let terminal = TERMINAL_CANCEL.with(|flag| flag.borrow().clone());
     #[cfg(test)]
     let counter = SPAWN_COUNTER.with(|c| c.borrow().clone());
     thread::scope(|scope| {
         let handles: Vec<_> = jobs
             .into_iter()
             .map(|job| {
+                let terminal = terminal.clone();
                 #[cfg(test)]
                 let counter = counter.clone();
                 scope.spawn(move || {
                     REQUEST_DEADLINE.with(|d| d.set(deadline));
+                    TERMINAL_CANCEL.with(|flag| *flag.borrow_mut() = terminal);
                     #[cfg(test)]
                     SPAWN_COUNTER.with(|c| *c.borrow_mut() = counter);
                     job()
@@ -883,7 +886,27 @@ pub(crate) fn capture(
     }
     Ok(out)
 }
+thread_local! {
+    static TERMINAL_CANCEL: std::cell::RefCell<Option<Arc<AtomicBool>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Enable only on the dedicated terminal client worker.
+pub fn terminal_worker(cancel: Arc<AtomicBool>) {
+    TERMINAL_CANCEL.with(|flag| *flag.borrow_mut() = Some(cancel));
+}
+
+pub(crate) fn terminal_cancelled() -> bool {
+    TERMINAL_CANCEL.with(|flag| {
+        flag.borrow()
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    })
+}
+
 pub(crate) fn spawn_piped(command: &mut Command, stdin: Stdio) -> Result<Child> {
+    if terminal_cancelled() {
+        return Err(Error::new("cancelled", "Terminal client closed."));
+    }
     command
         .stdin(stdin)
         .stdout(Stdio::piped())
@@ -891,7 +914,20 @@ pub(crate) fn spawn_piped(command: &mut Command, stdin: Stdio) -> Result<Child> 
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        command.process_group(0);
+        if TERMINAL_CANCEL.with(|flag| flag.borrow().is_some()) {
+            // setsid also creates the process group used by process-tree cleanup.
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() == -1 {
+                        Err(std::io::Error::last_os_error())
+                    } else {
+                        Ok(())
+                    }
+                });
+            }
+        } else {
+            command.process_group(0);
+        }
     }
     #[cfg(windows)]
     {
@@ -1047,9 +1083,10 @@ fn run_with_stdin_budget(
     let mut captured = 0;
     let failure = || {
         let paused = budget.elapsed();
-        let cancelled = clocks
-            .iter()
-            .any(|clock| clock.cancelled.load(Ordering::Relaxed));
+        let cancelled = terminal_cancelled()
+            || clocks
+                .iter()
+                .any(|clock| clock.cancelled.load(Ordering::Relaxed));
         let exceeded = execution_expired(
             start.elapsed(),
             paused,
@@ -1503,6 +1540,27 @@ mod tests {
             "never signal a reaped PID/PGID"
         );
         assert_eq!(unsafe { libc::kill(waiter.id() as i32, 0) }, -1);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn terminal_worker_cancels_a_running_process_on_exit() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (started, ready) = mpsc::channel();
+        let thread_cancel = cancel.clone();
+        let worker = thread::spawn(move || {
+            terminal_worker(thread_cancel);
+            let mut command = Command::new("sleep");
+            command.arg("30");
+            started.send(()).unwrap();
+            run_for(command, Duration::from_secs(10))
+        });
+        ready.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        let start = Instant::now();
+        cancel.store(true, Ordering::Relaxed);
+        assert_eq!(worker.join().unwrap().err().unwrap().code, "cancelled");
+        assert!(start.elapsed() < Duration::from_secs(2));
     }
 
     #[test]

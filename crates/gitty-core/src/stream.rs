@@ -154,10 +154,11 @@ impl GitStream {
         self
     }
     fn check_cancelled(&self) -> Result<()> {
-        if self
-            .cancel
-            .as_ref()
-            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        if process::terminal_cancelled()
+            || self
+                .cancel
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Relaxed))
         {
             return Err(Error::new("cancelled", "Stream cancelled"));
         }

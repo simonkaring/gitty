@@ -721,6 +721,27 @@ fn launch_path(
     cwd.join(arg).to_str().map(String::from)
 }
 
+#[cfg(all(test, unix))]
+#[test]
+fn launch_path_takes_the_first_non_option_argument_relative_to_the_launch_directory() {
+    let args = |values: &[&str]| {
+        values
+            .iter()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>()
+    };
+    let cwd = std::path::Path::new("/work");
+    assert_eq!(launch_path(args(&["gitty"]), cwd), None);
+    assert_eq!(
+        launch_path(args(&["gitty", "-psn_0_12345", "repo"]), cwd).as_deref(),
+        Some("/work/repo")
+    );
+    assert_eq!(
+        launch_path(args(&["gitty", "/abs/repo", "other"]), cwd).as_deref(),
+        Some("/abs/repo")
+    );
+}
+
 #[tauri::command]
 fn app_launch_path(state: tauri::State<'_, LaunchPath>) -> Option<String> {
     state.0.clone()

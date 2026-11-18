@@ -2798,7 +2798,13 @@ fn a_slow_hook_blocks_only_its_own_repository() {
             result
         })
     };
+    let deadline = Instant::now() + Duration::from_secs(10);
     while !started.exists() {
+        if finished.load(Ordering::SeqCst) {
+            let result = worker.join().unwrap();
+            panic!("slow hook never started: {result:?}");
+        }
+        assert!(Instant::now() < deadline, "slow hook did not start in time");
         std::thread::sleep(Duration::from_millis(20));
     }
     let at = Instant::now();
@@ -3685,25 +3691,4 @@ fn closing_a_session_cancels_its_in_flight_search_with_code_cancelled() {
     // The in-flight search reports `cancelled` (not invalidHandle); new lookups fail.
     assert_eq!(running.join().unwrap().unwrap_err().code, "cancelled");
     assert_eq!(service.repo(&handle).err().unwrap().code, "invalidHandle");
-}
-
-#[cfg(unix)]
-#[test]
-fn launch_path_takes_the_first_non_option_argument_relative_to_the_launch_directory() {
-    let args = |values: &[&str]| {
-        values
-            .iter()
-            .map(std::ffi::OsString::from)
-            .collect::<Vec<_>>()
-    };
-    let cwd = Path::new("/work");
-    assert_eq!(crate::launch_path(args(&["gitty"]), cwd), None);
-    assert_eq!(
-        crate::launch_path(args(&["gitty", "-psn_0_12345", "repo"]), cwd).as_deref(),
-        Some("/work/repo")
-    );
-    assert_eq!(
-        crate::launch_path(args(&["gitty", "/abs/repo", "other"]), cwd).as_deref(),
-        Some("/abs/repo")
-    );
 }

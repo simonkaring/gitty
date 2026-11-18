@@ -118,6 +118,251 @@ struct Fixture {
     repo: Arc<Repository>,
     handle: String,
 }
+
+#[test]
+fn terminal_reviews_scope_staging_and_commit_to_the_displayed_inputs() {
+    let f = Fixture::new();
+    f.write("file", "first edit\n");
+    f.write("-literal[1]", "new file\n");
+    let stage = f.repo.terminal_review_stage("file", false).unwrap();
+    f.write("file", "other edit\n");
+    assert_eq!(
+        f.service.terminal_stage(&f.handle, stage).unwrap_err().code,
+        "staleOperation"
+    );
+
+    let stage = f.repo.terminal_review_stage("-literal[1]", false).unwrap();
+    f.write("file", "unrelated edit\n");
+    f.service.terminal_stage(&f.handle, stage).unwrap();
+    assert_eq!(f.git(&["diff", "--cached", "--name-only"]), "-literal[1]");
+    assert_eq!(f.git(&["diff", "--name-only"]), "file");
+
+    let unstage = f.repo.terminal_review_stage("-literal[1]", true).unwrap();
+    f.write("-literal[1]", "unstaged contents\n");
+    f.service.terminal_stage(&f.handle, unstage).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("-literal[1]")).unwrap(),
+        "unstaged contents\n"
+    );
+
+    f.git(&["add", "--", "file"]);
+    let commit = f.repo.terminal_review_commit().unwrap();
+    f.git(&["add", "--", "-literal[1]"]);
+    assert_eq!(
+        f.service
+            .terminal_commit(&f.handle, commit, "stale")
+            .unwrap_err()
+            .code,
+        "staleOperation"
+    );
+
+    let commit = f.repo.terminal_review_commit().unwrap();
+    f.write("file", "later change\n");
+    f.git(&["update-ref", "refs/remotes/test/main", "HEAD"]);
+    let (created, matches) = f
+        .service
+        .terminal_commit(&f.handle, commit, "reviewed")
+        .unwrap();
+    assert_eq!(matches, Some(true));
+    assert_eq!(
+        f.git(&["show", &format!("{}:file", created.oid)]),
+        "unrelated edit"
+    );
+    assert_eq!(f.git(&["diff", "--name-only"]), "file");
+}
+
+#[test]
+fn terminal_stash_refuses_a_changed_file_set_and_keeps_untracked_files_unless_asked() {
+    let f = Fixture::new();
+    f.write("file", "edited\n");
+    let review = f.repo.terminal_review_stash().unwrap();
+    f.write("later", "new\n");
+    assert_eq!(
+        f.service
+            .terminal_stash(&f.handle, review)
+            .unwrap_err()
+            .code,
+        "staleOperation"
+    );
+    let review = f.repo.terminal_review_stash().unwrap();
+    assert!(!review.include_untracked);
+    f.service.terminal_stash(&f.handle, review).unwrap();
+    assert_eq!(f.repo.stashes().unwrap().len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(f.dir.path().join("file")).unwrap(),
+        "base\n"
+    );
+    assert!(f.dir.path().join("later").exists());
+}
+
+#[test]
+fn terminal_rename_review_resets_both_paths_and_refuses_embedded_repositories() {
+    let f = Fixture::new();
+    f.git(&["mv", "file", "moved"]);
+    let review = f.repo.terminal_review_stage("moved", true).unwrap();
+    assert_eq!(review.paths(), &["moved", "file"]);
+    f.service.terminal_stage(&f.handle, review).unwrap();
+    assert_eq!(f.git(&["diff", "--cached", "--name-only"]), "");
+    assert!(f.dir.path().join("moved").is_file());
+    std::fs::create_dir(f.dir.path().join("embedded")).unwrap();
+    git(&f.dir.path().join("embedded"), &["init", "-b", "main"]);
+    assert!(f.repo.terminal_review_stage("embedded/", false).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn terminal_commit_indicates_when_a_hook_changes_the_reviewed_tree() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    f.write("file", "reviewed\n");
+    f.git(&["add", "file"]);
+    f.git(&["config", "core.hooksPath", ".git/hooks"]);
+    let hook = f.dir.path().join(".git/hooks/pre-commit");
+    std::fs::write(
+        &hook,
+        "#!/bin/sh\nprintf 'changed by hook\\n' > file\ngit add -- file\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let review = f.repo.terminal_review_commit().unwrap();
+    let (_, matches) = f
+        .service
+        .terminal_commit(&f.handle, review, "hook")
+        .unwrap();
+    assert_eq!(matches, Some(false));
+    assert_eq!(f.git(&["show", "HEAD:file"]), "changed by hook");
+}
+
+#[test]
+fn terminal_publish_checks_the_actual_push_url_and_stale_targets() {
+    use crate::remote::TerminalSync;
+    let f = Fixture::new();
+    let fetch = tempfile::tempdir().unwrap();
+    let push = tempfile::tempdir().unwrap();
+    for dir in [&fetch, &push] {
+        git(dir.path(), &["init", "--bare", "-b", "main"]);
+    }
+    f.git(&["remote", "add", "origin", fetch.path().to_str().unwrap()]);
+    f.git(&[
+        "remote",
+        "set-url",
+        "--push",
+        "origin",
+        push.path().to_str().unwrap(),
+    ]);
+    let review = f
+        .repo
+        .terminal_review_remote(TerminalSync::Publish, "origin", Some("main"))
+        .unwrap();
+    assert_eq!(f.repo.terminal_push_ref(&review, None).unwrap(), None);
+    f.write("file", "another commit\n");
+    let oid = f.commit("another commit");
+    assert_eq!(
+        f.service
+            .terminal_remote(&f.handle, &review, None)
+            .unwrap_err()
+            .code,
+        "staleOperation"
+    );
+    let review = f
+        .repo
+        .terminal_review_remote(TerminalSync::Publish, "origin", Some("main"))
+        .unwrap();
+    f.service.terminal_remote(&f.handle, &review, None).unwrap();
+    assert_eq!(
+        f.repo.terminal_push_ref(&review, None).unwrap().as_deref(),
+        Some(oid.as_str())
+    );
+    assert_eq!(
+        git(fetch.path(), &["for-each-ref", "--format=%(refname)"]),
+        ""
+    );
+    assert_eq!(
+        f.repo.sync_info().unwrap().upstream.as_deref(),
+        Some("origin/main")
+    );
+}
+
+#[test]
+fn terminal_fetch_and_pull_only_advance_the_expected_refs() {
+    use crate::remote::TerminalSync;
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    let peer = f.peer(bare.path());
+    peer.write("file", "incoming\n");
+    let incoming = peer.commit("incoming");
+    peer.git(&["push", "origin", "HEAD:refs/heads/main"]);
+
+    let old_head = f.git(&["rev-parse", "HEAD"]);
+    let fetch = f
+        .repo
+        .terminal_review_remote(TerminalSync::Fetch, "origin", None)
+        .unwrap();
+    f.service.terminal_remote(&f.handle, &fetch, None).unwrap();
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), old_head);
+    assert_eq!(f.git(&["rev-parse", "refs/remotes/origin/main"]), incoming);
+
+    let pull = f
+        .repo
+        .terminal_review_remote(TerminalSync::Pull, "origin", None)
+        .unwrap();
+    f.service.terminal_remote(&f.handle, &pull, None).unwrap();
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), incoming);
+
+    f.write("only-local", "local\n");
+    let local = f.commit("local commit");
+    peer.write("only-remote", "remote\n");
+    let remote = peer.commit("remote commit");
+    peer.git(&["push", "origin", "HEAD:refs/heads/main"]);
+    let pull = f
+        .repo
+        .terminal_review_remote(TerminalSync::Pull, "origin", None)
+        .unwrap();
+    assert!(f.service.terminal_remote(&f.handle, &pull, None).is_err());
+    let push = f
+        .repo
+        .terminal_review_remote(TerminalSync::Push, "origin", None)
+        .unwrap();
+    assert_eq!(
+        f.service
+            .terminal_remote(&f.handle, &push, None)
+            .unwrap_err()
+            .code,
+        "pushRejected"
+    );
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), local);
+    assert_eq!(git(bare.path(), &["rev-parse", "refs/heads/main"]), remote);
+}
+
+#[cfg(unix)]
+#[test]
+fn terminal_push_can_land_even_when_the_client_reports_failure() {
+    use crate::remote::TerminalSync;
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    f.write("file", "new revision\n");
+    let oid = f.commit("new revision");
+    let wrapper = f.dir.path().join("receive-pack");
+    std::fs::write(&wrapper, "#!/bin/sh\ngit receive-pack \"$@\"\nexit 3\n").unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let args = crate::askpass::shell_quote(wrapper.to_str().unwrap());
+    f.git(&["config", "remote.origin.receivepack", &args]);
+    let review = f
+        .repo
+        .terminal_review_remote(TerminalSync::Push, "origin", None)
+        .unwrap();
+    let outcome = f.service.terminal_remote(&f.handle, &review, None);
+    assert_eq!(outcome.unwrap_err().code, "mutationUnverified");
+    assert_eq!(git(bare.path(), &["rev-parse", "refs/heads/main"]), oid);
+    assert_eq!(
+        f.repo.terminal_push_ref(&review, None).unwrap().as_deref(),
+        Some(oid.as_str())
+    );
+}
+
 impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();

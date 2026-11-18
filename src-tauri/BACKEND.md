@@ -577,6 +577,14 @@ runtime coverage is not implied by host tests.
 
 ### Ordinary staging and commits
 
+The experimental TUI uses separate typed, in-process review entry points.
+Stage pins selected status, index entries, and content (including rename
+partners); unstage pins selected index entries and its HEAD/ref reset base.
+Commit pins HEAD/ref and the full staged-entry snapshot and checks the
+resulting tree after hooks run. Revalidation takes the Gitty mutation lock,
+not a transaction with external Git. Existing IPC and stdio requests do not
+acquire these new review parameters.
+
 This section describes the ordinary staging/commit API. Graph operations and
 targeted conflict resolutions have the additional contract documented below.
 
@@ -945,6 +953,12 @@ exactly-full final page is reported truncated); Bitbucket when the envelope has 
   named upstream (`feature` tracking `origin/main`) returns `upstreamNameDiffers`
   and pushes nothing; Publish names the destination explicitly. Git's
   `push.default=simple` refuses the same push.
+- The TUI's separate reviewed sync path compares the local branch, upstream
+  and resolved URL as applicable under the mutation lock. It only integrates
+  fast-forwards. A push error without an exact ref rejection is unverified;
+  the TUI may query that exact ref at the reviewed push URL without changing
+  local refs. That lookup describes the server's current state, not whether
+  a previous push landed. These reviews are not new IPC or stdio methods.
 - Background fetch remains noninteractive (`credential.interactive=false` plus
   `GCM_INTERACTIVE=false`) and can use existing credentials and SSH agents.
   Explicit clone/fetch/pull/push (and origin branch deletion) allow helper

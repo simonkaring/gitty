@@ -40,13 +40,264 @@ impl Service {
             // Only moves refs/remotes/*; Git's own ref locks suffice, and a slow
             // network must not block local writes such as switching branches.
             let repo = self.repo(handle)?;
-            return crate::process::without_read_deadline(|| repo.remote_action(action, askpass));
+            return crate::process::without_read_deadline(|| {
+                repo.remote_action(action, askpass, false)
+            });
         }
-        self.mutate(handle, |repo| repo.remote_action(action, askpass))
+        self.mutate(handle, |repo| repo.remote_action(action, askpass, false))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalSync {
+    Fetch,
+    Pull,
+    Push,
+    Publish,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct TerminalRemoteReview {
+    kind: TerminalSync,
+    remote: String,
+    branch: Option<String>,
+    destination: Option<String>,
+    oid: Option<String>,
+    upstream: (Option<String>, Option<String>),
+    endpoint: String,
+}
+
+impl TerminalRemoteReview {
+    pub fn kind(&self) -> TerminalSync {
+        self.kind
+    }
+
+    pub fn remote(&self) -> &str {
+        &self.remote
+    }
+
+    pub fn branch(&self) -> Option<&str> {
+        self.branch.as_deref()
+    }
+
+    pub fn destination(&self) -> Option<&str> {
+        self.destination.as_deref()
+    }
+
+    pub fn oid(&self) -> Option<&str> {
+        self.oid.as_deref()
+    }
+
+    pub fn endpoint_label(&self) -> String {
+        // URLs can contain secrets outside userinfo as well, including in the path.
+        if let Ok(url) = url::Url::parse(&self.endpoint) {
+            if let Some(host) = url.host_str() {
+                return match url.port() {
+                    Some(port) => format!("{}://{host}:{port}/…", url.scheme()),
+                    None => format!("{}://{host}/…", url.scheme()),
+                };
+            }
+        }
+        if let Some((host, _)) = self.endpoint.split_once(':') {
+            let host = host.rsplit('@').next().unwrap_or_default();
+            if crate::dto::valid_ssh_word(host) && host.len() > 1 {
+                return format!("SSH {host}:…");
+            }
+        }
+        "configured endpoint (hidden)".into()
+    }
+}
+
+impl Service {
+    pub fn terminal_remote(
+        &self,
+        handle: &str,
+        review: &TerminalRemoteReview,
+        askpass: Option<&crate::askpass::AskpassRegistry>,
+    ) -> Result<ActionOutput> {
+        self.mutate(handle, |repo| {
+            let fresh = repo
+                .terminal_review_remote(review.kind, &review.remote, review.destination.as_deref())
+                .map_err(|_| {
+                    Error::new(
+                        "staleOperation",
+                        "Sync target changed; refresh and review again.",
+                    )
+                })?;
+            if &fresh != review {
+                return Err(Error::new(
+                    "staleOperation",
+                    "Sync target changed; refresh and review again.",
+                ));
+            }
+            let remote = Some(review.remote.clone());
+            let branch = review.destination.clone();
+            let action = match review.kind {
+                TerminalSync::Fetch => RemoteAction::Fetch {
+                    remote,
+                    branch: None,
+                },
+                TerminalSync::Pull => RemoteAction::Pull {
+                    remote,
+                    branch,
+                    target: None,
+                    pull_mode: PullMode::FfOnly,
+                },
+                TerminalSync::Push | TerminalSync::Publish => RemoteAction::Push {
+                    remote,
+                    branch,
+                    source: review.branch.clone(),
+                    set_upstream: review.kind == TerminalSync::Publish,
+                },
+            };
+            repo.remote_action(action, askpass, true)
+        })
     }
 }
 
 impl Repository {
+    pub fn terminal_review_remote(
+        &self,
+        kind: TerminalSync,
+        remote: &str,
+        publish_destination: Option<&str>,
+    ) -> Result<TerminalRemoteReview> {
+        let info = self.sync_info_with_counts(false)?;
+        let remote = self.choose_remote(Some(remote), None, &info.remotes)?;
+        let push = matches!(kind, TerminalSync::Push | TerminalSync::Publish);
+        let endpoint = if push {
+            self.push_destination(&remote)?
+        } else {
+            self.check_text(&["remote", "get-url", "--", &remote])?
+                .trim_end_matches('\n')
+                .to_owned()
+        };
+        let (branch, oid, upstream, destination) = if kind == TerminalSync::Fetch {
+            (None, None, (None, None), None)
+        } else {
+            let branch = info.branch.ok_or_else(|| {
+                Error::new("detachedHead", "Switch to a local branch before syncing.")
+            })?;
+            let oid = resolve(self.location(), &format!("refs/heads/{branch}"))?;
+            let configured_remote = self.sync_config(&format!("branch.{branch}.remote"))?;
+            let configured_ref = self.sync_config(&format!("branch.{branch}.merge"))?;
+            let upstream = (configured_remote, configured_ref);
+            let destination = match (kind, &upstream.0, &upstream.1) {
+                (TerminalSync::Publish, None, None) => {
+                    publish_destination.unwrap_or(&branch).to_owned()
+                }
+                (TerminalSync::Publish, ..) => {
+                    return Err(Error::new(
+                        "upstreamExists",
+                        "This branch already has an upstream.",
+                    ))
+                }
+                (_, Some(r), Some(target)) if r == &remote => target
+                    .strip_prefix("refs/heads/")
+                    .filter(|name| kind != TerminalSync::Push || *name == branch)
+                    .ok_or_else(|| {
+                        Error::new(
+                            "invalidUpstream",
+                            "Push requires a same-name upstream branch.",
+                        )
+                    })?
+                    .to_owned(),
+                _ => {
+                    return Err(Error::new(
+                        "noUpstream",
+                        "Choose the configured upstream remote, or Publish a new branch.",
+                    ))
+                }
+            };
+            self.remote_branch_name(&destination)?;
+            (Some(branch), Some(oid), upstream, Some(destination))
+        };
+        Ok(TerminalRemoteReview {
+            kind,
+            remote,
+            branch,
+            destination,
+            oid,
+            upstream,
+            endpoint,
+        })
+    }
+
+    pub fn terminal_push_ref(
+        &self,
+        review: &TerminalRemoteReview,
+        askpass: Option<&crate::askpass::AskpassRegistry>,
+    ) -> Result<Option<String>> {
+        let cannot_verify = || {
+            Error::new("remoteUnverified", "Could not verify the reviewed push endpoint. Inspect it manually before pushing again.")
+        };
+        let branch = review.destination.as_deref().ok_or_else(cannot_verify)?;
+        if !matches!(review.kind, TerminalSync::Push | TerminalSync::Publish)
+            || !matches!(self.location(), RepositoryLocation::Native { .. })
+        {
+            return Err(cannot_verify());
+        }
+        // Pass the URL via environment, not argv, and detect additional URL rewrites.
+        let alias = format!("gitty-check-{}", uuid::Uuid::new_v4());
+        let guard = askpass.map(|registry| {
+            registry.start_operation_with(crate::askpass::AskpassContext::new(
+                &self.session.name,
+                format!("verify push {}", review.remote),
+            ))
+        });
+        let (mut args, mut env) = network_args(true, guard.as_ref());
+        env.extend([
+            ("GIT_CONFIG_COUNT".into(), "1".into()),
+            ("GIT_CONFIG_KEY_0".into(), format!("remote.{alias}.url")),
+            ("GIT_CONFIG_VALUE_0".into(), review.endpoint.clone()),
+        ]);
+        let mut probe = args.clone();
+        probe.extend(crate::process::args(&[
+            "ls-remote",
+            "--get-url",
+            "--",
+            &alias,
+        ]));
+        let endpoint = self
+            .write(&probe, &env, &[], 0)
+            .map_err(|_| cannot_verify())?;
+        if !endpoint.success
+            || String::from_utf8_lossy(&endpoint.stdout).trim_end_matches('\n') != review.endpoint
+        {
+            return Err(cannot_verify());
+        }
+        let reference = format!("refs/heads/{branch}");
+        args.extend(crate::process::args(&[
+            "ls-remote",
+            "--exit-code",
+            "--refs",
+            "--",
+            &alias,
+            &reference,
+        ]));
+        let output = self
+            .write(&args, &env, &[], 0)
+            .map_err(|_| cannot_verify())?;
+        if output.code == Some(2) && output.stdout.is_empty() {
+            return Ok(None);
+        }
+        if !output.success {
+            return Err(cannot_verify());
+        }
+        let answer = crate::process::text(output.stdout).map_err(|_| cannot_verify())?;
+        let (oid, name) = answer
+            .trim_end_matches('\n')
+            .split_once('\t')
+            .ok_or_else(cannot_verify)?;
+        if name != reference
+            || !matches!(oid.len(), 40 | 64)
+            || !oid.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err(cannot_verify());
+        }
+        Ok(Some(oid.into()))
+    }
+
     fn sync_branch(&self) -> Result<Option<String>> {
         let out = process::git(self.location(), &args(&["symbolic-ref", "--quiet", "HEAD"]))?;
         match out.code {
@@ -250,6 +501,7 @@ impl Repository {
         &self,
         action: RemoteAction,
         askpass: Option<&crate::askpass::AskpassRegistry>,
+        reviewed: bool,
     ) -> Result<ActionOutput> {
         let wsl = matches!(self.location(), RepositoryLocation::Wsl { .. });
         // Network authentication happens on the remote host: Gitty must not try to
@@ -410,7 +662,24 @@ impl Repository {
                     &remote,
                     &format!("refs/heads/{source}:refs/heads/{destination}"),
                 ]));
-                network_result(self.write(&a, &env, &[], 0)?, wsl && interactive)
+                let output = self.write(&a, &env, &[], 0)?;
+                if reviewed && !output.success {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let destination = format!("refs/heads/{destination}");
+                    if crate::branch_delete::porcelain_status(&stdout, &destination)
+                        .is_some_and(|(flag, _)| flag == "!")
+                    {
+                        return Err(Error::new(
+                            "pushRejected",
+                            "The server rejected the destination ref.",
+                        ));
+                    }
+                    return Err(Error::new(
+                        "mutationUnverified",
+                        "Push result could not be verified.",
+                    ));
+                }
+                network_result(output, wsl && interactive)
             }
             RemoteAction::Pull {
                 target: Some(target),

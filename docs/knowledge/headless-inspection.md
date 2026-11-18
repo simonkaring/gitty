@@ -8,6 +8,8 @@ sources:
     resource: ../../crates/gitty-cli/src/main.rs
   - id: cli-tests
     resource: ../../crates/gitty-cli/src/main.rs
+  - id: tui
+    resource: ../../crates/gitty-cli/src/tui.rs
   - id: service
     resource: ../../crates/gitty-core/src/repository.rs
   - id: dto
@@ -47,6 +49,12 @@ dialogs and OS shell actions remain host-only. See the
 [command matrix](agent-command-matrix.md)
 for every registered desktop operation and its current headless disposition.
 
+`gitty-cli tui` is a separate interactive frontend over the same engine, not
+a stdio client. It browses one native-local repository, loading history in
+pinned pages and reading diffs on demand. It requires a terminal; writes are
+enabled only on macOS. It uses typed in-process reviews and scoped askpass,
+without changing the one-shot or stdio contracts.[^tui]
+
 `npm run test:e2e` runs the rendered React workspace against a disposable real
 Git fixture through a dev-only authenticated Vite bridge and CLI child process.
 The Playwright slice verifies stage/commit, stale discard, partial-line staging,
@@ -64,6 +72,7 @@ See [verification boundaries](demo-and-native-verification.md).[^cli][^cli-tests
 
 [^cli]: CLI commands, protocol methods and lifecycle.
 [^cli-tests]: Bounded queue discard after EOF and response correlation.
+[^tui]: Terminal entry point, worker, navigation, and test-backend checks.
 [^service]: Repository session ownership and history cursors.
 [^dispatcher]: Supported agent methods and per-request deadline boundary.
 [^bridge]: Fixture authorization, method restrictions, and child protocol.

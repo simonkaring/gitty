@@ -8,6 +8,8 @@ sources:
     resource: ../../src-tauri/BACKEND.md
   - id: locking
     resource: ../../crates/gitty-core/src/repository.rs
+  - id: terminal
+    resource: ../../crates/gitty-core/src/terminal.rs
   - id: writes
     resource: ../../crates/gitty-core/src/mutate.rs
   - id: workflow
@@ -67,7 +69,9 @@ locks, hooks, and signing. The common-directory mutation lock serializes Gitty
 sessions, including linked worktrees. Native mutations additionally acquire an
 OS-backed advisory lock in that common directory; another process holding it
 causes `repositoryBusy` before the write runs. WSL/SSH retain process-local
-coordination, and neither lock serializes external Git.[^writes][^locking]
+coordination, and neither lock serializes external Git. The native guard
+unlocks explicitly when the write ends, even if a concurrent fork briefly
+holds a copy of its descriptor.[^writes][^locking]
 
 Explicit [history acceleration](history-acceleration.md) writes only object-store
 commit-graph metadata, so it uses an independent common-directory job guard rather
@@ -82,6 +86,18 @@ eligibility into write authority or assume every write has the same preflight.
 See the [write contract](../../src-tauri/BACKEND.md#write-semantics) and
 [graph/conflict contract](../../src-tauri/BACKEND.md#operation-safety-and-semantics)
 for exact requirements.[^contract]
+
+The terminal client adds in-process reviewed writes without changing desktop
+or stdio contracts. Stage checks selected status, index entries, and content;
+unstage checks selected index entries and its HEAD/ref reset base. Commit checks
+HEAD/ref and staged entries and reports a mismatch if hooks change the committed
+tree. Sync rechecks reviewed local inputs and the configured endpoint; a
+non-force push with an uncertain result requires an explicit lookup of the
+destination at the push endpoint. That lookup only reports current state.
+Its stash rechecks the reviewed changed-path set and HEAD (content is kept, not
+discarded); pop uses the existing OID-pinned stash action.[^terminal][^remote-writes]
+
+[^terminal]: `terminal_review_stage`, `terminal_stage`, and `terminal_commit`.
 
 Preserve working files and unrelated index entries when staging/unstaging hunks.
 Discard deliberately destroys selected unstaged content; tracked files restore

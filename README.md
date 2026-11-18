@@ -45,6 +45,32 @@ To open a repository directly, pass its path when launching the app: `/Applicati
 
 ### CLI and browser integration tests (experimental)
 
+Run `cargo run -p gitty-cli -- tui --repo PATH` for the experimental terminal
+UI (or `gitty-cli tui` from a repository). A header shows the branch,
+ahead/behind counts, and working-change count. Terminals at least 110 columns
+wide get side-by-side panes, previewing the selected commit or file diff as you
+move. Use `↑`/`↓` or `j`/`k` to move (`g`/`G` for top and end), `Enter` to open
+a commit or a full diff, `w` for working changes (`Tab` switches staged and
+unstaged), `m` for sync, `r` to refresh, `Esc` to go back, and `q` or Ctrl-C to
+quit. With the mouse, click a row or header tab to select it, double-click to
+open, and scroll to move; the TUI captures the mouse, so hold Shift (Option in
+some macOS terminals) to select text. The graph keeps each branch in its own
+lane until it joins its parent: `●` is a commit, `○` a merge, `◇` a stash, and
+`◉` HEAD; the selected commit's line stays bright while other lines dim. The
+toolbar under the header has Fetch (`f`), Pull (`l`), Push or Publish (`p`),
+Stash (`z`, with `u` in the review to include untracked files) and Pop (`Z`)
+buttons; each opens a review before anything runs.
+
+TUI writes are currently enabled only on macOS; other builds are read-only.
+On macOS, use `s` to review staging or unstaging a file, `c` then `F2` to
+review and commit the index, and `f`/`l`/`p`/`b` in the remote view to review
+fetch, fast-forward-only pull, push, or publish. Use `v` to verify an uncertain
+push. Sync uses configured remotes, credential helpers, SSH agents, and
+operation-scoped credential prompts. The TUI does not open Gitty SSH/WSL
+repository sessions, or support force-push, amend, or hunk staging.
+Run `cargo build -p gitty-cli && python3 scripts/test-tui.py` for the macOS
+pseudo-terminal smoke test.
+
 Build and run `cargo run --manifest-path crates/gitty-cli/Cargo.toml -- capabilities --json`, `... -- doctor --json`, `... -- status --repo PATH --json`, or `... -- history --repo PATH --limit 50 --json`. Explicit writes are available as `stage --repo PATH --path FILE`, `unstage --repo PATH --path FILE`, and `commit --repo PATH --message-file FILE --json` (`-` reads the commit message from stdin). For other guarded operations, `request --repo PATH --method repository_discard --params-file request.json --json` accepts a bounded JSON params object; use `--params-file -` for stdin. Portable actions use `review` and `execute`; process-local worktree tokens remain in one `serve --stdio` session. Stdio emits versioned event lines for repository changes, Git activity, clone progress, and explicitly enabled prompts; clone progress includes `operationId`. Prompt listeners and system-account/keychain access require explicit `--allow-prompts` and `--accounts-file PATH` opt-ins. With `--accounts-file`, token connection and device OAuth are available only through JSON stdio requests: never put access tokens in CLI arguments; OAuth returns a verification URL and user code but does not open a browser. Polling is provider-rate-limited and each request is bounded; cancel with `provider_oauth_cancel`. Provider secrets are not emitted in activity or event logs. SSH test/directory discovery is available through validated core SSH calls; WSL discovery is advertised only on Windows and returns a structured error when `wsl.exe` is unavailable. These host discovery calls do not claim cross-process locking on WSL/SSH hosts. `--json` errors are structured `{error:{code,message}}`; commit messages and structured inputs are bounded before reading. The version-1 stdio protocol runs up to four requests concurrently with eight queued; match responses by ID. Handles and history cursors exist only for that process, and requests are capped at 1 MiB. See the [command matrix](docs/knowledge/agent-command-matrix.md) for all Tauri operations and headless dispositions. The CLI uses standalone `gitty-core` and builds without Tauri, GTK, or frontend assets. Native Gitty writes use a nonblocking common-directory lock and fail with `repositoryBusy` if another Gitty process holds it; this does not coordinate WSL/SSH hosts or external Git.
 
 `npm run build:cli` produces an optimized CLI executable for the current build host in `target/release`; it does not create a cross-platform installer.

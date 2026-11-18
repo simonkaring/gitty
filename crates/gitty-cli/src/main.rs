@@ -1,4 +1,5 @@
 use gitty_core::{AgentService, Error};
+mod tui;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -458,6 +459,9 @@ fn print_json(value: &Value) -> Result<(), Error> {
 
 fn run() -> Result<(), Error> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|arg| arg == "tui") {
+        return tui::run(&args[1..]);
+    }
     let allow_prompts = if let Some(index) = args.iter().position(|arg| arg == "--allow-prompts") {
         args.remove(index);
         true
@@ -689,7 +693,7 @@ fn run() -> Result<(), Error> {
             }
             Ok(())
         }
-        _ => Err(invalid("usage: gitty-cli capabilities | request --repo PATH --method METHOD --params-file FILE [--json] | status --repo PATH [--json] | history --repo PATH [--limit N] [--json] | stage|unstage --repo PATH --path PATH... | commit --repo PATH --message-file FILE [--json] | serve --stdio")),
+        _ => Err(invalid("usage: gitty-cli tui [--repo PATH] | capabilities | request --repo PATH --method METHOD --params-file FILE [--json] | status --repo PATH [--json] | history --repo PATH [--limit N] [--json] | stage|unstage --repo PATH --path PATH... | commit --repo PATH --message-file FILE [--json] | serve --stdio")),
     }
 }
 
