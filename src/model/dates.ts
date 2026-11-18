@@ -42,3 +42,16 @@ export function formatCommitDate(seconds: number, options: Intl.DateTimeFormatOp
 export function commitIsoString(seconds: number): string {
   return commitDate(seconds)?.toISOString() ?? '';
 }
+
+/** Local calendar-day group of a commit: stable key plus a "Today" / "Yesterday" / weekday / date label. */
+export function commitDay(seconds: number, now = new Date()): { key: string; label: string } | null {
+  const date = commitDate(seconds);
+  if (!date) return null;
+  const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((midnight(now) - midnight(date)) / 864e5);
+  const key = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+  if (days === 0) return { key, label: 'Today' };
+  if (days === 1) return { key, label: 'Yesterday' };
+  if (days > 1 && days < 7) return { key, label: formatCommitDate(seconds, { weekday: 'long' }) };
+  return { key, label: formatCommitDate(seconds, date.getFullYear() === now.getFullYear() ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' }) };
+}

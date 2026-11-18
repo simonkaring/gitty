@@ -1,15 +1,23 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { attachRipple } from './ripple';
 import { BUILTIN_THEMES, MAX_CUSTOM_THEMES, themeTokens, validateTheme, type ThemeDefinition } from './themes';
 import { MAX_COMMIT_PROFILES, validateCommitProfile, type CommitProfile } from './commitProfiles';
 export type { ThemeDefinition } from './themes';
+export type { DesignFamily } from './themes';
 
 export const SETTINGS_KEY = 'gitty:settings';
 export const MONO_FONTS = ['Geist Mono Variable', 'JetBrains Mono'] as const;
 export const HISTORY_COLUMN_IDS = ['refs', 'graph', 'message', 'author', 'hash', 'date'] as const;
 export type HistoryColumnId = typeof HISTORY_COLUMN_IDS[number];
+export const SIDEBAR_SECTION_IDS = ['worktrees', 'local', 'remote', 'tag', 'stash', 'remotes'] as const;
+export type SidebarSectionId = typeof SIDEBAR_SECTION_IDS[number];
 export type AuthorAvatarMode = 'initials' | 'gravatar';
 export interface HistoryColumnConfig {
   id: HistoryColumnId;
+  visible: boolean;
+}
+export interface SidebarSectionConfig {
+  id: SidebarSectionId;
   visible: boolean;
 }
 export interface Settings {
@@ -25,6 +33,7 @@ export interface Settings {
   monoFont: string;
   paneWidths: { sidebar: number; inspector: number };
   historyColumns: HistoryColumnConfig[];
+  sidebarSections: SidebarSectionConfig[];
   commitProfiles: CommitProfile[];
   repositoryCommitProfiles: Record<string, string>;
   authorAvatarMode: AuthorAvatarMode;
@@ -38,7 +47,8 @@ export const DEFAULT_HISTORY_COLUMNS: HistoryColumnConfig[] = [
   { id: 'hash', visible: true },
   { id: 'date', visible: false },
 ];
-export const DEFAULT_SETTINGS: Settings = { version: 1, themeMode: 'fixed', themeId: 'gitty-dark', lightThemeId: 'gitty-light', darkThemeId: 'gitty-dark', customThemes: [], diffView: 'unified', diffWrap: false, fontSize: 13, monoFont: MONO_FONTS[0], paneWidths: { sidebar: 240, inspector: 400 }, historyColumns: DEFAULT_HISTORY_COLUMNS, commitProfiles: [], repositoryCommitProfiles: {}, authorAvatarMode: 'initials', graphAuthorAvatars: false };
+export const DEFAULT_SIDEBAR_SECTIONS: SidebarSectionConfig[] = SIDEBAR_SECTION_IDS.map(id => ({ id, visible: true }));
+export const DEFAULT_SETTINGS: Settings = { version: 1, themeMode: 'fixed', themeId: 'gitty-dark', lightThemeId: 'gitty-light', darkThemeId: 'gitty-dark', customThemes: [], diffView: 'unified', diffWrap: false, fontSize: 13, monoFont: MONO_FONTS[0], paneWidths: { sidebar: 240, inspector: 400 }, historyColumns: DEFAULT_HISTORY_COLUMNS, sidebarSections: DEFAULT_SIDEBAR_SECTIONS, commitProfiles: [], repositoryCommitProfiles: {}, authorAvatarMode: 'initials', graphAuthorAvatars: false };
 export function validateSettings(value: unknown): Settings {
   if (!value || typeof value !== 'object') throw new Error('Invalid settings.');
   const s = value as Settings;
@@ -62,7 +72,14 @@ export function validateSettings(value: unknown): Settings {
     if (!col || typeof col !== 'object' || !HISTORY_COLUMN_IDS.includes(col.id as HistoryColumnId) || typeof col.visible !== 'boolean' || columnIds.has(col.id)) throw new Error('Invalid history column configuration.');
     columnIds.add(col.id);
   }
-  return { ...s, customThemes, commitProfiles, repositoryCommitProfiles: { ...s.repositoryCommitProfiles }, paneWidths: { ...s.paneWidths }, historyColumns: s.historyColumns.map(c => ({ ...c })) };
+  if (!Array.isArray(s.sidebarSections)) throw new Error('Invalid sidebar sections.');
+  if (s.sidebarSections.length !== SIDEBAR_SECTION_IDS.length) throw new Error('Invalid sidebar sections.');
+  const sectionIds = new Set<string>();
+  for (const section of s.sidebarSections) {
+    if (!section || typeof section !== 'object' || !SIDEBAR_SECTION_IDS.includes(section.id as SidebarSectionId) || typeof section.visible !== 'boolean' || sectionIds.has(section.id)) throw new Error('Invalid sidebar section configuration.');
+    sectionIds.add(section.id);
+  }
+  return { ...s, customThemes, commitProfiles, repositoryCommitProfiles: { ...s.repositoryCommitProfiles }, paneWidths: { ...s.paneWidths }, historyColumns: s.historyColumns.map(c => ({ ...c })), sidebarSections: s.sidebarSections.map(c => ({ ...c })) };
 }
 export interface PreferenceStorage { getItem(key: string): string | null; setItem(key: string, value: string): void }
 export function readSettings(storage: PreferenceStorage): { settings: Settings; error: string | null } {
@@ -75,6 +92,8 @@ export function readSettings(storage: PreferenceStorage): { settings: Settings; 
       // opted in to a non-default value (Gravatar, for example), so it gets the
       // default; an explicit stored value is preserved.
       if (parsed && typeof parsed === 'object') for (const [key, fallback] of Object.entries(DEFAULT_SETTINGS)) if (!(key in parsed)) parsed[key] = fallback;
+      // Mirrors the default backfill for the list's own new entry: a section saved before it existed gains its default.
+      if (parsed && Array.isArray(parsed.sidebarSections) && !parsed.sidebarSections.some((section: { id?: string }) => section?.id === 'stash')) parsed.sidebarSections.push({ id: 'stash', visible: true });
       return { settings: validateSettings(parsed), error: null };
     }
     const legacy = storage.getItem('gitty:theme');
@@ -121,12 +140,15 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   useLayoutEffect(() => {
     const root = document.documentElement;
     root.dataset.theme = theme.mode;
+    root.dataset.themeId = theme.id;
+    root.dataset.design = theme.design ?? 'default';
     root.dataset.diffWrap = String(settings.diffWrap);
     root.style.colorScheme = theme.mode;
     for (const [key, value] of Object.entries(themeTokens(theme))) root.style.setProperty(key, value);
     root.style.setProperty('--mono', `'${settings.monoFont}', monospace`);
     root.style.setProperty('--editor-font-size', `${settings.fontSize}px`);
   }, [theme, settings.diffWrap, settings.fontSize, settings.monoFont]);
+  useEffect(() => theme.design === 'material' ? attachRipple() : undefined, [theme.design]);
   const resetWorkspace = () => {
     const paneWidths = { ...DEFAULT_SETTINGS.paneWidths };
     updateSettings({ paneWidths });

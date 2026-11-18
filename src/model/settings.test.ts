@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_SETTINGS, SETTINGS_KEY, persistSettings, readSettings, resolveTheme, validateSettings } from './settings';
 import { BUILTIN_THEMES, COLOR_KEYS, contrastRatio, exportTheme, importTheme, themeTokens, validateTheme } from './themes';
+import { materialColors } from './materialPalette';
 import { commitProfileRepositoryKey, validateCommitProfile } from './commitProfiles';
 import type { RepositorySession } from './repository';
 
@@ -29,8 +30,14 @@ describe('local preferences', () => {
     expect(persistSettings(store, settings)).toBeNull();
     expect(readSettings(store).settings).toMatchObject({ themeId: 'dracula', diffWrap: true });
   });
-  it('keeps corrupt and future stored data untouched and reports fallback', () => {
-    for (const value of ['{broken', JSON.stringify({ ...DEFAULT_SETTINGS, version: 2 }), JSON.stringify({ ...DEFAULT_SETTINGS, diffWrap: 'yes' }), JSON.stringify({ ...DEFAULT_SETTINGS, authorAvatarMode: 'remote' })]) {
+  it('adds the stashes section to settings saved before it existed', () => {
+    const older = { ...DEFAULT_SETTINGS, sidebarSections: DEFAULT_SETTINGS.sidebarSections.filter(section => section.id !== 'stash') };
+    expect(validateSettings({ ...DEFAULT_SETTINGS }).sidebarSections.map(section => section.id)).toContain('stash');
+    const { settings, error } = readSettings(storage({ [SETTINGS_KEY]: JSON.stringify(older) }));
+    expect(error).toBeNull();
+    expect(settings.sidebarSections.find(section => section.id === 'stash')).toEqual({ id: 'stash', visible: true });
+  });
+  it('keeps corrupt and future stored data untouched and reports fallback', () => {    for (const value of ['{broken', JSON.stringify({ ...DEFAULT_SETTINGS, version: 2 }), JSON.stringify({ ...DEFAULT_SETTINGS, diffWrap: 'yes' }), JSON.stringify({ ...DEFAULT_SETTINGS, authorAvatarMode: 'remote' })]) {
       const store = storage({ [SETTINGS_KEY]: value });
       expect(readSettings(store).error).toBeTruthy();
       expect(readSettings(store).settings).toEqual(DEFAULT_SETTINGS);
@@ -43,7 +50,7 @@ describe('local preferences', () => {
     expect(persistSettings(broken, DEFAULT_SETTINGS)).toContain('session');
   });
   it('rejects invalid ranges, references, modes, fonts and duplicates', () => {
-    for (const patch of [{ fontSize: 10 }, { fontSize: 13.5 }, { monoFont: 'https://font' }, { paneWidths: { sidebar: Infinity, inspector: 400 } }, { themeId: 'missing' }, { lightThemeId: 'gitty-dark' }, { customThemes: [custom(), custom()] }, { customThemes: Array(31).fill(custom()) }, { historyColumns: [] }, { historyColumns: [{ id: 'unknown', visible: true }] }, { historyColumns: DEFAULT_SETTINGS.historyColumns.slice(0, 5) }]) expect(() => validateSettings({ ...DEFAULT_SETTINGS, ...patch })).toThrow();
+    for (const patch of [{ fontSize: 10 }, { fontSize: 13.5 }, { monoFont: 'https://font' }, { paneWidths: { sidebar: Infinity, inspector: 400 } }, { themeId: 'missing' }, { lightThemeId: 'gitty-dark' }, { customThemes: [custom(), custom()] }, { customThemes: Array(31).fill(custom()) }, { historyColumns: [] }, { historyColumns: [{ id: 'unknown', visible: true }] }, { historyColumns: DEFAULT_SETTINGS.historyColumns.slice(0, 5) }, { sidebarSections: [] }, { sidebarSections: DEFAULT_SETTINGS.sidebarSections.map(section => ({ ...section, id: 'local' })) }, { sidebarSections: DEFAULT_SETTINGS.sidebarSections.map(section => ({ ...section, visible: 'yes' })) }]) expect(() => validateSettings({ ...DEFAULT_SETTINGS, ...patch })).toThrow();
   });
   it('migrates older settings missing historyColumns to default columns', () => {
     const withoutCols = { ...DEFAULT_SETTINGS };
@@ -135,6 +142,25 @@ describe('local preferences', () => {
 });
 describe('theme files and render tokens', () => {
   it('round trips a complete versioned custom theme', () => { expect(importTheme(exportTheme(custom()))).toEqual(custom()); });
+  it('keeps a valid design family through export/import and rejects unknown ones', () => {
+    const material = { ...custom(), design: 'material' as const };
+    expect(importTheme(exportTheme(material)).design).toBe('material');
+    expect(() => validateTheme({ ...custom(), design: 'nope' })).toThrow();
+  });
+  it('ships the Apple presets in both modes on the Apple design family', () => {
+    expect(BUILTIN_THEMES.filter(t => t.design === 'apple').map(t => [t.id, t.name, t.mode])).toEqual([['apple-light', 'Apple', 'light'], ['apple-dark', 'Apple Dark', 'dark']]);
+    expect(importTheme(exportTheme({ ...BUILTIN_THEMES.at(-1)!, id: 'custom-apple' })).design).toBe('apple');
+    expect(() => validateTheme({ ...custom(), design: 'apple' })).not.toThrow();
+  });
+  it('generates readable Material palettes from any seed color', () => {
+    for (const seed of ['#6750a4', '#0b57d0', '#ff0000', '#00ff00', '#ffee00', '#808080'] as const) for (const mode of ['light', 'dark'] as const) {
+      const colors = materialColors(seed, mode);
+      expect(() => validateTheme({ ...custom(), mode, design: 'material', colors })).not.toThrow();
+      expect(contrastRatio(colors.text, colors.bg)).toBeGreaterThan(10);
+      expect(contrastRatio(colors.muted, colors.bg)).toBeGreaterThan(4.5);
+      expect(contrastRatio(colors.buttonForeground, colors.accentText)).toBeGreaterThan(4.5);
+    }
+  });
   it('rejects missing or unknown tokens, CSS injection, oversized files and future versions', () => {
     const missing = custom(); delete missing.colors.graphHead;
     const unknown = custom(); unknown.colors.remote = '#ffffff';
@@ -145,7 +171,7 @@ describe('theme files and render tokens', () => {
     expect(() => importTheme(' '.repeat(100_001))).toThrow();
   });
   it('renders complete semantic and graph tokens for all builtins', () => {
-    expect(BUILTIN_THEMES).toHaveLength(8);
+    expect(BUILTIN_THEMES).toHaveLength(12);
     for (const theme of BUILTIN_THEMES) {
       expect(Object.keys(theme.colors)).toEqual([...COLOR_KEYS]);
       expect(() => validateTheme({ ...theme, id: 'custom-check' })).not.toThrow();
@@ -160,6 +186,12 @@ describe('theme files and render tokens', () => {
     for (const { colors } of BUILTIN_THEMES.slice(0, 2)) {
       for (const fg of ['text', 'secondary', 'muted']) for (const bg of ['bg', 'chrome', 'sidebar', 'raised', 'subtle']) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
       for (const [fg, bg] of [['buttonForeground', 'accentText'], ['accentText', 'accentWash'], ['accentText', 'selected'], ['green', 'greenWash'], ['red', 'redWash']]) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+  it('keeps Apple presets at WCAG AA for text on every surface', () => {
+    for (const { colors } of BUILTIN_THEMES.slice(-2)) {
+      for (const fg of ['text', 'secondary', 'muted']) for (const bg of ['bg', 'chrome', 'sidebar', 'raised', 'subtle']) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
+      for (const [fg, bg] of [['accentText', 'accentWash'], ['accentText', 'selected'], ['green', 'greenWash'], ['red', 'redWash']]) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
     }
   });
   it('computes WCAG luminance contrast with symmetry and known endpoints', () => {

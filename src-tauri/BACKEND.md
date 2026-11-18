@@ -82,7 +82,7 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   The registry lock is short-lived; history walks use a per-session lock while
   state, search, status, and diff reads run independently. Closing invalidates the
   handle immediately; acquired requests may finish before resources are released.
-- History resolves current local/remote/tag refs and HEAD to concrete commit IDs,
+- History resolves current local/remote/tag/stash refs and HEAD to concrete commit IDs,
   then starts **one** `rev-list --date-order --stdin --` process per generation. The
   captured IDs are supplied newline-separated on stdin (a bounded anonymous file,
   16 MiB cap; tip IDs are at most 65 bytes), never on argv, so repositories with
@@ -174,7 +174,13 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   the end: if its fingerprint moved, or HEAD disagrees between
   state and status, the read restarts, and after three attempts fails with `unstable`.
   `repository_state`, `repository_status` and `repository_operation_state` remain for
-  callers that need only one. Optional `history` input is
+  callers that need only one. `repository_state` lists `refs/heads`, `refs/remotes`,
+  `refs/tags` and `refs/stash`, tagging the stash tip as `kind: "stash"` (name `stash`)
+  so the sidebar and graph can show it apart from branches. History keeps the stash
+  record as a row but skips its second-parent index commit (`<stash>^2`), which is
+  Git plumbing rather than user history. The frontend hands the graph the stash
+  record with only its first parent, so it draws the stash branching off the commit
+  it was taken from. Optional `history` input is
   `{fingerprint?, previousHead?, preserve: string[], preserveLimit?: number, remap?: {from, to}}`.
   When its fingerprint differs, the snapshot starts history from **that starting
   state's concrete tips**, pages internally, and performs the final state check

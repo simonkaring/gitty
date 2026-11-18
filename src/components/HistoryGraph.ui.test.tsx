@@ -150,7 +150,8 @@ it('switches graph nodes between dots, initials and Gravatar while preserving wo
     expect(host.querySelector(`[id$="-commit-${WORKING_ID}"] .graph-avatar-node`)).toBeNull();
     expect(host.querySelector('[id$="-commit-merge"] .graph-avatar-node.merge')?.textContent).toBe('AL');
     expect(host.querySelector('[id$="-commit-b"].dimmed .graph-avatar-node')?.textContent).toBe('GH');
-    expect(arc).not.toHaveBeenCalled();
+    // Only the ring around HEAD (the merge, 11px avatar + 5) is canvas-drawn; avatars replace the dots.
+    expect(arc.mock.calls.every(([, , radius]) => radius === 11 * 1.2 + 5)).toBe(true);
     expect(roundRect).toHaveBeenCalled();
     expect(avatarUrl).not.toHaveBeenCalled();
     const pan = host.querySelector('.graph-hscroll') as HTMLDivElement;
@@ -308,7 +309,7 @@ it.each(['refs/heads/topic', 'refs/remotes/origin/feature/topic'])('branch pill 
     canvas.mockRestore(); globalThis.ResizeObserver = originalObserver;
   }
 });
-it('renders graph nodes without selection halo, HEAD glow, or HEAD center dot', async () => {
+it('draws solid dots, a ring around HEAD, a larger selected node and a dashed working marker', async () => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const originalObserver = globalThis.ResizeObserver;
   globalThis.ResizeObserver = class { observe() {} disconnect() {} unobserve() {} } as typeof ResizeObserver;
@@ -322,6 +323,7 @@ it('renders graph nodes without selection halo, HEAD glow, or HEAD center dot', 
     moveTo: vi.fn(),
     bezierCurveTo: vi.fn(),
     lineTo: vi.fn(),
+    setLineDash: vi.fn(),
     stroke: vi.fn(),
     fill: vi.fn(),
     arc: vi.fn((x: number, y: number, radius: number) => {
@@ -367,16 +369,17 @@ it('renders graph nodes without selection halo, HEAD glow, or HEAD center dot', 
     expect(canvas).toHaveBeenCalled();
     // No .graph-head-pulse element rendered
     expect(host.querySelector('.graph-head-pulse')).toBeNull();
-    // No halo (radius 11) or HEAD center dot (radius 2)
-    expect(drawnArcs.some(a => a.radius === 11)).toBe(false);
-    expect(drawnArcs.some(a => a.radius === 2)).toBe(false);
-    // Standard node radii: 5 for normal commits and 5.5 for merge commits
-    expect(drawnArcs.some(a => a.radius === 5)).toBe(true);
-    expect(drawnArcs.some(a => a.radius === 5.5)).toBe(true);
+    const drew = (radius: number) => drawnArcs.some(a => Math.abs(a.radius - radius) < 1e-9);
+    // Solid dots: 7 for ordinary commits, 5.5 for (smaller) merges, and 1.2x for the selected HEAD commit with a ring 4px beyond it
+    expect(drew(5.5)).toBe(true);
+    expect(drew(7)).toBe(true);
+    expect(drew(7 * 1.2)).toBe(true);
+    expect(drew(7 * 1.2 + 4)).toBe(true);
     // Working tree drawn as roundRect
     expect(roundRectCalls).toBeGreaterThan(0);
+    expect(ctx.setLineDash).toHaveBeenCalledWith([3, 3]);
 
-    // Verify option selection updates and decorations remain absent
+    // Moving the selection shrinks HEAD back but keeps its ring
     drawnArcs.length = 0;
     await act(async () => {
       root.render(
@@ -396,8 +399,8 @@ it('renders graph nodes without selection halo, HEAD glow, or HEAD center dot', 
       );
     });
     expect(host.querySelector('.graph-head-pulse')).toBeNull();
-    expect(drawnArcs.some(a => a.radius === 11)).toBe(false);
-    expect(drawnArcs.some(a => a.radius === 2)).toBe(false);
+    expect(drew(11)).toBe(true);
+    expect(drew(7 * 1.2 + 4)).toBe(false);
   } finally {
     await act(async () => { root.unmount(); });
     canvas.mockRestore();
@@ -543,4 +546,29 @@ it('opens the branch menu for an active ref pill via Shift+F10 and resets the ac
     expect(host.querySelector('.row-control-active')).toBeNull();
     expect(activeId()).toBe(host.querySelector('[id$="-commit-base"]')!.id);
   } finally { await cleanup(); }
+});
+
+it('dims every commit outside a branch hovered elsewhere, overriding search dimming', async () => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const originalObserver = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} unobserve() {} } as typeof ResizeObserver;
+  const canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(new Proxy({}, { get: () => () => {} }) as CanvasRenderingContext2D);
+  const host = document.createElement('div'), root = createRoot(host);
+  const commits = [
+    { id: 'main-tip', parents: ['base'], subject: 'Main', body: '', author: 'A', email: '', timestamp: 3, branch: 'main', files: [] },
+    { id: 'topic-tip', parents: ['base'], subject: 'Topic', body: '', author: 'A', email: '', timestamp: 2, branch: 'topic', files: [] },
+    { id: 'base', parents: [], subject: 'Base', body: '', author: 'A', email: '', timestamp: 1, branch: 'main', files: [] },
+  ];
+  const refs = [{ name: 'main', fullName: 'refs/heads/main', kind: 'local' as const, commitId: 'main-tip' }, { name: 'topic', fullName: 'refs/heads/topic', kind: 'local' as const, commitId: 'topic-tip' }];
+  const render = (highlightRef: string | null) => act(async () => root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={refs} selectedId="main-tip" head="main-tip" headRef="refs/heads/main" matches={new Set(['base'])} highlightRef={highlightRef} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />));
+  const dimmed = () => [...host.querySelectorAll('.commit-row.dimmed')].map(row => row.getAttribute('aria-label')?.split(',')[0]);
+  try {
+    await render(null);
+    expect(dimmed()).toEqual(['Main', 'Topic']);
+    await render('refs/heads/topic');
+    expect(dimmed()).toEqual(['Main', 'Base']);
+  } finally {
+    await act(async () => root.unmount());
+    canvas.mockRestore(); globalThis.ResizeObserver = originalObserver;
+  }
 });

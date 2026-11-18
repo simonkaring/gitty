@@ -22,7 +22,7 @@ export interface Commit {
 export interface GitRef {
   name: string;
   commitId: string;
-  kind: 'local' | 'remote' | 'tag';
+  kind: 'local' | 'remote' | 'tag' | 'stash';
 }
 
 export interface RepositorySnapshot {

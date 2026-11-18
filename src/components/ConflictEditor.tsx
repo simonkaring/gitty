@@ -3,7 +3,7 @@ import type { ConflictFile, ConflictResolution } from '../model/operations';
 import { native, errorMessage } from '../model/native';
 import { acceptBlock, conflictBlocks, editConflictText } from '../model/operationUi';
 import type { OperationWrite } from './OperationDialog';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { Icons } from './icons';
 import { Dialog } from './ui';
 
 export function ConflictEditor({ handle, path, revision, busy, onWrite, onClose }: { handle: string; path: string; revision: number; busy: boolean; onWrite: OperationWrite; onClose: () => void }) {
@@ -70,8 +70,8 @@ export function ConflictEditor({ handle, path, revision, busy, onWrite, onClose 
       {file.editable ? <>
         <div className="conflict-toolbar">
           <span className="muted small">{blocks.length ? `Block ${index + 1} of ${blocks.length}` : 'No conflict blocks left'}</span>
-          <button className="icon-button sm" aria-label="Previous block" disabled={!blocks.length || !index} onClick={() => navigate(index - 1)}><ChevronUp size={14} /></button>
-          <button className="icon-button sm" aria-label="Next block" disabled={!blocks.length || index === blocks.length - 1} onClick={() => navigate(index + 1)}><ChevronDown size={14} /></button>
+          <button className="icon-button sm" aria-label="Previous block" disabled={!blocks.length || !index} onClick={() => navigate(index - 1)}><Icons.ChevronUp size={14} /></button>
+          <button className="icon-button sm" aria-label="Next block" disabled={!blocks.length || index === blocks.length - 1} onClick={() => navigate(index + 1)}><Icons.ChevronDown size={14} /></button>
           <span className="spacer" />
           {(['current', 'incoming', 'both'] as const).map(choice => <button key={choice} className="secondary-button" disabled={!blocks.length || blocked} onClick={() => edit(acceptBlock(text, blocks[index], choice))}>Accept {choice}</button>)}
         </div>

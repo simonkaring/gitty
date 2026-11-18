@@ -1,14 +1,14 @@
 import { useEffect, useState } from 'react';
 import { isDemoHandle, native } from '../model/native';
 import type { RepositoryState } from '../model/repository';
-import { DEFAULT_PULL_MODE, PULL_MODE_LABELS, branchPushRequest, type PullMode, type RemoteActionRequest, type SyncInfo } from '../model/remote';
+import { DEFAULT_PULL_MODE, PULL_MODE_LABELS, branchPushRequest, type PullMode, type RemoteActionRequest, type StashActionRequest, type SyncInfo } from '../model/remote';
 import type { ActionContext } from './OperationDialog';
 import { useContextMenu } from './useContextMenu';
 import type { BranchDeleteScope } from '../model/branchDelete';
 
 export interface MenuTarget { context: ActionContext; x: number; y: number; trigger: HTMLElement }
 
-export function GraphContextMenu({ target, state, busy, hasTrackedChanges = false, onOperation, onSwitchBranch, onShowDetails, onSetBase, onSetTarget, onCompare, onPullRequest, onRemoteAction, onPush, onResetToOrigin, onCopy, onDeleteBranch, onClose }: {
+export function GraphContextMenu({ target, state, busy, hasTrackedChanges = false, onOperation, onSwitchBranch, onShowDetails, onSetBase, onSetTarget, onCompare, onPullRequest, onRemoteAction, onPush, onResetToOrigin, onCopy, onDeleteBranch, onStash, onClose }: {
   target: MenuTarget; state: RepositoryState; busy: boolean;
   hasTrackedChanges?: boolean;
   onOperation: (context: ActionContext) => void; onSwitchBranch: (ref: string) => void; onShowDetails: (oid: string) => void;
@@ -17,6 +17,7 @@ export function GraphContextMenu({ target, state, busy, hasTrackedChanges = fals
   onResetToOrigin: (originRef: string) => void;
   onCopy: (value: string, label: string) => void; onClose: () => void;
   onDeleteBranch: (fullName: string, scope: BranchDeleteScope) => void;
+  onStash: (action: StashActionRequest) => void;
 }) {
   const { menu, position } = useContextMenu(target, onClose);
   const [relation, setRelation] = useState<[number, number] | null>(null);
@@ -31,6 +32,8 @@ export function GraphContextMenu({ target, state, busy, hasTrackedChanges = fals
   const context = target.context;
   const ref = state.refs.find(value => value.fullName === context.ref);
   const current = context.ref === state.session.headRef;
+  // The stash ref is a record, not a branch: only stash actions plus the generic commit actions apply.
+  const isStash = ref?.kind === 'stash';
   const headName = state.session.headRef?.replace(/^refs\/heads\//, '');
   const [branchSync, setBranchSync] = useState<SyncInfo | null>(null);
   useEffect(() => {
@@ -75,9 +78,9 @@ export function GraphContextMenu({ target, state, busy, hasTrackedChanges = fals
       {showReset && <button role="menuitem" disabled={busy || demo} title={demo ? 'Reset is unavailable in the demo.' : undefined} onClick={() => onResetToOrigin(originRef!)}>Reset {originBranch} to origin/{originBranch}…</button>}
       <div className="menu-divider" role="separator" />
     </>}
-    {!current && (ref?.kind === 'local' || context.oid !== state.session.head) && <>{ref?.kind === 'local' && state.session.headRef && relation && <>{relation[0] > 0 ? <button role="menuitem" onClick={() => operation('merge', state.session.headRef!, ref.fullName)}>Merge {ref.name} into {headName}… · {relation[0]} commit{relation[0] === 1 ? '' : 's'} to bring in</button> : <button role="menuitem" disabled>{ref.name} already includes {headName}</button>}{relation[1] > 0 ? <button role="menuitem" onClick={() => operation('merge', ref.fullName, state.session.headRef!)}>Merge {headName} into {ref.name}… · {relation[1]} commit{relation[1] === 1 ? '' : 's'} to bring in</button> : <button role="menuitem" disabled>{headName} already includes {ref.name}</button>}</>}{ref?.kind === 'remote' && state.session.headRef && relation && (relation[0] > 0 ? <button role="menuitem" onClick={() => operation('merge', state.session.headRef!, ref.fullName)}>Merge {ref.name} into {headName}… · {relation[0]} commit{relation[0] === 1 ? '' : 's'} to bring in</button> : <button role="menuitem" disabled>{ref.name} has no commits to bring into {headName}</button>)}<button role="menuitem" onClick={() => operation('rebase')}>Rebase current onto this…</button><button role="menuitem" onClick={() => operation('cherryPick')}>Cherry-pick {ref ? 'tip commit' : 'commit'}…</button></>}
-    <button role="menuitem" onClick={() => operation('createBranch')}>Create branch here…</button>
-    <button role="menuitem" onClick={() => operation('createTag')}>Create tag here…</button>
+    {!current && !isStash && (ref?.kind === 'local' || context.oid !== state.session.head) && <>{ref?.kind === 'local' && state.session.headRef && relation && <>{relation[0] > 0 ? <button role="menuitem" onClick={() => operation('merge', state.session.headRef!, ref.fullName)}>Merge {ref.name} into {headName}… · {relation[0]} commit{relation[0] === 1 ? '' : 's'} to bring in</button> : <button role="menuitem" disabled>{ref.name} already includes {headName}</button>}{relation[1] > 0 ? <button role="menuitem" onClick={() => operation('merge', ref.fullName, state.session.headRef!)}>Merge {headName} into {ref.name}… · {relation[1]} commit{relation[1] === 1 ? '' : 's'} to bring in</button> : <button role="menuitem" disabled>{headName} already includes {ref.name}</button>}</>}{ref?.kind === 'remote' && state.session.headRef && relation && (relation[0] > 0 ? <button role="menuitem" onClick={() => operation('merge', state.session.headRef!, ref.fullName)}>Merge {ref.name} into {headName}… · {relation[0]} commit{relation[0] === 1 ? '' : 's'} to bring in</button> : <button role="menuitem" disabled>{ref.name} has no commits to bring into {headName}</button>)}<button role="menuitem" onClick={() => operation('rebase')}>Rebase current onto this…</button><button role="menuitem" onClick={() => operation('cherryPick')}>Cherry-pick {ref ? 'tip commit' : 'commit'}…</button></>}
+    {!isStash && <button role="menuitem" onClick={() => operation('createBranch')}>Create branch here…</button>}
+    {!isStash && <button role="menuitem" onClick={() => operation('createTag')}>Create tag here…</button>}
     {ref?.kind === 'local' && <button role="menuitem" onClick={() => onPullRequest(ref.fullName)}>Create pull request…</button>}
     {ref?.kind === 'local' && <>
       <button role="menuitem" disabled={busy || demo || current} title={current ? 'Switch to another branch first.' : demo ? 'Branch deletion is unavailable in the demo.' : undefined} onClick={() => onDeleteBranch(localRef!, 'local')}>Delete local branch…{current ? ' (current branch)' : demo ? ' (unavailable in demo)' : ''}</button>
@@ -88,6 +91,11 @@ export function GraphContextMenu({ target, state, busy, hasTrackedChanges = fals
       {hasLocalCounterpart && <button role="menuitem" disabled={busy || demo || state.session.headRef === localRef} title={state.session.headRef === localRef ? 'Switch to another branch first.' : demo ? 'Branch deletion is unavailable in the demo.' : undefined} onClick={() => onDeleteBranch(localRef!, 'local')}>Delete local branch…{state.session.headRef === localRef ? ' (current branch)' : ''}</button>}
       <button role="menuitem" disabled={busy || demo} title={demo ? 'Branch deletion is unavailable in the demo.' : undefined} onClick={() => onDeleteBranch(ref.fullName, 'origin')}>Delete branch on origin…</button>
       {hasLocalCounterpart && <button role="menuitem" disabled={busy || demo || state.session.headRef === localRef} title={state.session.headRef === localRef ? 'Switch to another branch first.' : demo ? 'Branch deletion is unavailable in the demo.' : undefined} onClick={() => onDeleteBranch(localRef!, 'both')}>Delete local and origin branches…{state.session.headRef === localRef ? ' (current branch)' : ''}</button>}
+    </>}
+    {ref?.kind === 'stash' && <>
+      <button role="menuitem" disabled={busy} onClick={() => onStash({ kind: 'pop', oid: ref.commitId, restoreIndex: true })}>Pop stash…</button>
+      <button role="menuitem" disabled={busy} onClick={() => onStash({ kind: 'drop', oid: ref.commitId })}>Drop stash…</button>
+      <div className="menu-divider" role="separator" />
     </>}
     <div className="menu-divider" role="separator" />
     {state.session.head && context.oid !== state.session.head && <button role="menuitem" onClick={() => onCompare(context.oid)}>Compare with current</button>}

@@ -815,6 +815,40 @@ fn fetch_ignores_mirror_refspecs_and_pull_preserves_ignored_files() {
 }
 
 #[test]
+fn stash_appears_in_state_and_history_without_its_index_helper() {
+    let f = Fixture::new();
+    assert!(f
+        .repo
+        .state()
+        .unwrap()
+        .refs
+        .iter()
+        .all(|r| r.kind != "stash"));
+    f.write("file", "saved\n");
+    let oid = f.save("pinned");
+    let state = f.repo.state().unwrap();
+    let stash: Vec<_> = state.refs.iter().filter(|r| r.kind == "stash").collect();
+    assert_eq!(stash.len(), 1);
+    assert_eq!(
+        (stash[0].full_name.as_str(), stash[0].name.as_str()),
+        ("refs/stash", "stash")
+    );
+    assert_eq!(stash[0].commit_id, oid);
+    // The stash record is a row; the index commit Git created beside it is not.
+    let commits = f
+        .repo
+        .history(None, 20, HistoryQuery::default())
+        .unwrap()
+        .commits;
+    let subjects: Vec<_> = commits.iter().map(|c| c.subject.as_str()).collect();
+    assert!(subjects.contains(&"On main: pinned"), "{subjects:?}");
+    assert!(
+        !subjects.iter().any(|s| s.starts_with("index on ")),
+        "{subjects:?}"
+    );
+}
+
+#[test]
 fn stash_save_apply_pop_drop_and_untracked() {
     let f = Fixture::new();
     assert!(f.repo.stashes().unwrap().is_empty());

@@ -19,7 +19,7 @@ export interface RepositorySession {
   head: string | null;
   headRef: string | null;
 }
-export interface RepositoryRef { name: string; fullName: string; commitId: string; kind: 'local' | 'remote' | 'tag' }
+export interface RepositoryRef { name: string; fullName: string; commitId: string; kind: 'local' | 'remote' | 'tag' | 'stash' }
 export interface CommitSummary { id: string; parents: string[]; subject: string; author: string; email: string; timestamp: number }
 /** `body` is the full commit message, subject line included; the inspector shows only its description. */
 /** Legacy eligibility fields are unchecked placeholders; use the separate eligibility command. */

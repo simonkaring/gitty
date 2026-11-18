@@ -1,0 +1,1557 @@
+/* ==========================================================================
+   Apple design family, after the macOS 26 Human Interface Guidelines. Everything
+   is scoped to html[data-design='apple'], so other designs are untouched. Colors
+   still come from the active theme; this file sets SF type on the macOS type
+   ramp (13px body, 11px section titles), a floating rounded sidebar, chrome
+   that shares the content background with controls grouped on glass capsules,
+   inset rounded selections, System Settings-style forms with switches, and the
+   SF Symbols-style glyphs from icons.tsx.
+   ========================================================================== */
+
+@media (prefers-reduced-transparency: no-preference) {
+  html[data-design='apple'] .sidebar.native-sidebar {
+    background: color-mix(in srgb, var(--sidebar) 84%, transparent);
+    -webkit-backdrop-filter: saturate(1.8) blur(30px);
+    backdrop-filter: saturate(1.8) blur(30px);
+  }
+}
+
+html[data-design='apple'] {
+  /* The system font is SF Pro on Apple platforms, with optical sizes and tracking applied by the OS,
+     so no manual letter-spacing. Other systems fall back to their closest UI face. */
+  --ui: -apple-system, BlinkMacSystemFont, system-ui, 'SF Pro Text', 'Helvetica Neue', 'Segoe UI', sans-serif;
+  /* Hashes and paths use SF Mono like Xcode; diffs keep the user's editor font (--mono). */
+  --apple-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Glass capsule for grouped toolbar controls (Liquid Glass with transparency reduced to a frosted fill). */
+  --apple-glass: color-mix(in srgb, var(--raised) 92%, transparent);
+  --apple-glass-edge: 0 0 0 0.5px color-mix(in srgb, var(--text) 10%, transparent), 0 1px 2px color-mix(in srgb, #000 8%, transparent), 0 4px 14px color-mix(in srgb, #000 6%, transparent);
+  --apple-fill: color-mix(in srgb, var(--text) 7%, transparent);
+  --apple-fill-strong: color-mix(in srgb, var(--text) 13%, transparent);
+  --apple-material: color-mix(in srgb, var(--chrome) 80%, transparent);
+  --apple-arrows: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='14' fill='none' stroke='%238e8e93' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m2 5 3-3 3 3M2 9l3 3 3-3'/%3E%3C/svg%3E");
+  font-family: var(--ui);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  .sidebar.native-sidebar {
+    padding-bottom: 8px;
+  }
+
+  /* Header: recede. */
+  .workspace-label {
+    align-items: center;
+    padding: 14px 12px 8px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .workspace-label > svg {
+    width: 26px;
+    height: 26px;
+    padding: 5px;
+    border: 0;
+    border-radius: 7px;
+    background: var(--apple-fill);
+    box-shadow: none;
+    color: var(--secondary);
+  }
+  .workspace-label small {
+    margin-top: 2px;
+    font-family: var(--ui);
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  :is(h1, h2, h3, .workspace-label > span) {
+    letter-spacing: normal;
+  }
+  /* Numbers and dates in SF with tabular figures; hashes and paths in SF Mono. */
+  :is(.row-date, .change-totals, .count, .ref-more, .native-inspector .compare-summary p:first-child) {
+    font-family: var(--ui);
+    font-variant-numeric: tabular-nums;
+  }
+  :is(.row-hash, .commit-metadata dd.full-sha code, .commit-eyebrow > span:first-child, .diff-view-filepath) {
+    font-family: var(--apple-mono);
+    font-size: 11.5px;
+  }
+
+  /* Mono badges, counts and control glyphs become SF. */
+  .native-sidebar-meta .badge,
+  .reference-group > summary .count,
+  .filter-secondary summary .count,
+  .filter-secondary > .text-button,
+  .side-foot kbd {
+    font-family: var(--ui);
+  }
+  .native-sidebar-meta {
+    padding: 0 12px 8px;
+    font-size: 12px;
+  }
+  .native-sidebar-meta .badge {
+    height: 22px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 500;
+  }
+  .sidebar-divider {
+    margin: 2px 12px 8px;
+  }
+
+  .native-filters {
+    padding: 0 8px 6px;
+  }
+  .filter-primary {
+    gap: 6px;
+  }
+  .search-field {
+    height: 28px;
+    padding-inline: 8px 4px;
+    border: 0;
+    border-radius: 7px;
+    background: var(--apple-fill);
+    color: var(--muted);
+    box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--text) 8%, transparent);
+    transition: background-color 160ms var(--ease-out);
+  }
+  .search-field:hover {
+    background: var(--apple-fill-strong);
+  }
+  .search-field:focus-within {
+    outline: 0;
+    border: 0;
+    background: var(--apple-fill);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  .search-field input {
+    font-size: 13px;
+  }
+  .filter-primary select,
+  .filter-disclosure input {
+    height: 28px;
+    border: 0;
+    border-radius: 7px;
+    background: var(--apple-fill);
+    font-size: 12.5px;
+  }
+  .filter-primary select {
+    padding: 0 18px 0 8px;
+  }
+  .head-button {
+    height: 28px;
+    padding: 0 9px;
+    border: 0;
+    border-radius: 7px;
+    background: var(--apple-fill);
+    color: var(--secondary);
+    font: 500 12px var(--ui);
+  }
+  .head-button:hover:not(:disabled) {
+    background: var(--apple-fill-strong);
+  }
+  .filter-secondary {
+    margin-top: 2px;
+    padding-inline: 4px;
+    font-size: 12.5px;
+  }
+  .filter-secondary summary {
+    padding: 4px 6px;
+    border-radius: 6px;
+  }
+  .filter-secondary summary .count {
+    background: none;
+    color: var(--accent-text);
+    font-size: 12px;
+  }
+
+  /* Section headers: small caps-less labels that read as group titles. */
+  .reference-group {
+    margin: 0 8px 4px;
+    --section: var(--secondary);
+  }
+  .reference-group > summary {
+    min-height: 26px;
+    gap: 6px;
+    padding: 0 8px;
+    border-radius: 6px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .reference-group > summary:hover {
+    background: transparent;
+    color: var(--text);
+  }
+  .reference-group > summary::before {
+    width: 5px;
+    height: 5px;
+  }
+  .reference-group > summary > svg:first-child {
+    width: 13px;
+    height: 13px;
+    padding: 0;
+    border-radius: 0;
+    background: none;
+    color: var(--muted);
+  }
+  .reference-group > summary .count {
+    height: 18px;
+    min-width: 18px;
+    padding: 0 6px;
+    background: var(--apple-fill);
+    color: var(--secondary);
+    font: 500 11px/18px var(--ui);
+  }
+
+  /* Ref list rows: 28px, 8px radius, translucent selection fill. */
+  .reference-tree {
+    padding: 1px 0 6px;
+  }
+  .reference-folder > summary,
+  .ref-item {
+    min-height: 28px;
+    gap: 8px;
+    padding: 0 8px;
+    border-radius: 7px;
+    font-family: var(--ui);
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--text);
+    transition: background-color 160ms var(--ease-out);
+  }
+  .reference-folder > summary {
+    color: var(--secondary);
+  }
+  .reference-folder > summary:hover,
+  .ref-action-row:hover,
+  .ref-action-row:focus-within,
+  .ref-action-row .ref-item:hover:not(:disabled) {
+    background: var(--apple-fill);
+  }
+  .ref-item svg,
+  .reference-folder-icon,
+  .reference-folder-chevron {
+    color: color-mix(in srgb, var(--secondary) 80%, var(--muted));
+  }
+  .ref-action-row {
+    border-radius: 7px;
+  }
+  .ref-action-row.current {
+    background: var(--selected);
+  }
+  .ref-action-row.current::before {
+    display: none;
+  }
+  .ref-action-row.current .ref-item,
+  .ref-action-row.current .ref-item:hover:not(:disabled) {
+    background: transparent;
+    color: var(--text);
+    font-weight: 600;
+  }
+  .ref-action-row.current .ref-item svg,
+  .ref-item .current-branch-check {
+    color: var(--accent-text);
+  }
+  .reference-folder-children {
+    margin-left: 15px;
+    padding-left: 0;
+    border-left: 0;
+  }
+  .ref-item > span:first-of-type {
+    transition: none;
+  }
+  .ref-action-row:hover .ref-item > span:first-of-type {
+    transform: none;
+  }
+  .reference-group > p {
+    font-family: var(--ui);
+    font-size: 12px;
+  }
+  .reference-tree .worktree-row small {
+    font-family: var(--ui);
+  }
+
+  /* ---- History: one rounded blue selection rect behind the row (reference .selrect/.mrow.sel) ---- */
+  .history-selection {
+    position: absolute;
+    z-index: 0;
+    pointer-events: none;
+    border-radius: 7px;
+    background: var(--accent);
+    transition:
+      top 200ms var(--ease-out),
+      height 120ms var(--ease-out);
+  }
+  /* The row must sit above the lane canvas (z-index 2) so avatar nodes inside it are not struck through by lines. */
+  .commit-row {
+    z-index: 3;
+    border-radius: 7px;
+  }
+  .commit-row:hover:not(.selected) {
+    background: var(--apple-fill);
+    box-shadow: none;
+  }
+  .commit-row.selected,
+  .commit-row.selected:hover {
+    background: transparent;
+    box-shadow: none;
+    color: #fff;
+  }
+  .commit-row.selected .subject,
+  .commit-row.selected .commit-message,
+  .commit-row.selected .row-hash,
+  .commit-row.selected .row-date,
+  .commit-row.selected .row-author {
+    color: #fff;
+  }
+  .commit-row.selected .row-date,
+  .commit-row.selected .row-author {
+    color: color-mix(in srgb, #fff 78%, transparent);
+  }
+  .commit-row.selected .ref-pill,
+  .commit-row.selected .ref-pill.remote-ref,
+  .commit-row.selected .ref-pill.tag-ref,
+  .commit-row.selected .ref-pill.stash-ref,
+  .commit-row.selected .ref-more {
+    color: #fff;
+    background: color-mix(in srgb, #fff 24%, transparent);
+    border-color: transparent;
+  }
+  .commit-row.selected .ref-pill svg,
+  .commit-row.selected .ref-pill.tag-ref svg {
+    color: #fff;
+  }
+  .commit-row.selected .graph-action-button {
+    color: #fff;
+  }
+  .commit-row.selected .graph-action-button:hover:not(:disabled) {
+    background: color-mix(in srgb, #fff 24%, transparent);
+  }
+
+  /* ---- Toolbar: one glass capsule of plain items (see Window chrome); hover is a soft fill ---- */
+  .repository-toolbar-group {
+    gap: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: none;
+    box-shadow: none;
+  }
+  .repository-toolbar button {
+    min-height: 28px;
+    gap: 6px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .repository-toolbar button svg {
+    color: var(--secondary);
+  }
+  .repository-toolbar button:hover:not(:disabled),
+  .repository-toolbar button[aria-expanded='true'] {
+    background: var(--apple-fill);
+    border: 0;
+  }
+  .repository-toolbar .pull-dropdown-toggle {
+    padding: 0 6px;
+    margin-left: -8px;
+    color: var(--secondary);
+  }
+  .repository-toolbar .pull-dropdown-toggle svg {
+    color: var(--secondary);
+  }
+  .toolbar-sep {
+    width: 1px;
+    height: 16px;
+    margin: 0 4px;
+    background: var(--border);
+  }
+  .repository-toolbar .badge {
+    height: 22px;
+    padding: 0 9px;
+    border-radius: 999px;
+    color: var(--secondary);
+    font-size: 12px;
+  }
+  .repository-fetch-status {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  /* ---- Inspector: inset cards, SF type, rounded selection (reference .inset/.prow/.fl) ---- */
+  .native-inspector {
+    background: var(--bg);
+  }
+  .inspector-content {
+    padding: 10px 12px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .commit-summary {
+    padding: 4px 2px 0;
+  }
+  .commit-eyebrow > span:first-child {
+    padding: 0;
+    background: none;
+    font-family: var(--apple-mono);
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .commit-summary > h2,
+  .commit-message-body h2 {
+    margin: 6px 0 0;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  .commit-summary > h2 {
+    margin-bottom: 0;
+  }
+  .commit-message-body {
+    margin: 8px 0 0;
+    padding: 0;
+    border: 0;
+    background: none;
+  }
+  .commit-message-body h2 + p,
+  .commit-message-body p {
+    color: var(--secondary);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .commit-metadata {
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 12px;
+    background: var(--subtle);
+    overflow: hidden;
+    display: block;
+  }
+  /* Each row is its own two-column grid: label, value. */
+  .commit-metadata > div {
+    display: grid;
+    grid-template-columns: 84px minmax(0, 1fr);
+    align-items: center;
+    column-gap: 12px;
+    row-gap: 2px;
+    min-height: 42px;
+    padding: 9px 14px;
+  }
+  .commit-metadata > div + div {
+    border-top: 1px solid var(--border);
+  }
+  .commit-metadata > div > dt,
+  .commit-metadata > div > dd {
+    padding: 0;
+    min-height: 0;
+  }
+  .commit-metadata > div > dd {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--text);
+  }
+  /* The full hash is long: stack its value under the label instead of pressing it into the value column. */
+  .commit-metadata > div.meta-sha {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .commit-metadata > div.meta-sha > dd.full-sha {
+    grid-column: 1;
+    grid-row: 2;
+    display: block;
+  }
+  .commit-metadata > div.meta-sha > dd.full-sha code {
+    font-family: var(--apple-mono);
+    font-size: 11.5px;
+    color: var(--secondary);
+    overflow-wrap: anywhere;
+    user-select: all;
+  }
+  .commit-metadata dt {
+    padding: 0;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+  .commit-metadata dd {
+    padding: 0;
+    font-size: 13px;
+    color: var(--text);
+  }
+  .commit-metadata dd code,
+  .commit-metadata .parent-link {
+    font-family: var(--ui);
+    font-size: 13px;
+  }
+  .commit-metadata .parent-link {
+    padding: 0 6px;
+    border-radius: 6px;
+    background: var(--apple-fill);
+    color: var(--accent-text);
+  }
+  .changed-files {
+    margin: 0;
+  }
+  .section-heading {
+    min-height: 28px;
+    padding-inline: 4px;
+    border: 0;
+    background: none;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .file-row {
+    min-height: 30px;
+    gap: 9px;
+    padding: 4px 8px;
+    border-bottom: 0;
+    border-radius: 7px;
+    color: var(--text);
+    font-size: 13px;
+  }
+  .file-row:hover:not(.active) {
+    background: var(--apple-fill);
+  }
+  .file-row.active {
+    background: var(--selected);
+    box-shadow: none;
+    color: var(--text);
+  }
+  .file-name strong,
+  .file-name > span {
+    font-family: var(--ui);
+    font-size: 13px;
+  }
+  .file-name > span {
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .file-status {
+    font-family: var(--ui);
+    background: none;
+    border-radius: 0;
+  }
+  .inspector-tip {
+    margin: 0;
+    padding: 10px 12px;
+    border: 0;
+    border-radius: 10px;
+    background: var(--subtle);
+    font-size: 12.5px;
+  }
+  .inspector-tip p {
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+  .workflow-alert.inspector-alert {
+    margin: 0;
+    border-radius: 10px;
+  }
+
+  /* ---- Window chrome (macOS 26): bars share the content background, no separators; controls sit on glass capsules ---- */
+  .titlebar,
+  .repository-toolbar {
+    border-bottom: 0;
+    background: var(--bg);
+  }
+  .titlebar {
+    height: 46px;
+    padding-block: 0;
+  }
+  .titlebar .brand {
+    display: none;
+  }
+  .repository-tabs-row {
+    padding: 0;
+  }
+  /* Tabs as in Safari/Finder: a quiet capsule row, the selected tab raised on glass. */
+  .repository-tab {
+    min-height: 30px;
+    border: 0;
+    border-radius: 999px;
+    color: var(--secondary);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .repository-tab:hover {
+    background: var(--apple-fill);
+  }
+  .repository-tab[data-selected='true'] {
+    background: var(--apple-glass);
+    box-shadow: var(--apple-glass-edge);
+    color: var(--text);
+  }
+  .repository-tab[data-selected='true']::after {
+    display: none;
+  }
+  .repository-tab-branch {
+    font-family: var(--ui);
+  }
+  .repository-toolbar {
+    padding: 2px 14px 10px;
+  }
+  /* Grouped toolbar items share one capsule; groups are separated by space, not lines. */
+  .toolbar-end:has(button) {
+    justify-self: end;
+  }
+  .native-actions,
+  .toolbar-center,
+  .toolbar-end:has(button) {
+    gap: 0;
+    padding: 3px;
+    border-radius: 999px;
+    background: var(--apple-glass);
+    box-shadow: var(--apple-glass-edge);
+  }
+  .titlebar .icon-button,
+  .toolbar-end .icon-button {
+    width: 32px;
+    height: 28px;
+    border-radius: 999px;
+    color: var(--secondary);
+  }
+  .titlebar .icon-button[aria-pressed='true'],
+  .titlebar .icon-button[aria-pressed='true']:hover:not(:disabled) {
+    background: transparent;
+    color: var(--accent);
+  }
+  .badge {
+    background: var(--apple-fill);
+    font-family: var(--ui);
+    font-size: 11px;
+  }
+  kbd {
+    min-width: 0;
+    height: 18px;
+    padding: 0 5px;
+    border: 0;
+    border-radius: 5px;
+    background: var(--apple-fill);
+    color: var(--muted);
+    font: 500 11px var(--ui);
+  }
+  .statusbar {
+    min-height: 28px;
+    border-top: 0.5px solid var(--border);
+    background: var(--bg);
+    color: var(--muted);
+    font-family: var(--ui);
+    font-size: 11px;
+  }
+  .statusbar kbd {
+    height: 16px;
+    min-width: 0;
+    padding: 0 5px;
+    font-size: 10px;
+  }
+  .history-bottom {
+    border-top: 0.5px solid var(--border);
+    background: var(--bg);
+    color: var(--muted);
+    font-size: 11px;
+  }
+  @media (prefers-reduced-transparency: no-preference) {
+    .repository-tab[data-selected='true'],
+    .native-actions,
+    .toolbar-center,
+    .toolbar-end:has(button) {
+      -webkit-backdrop-filter: saturate(1.8) blur(20px);
+      backdrop-filter: saturate(1.8) blur(20px);
+    }
+  }
+
+  /* ---- Floating sidebar (macOS 26): an inset rounded glass panel beside the content ---- */
+  .sidebar.native-sidebar {
+    margin: 0 0 8px 8px;
+    border: 0;
+    border-radius: 16px;
+    box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--text) 9%, transparent), 0 6px 24px color-mix(in srgb, #000 7%, transparent);
+  }
+  /* The gap beside the floating sidebar is the resize handle; no divider line. */
+  .native-sidebar + .pane-resizer {
+    width: 8px;
+    background: transparent;
+  }
+  .native-sidebar + .pane-resizer:is(:hover, [data-dragging]) {
+    outline: 0;
+    background: transparent;
+  }
+
+  /* ---- Controls: pill buttons, SF fields, system-style key caps ---- */
+  /* macOS 26 bordered buttons: capsules with regular-weight 13px labels. */
+  .primary-button,
+  .secondary-button {
+    min-height: 28px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: var(--r-pill);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .primary-button,
+  .primary-button:hover:not(:disabled) {
+    background: var(--accent);
+    color: var(--button-foreground);
+  }
+  .primary-button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent) 88%, #fff);
+  }
+  .secondary-button,
+  .secondary-button:hover:not(:disabled) {
+    background: var(--apple-fill-strong);
+    color: var(--text);
+  }
+  .secondary-button:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--text) 18%, transparent);
+  }
+  .compact {
+    min-height: 28px;
+    padding: 0 14px;
+  }
+  .dialog :is(input:not([type='checkbox'], [type='radio'], [type='range']), select, textarea),
+  .field > :is(input, select, textarea) {
+    min-height: 28px;
+    padding: 4px 10px;
+    border: 0.5px solid var(--border-strong);
+    border-radius: 8px;
+    background: var(--raised);
+    font-size: 13px;
+  }
+  .dialog :is(input, select, textarea):focus-visible,
+  .field > :is(input, select, textarea):focus-visible {
+    outline: 0;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+  :focus-visible {
+    outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent);
+    outline-offset: 1px;
+  }
+
+  /* ---- Menus, sheets, toasts: vibrancy, 12-14px continuous corners, accent-filled menu highlight ---- */
+  .menu,
+  .toast,
+  .dialog {
+    border: 1px solid var(--border);
+  }
+  .menu {
+    gap: 0;
+    padding: 5px;
+    border-radius: 12px;
+    box-shadow: 0 16px 48px var(--shadow-color), 0 2px 8px color-mix(in srgb, var(--shadow-color) 50%, transparent);
+  }
+  .menu [role='menuitem'] {
+    min-height: 28px;
+    padding: 0 10px;
+    border-radius: 6px;
+    font-size: 13.5px;
+  }
+  .menu [role='menuitem']:is(:hover, :focus-visible):not(:disabled) {
+    outline: 0;
+    background: var(--accent);
+    color: var(--button-foreground);
+  }
+  .menu [role='menuitem']:is(:hover, :focus-visible):not(:disabled) svg {
+    color: inherit;
+  }
+  .menu [role='menuitem'][aria-current='true'] {
+    background: var(--apple-fill);
+    color: var(--text);
+  }
+  .menu-divider {
+    margin: 5px 8px;
+  }
+  .toast {
+    border-radius: 14px;
+    box-shadow: 0 12px 36px var(--shadow-color);
+  }
+  /* Sheets and windows take the larger macOS 26 corner radius. */
+  .dialog {
+    border-radius: 20px;
+    box-shadow: 0 0 0 0.5px color-mix(in srgb, #000 12%, transparent), 0 24px 80px var(--shadow-color);
+  }
+  .dialog-header {
+    min-height: 52px;
+  }
+  .dialog-header h2 {
+    font-size: 15px;
+    font-weight: 700;
+  }
+  .dialog-footer {
+    background: transparent;
+  }
+  @media (prefers-reduced-transparency: no-preference) {
+    .menu,
+    .toast,
+    .dialog {
+      /* Nearly opaque: a menu opened from a blurred bar cannot blur what is behind the bar. */
+      background: color-mix(in srgb, var(--raised) 97%, transparent);
+      -webkit-backdrop-filter: saturate(1.8) blur(30px);
+      backdrop-filter: saturate(1.8) blur(30px);
+    }
+  }
+
+  /* ---- Sidebar (reference .sec-h / .si): label then chevron, plain counts, 30px rows, graph-coloured icons, trailing HEAD check ---- */
+  .reference-group {
+    margin: 0 8px 2px;
+  }
+  .reference-group > summary {
+    min-height: 28px;
+    margin-top: 6px;
+    padding: 0 10px;
+  }
+  .reference-group > summary > svg:first-child {
+    display: none;
+  }
+  .reference-group > summary::before {
+    order: 2;
+    width: 6px;
+    height: 6px;
+    margin: 0 auto 0 2px;
+    color: var(--muted);
+  }
+  .reference-group > summary .count {
+    order: 3;
+    height: auto;
+    min-width: 0;
+    margin-left: 0;
+    padding: 0;
+    background: none;
+    color: var(--muted);
+    font: 500 12px var(--ui);
+  }
+  /* Hover actions overlay the header instead of reserving width, so counts stay right-aligned. */
+  .reference-group > summary {
+    position: relative;
+  }
+  .reference-group-actions {
+    position: absolute;
+    top: 50%;
+    right: 34px;
+    margin: 0;
+    transform: translateY(-50%);
+  }
+  /* Source-list rows: 28px, 13px, 16px symbols at SF weight. No hover fill (macOS lists have none);
+     the selected row is a 6px accent rect with white content, like the graph's selection. */
+  .reference-folder > summary,
+  .ref-item {
+    min-height: 28px;
+    gap: 8px;
+    font-size: 13px;
+    cursor: default;
+  }
+  .ref-item svg,
+  .reference-folder-icon {
+    width: 16px;
+    height: 16px;
+    stroke-width: 2;
+  }
+  .reference-folder-chevron {
+    width: 10px;
+    height: 10px;
+    stroke-width: 2.6;
+  }
+  .ref-action-row,
+  .reference-folder > summary {
+    border-radius: 6px;
+  }
+  .reference-folder > summary:hover,
+  .ref-action-row:hover,
+  .ref-action-row:focus-within,
+  .ref-action-row .ref-item:hover:not(:disabled),
+  .ref-action-row.current,
+  .ref-action-row.current:hover {
+    background: transparent;
+  }
+  .reference-folder > summary:focus-visible {
+    outline: 0;
+    background: var(--apple-fill-strong);
+  }
+  .ref-item:focus-visible {
+    outline: 0;
+  }
+  .ref-item > svg:first-child,
+  .ref-action-row.current .ref-item > svg:first-child {
+    color: var(--branch-color, var(--section));
+  }
+  .reference-folder-icon.remote-root {
+    color: var(--graph-lane6, var(--section));
+  }
+  .ref-item > svg.current-branch-check:last-child {
+    margin-left: auto;
+    color: var(--accent);
+  }
+  .ref-action-row:is(.selected, :has(.ref-item:focus-visible)) {
+    background: var(--accent);
+  }
+  .ref-action-row:is(.selected, :has(.ref-item:focus-visible)) .ref-item,
+  .ref-action-row:is(.selected, :has(.ref-item:focus-visible)) .ref-item > svg,
+  .ref-action-row:is(.selected, :has(.ref-item:focus-visible)) .ref-item small,
+  .ref-action-row:is(.selected, :has(.ref-item:focus-visible)) .icon-button {
+    color: var(--button-foreground);
+  }
+  .ref-action-row:is(.selected, :has(.ref-item:focus-visible)) .icon-button:hover:not(:disabled) {
+    background: color-mix(in srgb, #fff 24%, transparent);
+  }
+
+  /* Group headers as in Finder: no disclosure arrow; "Hide"/"Show" fades in on hover or focus where the count sits. */
+  .reference-group > summary {
+    position: relative;
+    cursor: default;
+  }
+  .reference-group > summary::before {
+    display: none;
+  }
+  .reference-group > summary .count {
+    margin-left: auto;
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+  .reference-group > summary::after {
+    content: 'Hide';
+    position: absolute;
+    right: 10px;
+    color: var(--accent-text);
+    font: 500 11px var(--ui);
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease-out);
+  }
+  .reference-group:not([open]) > summary::after {
+    content: 'Show';
+  }
+  .reference-group > summary:is(:hover, :focus-visible)::after {
+    opacity: 1;
+  }
+  .reference-group > summary:is(:hover, :focus-visible) .count {
+    opacity: 0;
+  }
+  .reference-group > summary:focus-visible {
+    outline: 0;
+    background: var(--apple-fill-strong);
+  }
+  /* Hover actions overlay the header instead of reserving width. */
+  .reference-group-actions {
+    position: absolute;
+    top: 50%;
+    right: 48px;
+    margin: 0;
+    transform: translateY(-50%);
+  }
+
+  /* ======== Left sidebar header: quiet, no tile; accent-tinted branch chip ======== */
+  .workspace-label {
+    padding: 12px 12px 6px;
+  }
+  .workspace-label > svg {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    background: none;
+    color: var(--accent);
+  }
+  .workspace-label > span:not(.badge) {
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .native-sidebar-meta .badge {
+    background: var(--accent-wash);
+    color: var(--accent-text);
+  }
+  .sidebar-divider {
+    display: none;
+  }
+  .reference-group > summary {
+    font-size: 11px;
+    letter-spacing: 0.01em;
+  }
+
+  /* ======== Right inspector: inset grouped lists, hue avatars, paired actions ======== */
+  .commit-eyebrow .badge[data-tone='accent'] {
+    background: var(--accent-wash);
+    color: var(--accent-text);
+    font-weight: 600;
+  }
+  .commit-actions .icon-button,
+  .working-sidebar-actions .icon-button {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+  }
+  .avatar {
+    background: hsl(var(--h, 210) 60% 45%);
+    color: #fff;
+  }
+  .button-row.inspector-block {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin: 0;
+  }
+  .button-row.inspector-block .secondary-button {
+    width: 100%;
+    padding: 0 8px;
+    font-size: 12.5px;
+  }
+  .section-heading {
+    margin-bottom: 6px;
+  }
+  .changed-files > .file-row {
+    min-height: 44px;
+    padding: 6px 12px;
+    border-radius: 0;
+    background: var(--subtle);
+  }
+  .changed-files > .section-heading + .file-row {
+    border-radius: 12px 12px 0 0;
+  }
+  .changed-files > .file-row:last-child {
+    border-bottom-left-radius: 12px;
+    border-bottom-right-radius: 12px;
+  }
+  .changed-files > .file-row + .file-row {
+    border-top: 1px solid var(--border);
+  }
+  .changed-files > .file-row:hover:not(.active) {
+    background: var(--hover);
+  }
+  .changed-files > .file-row.active {
+    background: var(--selected);
+  }
+  .file-list-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding: 10px 12px 6px;
+    border-bottom: 0;
+  }
+  .file-list-actions button {
+    min-height: 28px;
+    font-size: 12.5px;
+  }
+  .file-list-actions [data-danger='true'] {
+    grid-column: 1 / -1;
+    background: transparent;
+    color: var(--red);
+  }
+  .file-list-actions [data-danger='true']:hover:not(:disabled) {
+    background: var(--red-wash);
+    color: var(--red);
+  }
+  .working-files-list {
+    scrollbar-gutter: auto;
+  }
+  .working-feedback {
+    flex: 0 0 auto;
+    min-height: 8px;
+  }
+  .working-category {
+    padding-bottom: 10px;
+  }
+  .working-category-toggle {
+    padding-inline: 16px;
+  }
+  .working-category-files {
+    margin: 0 12px;
+  }
+  .working-file-window {
+    overflow: hidden;
+    border-radius: 12px;
+    background: var(--subtle);
+  }
+  .working-file-window > div + div {
+    border-top: 1px solid var(--border);
+  }
+  .working-file {
+    margin: 0;
+    border-radius: 0;
+  }
+  .working-file:hover {
+    background: var(--hover);
+  }
+  .commit-composer {
+    padding: 8px 12px 12px;
+  }
+
+  /* System checkboxes and radios: rounded fill that turns accent with a white mark. */
+  input[type='checkbox'],
+  input[type='radio'] {
+    appearance: none;
+    flex: none;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: 1px solid var(--border-strong);
+    background: var(--raised);
+    transition: background-color var(--dur-fast) var(--ease-out);
+  }
+  input[type='checkbox'] {
+    border-radius: 4.5px;
+  }
+  input[type='radio'] {
+    border-radius: 50%;
+  }
+  input[type='checkbox']:checked {
+    border-color: var(--accent);
+    background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3.5 8.5 3 3 6-7'/%3E%3C/svg%3E") center / 12px no-repeat;
+  }
+  input[type='radio']:checked {
+    border-color: var(--accent);
+    background: radial-gradient(circle, #fff 0 2.5px, var(--accent) 3px);
+  }
+
+  /* ======== Settings: System Settings layout. Centered title, tinted icon tiles, grouped rows with the control on the right ======== */
+  .settings-dialog .dialog-header {
+    min-height: 48px;
+    padding: 8px 12px 8px 52px;
+  }
+  .settings-dialog .dialog-header h2 {
+    font-size: 13px;
+    text-align: center;
+  }
+  .settings-dialog .dialog-header .icon-button {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--apple-fill);
+  }
+  /* One fixed window size, like System Settings, so switching panes doesn't resize it. */
+  .settings-dialog {
+    width: min(760px, calc(100vw - 32px));
+    height: min(640px, calc(100dvh - 64px));
+  }
+  .settings-layout {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+  .settings-layout > nav {
+    padding: 12px 10px;
+    background: color-mix(in srgb, var(--sidebar) 70%, transparent);
+  }
+  .settings-layout > nav button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 32px;
+    padding: 0 8px;
+    border-radius: 8px;
+    font-size: 13.5px;
+    transition: background-color var(--dur-fast) var(--ease-out);
+  }
+  .settings-layout > nav button:hover:not([aria-current]) {
+    background: var(--apple-fill);
+  }
+  .settings-layout > nav [aria-current] {
+    background: var(--accent);
+    color: var(--button-foreground);
+    font-weight: 500;
+  }
+  .settings-nav-icon {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    background: var(--tile, #8e8e93);
+    color: #fff;
+  }
+  .settings-nav-icon[data-section='Appearance'] { --tile: #007aff; }
+  .settings-nav-icon[data-section='Commit profiles'] { --tile: #30a14e; }
+  .settings-nav-icon[data-section='Integrations'] { --tile: #af52de; }
+  .settings-nav-icon[data-section='Editor & diffs'] { --tile: #e07b00; }
+  .settings-nav-icon[data-section='About / shortcuts'] { --tile: #5e5ce6; }
+  .settings-content {
+    padding: 20px 28px 28px;
+  }
+  .settings-content > section > h3:first-child {
+    margin: 0 0 18px;
+    font-size: 22px;
+    font-weight: 700;
+  }
+  .settings-content h3 {
+    margin: 24px 0 10px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+  .settings-content .integrations-header h3 {
+    margin: 0 0 8px;
+    font-size: 22px;
+    font-weight: 700;
+  }
+  :is(.settings-field, .settings-checkbox, .settings-import) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 230px);
+    align-items: center;
+    gap: 12px;
+    min-height: 44px;
+    margin: 0 0 12px;
+    padding: 6px 14px;
+    border-radius: 10px;
+    background: var(--subtle);
+    font-size: 13.5px;
+    font-weight: 400;
+  }
+  :is(.settings-field, .settings-checkbox, .settings-import):has(+ :is(.settings-field, .settings-checkbox, .settings-import)) {
+    margin-bottom: 0;
+    border-radius: 10px 10px 0 0;
+  }
+  :is(.settings-field, .settings-checkbox, .settings-import) + :is(.settings-field, .settings-checkbox, .settings-import) {
+    margin-bottom: 12px;
+    border-top: 1px solid var(--border);
+    border-radius: 0 0 10px 10px;
+  }
+  :is(.settings-field, .settings-checkbox, .settings-import) + :is(.settings-field, .settings-checkbox, .settings-import):has(+ :is(.settings-field, .settings-checkbox, .settings-import)) {
+    margin-bottom: 0;
+    border-radius: 0;
+  }
+  .settings-pair {
+    display: contents;
+  }
+  .settings-checkbox input {
+    order: 2;
+    justify-self: end;
+  }
+  /* Boolean settings are switches, as in System Settings. */
+  .settings-checkbox input[type='checkbox'] {
+    width: 32px;
+    height: 18px;
+    border: 0;
+    border-radius: 999px;
+    background: radial-gradient(circle at 9px 50%, #fff 0 7px, transparent 7.5px) var(--apple-fill-strong);
+    box-shadow: inset 0 0 0 0.5px color-mix(in srgb, #000 8%, transparent);
+    transition: background-color var(--dur-fast) var(--ease-out), background-position var(--dur-fast) var(--ease-out);
+  }
+  .settings-checkbox input[type='checkbox']:checked {
+    background: radial-gradient(circle at 23px 50%, #fff 0 7px, transparent 7.5px) var(--accent);
+  }
+  /* Form pop-up buttons as in System Settings: borderless, right-aligned, a fill only on hover. */
+  .settings-dialog .settings-field select {
+    width: 100%;
+    min-height: 28px;
+    border: 0;
+    border-radius: 7px;
+    background-color: transparent;
+    color: var(--text);
+    font-size: 13px;
+    text-align: right;
+    text-align-last: right;
+  }
+  .settings-dialog .settings-field select:hover {
+    background-color: var(--apple-fill);
+  }
+  .settings-field input:not([type='range'], [type='color'], [type='checkbox'], [type='radio']) {
+    min-height: 28px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font-size: 13px;
+    text-align: right;
+  }
+  .settings-import input[type='file'] {
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--muted);
+    font-size: 12px;
+    max-width: none;
+  }
+  .settings-import input[type='file']::file-selector-button {
+    margin-right: 8px;
+    padding: 4px 12px;
+    border: 0;
+    border-radius: var(--r-pill);
+    background: var(--apple-fill-strong);
+    color: var(--text);
+    font: 600 12px var(--ui);
+  }
+  .settings-content section > p {
+    margin: 0 0 14px;
+    padding: 0 14px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+  }
+  .settings-actions {
+    margin: 14px 0;
+  }
+  .settings-actions .settings-import {
+    flex: 1 1 100%;
+  }
+  .commit-profile-row {
+    margin-bottom: 8px;
+    padding: 10px 14px;
+    border-bottom: 0;
+    border-radius: 10px;
+    background: var(--subtle);
+  }
+  .settings-notice {
+    border-radius: 10px;
+  }
+  .theme-preview {
+    overflow: hidden;
+    border: 0;
+    border-radius: 12px;
+    background: var(--subtle);
+  }
+  .integration-empty,
+  .integration-provider,
+  .integration-setup,
+  .integration-device {
+    border: 0;
+    border-radius: 12px;
+    background: var(--subtle);
+  }
+  .integration-provider:hover:not(:disabled) {
+    background: var(--hover);
+  }
+  .integration-provider[aria-pressed='true'] {
+    background: var(--accent-wash);
+    box-shadow: inset 0 0 0 1.5px var(--accent);
+  }
+  .integration-setup-heading {
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* Pop-up button and disclosure in the system style instead of the browser's triangle and arrow. */
+  .filter-primary select,
+  .settings-dialog .settings-field select {
+    appearance: none;
+    padding-right: 24px;
+    background-image: var(--apple-arrows);
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+  }
+  .filter-secondary summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    list-style: none;
+  }
+  .filter-secondary summary::-webkit-details-marker {
+    display: none;
+  }
+  .filter-secondary summary::before {
+    content: '';
+    width: 5px;
+    height: 5px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    color: var(--muted);
+    transform: rotate(-45deg);
+    transition: transform var(--dur-fast) var(--ease-out);
+  }
+  .filter-secondary details[open] > summary::before {
+    transform: rotate(45deg) translate(-1px, -1px);
+  }
+
+  /* A backdrop-filter makes each bar its own stacking context; lift them so their dropdown menus stay above the panes. */
+  .titlebar,
+  .repository-toolbar,
+  .statusbar {
+    position: relative;
+    z-index: 20;
+  }
+
+  /* ---- Working changes: grouped SF lists, inset rounded rows, SF composer ---- */
+  .working-inspector {
+    background: var(--bg);
+  }
+  .working-sidebar-header {
+    padding: 14px 12px 10px 16px;
+  }
+  .eyebrow {
+    font-family: var(--ui);
+    font-size: 12px;
+    letter-spacing: 0;
+  }
+  .working-sidebar-header h2 {
+    font-size: 17px;
+    font-weight: 700;
+  }
+  .working-category h2 {
+    background: var(--bg);
+  }
+  .working-category-toggle {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  .working-category-toggle .count {
+    font-family: var(--ui);
+  }
+  .working-file {
+    margin: 0 8px;
+    border-radius: 8px;
+  }
+  .working-file:hover {
+    background: var(--apple-fill);
+  }
+  .working-file.selected {
+    background: var(--selected);
+    box-shadow: none;
+  }
+  .working-file-select {
+    padding-left: 8px;
+  }
+  .working-file-select strong {
+    font-family: var(--ui);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .file-stage-button {
+    border: 0;
+    border-radius: 50%;
+    background: var(--apple-fill);
+  }
+  .commit-composer {
+    background: var(--bg);
+  }
+  .composer-heading > span {
+    font-family: var(--ui);
+  }
+  .composer-draft {
+    font-weight: 600;
+  }
+  .commit-composer :is(input:not([type='checkbox'], [type='radio']), textarea) {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--subtle);
+    font-family: var(--ui);
+    font-size: 13px;
+  }
+  .commit-composer :is(input, textarea):focus-visible {
+    outline: 0;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+
+  /* ---- History details: flat SF rows, filled ref pills, SF column titles, thin lane lines ---- */
+  .history-column-viewport {
+    border-bottom: 0.5px solid var(--border);
+    background: var(--bg);
+  }
+  .history-columns {
+    height: 28px;
+    color: var(--secondary);
+    font-family: var(--ui);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  .history-column-resize::after {
+    background: var(--border);
+  }
+  .commit-row {
+    font-size: 13px;
+  }
+  .commit-message::before {
+    display: none;
+  }
+  .subject {
+    font-weight: 500;
+  }
+  .commit-row.working .subject {
+    color: var(--secondary);
+    font-style: italic;
+    font-weight: 400;
+  }
+  .commit-row:hover:not(.selected) {
+    background: transparent;
+  }
+  /* Hover is a soft fill drawn under the graph canvas (HistoryGraph positions it), matching the selection's shape. */
+  .history-hover {
+    position: absolute;
+    z-index: 0;
+    border-radius: 7px;
+    background: var(--apple-fill);
+    pointer-events: none;
+  }
+  /* Keep pills inside the inset selection and hover fills (which start 10px in). */
+  .commit-refs {
+    padding-left: 16px;
+  }
+  .ref-pill {
+    height: 20px;
+    padding: 0 8px;
+    border: 0;
+    font-family: var(--ui);
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+  .ref-pill:not([data-current='true'], .remote-ref, .tag-ref, .stash-ref) {
+    background: color-mix(in srgb, var(--branch-color, var(--text)) 20%, transparent);
+    color: color-mix(in srgb, var(--branch-color, var(--secondary)) 62%, var(--text));
+  }
+  .ref-pill[data-current='true'] {
+    background: var(--accent);
+    color: var(--button-foreground);
+  }
+  .avatar {
+    font-weight: 700;
+  }
+
+  /* Icon buttons: no chrome until hovered, then an iOS-style centered tint. */
+  .icon-button {
+    border-radius: 6px;
+  }
+  .icon-button:hover:not(:disabled) {
+    background: var(--apple-fill);
+    color: var(--text);
+  }
+  .ref-action-row .icon-button:hover:not(:disabled) {
+    background: var(--apple-fill-strong);
+  }
+
+  /* Glyph parts that move on hover/focus of their control (reference className set). */
+  :is(button, summary, [role='menuitem'], .ref-action-row):is(:hover, :focus-visible, :focus-within) {
+    .apple-glyph .arrow { animation: apple-arrow 420ms var(--ease-out); }
+    .apple-glyph .chk { animation: apple-draw 500ms var(--ease-out); }
+    .apple-glyph .b-curve { animation: apple-draw 600ms var(--ease-out); }
+    .apple-glyph .b-node { animation: apple-pop 450ms var(--ease-spring) 250ms both; }
+    .apple-glyph .rot { animation: apple-spin 700ms var(--ease-out); }
+    .apple-glyph .hand { animation: apple-hand 600ms var(--ease-out); }
+  }
+  /* Rotate about the glyph centre whatever transform-box the surrounding view (the sidebar) sets. */
+  .apple-glyph :is(.rot, .spin) {
+    transform-box: view-box;
+    transform-origin: 12px 12px;
+  }
+}
+@keyframes apple-arrow {
+  from { opacity: 0.4; transform: translateY(2px); }
+}
+@keyframes apple-draw {
+  from { stroke-dasharray: 24; stroke-dashoffset: 24; }
+  to { stroke-dasharray: 24; stroke-dashoffset: 0; }
+}
+@keyframes apple-pop {
+  from { transform: scale(0); }
+  to { transform: none; }
+}
+@keyframes apple-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes apple-hand {
+  to { transform: rotate(120deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-design='apple'] .apple-glyph :is(.arrow, .chk, .b-curve, .b-node, .rot, .hand) {
+    animation: none;
+  }
+}
+
+/* Overlay-style thin scrollbars everywhere, as on macOS. Zero specificity so any component rule still wins. */
+:where(html[data-design='apple']) :where(*) {
+  scrollbar-width: thin;
+  scrollbar-color: var(--apple-fill-strong) transparent;
+}

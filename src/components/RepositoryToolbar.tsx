@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useDismiss, useMenuKeyboard } from './ui';
-import { Archive, Check, ChevronDown, Download, GitBranch, RefreshCw, Upload, UserRound } from 'lucide-react';
+import { Icons } from './icons';
 import { native, errorMessage } from '../model/native';
-import { DEFAULT_PULL_MODE, PULL_MODE_LABELS, remoteSuccessMessage, needsPublish, syncSummary, type PullMode, type RemoteActionRequest, type SyncInfo } from '../model/remote';
+import { autoStashMessage, DEFAULT_PULL_MODE, PULL_MODE_LABELS, remoteSuccessMessage, needsPublish, sortStashes, stashSuccessMessage, syncSummary, type PullMode, type RemoteActionRequest, type StashActionRequest, type StashEntry, type SyncInfo } from '../model/remote';
 import { PublishDialog } from './PublishDialog';
 import { describeFetchStatus, type FetchStatus } from '../model/autoFetch';
 import { RepositoryIdentityDialog } from './RepositoryIdentityDialog';
@@ -23,7 +23,8 @@ export interface RepositoryToolbarProps {
   onCherryPick: () => void;
   onClearPick: () => void;
   onStartPickMode: () => void;
-  onOpenStash: () => void;
+  /** The commit picked in the graph; a pop uses its stash entry when it is one. */
+  selectedOid: string;
   onRefresh: () => void;
   onWrite: (command: string, args: Record<string, unknown>) => Promise<string>;
   notify: (message: string) => void;
@@ -35,7 +36,7 @@ const IDLE_FETCH: FetchStatus = { kind: 'idle' };
 /** Compact Pull / Push / Branch / Stash / Refresh toolbar. Sync info is a
  * passive, local-only read refetched when the active repository changes.
  * RepositoryPane separately schedules background fetches of remote refs. */
-export function RepositoryToolbar({ handle, active, revision, stateRevision, busy, pickCount, pickMode, onCreateBranch, onSwitchBranch, onCherryPick, onClearPick, onStartPickMode, onOpenStash, onRefresh, onWrite, notify, fetchStatus = IDLE_FETCH }: RepositoryToolbarProps) {
+export function RepositoryToolbar({ handle, active, revision, stateRevision, busy, pickCount, pickMode, onCreateBranch, onSwitchBranch, onCherryPick, onClearPick, onStartPickMode, selectedOid, onRefresh, onWrite, notify, fetchStatus = IDLE_FETCH }: RepositoryToolbarProps) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return;
@@ -46,7 +47,7 @@ export function RepositoryToolbar({ handle, active, revision, stateRevision, bus
   const fetchLabel = describeFetchStatus(fetchStatus, now);
   const [sync, setSync] = useState<SyncInfo | null>(null);
   const [syncError, setSyncError] = useState('');
-  const [pending, setPending] = useState<'fetch' | 'pull' | 'push' | null>(null);
+  const [pending, setPending] = useState<'fetch' | 'pull' | 'push' | 'stash' | 'pop' | null>(null);
   // Briefly swaps the finished action's icon for a self-drawing check.
   const [done, setDone] = useState<'fetch' | 'pull' | 'push' | null>(null);
   useEffect(() => { if (!done) return; const timer = setTimeout(() => setDone(null), 1600); return () => clearTimeout(timer); }, [done]);
@@ -98,6 +99,25 @@ export function RepositoryToolbar({ handle, active, revision, stateRevision, bus
     finally { setPending(null); }
   }
   function branchAction(action: () => void) { setBranchMenuOpen(false); action(); }
+  async function stashAction(action: StashActionRequest, kind: 'stash' | 'pop') {
+    if (disabled || pending) return;
+    setPending(kind);
+    try { const output = await onWrite('repository_stash_action', { action }); notify(stashSuccessMessage(action, output)); }
+    catch { /* The pane owns the dismissible operation error. */ }
+    finally { setPending(null); }
+  }
+  /** Pops the stash entry the graph selection stands on, else the newest stash. */
+  async function popStash() {
+    if (disabled || pending) return;
+    try {
+      setPending('pop');
+      const stashes = await native<StashEntry[]>('repository_stashes', { handle });
+      const target = stashes.find(stash => stash.oid === selectedOid) ?? sortStashes(stashes)[0];
+      if (!target) notify('No stashes to pop.');
+      else await stashAction({ kind: 'pop', oid: target.oid, restoreIndex: true }, 'pop');
+    } catch (e) { notify(errorMessage(e)); }
+    finally { setPending(null); }
+  }
   return <><div className="repository-toolbar" aria-label="Repository actions">
     <div className="toolbar-zone toolbar-start">
       <span className="badge" data-tone={!sync && syncError ? 'red' : undefined} role="status">{sync ? syncSummary(sync) : syncError ? 'Sync info unavailable' : 'Reading sync info…'}</span>
@@ -106,18 +126,18 @@ export function RepositoryToolbar({ handle, active, revision, stateRevision, bus
     <div className="toolbar-zone toolbar-center">
     <div className="repository-toolbar-group">
       <div className="pull-dropdown" ref={pullMenuRef}>
-        <button className="sync-button pull" data-pending={pending === 'pull' || pending === 'fetch'} disabled={disabled || !!pending} onClick={() => void run({ kind: 'pull', pullMode: DEFAULT_PULL_MODE }, 'pull')} title={PULL_MODE_LABELS[DEFAULT_PULL_MODE]}>{done === 'pull' ? <Check size={15} className="done-check" /> : <Download size={15} />}{pending === 'pull' ? 'Pulling…' : 'Pull'}</button>
-        <button ref={pullToggleRef} className="pull-dropdown-toggle" disabled={disabled || !!pending} aria-label="More pull options" aria-expanded={pullMenuOpen} aria-haspopup="menu" onClick={() => setPullMenuOpen(value => !value)}><ChevronDown size={14} /></button>
+        <button className="sync-button pull" data-pending={pending === 'pull' || pending === 'fetch'} disabled={disabled || !!pending} onClick={() => void run({ kind: 'pull', pullMode: DEFAULT_PULL_MODE }, 'pull')} title={PULL_MODE_LABELS[DEFAULT_PULL_MODE]}>{done === 'pull' ? <Icons.Check size={15} className="done-check" /> : <Icons.Download size={15} />}{pending === 'pull' ? 'Pulling…' : 'Pull'}</button>
+        <button ref={pullToggleRef} className="pull-dropdown-toggle" disabled={disabled || !!pending} aria-label="More pull options" aria-expanded={pullMenuOpen} aria-haspopup="menu" onClick={() => setPullMenuOpen(value => !value)}><Icons.ChevronDown size={14} /></button>
         {pullMenuOpen && <div className="menu pull-dropdown-menu" role="menu">
           <button role="menuitem" onClick={() => void run({ kind: 'fetch' }, 'fetch')}>Fetch only</button>
           {(Object.keys(PULL_MODE_LABELS) as PullMode[]).map(mode => <button key={mode} role="menuitem" aria-current={mode === DEFAULT_PULL_MODE} onClick={() => void run({ kind: 'pull', pullMode: mode }, 'pull')}>{PULL_MODE_LABELS[mode]}{mode === DEFAULT_PULL_MODE && ' (default)'}</button>)}
         </div>}
       </div>
-      <button className="sync-button push" data-pending={pending === 'push'} disabled={disabled || !!pending} onClick={push}>{done === 'push' ? <Check size={15} className="done-check" /> : <Upload size={15} />}{pending === 'push' ? 'Pushing…' : needsPublish(sync) ? 'Publish…' : 'Push'}</button>
+      <button className="sync-button push" data-pending={pending === 'push'} disabled={disabled || !!pending} onClick={push}>{done === 'push' ? <Icons.Check size={15} className="done-check" /> : <Icons.Upload size={15} />}{pending === 'push' ? 'Pushing…' : needsPublish(sync) ? 'Publish…' : 'Push'}</button>
     </div>
     <span className="toolbar-sep" aria-hidden="true" />
       <div className="pull-dropdown" ref={branchMenuRef}>
-        <button ref={branchToggleRef} disabled={busy} aria-expanded={branchMenuOpen} aria-haspopup="menu" onClick={() => setBranchMenuOpen(value => !value)}><GitBranch size={15} />Branch<ChevronDown size={14} /></button>
+        <button ref={branchToggleRef} disabled={busy} aria-expanded={branchMenuOpen} aria-haspopup="menu" onClick={() => setBranchMenuOpen(value => !value)}><Icons.GitBranch size={15} />Branch<Icons.ChevronDown size={14} /></button>
         {branchMenuOpen && <div className="menu pull-dropdown-menu" role="menu">
           <button role="menuitem" onClick={() => branchAction(onCreateBranch)}>New branch…</button>
           <button role="menuitem" onClick={() => branchAction(onSwitchBranch)}>Switch branch…</button>
@@ -127,11 +147,13 @@ export function RepositoryToolbar({ handle, active, revision, stateRevision, bus
           </> : <button role="menuitem" onClick={() => branchAction(onStartPickMode)}>Start cherry-pick sequence…</button>}
         </div>}
       </div>
-      <button disabled={busy} onClick={onOpenStash}><Archive size={15} />Stash…</button>
+      <button className="sync-button stash" data-pending={pending === 'stash'} disabled={disabled || !!pending} title="Stash all working changes" onClick={() => void stashAction({ kind: 'save', message: autoStashMessage(sync?.branch ?? null) }, 'stash')}><Icons.Archive size={15} />{pending === 'stash' ? 'Stashing…' : 'Stash'}</button>
+      <button className="sync-button pop" data-pending={pending === 'pop'} disabled={disabled || !!pending} title={selectedOid ? 'Pop the selected stash, or the latest stash' : 'Pop the latest stash'} onClick={() => void popStash()}><Icons.ArchiveRestore size={15} />{pending === 'pop' ? 'Popping…' : 'Pop'}</button>
+
     </div>
     <div className="toolbar-zone toolbar-end">
-      <button className="icon-button" aria-label="Git identity…" title="Repository Git identity" disabled={disabled} onClick={() => setIdentityOpen(true)}><UserRound size={16} /></button>
-      <button className="icon-button refresh-button" aria-label="Refresh" title="Refresh repository" data-pending={busy} disabled={busy} onClick={onRefresh}><RefreshCw size={16} /></button>
+      <button className="icon-button" aria-label="Git identity…" title="Repository Git identity" disabled={disabled} onClick={() => setIdentityOpen(true)}><Icons.UserRound size={16} /></button>
+      <button className="icon-button refresh-button" aria-label="Refresh" title="Refresh repository" data-pending={busy} disabled={busy} onClick={onRefresh}><Icons.RefreshCw size={16} /></button>
     </div>
   </div>
     {publishOpen && <PublishDialog remotes={sync?.remotes ?? []} branch={sync?.branch ?? ''} onPublish={publish} onClose={() => setPublishOpen(false)} />}

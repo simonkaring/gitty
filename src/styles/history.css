@@ -258,6 +258,19 @@
 .commit-refs > .ref-pill {
   flex: 0 1 auto;
 }
+/* Runs flush to the graph column and continues as a canvas line to the commit's node. */
+.commit-row.connect .commit-refs {
+  padding-right: 0;
+}
+.commit-row.connect .commit-refs::after {
+  content: '';
+  flex: 1 0 8px;
+  height: 2px;
+  margin: 0 -1px 0 2px;
+  border-radius: var(--r-sm);
+  background: var(--branch-color);
+  opacity: 0.75;
+}
 .ref-more {
   flex: none;
   height: 20px;
@@ -331,23 +344,59 @@
   transform: translate(-50%, -50%);
   z-index: 3;
   display: flex;
-  border: 1px solid var(--branch-color);
   border-radius: 50%;
-  box-shadow: 0 0 0 1px var(--bg);
+  box-shadow: 0 0 0 3px var(--bg);
   pointer-events: none;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.graph-avatar-node .avatar {
+  background: var(--branch-color);
+  color: var(--bg);
+  font-weight: 700;
+}
+.commit-row.selected .graph-avatar-node {
+  transform: translate(-50%, -50%) scale(1.2);
 }
 .graph-avatar-node.merge {
   border: 3px double var(--branch-color);
+}
+.graph-avatar-node.merge .avatar {
+  background: var(--subtle);
+  color: var(--secondary);
 }
 .commit-row.dimmed .graph-avatar-node {
   opacity: 0.3;
 }
 .commit-message {
+  position: relative;
+  align-self: stretch;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 16px 0 6px;
+  padding: 0 16px 0 16px;
   overflow: hidden;
+}
+/* Branch-colour tick marking which line a commit belongs to. */
+.commit-message::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: var(--r-sm);
+  background: var(--branch-color, transparent);
+  opacity: 0.85;
+  transition: top var(--dur-fast), bottom var(--dur-fast), background-color var(--dur-fast);
+}
+.commit-row.selected .commit-message::before {
+  top: 8px;
+  bottom: 8px;
+  background: var(--graph-selection, var(--accent));
+  opacity: 1;
+}
+.commit-row.working .commit-message::before {
+  background: repeating-linear-gradient(var(--branch-color) 0 3px, transparent 3px 6px);
 }
 .subject {
   overflow: hidden;
@@ -387,8 +436,9 @@
   min-width: 0;
   max-width: 100%;
   flex-shrink: 1;
-  height: 20px;
+  height: 22px;
   padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--branch-color, var(--border-strong)) 50%, transparent);
   border-radius: var(--r-pill);
   font-family: var(--mono);
   font-size: var(--fs-2xs);
@@ -398,7 +448,7 @@
   -webkit-user-select: none;
   user-select: none;
   color: var(--text);
-  background: var(--subtle);
+  background: color-mix(in srgb, var(--branch-color, var(--subtle)) 16%, var(--bg));
   transition:
     transform var(--dur-fast) var(--ease-out),
     background-color var(--dur-fast);
@@ -415,9 +465,28 @@
 .ref-pill.remote-ref {
   color: var(--secondary);
   background: transparent;
+  border-color: transparent;
+}
+.ref-pill.tag-ref {
+  color: var(--secondary);
+  background: transparent;
+  border-style: dashed;
 }
 .ref-pill.tag-ref svg {
   color: var(--amber);
+}
+/* A stash is a record, not a branch: muted, dashed, and its row's subject reads as one. */
+.ref-pill.stash-ref {
+  color: var(--secondary);
+  background: transparent;
+  border-style: dashed;
+}
+.ref-pill.stash-ref svg {
+  color: var(--muted);
+}
+.commit-row.stash-commit .subject {
+  font-style: italic;
+  color: var(--secondary);
 }
 .ref-pill[draggable='true'] {
   cursor: grab;
@@ -425,6 +494,7 @@
 .ref-pill[data-current='true'] {
   color: var(--button-foreground);
   background: var(--accent-text);
+  border-color: var(--accent-text);
   font-weight: 650;
 }
 .ref-pill[data-current='true'] svg {
@@ -516,3 +586,8 @@
   font-size: var(--fs-2xs);
 }
 
+
+/* Day dividers are only drawn by designs that opt in (Material). */
+.day-label {
+  display: none;
+}

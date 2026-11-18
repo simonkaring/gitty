@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assignBranchColors, branchName, CURRENT_COLOR } from './branchColor';
+import { assignBranchColors, branchName, CURRENT_COLOR, stashBranches } from './branchColor';
 import type { GitRef } from '../model/types';
 
 const ref = (name: string, commitId: string, kind: GitRef['kind'] = 'local'): GitRef => ({ name, commitId, kind });
@@ -22,6 +22,12 @@ describe('branch colors', () => {
     expect(branchName(ref('feat/git', 'x'))).toBe('feat/git');
     expect(branchName(ref('origin/HEAD', 'x', 'remote'))).toBeNull();
     expect(branchName(ref('v1', 'x', 'tag'))).toBeNull();
+  });
+
+  it('names the branch that owns each row, so hover highlights follow branches rather than shared colors', () => {
+    const { owned } = assignBranchColors(commits, refs, 'working');
+    expect(owned.slice(0, 5)).toEqual(['main', 'main', 'main', 'feat/git', 'feat/git']);
+    expect(owned[5]).toBeNull();
   });
 
   it('keeps trunk, side chains, and working changes consistent independent of ref order', () => {
@@ -60,5 +66,29 @@ describe('branch colors', () => {
     for (const row of [3, 4]) expect(onFeature.rows[row]).toBe(CURRENT_COLOR);
     expect(onFeature.rows[2]).toBe(base.rows[2]);
     expect(assignBranchColors(commits, refs, 'working', 'gone').rows).toEqual(base.rows);
+  });
+});
+
+describe('stash colors', () => {
+  const stash = { id: 'stash', parents: ['main-tip'], subject: 'On feat/git: feat/git - stash - 1/1/2026' };
+  const graph = [stash, ...commits.filter(commit => commit.id !== 'working').map(commit => ({ ...commit, subject: commit.id }))];
+  const withStash = [...refs, ref('stash', 'stash', 'stash')];
+
+  it('takes the colour of the branch the stash was made on', () => {
+    const owners = stashBranches(graph, withStash);
+    expect([...owners]).toEqual([[0, 'feat/git']]);
+    const colors = assignBranchColors(graph, withStash, undefined, 'main', owners);
+    const featureRow = graph.findIndex(commit => commit.id === 'feature-tip');
+    expect(colors.rows[0]).toBe(colors.branches.get('feat/git'));
+    expect(colors.rows[0]).toBe(colors.rows[featureRow]);
+  });
+  it('does not take branch ownership of newer history', () => {
+    const colors = assignBranchColors(graph, withStash, undefined, 'main', stashBranches(graph, withStash));
+    expect(colors.owned[0]).toBe('feat/git');
+    expect(colors.owned[graph.findIndex(commit => commit.id === 'merge')]).toBe('main');
+  });
+  it('ignores stash messages without a branch', () => {
+    expect(stashBranches([{ id: 's', parents: [], subject: 'custom' }], [ref('stash', 's', 'stash')]).size).toBe(0);
+    expect(stashBranches([{ id: 'stash', parents: [], subject: 'On feat/git: x' }], refs).size).toBe(0);
   });
 });

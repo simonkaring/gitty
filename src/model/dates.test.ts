@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { commitDate, commitIsoString, formatCommitDate } from './dates';
+import { commitDate, commitDay, commitIsoString, formatCommitDate } from './dates';
 
 describe('commit dates', () => {
   it('converts native seconds, including epoch and pre-epoch values', () => {
@@ -29,5 +29,18 @@ describe('commit dates', () => {
     expect(commitIsoString(1_700_000_000)).toBe('2023-11-14T22:13:20.000Z');
     expect(commitIsoString(1e15)).toBe('');
     expect(commitIsoString(NaN)).toBe('');
+  });
+});
+
+describe('commitDay', () => {
+  const now = new Date(2026, 10, 16, 12);
+  const at = (days: number) => new Date(2026, 10, 16 - days, 9).getTime() / 1000;
+  it('labels recent days relatively and groups by local calendar day', () => {
+    expect(commitDay(at(0), now)?.label).toBe('Today');
+    expect(commitDay(at(1), now)?.label).toBe('Yesterday');
+    expect(commitDay(at(3), now)?.label).toBe('Friday');
+    expect(commitDay(at(10), now)?.label).toBe('Nov 6');
+    expect(commitDay(at(0), now)?.key).toBe(commitDay(at(0) + 3600, now)?.key);
+    expect(commitDay(Number.NaN, now)).toBeNull();
   });
 });

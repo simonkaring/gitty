@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { branchPushRequest, defaultRemote, needsPublish, remoteSuccessMessage, sortStashes, stashSuccessMessage, syncSummary, type SyncInfo } from './remote';
+import { autoStashMessage, branchPushRequest, defaultRemote, needsPublish, remoteSuccessMessage, sortStashes, stashSuccessMessage, syncSummary, type SyncInfo } from './remote';
 
 describe('sync summary', () => {
   it('is empty without sync info', () => { expect(syncSummary(null)).toBe(''); });
@@ -86,6 +86,11 @@ describe('success notifications', () => {
     expect(remoteSuccessMessage({ kind: 'pull', pullMode: 'rebase' }, 'Current branch feat/branch-actions is up to date.')).toBe('Already up to date. Nothing to pull.');
   });
 
+  it('names an automatic stash after the branch and time', () => {
+    const at = new Date(2026, 0, 2, 15, 4, 5);
+    expect(autoStashMessage('feature/login', at)).toBe(`feature/login - stash - ${at.toLocaleString()}`);
+    expect(autoStashMessage(null, at)).toBe(`HEAD - stash - ${at.toLocaleString()}`);
+  });
   it('explains stash results and whether the saved stash is retained', () => {
     expect(stashSuccessMessage({ kind: 'save' }, 'Saved working directory and index state WIP on main: abc123')).toBe('Saved working changes to a stash.');
     expect(stashSuccessMessage({ kind: 'save' }, 'No local changes to save\n')).toBe('No changes to stash.');

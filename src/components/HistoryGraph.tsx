@@ -1,14 +1,15 @@
 import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Check, GitMerge, Globe2, Laptop, Settings as SettingsIcon, Tag } from 'lucide-react';
-import { indexEdges, laneX, LANE_WIDTH, ROW_HEIGHT, type GraphLayout } from '../graph/layout';
-import { assignBranchColors, branchName } from '../graph/branchColor';
+import { Icons } from './icons';
+import { indexEdges, laneX, LANE_WIDTH, ROW_HEIGHT, type GraphEdge, type GraphLayout } from '../graph/layout';
+import { assignBranchColors, branchName, stashBranches } from '../graph/branchColor';
 import { WORKING_ID } from '../model/native';
 import type { Commit, GitRef } from '../model/types';
 import type { ActionContext } from './OperationDialog';
 import { DEFAULT_HISTORY_COLUMNS, useSettings, type HistoryColumnId, type ThemeDefinition } from '../model/settings';
 import { COLUMN_LABELS, HistoryColumnMenu } from './HistoryColumnMenu';
 import { AuthorAvatar } from './AuthorAvatar';
-import { commitIsoString, formatCommitDate } from '../model/dates';
+import { commitDay, commitIsoString, formatCommitDate } from '../model/dates';
+import { shapeOf, traceShape } from '../graph/shape';
 
 const ROW_DATE: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false };
 
@@ -83,18 +84,27 @@ interface Props {
   onSwitchBranch?: (ref: string) => void;
   pickOrder?: string[];
   onTogglePick?: (oid: string) => void;
+  /** Full name of a ref hovered elsewhere (the sidebar): its branch is emphasised and everything else dims. */
+  highlightRef?: string | null;
 }
 
 const WIDTH_VAR: Record<HistoryColumnId, string> = { refs: 'var(--ref-width)', graph: 'var(--graph-width)', message: 'var(--message-width)', author: 'var(--author-width)', hash: 'var(--hash-width)', date: 'var(--date-width)' };
 const MIN_GRAPH_WIDTH = laneX(2) + 14; // three lanes plus padding; also fits the "GRAPH" label
-export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onContextActions, onSwitchBranch, pickOrder, onTogglePick }, ref) {
+export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onContextActions, onSwitchBranch, pickOrder, onTogglePick, highlightRef }, ref) {
   const uid = useId();
   const { settings, updateSettings } = useSettings();
-  const graphLaneWidth = settings.graphAuthorAvatars ? 30 : LANE_WIDTH;
+  // Material draws every node as a shaped author avatar; other designs follow the setting.
+  const material = theme.design === 'material';
+  const apple = theme.design === 'apple';
+  const avatars = settings.graphAuthorAvatars || material;
+  // Material uses roomier rows so avatars, the HEAD ring and day dividers don't crowd each other.
+  const rowHeight = material ? 52 : apple ? 34 : ROW_HEIGHT;
+  const graphLaneWidth = avatars ? 30 : LANE_WIDTH;
   const graphLaneX = useMemo(() => (lane: number) => laneX(0) + lane * graphLaneWidth, [graphLaneWidth]);
   const minGraphWidth = graphLaneX(2) + 14;
   const scroller = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
+  const hoverRect = useRef<HTMLDivElement>(null);
   const columnSettingsButton = useRef<HTMLButtonElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [scrollLeft, setScrollLeft] = useState(0);
@@ -109,9 +119,11 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const [messageResized, setMessageResized] = useState(false);
   const [widths, setWidths] = useState<Record<HistoryColumnId, number>>({ refs: 170, graph: MIN_GRAPH_WIDTH, message: 130, author: 110, hash: 90, date: 120 });
   type Column = HistoryColumnId;
+  const dateResized = useRef(false);
   const limits: Record<Column, [number, number]> = { refs: [90, 420], graph: [minGraphWidth, 600], message: [100, Math.max(600, viewportWidth)], author: [70, 260], hash: [70, 180], date: [80, 220] };
   function resize(column: Column, delta: number, initial: number) {
     if (column === 'message') setMessageResized(true);
+    if (column === 'date') dateResized.current = true;
     setWidths(current => ({ ...current, [column]: Math.max(limits[column][0], Math.min(limits[column][1], initial + delta)) }));
   }
   function resizeHandle(column: Column) {
@@ -140,16 +152,47 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const graphScrollMax = Math.max(0, graphContent - graphWidth);
   const graphX = Math.min(graphScroll, graphScrollMax);
   const loaded = commits.length;
-  const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - 8);
-  const end = Math.min(loaded, Math.ceil((scrollTop + height) / ROW_HEIGHT) + 8);
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - 8);
+  const end = Math.min(loaded, Math.ceil((scrollTop + height) / rowHeight) + 8);
+  // The canvas is a window of the scrolled content that moves natively with the rows, so scrolling never
+  // lags behind a redraw; it is only repainted when scrolling leaves the buffered window.
+  const BUFFER = rowHeight * 10;
+  const windowTop = Math.max(0, Math.floor(scrollTop / BUFFER) * BUFFER - BUFFER);
+  const windowHeight = Math.max(0, Math.min(height + BUFFER * 3, loaded * rowHeight - windowTop));
   const selectedIndex = useMemo(() => commits.findIndex(commit => commit.id === selectedId), [commits, selectedId]);
   const refsByCommit = useMemo(() => groupRefsByCommit(refs), [refs]);
+  // First loaded commit of each calendar day, with that day's loaded count (shown as a divider label by the Material design).
+  const dayStarts = useMemo(() => {
+    const counts = new Map<string, number>(), starts = new Map<number, { label: string; key: string }>();
+    let previous = '';
+    commits.forEach((commit, row) => {
+      const day = commit.id === WORKING_ID ? null : commitDay(commit.timestamp);
+      if (!day) return;
+      counts.set(day.key, (counts.get(day.key) ?? 0) + 1);
+      if (day.key !== previous) starts.set(row, day);
+      previous = day.key;
+    });
+    return { counts, starts };
+  }, [commits]);
   const loadedIds = useMemo(() => new Set(commits.map(commit => commit.id)), [commits]);
   const visibleEdges = useMemo(() => indexEdges(layout.edges, layout.edgeMaxTo), [layout.edges, layout.edgeMaxTo]);
   const colors = useMemo(() => Array.from({ length: 8 }, (_, index) => theme.colors[`graphLane${index + 1}`]), [theme]);
   const palette = useMemo(() => [...colors, theme.colors.accent], [colors, theme]);
   const currentBranch = headRef?.startsWith('refs/heads/') ? headRef.slice(11) : null;
-  const branchColors = useMemo(() => assignBranchColors(commits, refs, WORKING_ID, currentBranch), [commits, refs, currentBranch]);
+  const branchColors = useMemo(() => assignBranchColors(commits, refs, WORKING_ID, currentBranch, stashBranches(commits, refs)), [commits, refs, currentBranch]);
+  // The commits of a hovered branch (a tag only marks its own commit). Overrides search dimming while it lasts.
+  const focus = useMemo(() => {
+    const target = highlightRef ? refs.find(item => item.fullName === highlightRef) : undefined;
+    if (!target) return null;
+    const branch = branchName(target);
+    const ids = new Set<string>(branch === null ? [target.commitId] : commits.filter((_, row) => branchColors.owned[row] === branch).map(commit => commit.id));
+    return { ids, branch };
+  }, [highlightRef, refs, commits, branchColors]);
+  const shown = focus?.ids ?? matches;
+  const columns = settings.historyColumns ?? DEFAULT_HISTORY_COLUMNS;
+  const visibleColumns = useMemo(() => columns.filter(c => c.visible), [columns]);
+  // A branch-coloured connector links ref pills to their node only when the refs column sits right before the graph.
+  const joinRefs = visibleColumns.findIndex(c => c.id === 'graph') > 0 && visibleColumns[visibleColumns.findIndex(c => c.id === 'graph') - 1].id === 'refs';
 
   interface RowControls { n: number }
   const activeN = activeControl?.id === selectedId ? activeControl.n : null;
@@ -161,7 +204,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   function renderRef({ ref, remote }: { ref: GitRef & { fullName?: string }; remote?: GitRef }, commit: Commit, controls: RowControls) {
     const name = branchName(ref);
     const control = ref.fullName ? rowControl(commit.id, controls) : null;
-    return <span key={ref.fullName ?? ref.name} id={control?.id} data-row-control={control ? '' : undefined} className={`ref-pill ${ref.kind === 'tag' ? 'tag-ref' : ref.kind === 'remote' ? 'remote-ref' : ''}${control?.active ? ' row-control-active' : ''}`}
+    return <span key={ref.fullName ?? ref.name} id={control?.id} data-row-control={control ? '' : undefined} className={`ref-pill ${ref.kind === 'tag' ? 'tag-ref' : ref.kind === 'remote' ? 'remote-ref' : ref.kind === 'stash' ? 'stash-ref' : ''}${control?.active ? ' row-control-active' : ''}`}
                       style={name !== null ? { '--branch-color': palette[branchColors.branches.get(name)!] } as React.CSSProperties : undefined}
                       data-name={ref.name} title={remote ? `${ref.fullName} + ${remote.name}` : ref.fullName ?? ref.name}
                       role={ref.fullName ? 'button' : undefined} tabIndex={ref.fullName ? -1 : undefined} aria-label={ref.fullName ? `Select tip of ${ref.fullName}; right-click or press Shift+F10 for actions` : undefined}
@@ -172,26 +215,26 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                       onDrop={event => { event.preventDefault(); event.stopPropagation(); stopDrag(); const action = graphDropAction(event.dataTransfer, ref.fullName, headRef, commits, refs); if (action) onActions?.(action); }}
                       onContextMenu={event => { if (onContextActions && ref.fullName) { event.preventDefault(); event.stopPropagation(); onContextActions({ oid: commit.id, ref: ref.fullName }, event.clientX, event.clientY, scroller.current ?? event.currentTarget); } }} onClick={event => { event.stopPropagation(); onSelect(commit.id); scroller.current?.focus(); }}
                       onDoubleClick={event => { if (ref.fullName && (ref.kind === 'local' || (ref.kind === 'remote' && ref.fullName.startsWith('refs/remotes/origin/') && ref.fullName !== 'refs/remotes/origin/HEAD')) && onSwitchBranch) { event.stopPropagation(); onSwitchBranch(ref.fullName); } }}>
-                      {!!headRef && ref.fullName === headRef && <Check size={10} strokeWidth={3} aria-hidden="true" />}{ref.kind === 'tag' ? <Tag size={10} /> : ref.kind === 'remote' ? <Globe2 size={10} /> : <Laptop size={10} />}{remote && <Globe2 size={10} />}<span className="ref-pill-name">{ref.name}</span>
+                      {!!headRef && ref.fullName === headRef && <Icons.Check size={10} strokeWidth={3} aria-hidden="true" />}{ref.kind === 'tag' ? <Icons.Tag size={10} /> : ref.kind === 'remote' ? <Icons.Globe2 size={10} /> : ref.kind === 'stash' ? <Icons.Archive size={10} /> : <Icons.Laptop size={10} />}{remote && <Icons.Globe2 size={10} />}<span className="ref-pill-name">{ref.name}</span>
                     </span>;
   }
 
   function scrollTo(row: number) {
     const el = scroller.current;
     if (!el) return;
-    const top = row * ROW_HEIGHT;
-    if (top < el.scrollTop || top + ROW_HEIGHT > el.scrollTop + el.clientHeight) {
+    const top = row * rowHeight;
+    if (top < el.scrollTop || top + rowHeight > el.scrollTop + el.clientHeight) {
       el.scrollTop = Math.max(0, top - el.clientHeight / 3);
       setScrollTop(el.scrollTop);
     }
   }
   useImperativeHandle(ref, () => ({ scrollTo, anchor: () => {
     const top = scroller.current?.scrollTop ?? 0;
-    const commit = commits[Math.floor(top / ROW_HEIGHT)];
-    return commit ? { id: commit.id, offset: top % ROW_HEIGHT } : null;
+    const commit = commits[Math.floor(top / rowHeight)];
+    return commit ? { id: commit.id, offset: top % rowHeight } : null;
   }, restore: anchor => {
     const row = commits.findIndex(commit => commit.id === anchor.id);
-    if (row >= 0 && scroller.current) { scroller.current.scrollTop = row * ROW_HEIGHT + anchor.offset; setScrollTop(scroller.current.scrollTop); }
+    if (row >= 0 && scroller.current) { scroller.current.scrollTop = row * rowHeight + anchor.offset; setScrollTop(scroller.current.scrollTop); }
   } }));
   useLayoutEffect(() => {
     const el = scroller.current!;
@@ -205,56 +248,101 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   // Sit above the list's own horizontal scrollbar when it is showing.
   useLayoutEffect(() => { const el = scroller.current; if (el) setHbar(el.offsetHeight - el.clientHeight); });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = canvas.current;
     if (!element) return;
     const ctx = element.getContext('2d');
     if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
     // Assigning width/height clears and reallocates the backing store, so only do it when the size really changed.
-    const pixelWidth = Math.floor(graphWidth * dpr), pixelHeight = Math.floor(height * dpr);
+    const pixelWidth = Math.floor(graphWidth * dpr), pixelHeight = Math.floor(windowHeight * dpr);
     if (element.width !== pixelWidth) element.width = pixelWidth;
     if (element.height !== pixelHeight) element.height = pixelHeight;
-    const y = (row: number) => row * ROW_HEIGHT + ROW_HEIGHT / 2 - scrollTop;
-    const bg = theme.colors.bg;
+    const y = (row: number) => row * rowHeight + rowHeight / 2 - windowTop;
+    const firstRow = Math.max(0, Math.floor(windowTop / rowHeight) - 1), lastRow = Math.min(loaded, Math.ceil((windowTop + windowHeight) / rowHeight) + 1);
     ctx.setTransform(dpr, 0, 0, dpr, -graphX * dpr, 0);
-    ctx.clearRect(graphX, 0, graphWidth, height);
-    ctx.lineWidth = 1.8;
+    ctx.clearRect(graphX, 0, graphWidth, windowHeight);
+    ctx.lineWidth = apple ? 1.75 : 2.5;
     ctx.lineCap = 'round';
-    for (const edge of visibleEdges(Math.floor(scrollTop / ROW_HEIGHT) - 1, Math.min(loaded, Math.ceil((scrollTop + height) / ROW_HEIGHT) + 1))) {
+    ctx.lineJoin = 'round';
+    const colorRowOf = (edge: GraphEdge) => commits[edge.fromRow]?.parents[0] === edge.to ? edge.fromRow : edge.toRow;
+    const edges = visibleEdges(firstRow, lastRow);
+    // With a branch hovered, its lines are drawn last so they sit on top of the dimmed ones.
+    const onBranch = (edge: GraphEdge) => !!focus && focus.branch !== null && branchColors.owned[colorRowOf(edge)] === focus.branch;
+    if (focus) edges.sort((a, b) => Number(onBranch(a)) - Number(onBranch(b)));
+    const traceEdge = (edge: GraphEdge) => {
       const x1 = graphLaneX(edge.fromLane), xt = graphLaneX(edge.track), x2 = graphLaneX(edge.toLane);
       const y1 = y(edge.fromRow), y2 = y(edge.toRow);
-      const colorRow = commits[edge.fromRow]?.parents[0] === edge.to ? edge.fromRow : edge.toRow;
-      ctx.strokeStyle = palette[branchColors.rows[colorRow] ?? branchColors.rows[edge.fromRow] ?? edge.track % colors.length];
-      ctx.globalAlpha = matches ? 0.3 : 0.78;
+      const bend = rowHeight / 4, reach = rowHeight * 5 / 12;
+      // Uncommitted work hangs off HEAD by a dotted line (round caps turn near-zero dashes into dots).
+      ctx.setLineDash(commits[edge.fromRow]?.id === WORKING_ID ? [0.01, 6] : []);
       ctx.beginPath();
       ctx.moveTo(x1, y1);
-      const bend = ROW_HEIGHT / 4, reach = ROW_HEIGHT * 5 / 12;
       ctx.bezierCurveTo(x1, y1 + bend, xt, y1 + bend, xt, y1 + reach);
       ctx.lineTo(xt, y2 - reach);
       ctx.bezierCurveTo(xt, y2 - bend, x2, y2 - bend, x2, y2);
       ctx.stroke();
+    };
+    for (const edge of edges) {
+      const colorRow = colorRowOf(edge);
+      ctx.strokeStyle = palette[branchColors.rows[colorRow] ?? branchColors.rows[edge.fromRow] ?? edge.track % colors.length];
+      ctx.globalAlpha = focus ? (onBranch(edge) ? 1 : 0.18) : matches ? 0.3 : 1;
+      traceEdge(edge);
     }
+    // Apple: content on the accent selection turns white, as in a selected macOS table row, so lines stay visible on it.
+    const selectedBand = apple && selectedIndex >= firstRow && selectedIndex < lastRow;
+    if (selectedBand) {
+      ctx.save();
+      ctx.beginPath(); ctx.rect(graphX, y(selectedIndex) - rowHeight / 2, graphWidth, rowHeight - 2); ctx.clip();
+      ctx.strokeStyle = '#fff'; ctx.globalAlpha = 0.9;
+      edges.forEach(traceEdge);
+      ctx.restore();
+    }
+    const erase = (paint: () => void) => { ctx.globalCompositeOperation = 'destination-out'; paint(); ctx.globalCompositeOperation = 'source-over'; };
     // The worker can still be laying out newly loaded history when this effect
     // runs. Rows remain visible, but their canvas nodes must wait for layout.
-    for (let row = start; row < Math.min(end, layout.nodes.length, commits.length); row++) {
+    ctx.setLineDash([]);
+    for (let row = firstRow; row < Math.min(lastRow, layout.nodes.length, commits.length); row++) {
       const node = layout.nodes[row];
       const commit = commits[row];
-      if (settings.graphAuthorAvatars && commit.id !== WORKING_ID) continue;
+      const working = commit.id === WORKING_ID;
       const x = graphLaneX(node.lane), cy = y(row);
-      const lane = palette[branchColors.rows[row] ?? node.lane % colors.length];
-      ctx.globalAlpha = matches && !matches.has(node.id) ? 0.3 : 1;
+      const onSelection = selectedBand && row === selectedIndex;
+      const lane = onSelection ? '#fff' : palette[branchColors.rows[row] ?? node.lane % colors.length];
+      const alpha = shown && !shown.has(node.id) ? (focus ? 0.25 : 0.3) : 1;
+      // Solid dots are bigger than merge dots; the selected node grows like its avatar counterpart does.
+      // A stash record is a two-parent commit whose index parent is not drawn; it is not a user merge.
+      const merge = commit.parents.length > 1 && !refsByCommit.get(commit.id)?.some(ref => ref.kind === 'stash'), avatarNode = avatars && !working && !(material && merge);
+      const radius = (avatarNode ? (material ? 13 : 11) : apple ? (merge ? 4 : 5) : merge ? 5.5 : 7) * (commit.id === selectedId ? 1.2 : 1);
+      ctx.lineWidth = 2;
+      if (joinRefs && refsByCommit.has(commit.id) && x - radius - 3 > graphX) {
+        ctx.globalAlpha = alpha * 0.75; ctx.strokeStyle = lane;
+        ctx.beginPath(); ctx.moveTo(graphX, cy); ctx.lineTo(x - radius - 3, cy); ctx.stroke();
+      }
+      ctx.globalAlpha = alpha;
+      if (commit.id === head) {
+        // Material rings HEAD with a scalloped (cookie) outline, even around a small merge dot.
+        if (material) traceShape(ctx, 'cookie', x, cy, (commit.id === selectedId ? 13 * 1.2 + 4 : 13 + 5), 0.12); else { ctx.beginPath(); ctx.arc(x, cy, radius + (avatars ? 5 : 4), 0, Math.PI * 2); }
+        ctx.strokeStyle = onSelection ? '#fff' : apple ? theme.colors.text : theme.colors.graphHead; ctx.stroke();
+      }
+      if (avatarNode) continue;
       ctx.beginPath();
-      if (commit.id === WORKING_ID) ctx.roundRect(x - 5, cy - 5, 10, 10, 2.5);
-      else ctx.arc(x, cy, commit.parents.length > 1 ? 5.5 : 5, 0, Math.PI * 2);
-      // Merges and the working tree are hollow rings; ordinary commits are solid with a background gap ring.
-      const hollow = commit.parents.length > 1 || commit.id === WORKING_ID;
-      ctx.fillStyle = hollow ? bg : lane; ctx.fill();
-      ctx.lineWidth = hollow ? 2 : 2.5; ctx.strokeStyle = hollow ? lane : bg; ctx.stroke();
-      if (!hollow) { ctx.beginPath(); ctx.arc(x, cy, 5, 0, Math.PI * 2); ctx.lineWidth = 1; ctx.strokeStyle = lane; ctx.stroke(); }
+      if (working) {
+        // Uncommitted work is a dashed, hollow marker (a round one in Material).
+        if (material) { ctx.arc(x, cy, 9, 0, Math.PI * 2); ctx.lineWidth = 2.5; } else ctx.roundRect(x - 5, cy - 5, 10, 10, 2.5);
+        erase(() => ctx.fill());
+        ctx.setLineDash([3, 3]); ctx.strokeStyle = lane; ctx.stroke(); ctx.setLineDash([]);
+      } else {
+        // Solid dot separated from lines behind it by a gap cut out of the canvas, so the row's hover or selection fill shows through.
+        ctx.arc(x, cy, radius, 0, Math.PI * 2);
+        ctx.lineWidth = 3;
+        erase(() => { ctx.fill(); ctx.stroke(); });
+        ctx.fillStyle = lane; ctx.fill();
+        erase(() => ctx.stroke());
+      }
     }
     ctx.globalAlpha = 1;
-  }, [commits, layout, visibleEdges, start, end, scrollTop, height, graphWidth, graphX, theme, matches, loaded, colors, palette, branchColors, settings.graphAuthorAvatars, graphLaneX]);
+  }, [commits, layout, visibleEdges, windowTop, windowHeight, graphWidth, graphX, theme, matches, focus, shown, loaded, colors, palette, branchColors, avatars, material, apple, graphLaneX, joinRefs, refsByCommit, selectedId, selectedIndex, head]);
 
   useEffect(() => {
     const node = layout.nodes[selectedIndex];
@@ -307,10 +395,20 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const activeControlId = activeN === null ? null : `${uid}-commit-${selectedId}-ctl-${activeN}`;
   // Drop an active control whose element is gone (row scrolled out, refs or columns changed) so aria-activedescendant never dangles.
   useLayoutEffect(() => { if (activeControlId && !scroller.current?.querySelector(`[id="${activeControlId}"]`)) setActiveControl(null); });
-  const columns = settings.historyColumns ?? DEFAULT_HISTORY_COLUMNS;
-  const visibleColumns = useMemo(() => columns.filter(c => c.visible), [columns]);
-
   const columnWidth = (id: Column) => (id === 'graph' ? graphWidth : widths[id]);
+  // Until the user drags the Date column, it grows (never shrinks, so scrolling doesn't jitter) to show the whole date.
+  const dateVisible = visibleColumns.some(c => c.id === 'date');
+  useLayoutEffect(() => {
+    if (!dateVisible || dateResized.current) return;
+    let needed = 0;
+    const range = document.createRange();
+    scroller.current?.querySelectorAll<HTMLElement>('.row-date').forEach(cell => {
+      range.selectNodeContents(cell);
+      needed = Math.max(needed, range.getBoundingClientRect().width + parseFloat(getComputedStyle(cell).paddingLeft));
+    });
+    needed = Math.min(Math.ceil(needed) + 12, 320);
+    if (needed > widths.date) setWidths(current => ({ ...current, date: needed }));
+  }, [dateVisible, start, end, commits, widths.date, settings.fontSize, settings.monoFont]);
 
   const gridTemplateColumns = useMemo(
     () =>
@@ -376,7 +474,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
           title="Customize columns"
           onClick={() => setMenuOpen(open => !open)}
         >
-          <SettingsIcon size={14} />
+          <Icons.Settings size={14} />
         </button>
       </div>
     </div>
@@ -415,26 +513,35 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
           }
           if ((event.key === 'Enter' || event.key === ' ') && active) { event.preventDefault(); active.click(); return; }
           if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && selectedId !== WORKING_ID && onContextActions) { event.preventDefault(); const rect = event.currentTarget.getBoundingClientRect(); onContextActions({ oid: selectedId }, rect.left + 24, rect.top + 24, event.currentTarget); }
-          const moves: Record<string, number> = { ArrowDown: selectedIndex + 1, ArrowUp: selectedIndex - 1, Home: 0, End: loaded - 1, PageDown: selectedIndex + Math.floor(height / ROW_HEIGHT), PageUp: selectedIndex - Math.floor(height / ROW_HEIGHT) };
+          const moves: Record<string, number> = { ArrowDown: selectedIndex + 1, ArrowUp: selectedIndex - 1, Home: 0, End: loaded - 1, PageDown: selectedIndex + Math.floor(height / rowHeight), PageUp: selectedIndex - Math.floor(height / rowHeight) };
           if (event.key in moves) { event.preventDefault(); setActiveControl(null); navigate(moves[event.key]); }
           if (event.key === 'Enter') { event.preventDefault(); onOpenDetails(); }
         }}>
-        <div className="history-spacer" style={{ height: loaded * ROW_HEIGHT }}>
+        <div className="history-spacer" style={{ height: loaded * rowHeight }}
+          // Apple: the hover fill sits under the graph canvas like the selection, so lines and dots stay crisp. Moved directly, no re-render per row.
+          onMouseMove={apple ? event => { const el = hoverRect.current; if (!el) return; const row = Math.floor((event.clientY - event.currentTarget.getBoundingClientRect().top) / rowHeight); el.hidden = row < 0 || row >= loaded; el.style.top = `${row * rowHeight}px`; } : undefined}
+          onMouseLeave={apple ? () => { if (hoverRect.current) hoverRect.current.hidden = true; } : undefined}>
+          {apple && <div ref={hoverRect} className="history-hover" aria-hidden="true" hidden style={{ height: rowHeight - 2, left: 10, right: 10 }} />}
+          {/* Apple design: the reference draws one rounded blue rect behind the selected row, spanning the whole row. */}
+          {apple && selectedIndex >= 0 && <div className="history-selection" aria-hidden="true" style={{ top: selectedIndex * rowHeight, height: rowHeight - 2, left: 10, right: 10 }} />}
+          {isGraphVisible && <canvas ref={canvas} className="graph-canvas" aria-hidden="true" style={{ width: graphWidth, height: windowHeight, left: graphOffset, top: windowTop }} />}
           {commits.slice(start, end).map((commit, offset) => {
             const row = start + offset;
             const node = layout.nodes[row];
             const lane = node?.lane ?? 0;
             const branchColor = palette[branchColors.rows[row] ?? lane % colors.length];
             const badges = refsByCommit.get(commit.id) ?? NO_REFS;
+            // refs/stash points at the stash commit, not at the index/tree helper commits it parents.
+            const stash = badges.find(ref => ref.kind === 'stash');
             const groups = groupRefs(badges, headRef);
             const controls: RowControls = { n: 0 };
             return <div key={commit.id} id={`${uid}-commit-${commit.id}`} role="option" aria-selected={commit.id === selectedId}
               aria-posinset={row + 1} aria-setsize={commits.length}
-              aria-label={`${commit.subject}, ${commit.author}, ${commit.id.slice(0, 7)}${commit.parents.length > 1 ? ', merge commit' : ''}${commit.id === head ? ', HEAD' : ''}${badges.length ? `, ${badges.map(b => b.name).join(', ')}` : ''}`}
-              className={`commit-row ${commit.id === selectedId ? 'selected' : ''} ${matches && !matches.has(commit.id) ? 'dimmed' : ''} ${freshIds.has(commit.id) ? 'fresh' : ''}`}
+              aria-label={`${commit.subject}, ${commit.author}, ${commit.id.slice(0, 7)}${commit.parents.length > 1 && !stash ? ', merge commit' : ''}${commit.id === head ? ', HEAD' : ''}${badges.length ? `, ${badges.map(b => b.name).join(', ')}` : ''}`}
+              className={`commit-row ${commit.id === selectedId ? 'selected' : ''} ${shown && !shown.has(commit.id) ? 'dimmed' : ''} ${freshIds.has(commit.id) ? 'fresh' : ''} ${commit.id === WORKING_ID ? 'working' : ''} ${stash ? 'stash-commit' : ''} ${joinRefs && badges.length ? 'connect' : ''} ${row > 0 && dayStarts.starts.has(row) ? 'day-start' : ''}`}
               style={{
-                top: row * ROW_HEIGHT,
-                height: ROW_HEIGHT,
+                top: row * rowHeight,
+                height: rowHeight,
                 gridTemplateColumns,
                 '--branch-color': branchColor,
                } as React.CSSProperties} onContextMenu={event => { if (onContextActions && commit.id !== WORKING_ID) { event.preventDefault(); onContextActions({ oid: commit.id }, event.clientX, event.clientY, scroller.current ?? event.currentTarget); } }} onClick={() => { onSelect(commit.id); scroller.current?.focus(); }} onDoubleClick={onOpenDetails}>
@@ -448,19 +555,21 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                 }
                 if (col.id === 'graph') {
                   return <div key="graph" className="commit-graph-cell" aria-hidden="true">
-                    {settings.graphAuthorAvatars && node && commit.id !== WORKING_ID && <span className={`graph-avatar-node${commit.parents.length > 1 ? ' merge' : ''}`} style={{ left: graphLaneX(node.lane) - graphX }}>
+                    {avatars && node && commit.id !== WORKING_ID && !(material && commit.parents.length > 1 && !stash) && <span className={`graph-avatar-node${commit.parents.length > 1 && !stash ? ' merge' : ''}`} data-shape={shapeOf(commit.author)} style={{ left: graphLaneX(node.lane) - graphX }}>
                       <AuthorAvatar name={commit.author} email={commit.email} mode={settings.authorAvatarMode} tiny />
                     </span>}
                   </div>;
                 }
                 if (col.id === 'message') {
+                  const day = row > 0 ? dayStarts.starts.get(row) : undefined;
                   return <div key="message" className="commit-message">
+                    {day && <span className="day-label" aria-hidden="true">{day.label}<i>{dayStarts.counts.get(day.key)}</i></span>}
                     {onTogglePick && commit.id !== WORKING_ID && (() => { const control = rowControl(commit.id, controls); return <input id={control.id} data-row-control="" tabIndex={-1} className={`graph-pick${control.active ? ' row-control-active' : ''}`} type="checkbox" aria-label={`Cherry-pick ${commit.id.slice(0, 7)}`} checked={pickOrder?.includes(commit.id) ?? false} onClick={event => event.stopPropagation()} onChange={() => { onTogglePick(commit.id); scroller.current?.focus(); }} />; })()}
-                    {commit.parents.length > 1 && <GitMerge size={13} className="merge-icon" />}
+                    {commit.parents.length > 1 && !stash && <Icons.GitMerge size={13} className="merge-icon" />}
                     <span className="subject" title={commit.subject} draggable={!!onActions && commit.id !== WORKING_ID}
-                      onDragStart={event => { event.stopPropagation(); if (!onActions || commit.id === WORKING_ID) { event.preventDefault(); return; } event.dataTransfer.clearData(REF_DRAG_TYPE); event.dataTransfer.setData(COMMIT_DRAG_TYPE, commit.id); event.dataTransfer.effectAllowed = 'copy'; }} onDragEnd={stopDrag}>{commit.subject}</span>
+                      onDragStart={event => { event.stopPropagation(); if (!onActions || commit.id === WORKING_ID) { event.preventDefault(); return; } event.dataTransfer.clearData(REF_DRAG_TYPE); event.dataTransfer.setData(COMMIT_DRAG_TYPE, commit.id); event.dataTransfer.effectAllowed = 'copy'; }} onDragEnd={stopDrag}>{stash ? commit.subject.replace(/^On .*?: /, '') : commit.subject}</span>
                     {onActions && commit.id !== WORKING_ID && (() => { const control = rowControl(commit.id, controls); return <button id={control.id} data-row-control="" tabIndex={-1} className={`icon-button sm graph-action-button${control.active ? ' row-control-active' : ''}`} aria-label={`Actions for ${commit.id.slice(0, 7)}`} onClick={event => { event.stopPropagation(); scroller.current?.focus(); onActions({ oid: commit.id }); }}>…</button>; })()}
-                    {hasMore !== undefined && commit.parents.some(parent => !loadedIds.has(parent)) && <span className="boundary-label">{hasMore ? 'unloaded parent' : shallow ? 'shallow boundary' : 'unavailable parent'}</span>}
+                    {hasMore !== undefined && commit.parents.some(parent => !loadedIds.has(parent)) && !stash && <span className="boundary-label">{hasMore ? 'unloaded parent' : shallow ? 'shallow boundary' : 'unavailable parent'}</span>}
                   </div>;
                 }
                 if (col.id === 'author') {
@@ -479,7 +588,6 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
         </div>
       </div>
       {isGraphVisible && graphScrollMax > 0 && <div ref={graphScroller} className="graph-hscroll" aria-label="Scroll graph horizontally" style={{ width: graphWidth, left: graphOffset - scrollLeft, bottom: hbar }} onScroll={event => setGraphScroll(event.currentTarget.scrollLeft)}><div style={{ width: graphContent }} /></div>}
-      {isGraphVisible && <canvas ref={canvas} className="graph-canvas" aria-hidden="true" style={{ width: graphWidth, height, left: graphOffset - scrollLeft }} />}
     </div>
     <div className="history-bottom"><span><span className="live-dot" />{(loaded - (commits[0]?.id === WORKING_ID ? 1 : 0)).toLocaleString()} commits loaded{shallow ? ' · Shallow repository boundary' : ''}</span>
       {hasMore ? <button className="text-button" disabled={paging} onClick={onLoadMore}>{paging ? 'Loading…' : 'Load older history ↓'}</button> : <span className="muted">{shallow ? 'Available history loaded' : 'All history loaded'}</span>}

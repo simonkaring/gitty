@@ -38,13 +38,31 @@ provider.[^settings][^controls]
 
 When enabled, visible, laid-out commit rows render 22px `AuthorAvatar`
 elements (the author-column size) centered on 30px-spaced graph lanes above
-canvas connections. Dot mode retains 18px lane spacing. The graph column's
+canvas connections. Dot mode uses 24px lane spacing and 40px rows (44px under the Apple design, 52px under Material). The graph column's
 minimum width expands to fit three avatar lanes. Horizontal
 graph panning shifts their positions; row virtualization limits rendered
-avatars. Search-dimmed rows also dim their avatar nodes. Branch-colored borders
-identify lanes; merges use double borders and retain the message merge icon.
-The working tree keeps its canvas square. Pending layouts show rows without
+avatars. Search-dimmed rows also dim their avatar nodes. Avatars are filled with
+the branch color and ringed in the background color; the selected node grows 1.2x.
+Merges use double borders and retain the message merge icon.
+The working tree keeps its canvas square, now dashed and hollow. Pending layouts show rows without
 inventing avatar positions.[^graph]
+
+In both modes the canvas draws 2.5px opaque branch lines (the working tree hangs
+off HEAD by a dotted line), a `graphHead` ring around the HEAD commit, and, when
+the refs column sits directly before the graph, a connector from each ref pill to
+its node (the pill's CSS line runs flush to the column edge and the canvas line continues from it, so they read as one). Dot mode draws solid dots (smaller for merges) with a 3px gap erased
+from the canvas (and the working square is erased before its dashed outline), so
+whatever row fill sits beneath shows through. The Apple design draws its hover and
+selection fills under the canvas (`.history-hover`, `.history-selection`) and
+repaints lines, the selected node and HEAD ring in white inside the selected row. Each message cell carries a branch-colored tick, replaced by the
+`graphSelection` color on the selected row.[^graph]
+
+The canvas is a buffered window (viewport plus 10 rows above and 20 below, snapped
+to 10-row steps) positioned inside the scrolled content, so it moves natively with
+the rows and only repaints when scrolling leaves the window. Hovering or focusing a
+branch or tag in the sidebar passes `highlightRef` to the graph: commits owned by
+that branch (per `assignBranchColors().owned`) stay lit, everything else dims, and
+its lines draw on top. This overrides search dimming while it lasts.[^graph]
 
 Graph avatars follow `authorAvatarMode` and reuse the initials fallback,
 asynchronous stale-response protection, and image-failure behavior used by

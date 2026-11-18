@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowUpRight, Check, ChevronRight, KeyRound, LockKeyhole, Monitor, ShieldCheck } from 'lucide-react';
+import { Icons } from './icons';
 import { errorMessage, isDesktopHost, native } from '../model/native';
 import type { ProviderAccount as Account } from '../model/providerRepositories';
 import githubIcon from '../assets/providers/github.svg';
@@ -124,17 +124,17 @@ export function IntegrationsSettings() {
         : loadError ? <div className="settings-error" role="alert">{loadError} <button type="button" className="text-button" onClick={() => setRefresh(value => value + 1)}>Retry</button></div>
         : accounts.length ? <ul className="integration-account-list">{accounts.map(account => <li key={account.id}>
           <ProviderIcon provider={account.provider} /><div className="integration-account-identity"><strong>{account.username}</strong><small>{providers[account.provider]} · {account.oauth ? 'Browser sign-in' : 'Access token'}</small></div>
-          <span className="integration-connected"><Check size={13} aria-hidden="true" />Connected</span>
+          <span className="integration-connected"><Icons.Check size={13} aria-hidden="true" />Connected</span>
           <button type="button" className="text-button" aria-label={`Disconnect ${providers[account.provider]} account ${account.username}`} disabled={busy} onClick={() => void disconnect(account.id)}>Disconnect</button>
         </li>)}</ul>
-        : <div className="integration-empty"><LockKeyhole size={18} aria-hidden="true" /><div><strong>No accounts connected yet</strong><p>Choose a provider below to get started.</p></div></div>}
+        : <div className="integration-empty"><Icons.LockKeyhole size={18} aria-hidden="true" /><div><strong>No accounts connected yet</strong><p>Choose a provider below to get started.</p></div></div>}
     </section>
     <section aria-labelledby="connect-provider-heading">
       <div className="integration-section-heading"><h4 id="connect-provider-heading">Connect a provider</h4></div>
       <div className="integration-provider-grid" role="group" aria-label="Hosting provider">
         {(Object.keys(providers) as Provider[]).map(id => <button type="button" key={id} className="integration-provider" aria-pressed={provider === id} disabled={busy || loading} onClick={() => { setProvider(id); setUsername(''); setToken(''); setError(''); }}>
           <ProviderIcon provider={id} /><span><strong>{providers[id]}</strong><small>{providerInfo[id].host}</small></span>
-          {provider === id ? <Check className="integration-provider-selection" size={16} aria-hidden="true" /> : <ChevronRight className="integration-provider-selection" size={16} aria-hidden="true" />}
+          {provider === id ? <Icons.Check className="integration-provider-selection" size={16} aria-hidden="true" /> : <Icons.ChevronRight className="integration-provider-selection" size={16} aria-hidden="true" />}
         </button>)}
       </div>
       <div className="integration-setup" aria-labelledby="provider-setup-heading">
@@ -142,7 +142,7 @@ export function IntegrationsSettings() {
         {desktop ? <form onSubmit={event => void connect(event)}>
           {provider !== 'bitbucket' && !device && <div className="integration-browser-signin">
             <p>Sign in securely in your browser. Gitty never sees your password.</p>
-            <button type="button" className="primary-button" disabled={busy || loading} onClick={() => void signIn()}>{busy && operation === 'browser' ? 'Starting sign-in…' : `Connect ${providers[provider]} in browser`}<ArrowUpRight size={15} aria-hidden="true" /></button>
+            <button type="button" className="primary-button" disabled={busy || loading} onClick={() => void signIn()}>{busy && operation === 'browser' ? 'Starting sign-in…' : `Connect ${providers[provider]} in browser`}<Icons.ArrowUpRight size={15} aria-hidden="true" /></button>
           </div>}
           {provider === 'azureDevops' && <p className="integration-provider-help">Use a Microsoft work or school account for browser sign-in. For a personal Microsoft account, connect with an access token below.</p>}
           {provider === 'bitbucket' && <p className="integration-provider-help">Connect with a Bitbucket Cloud API token to manage pull requests. Repository browsing and account-based cloning are not available for this provider.</p>}
@@ -150,10 +150,10 @@ export function IntegrationsSettings() {
             <strong>Finish signing in with {providers[provider]}</strong><p>Enter this code in your browser, then approve Gitty.</p>
             <code className="integration-device-code">{device.userCode}</code>
             <small>Expires in {Math.ceil(device.expiresIn / 60)} minutes. Waiting for approval…</small>
-            <div className="integration-device-actions"><a href={device.verificationUri} onClick={event => { event.preventDefault(); void native('open_external_url', { url: device.verificationUri }).catch(e => setError(errorMessage(e))); }}>Open sign-in page<ArrowUpRight size={14} aria-hidden="true" /></a>
+            <div className="integration-device-actions"><a href={device.verificationUri} onClick={event => { event.preventDefault(); void native('open_external_url', { url: device.verificationUri }).catch(e => setError(errorMessage(e))); }}>Open sign-in page<Icons.ArrowUpRight size={14} aria-hidden="true" /></a>
               <button type="button" className="secondary-button" onClick={() => { setDevice(null); setBusy(false); setError(''); }}>Cancel sign-in</button></div>
           </div>}
-          <details className="integration-token" key={provider} open={provider === 'bitbucket' || undefined}><summary><KeyRound size={15} aria-hidden="true" />{provider === 'bitbucket' ? 'Connect with an API token' : 'Connect with an access token instead'}</summary>
+          <details className="integration-token" key={provider} open={provider === 'bitbucket' || undefined}><summary><Icons.KeyRound size={15} aria-hidden="true" />{provider === 'bitbucket' ? 'Connect with an API token' : 'Connect with an access token instead'}</summary>
             <div className="integration-token-fields">
               <label className="settings-field">Account username<input value={username} maxLength={254} required disabled={busy || loading} autoComplete="username" onChange={event => setUsername(event.target.value)} /></label>
               <label className="settings-field">Access token<input value={token} type="password" required disabled={busy || loading} autoComplete="off" aria-describedby="integration-token-help" onChange={event => setToken(event.target.value)} /></label>
@@ -162,10 +162,10 @@ export function IntegrationsSettings() {
             </div>
           </details>
           {error && operation !== 'disconnect' && <p className="settings-error" role="alert">{error}</p>}
-        </form> : <div className="integration-desktop-note"><Monitor size={18} aria-hidden="true" /><p>Provider connections are available in the desktop app.</p></div>}
+        </form> : <div className="integration-desktop-note"><Icons.Monitor size={18} aria-hidden="true" /><p>Provider connections are available in the desktop app.</p></div>}
       </div>
     </section>
-    <footer className="integration-security"><ShieldCheck size={18} aria-hidden="true" /><div><strong>Credentials stay on your device</strong><p>Tokens are stored in your system credential store.</p>
+    <footer className="integration-security"><Icons.ShieldCheck size={18} aria-hidden="true" /><div><strong>Credentials stay on your device</strong><p>Tokens are stored in your system credential store.</p>
       <details><summary>How Git authentication works</summary><p>Connected accounts authorize provider features and explicitly selected HTTPS clones. Fetch, pull, push and URL cloning use your Git credential helper or SSH agent. Gitty includes Git Credential Manager as an HTTPS fallback; WSL uses its own credentials.</p></details>
     </div></footer>
     {error && operation === 'disconnect' && <p className="settings-error" role="alert">{error}</p>}

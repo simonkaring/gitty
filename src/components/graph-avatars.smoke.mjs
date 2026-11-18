@@ -31,8 +31,9 @@ try {
   assert.equal(await page.locator('[id$="-commit-gitty:working-tree"] .graph-avatar-node').count(), 0);
   const checkAlignment = () => page.waitForFunction(() => [...document.querySelectorAll('.graph-avatar-node')].every(node => {
     const rect = node.getBoundingClientRect(), cell = node.closest('.commit-graph-cell').getBoundingClientRect();
-    const avatar = node.querySelector('.avatar').getBoundingClientRect();
-    return avatar.width === 22 && avatar.height === 22 && rect.width <= 28 && Math.abs(rect.top + rect.height / 2 - cell.top - cell.height / 2) < 1;
+    const avatar = node.querySelector('.avatar');
+    // Layout size: the selected row's avatar is scaled up with a transform.
+    return avatar.offsetWidth === 22 && avatar.offsetHeight === 22 && rect.width <= 28 && Math.abs(rect.top + rect.height / 2 - cell.top - cell.height / 2) < 1;
   }));
   await checkAlignment();
   await history.evaluate(el => { el.scrollTop = 500; });

@@ -16,13 +16,36 @@ beforeEach(async () => {
   document.body.append(host);
   root = createRoot(host);
   await act(async () => {
-    root.render(<RepositoryToolbar handle="repo" active revision={0} stateRevision={0} busy={false} pickCount={1} pickMode onCreateBranch={() => {}} onSwitchBranch={() => {}} onCherryPick={() => {}} onClearPick={() => {}} onStartPickMode={() => {}} onOpenStash={() => {}} onRefresh={() => {}} onWrite={async () => ''} notify={() => {}} />);
+    root.render(<RepositoryToolbar handle="repo" active revision={0} stateRevision={0} busy={false} pickCount={1} pickMode onCreateBranch={() => {}} onSwitchBranch={() => {}} onCherryPick={() => {}} onClearPick={() => {}} onStartPickMode={() => {}} selectedOid="" onRefresh={() => {}} onWrite={async () => ''} notify={() => {}} />);
   });
 });
 afterEach(async () => { await act(async () => { root.unmount(); }); host.remove(); });
 
 const key = (name: string) => act(async () => { document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: name, bubbles: true, cancelable: true })); });
 const items = () => [...host.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>('.repository-toolbar button')].find(item => item.textContent === label)!;
+
+async function popWith(selectedOid: string, stashes: unknown[]) {
+  const onWrite = vi.fn(async (..._args: unknown[]) => 'Dropped refs/stash@{0} (abc)');
+  mocks.native.mockImplementation(((...args: unknown[]) => Promise.resolve(args[0] === 'repository_stashes' ? stashes : { branch: 'main', upstream: null, ahead: 0, behind: 0, remotes: [] })));
+  await act(async () => {
+    root.render(<RepositoryToolbar handle="repo" active revision={0} stateRevision={0} busy={false} pickCount={0} pickMode={false} onCreateBranch={() => {}} onSwitchBranch={() => {}} onCherryPick={() => {}} onClearPick={() => {}} onStartPickMode={() => {}} selectedOid={selectedOid} onRefresh={() => {}} onWrite={onWrite} notify={() => {}} />);
+  });
+  await act(async () => { button('Pop').click(); });
+  return onWrite.mock.lastCall;
+}
+
+it('pops the selected stash entry, else the newest stash, and stashes with a generated message', async () => {
+  const stashes = [{ oid: 'b', selector: 'stash@{0}', message: 'newer' }, { oid: 'a', selector: 'stash@{1}', message: 'older' }];
+  expect((await popWith('a', stashes))![1]).toEqual({ action: { kind: 'pop', oid: 'a', restoreIndex: true } });
+  expect((await popWith('not-a-stash', stashes))![1]).toEqual({ action: { kind: 'pop', oid: 'b', restoreIndex: true } });
+  const onWrite = vi.fn(async (..._args: unknown[]) => 'Saved working directory and index state');
+  await act(async () => {
+    root.render(<RepositoryToolbar handle="repo" active revision={0} stateRevision={0} busy={false} pickCount={0} pickMode={false} onCreateBranch={() => {}} onSwitchBranch={() => {}} onCherryPick={() => {}} onClearPick={() => {}} onStartPickMode={() => {}} selectedOid="" onRefresh={() => {}} onWrite={onWrite} notify={() => {}} />);
+  });
+  await act(async () => { button('Stash').click(); });
+  expect((onWrite.mock.lastCall as unknown[])[1]).toEqual({ action: { kind: 'save', message: expect.stringMatching(/^main - stash - /) } });
+});
 
 it('focuses the first pull-menu item on open and moves with arrows, Home and End', async () => {
   const toggle = host.querySelector<HTMLButtonElement>('[aria-label="More pull options"]')!;

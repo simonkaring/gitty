@@ -1,3 +1,4 @@
+/** `parents` are only the parents the graph draws: a stash record's internal index commit is not one. */
 export interface GraphCommit { id: string; parents: readonly string[] }
 export interface GraphNode { id: string; row: number; lane: number }
 export interface GraphEdge { from: string; to: string; fromRow: number; toRow: number; fromLane: number; toLane: number; track: number }
@@ -90,8 +91,8 @@ export function appendHistory(state: LayoutState, commits: readonly GraphCommit[
   return { nodes: [...nodes], edges, laneCount: state.laneCount };
 }
 
-export const ROW_HEIGHT = 36;
-export const LANE_WIDTH = 18;
+export const ROW_HEIGHT = 40;
+export const LANE_WIDTH = 24;
 export const LANE_PADDING = 22;
 export const laneX = (lane: number) => LANE_PADDING + lane * LANE_WIDTH;
 

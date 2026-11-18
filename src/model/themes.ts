@@ -1,7 +1,9 @@
+export type DesignFamily = 'default' | 'material' | 'apple';
 export interface ThemeDefinition {
   id: string;
   name: string;
   mode: 'light' | 'dark';
+  design?: DesignFamily;
   colors: Record<string, string>;
 }
 
@@ -27,7 +29,45 @@ export const BUILTIN_THEMES: ThemeDefinition[] = [
   family('nord', 'Nord', 'dark', '#2e3440', '#272d38', '#3b4252', '#eceff4', '#d8dee9', '#88c0d0', '#bf616a', '#a3be8c'),
   family('catppuccin-latte', 'Catppuccin Latte', 'light', '#eff1f5', '#e6e9ef', '#ffffff', '#4c4f69', '#5c5f77', '#8839ef', '#d20f39', '#40722f'),
   family('catppuccin-mocha', 'Catppuccin Mocha', 'dark', '#1e1e2e', '#181825', '#313244', '#cdd6f4', '#bac2de', '#cba6f7', '#f38ba8', '#a6e3a1'),
+  {
+    id: 'material-google-dark',
+    name: 'Material Google Dark',
+    mode: 'dark',
+    design: 'material',
+    colors: {
+      bg: '#1a1c25', chrome: '#0c0d12', sidebar: '#15171e', raised: '#232630', subtle: '#2d303b', hover: '#373a45', border: '#3f424d', borderStrong: '#767a87', text: '#e6e7ef', secondary: '#c0c3d1', muted: '#a7aab8', accent: '#aab9fc', accentText: '#aab9fc', accentWash: '#262c47', selected: '#383e58', green: '#81c995', greenWash: '#213c27', red: '#f28b82', redWash: '#4f2825', buttonForeground: '#1f2557', shadow: '#00000099', backdrop: '#00000080', graphLane1: '#8ab4f8', graphLane2: '#f28b82', graphLane3: '#81c995', graphLane4: '#fdd663', graphLane5: '#d7aefb', graphLane6: '#78d9ec', graphLane7: '#fcad70', graphLane8: '#ff8bcb', graphSelection: '#aab9fc', graphMerge: '#fdd663', graphHead: '#e6e7ef',
+    },
+  },
+  {
+    id: 'material-google-light',
+    name: 'Material Google Light',
+    mode: 'light',
+    design: 'material',
+    colors: {
+      bg: '#eef0f8', chrome: '#f9fafe', sidebar: '#f4f5fc', raised: '#e7e9f2', subtle: '#e0e2ed', hover: '#d7dae6', border: '#c1c4ce', borderStrong: '#717481', text: '#191a20', secondary: '#444753', muted: '#575a66', accent: '#444dbd', accentText: '#444dbd', accentWash: '#e1e7fe', selected: '#d4ddfd', green: '#146c2e', greenWash: '#c4eed0', red: '#b3261e', redWash: '#f9dedc', buttonForeground: '#ffffff', shadow: '#00000040', backdrop: '#00000052', graphLane1: '#1a73e8', graphLane2: '#d93025', graphLane3: '#188038', graphLane4: '#b06000', graphLane5: '#9334e6', graphLane6: '#129eaf', graphLane7: '#e8710a', graphLane8: '#c2185b', graphSelection: '#444dbd', graphMerge: '#b06000', graphHead: '#191a20',
+    },
+  },
 ];
+// Apple: macOS/iOS system palette. Surfaces, separators and washes are the reference's
+// translucent values flattened onto their base; accent/green/red text are darkened or
+// lightened to reach WCAG AA on washes and selection.
+const apple = (mode: 'light' | 'dark', colors: Record<string, string>): ThemeDefinition => ({ id: `apple-${mode}`, name: mode === 'dark' ? 'Apple Dark' : 'Apple', mode, design: 'apple', colors } as ThemeDefinition);
+BUILTIN_THEMES.push(
+  apple('light', {
+    bg: '#ffffff', chrome: '#f2f2f7', sidebar: '#f1f1f5', raised: '#ffffff', subtle: '#f4f4f4', hover: '#ebebeb', border: '#e6e6e6', borderStrong: '#bbbbbc',
+    text: '#1d1d1f', secondary: '#696970', muted: '#5e5e63', accent: '#007aff', accentText: '#00438c', accentWash: '#e0efff', selected: '#c2dfff',
+    green: '#187a34', greenWash: '#e3f7e8', red: '#d70015', redWash: '#ffe7e6', buttonForeground: '#ffffff', shadow: '#0000002e', backdrop: '#00000052',
+    graphLane1: '#007aff', graphLane2: '#af52de', graphLane3: '#ff2d55', graphLane4: '#ff9500', graphLane5: '#34c759', graphLane6: '#30b0c7', graphLane7: '#5856d6', graphLane8: '#6d6d72',
+    graphSelection: '#007aff', graphMerge: '#ff9500', graphHead: '#007aff',
+  }),
+  apple('dark', {
+    bg: '#1c1c1e', chrome: '#141416', sidebar: '#262628', raised: '#202023', subtle: '#2b2b2d', hover: '#38383a', border: '#333335', borderStrong: '#5d5d5f',
+    text: '#f5f5f7', secondary: '#c7c7cc', muted: '#a1a1a6', accent: '#0a84ff', accentText: '#57abff', accentWash: '#192f47', selected: '#163d66',
+    green: '#3ddb64', greenWash: '#1f3526', red: '#ff7a70', redWash: '#3e2222', buttonForeground: '#ffffff', shadow: '#00000080', backdrop: '#000000a6',
+    graphLane1: '#0a84ff', graphLane2: '#bf5af2', graphLane3: '#ff375f', graphLane4: '#ff9f0a', graphLane5: '#30d158', graphLane6: '#40c8e0', graphLane7: '#5e5ce6', graphLane8: '#a8a8b3',
+    graphSelection: '#0a84ff', graphMerge: '#ff9f0a', graphHead: '#0a84ff',
+  }),
+);
 export const MAX_CUSTOM_THEMES = 30;
 export const MAX_THEME_FILE_BYTES = 100_000;
 export function isColor(value: unknown, alpha = false): value is string {
@@ -36,9 +76,9 @@ export function isColor(value: unknown, alpha = false): value is string {
 export function validateTheme(value: unknown): ThemeDefinition {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Theme must be an object.');
   const t = value as ThemeDefinition;
-  if (Object.keys(t).some(k => !['id', 'name', 'mode', 'colors'].includes(k)) || typeof t.id !== 'string' || !/^custom-[a-zA-Z0-9-]{1,80}$/.test(t.id) || typeof t.name !== 'string' || !t.name.trim() || t.name.length > 60 || /[\u0000-\u001f]/.test(t.name) || !['light', 'dark'].includes(t.mode)) throw new Error('Invalid custom theme identity, name, or mode.');
+  if (Object.keys(t).some(k => !['id', 'name', 'mode', 'design', 'colors'].includes(k)) || typeof t.id !== 'string' || !/^custom-[a-zA-Z0-9-]{1,80}$/.test(t.id) || typeof t.name !== 'string' || !t.name.trim() || t.name.length > 60 || /[\u0000-\u001f]/.test(t.name) || !['light', 'dark'].includes(t.mode) || (t.design !== undefined && !['default', 'material', 'apple'].includes(t.design as string))) throw new Error('Invalid custom theme identity, name, mode, or design family.');
   if (!t.colors || Array.isArray(t.colors) || typeof t.colors !== 'object' || Object.keys(t.colors).length !== COLOR_KEYS.length || COLOR_KEYS.some(k => !Object.hasOwn(t.colors, k) || !isColor(t.colors[k], k === 'shadow' || k === 'backdrop'))) throw new Error('Theme must contain every supported color, no unknown colors, using #RRGGBB (shadow/backdrop may use #RRGGBBAA).');
-  return { id: t.id, name: t.name.trim(), mode: t.mode, colors: { ...t.colors } };
+  return { id: t.id, name: t.name.trim(), mode: t.mode, ...(t.design ? { design: t.design } : {}), colors: { ...t.colors } };
 }
 export function importTheme(json: string): ThemeDefinition {
   if (new TextEncoder().encode(json).length > MAX_THEME_FILE_BYTES) throw new Error('Theme file is too large (100 KB maximum).');

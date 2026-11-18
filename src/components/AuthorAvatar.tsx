@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { gravatarImageFailed, gravatarUrl, markGravatarImageFailed } from '../model/gravatar';
 import type { AuthorAvatarMode } from '../model/settings';
 import { initials } from './ui';
@@ -17,7 +17,9 @@ export function AuthorAvatar({ name, email, mode = 'initials', tiny = false }: {
     return () => { live = false; };
   }, [email, key, mode]);
   const visible = mode === 'gravatar' && image?.key === key ? image.url : null;
-  return <span className={`avatar${tiny ? ' tiny' : ''}`}>
+  // Only the Apple design reads --h (the reference's per-author hue); other designs keep the neutral circle.
+  const hue = [...email || name].reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) % 360, 7);
+  return <span className={`avatar${tiny ? ' tiny' : ''}`} style={{ '--h': hue } as CSSProperties}>
     {initials(name)}
     {visible && <img key={visible} src={visible} alt="" referrerPolicy="no-referrer" decoding="async" draggable={false} onLoad={event => { if (currentKey.current === key) event.currentTarget.style.opacity = '1'; }} onError={() => { if (currentKey.current === key) { markGravatarImageFailed(email); setImage(null); } }} />}
   </span>;

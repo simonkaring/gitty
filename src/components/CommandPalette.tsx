@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { CornerDownLeft, Search } from 'lucide-react';
+import { Icons } from './icons';
 
 export interface PaletteCommand { id: string; label: string; group: string; hint?: string; icon?: ReactNode; disabled?: boolean; run: () => void }
 
@@ -48,7 +48,7 @@ export function CommandPalette({ commands, onClose }: { commands: PaletteCommand
   return <dialog ref={dialog} className="dialog command-palette" aria-label="Command palette" onCancel={event => { event.preventDefault(); onClose(); }}
     onClick={event => { if (event.target === dialog.current) onClose(); }}>
     <div className="palette-search">
-      <Search size={16} />
+      <Icons.Search size={16} />
       <input autoFocus role="combobox" aria-expanded="true" aria-controls="palette-results" aria-autocomplete="list" aria-label="Search commands"
         aria-activedescendant={results[index] ? `palette-${results[index].command.id}` : undefined}
         placeholder="Type a command, branch, or theme…" value={query} onChange={event => setQuery(event.target.value)}
@@ -66,7 +66,7 @@ export function CommandPalette({ commands, onClose }: { commands: PaletteCommand
           <span className="palette-icon">{command.icon}</span>
           <span className="palette-label"><Highlight label={command.label} hits={hits} /></span>
           {command.hint && <span className="palette-hint">{command.hint}</span>}
-          {i === index && <CornerDownLeft size={14} className="palette-enter" />}
+          {i === index && <Icons.CornerDownLeft size={14} className="palette-enter" />}
         </div>
       </div>)}
       {!results.length && <p className="palette-empty">No matching commands.</p>}
