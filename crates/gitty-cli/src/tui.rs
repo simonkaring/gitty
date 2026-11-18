@@ -26,6 +26,7 @@ use std::{
     time::Duration,
 };
 
+mod theme;
 mod view;
 use view::{render, safe};
 
@@ -457,6 +458,7 @@ enum View {
     Remote,
     Publish,
     Confirm,
+    Settings,
 }
 
 enum Confirm {
@@ -485,6 +487,7 @@ enum Hit {
     Change(usize),
     Staged(bool),
     Remote(usize),
+    Setting(usize),
     Action(Action),
 }
 
@@ -542,6 +545,11 @@ struct App {
     uncertain: Option<TerminalRemoteReview>,
     confirm: Option<Confirm>,
     notice: String,
+    /// Index of the applied theme, and of the one highlighted in settings.
+    theme: usize,
+    settings: usize,
+    /// Columns the diff is panned to the right.
+    hscroll: usize,
 }
 
 impl App {
@@ -588,6 +596,9 @@ impl App {
             uncertain: None,
             confirm: None,
             notice: String::new(),
+            theme: 0,
+            settings: 0,
+            hscroll: 0,
         }
     }
 
@@ -784,6 +795,7 @@ impl App {
             Ok(Reply::Diff(key, diff, open)) => {
                 self.diff = Some(diff);
                 self.diff_key = Some(key);
+                self.hscroll = 0;
                 if open {
                     self.view = View::Diff;
                     self.scroll = 0;
@@ -803,6 +815,7 @@ impl App {
             Ok(Reply::StageReview(review)) => {
                 self.confirm = Some(Confirm::Stage(review));
                 self.scroll = 0;
+                self.hscroll = 0;
                 self.view = View::Confirm;
             }
             Ok(Reply::CommitReview(review)) => {
@@ -1015,15 +1028,17 @@ impl App {
         match hit {
             Hit::Tab(0) => self.key(Key::Char('h'), false, 1),
             Hit::Tab(1) => self.key(Key::Char('w'), false, 1),
-            Hit::Tab(_) => self.key(Key::Char('m'), false, 1),
+            Hit::Tab(2) => self.key(Key::Char('m'), false, 1),
+            Hit::Tab(_) => self.key(Key::Char(','), false, 1),
             Hit::Staged(staged) if staged != self.staged => self.key(Key::Tab, false, 1),
             Hit::Staged(_) => {}
             Hit::Remote(i) => self.remote = i,
             Hit::Action(action) => self.action(action),
-            Hit::Commit(i) | Hit::File(i) | Hit::Change(i) => {
+            Hit::Commit(i) | Hit::File(i) | Hit::Change(i) | Hit::Setting(i) => {
                 match hit {
                     Hit::Commit(_) => self.history = i,
                     Hit::File(_) => self.file = i,
+                    Hit::Setting(_) => self.settings = i,
                     _ => self.working = i,
                 }
                 if double {
@@ -1065,6 +1080,25 @@ impl App {
             self.confirm = None;
             self.next = None;
             self.follow();
+            return;
+        }
+        if matches!(key, Key::Left | Key::Right)
+            && matches!(
+                self.view,
+                View::Diff | View::Files | View::Working | View::Confirm
+            )
+        {
+            let diff = match (self.view, &self.confirm) {
+                (View::Confirm, Some(Confirm::Stage(review))) => Some(&review.preview),
+                (View::Confirm, _) => None,
+                _ => self.diff.as_ref(),
+            };
+            let limit = diff.map_or(0, view::widest).saturating_sub(8);
+            self.hscroll = if key == Key::Left {
+                self.hscroll.saturating_sub(8)
+            } else {
+                (self.hscroll + 8).min(limit.next_multiple_of(8))
+            };
             return;
         }
         match self.view {
@@ -1171,6 +1205,12 @@ impl App {
                 self.request(Job::Sync);
                 return;
             }
+            Key::Char(',') => {
+                self.settings = self.theme;
+                self.view = View::Settings;
+                self.next = None;
+                return;
+            }
             Key::Char('c') if WRITES && !self.locked && worktree => {
                 self.request(Job::CommitReview);
                 return;
@@ -1183,11 +1223,17 @@ impl App {
             Key::Char('p') if self.view != View::Remote => return self.action(Action::Push),
             _ => {}
         }
+        // History rows are two lines tall.
+        let page = if self.view == View::History {
+            height / 2
+        } else {
+            height
+        } as isize;
         let move_by = match key {
             Key::Up | Key::Char('k') => -1,
             Key::Down | Key::Char('j') => 1,
-            Key::PageUp => -(height as isize),
-            Key::PageDown => height as isize,
+            Key::PageUp => -page,
+            Key::PageDown => page,
             Key::Home | Key::Char('g') => isize::MIN / 2,
             Key::End | Key::Char('G') => isize::MAX / 2,
             _ => 0,
@@ -1244,6 +1290,20 @@ impl App {
                 shift(&mut self.scroll, move_by, len);
                 if key == Key::Tab {
                     self.view = self.back;
+                }
+            }
+            View::Settings => {
+                shift(&mut self.settings, move_by, theme::themes().len());
+                if key == Key::Enter {
+                    self.theme = self.settings;
+                    let name = theme::themes()[self.theme].name;
+                    match theme::save(theme::config_path(), self.theme) {
+                        Ok(()) => self.say(Tone::Good, format!("Theme set to {name}.")),
+                        Err(error) => self.say(
+                            Tone::Bad,
+                            format!("Theme set to {name} for this session; saving failed: {error}"),
+                        ),
+                    }
                 }
             }
             View::Remote => {
@@ -1370,9 +1430,11 @@ pub fn run(args: &[String]) -> Result<()> {
             let _ = reply.send(Err(error));
         }
     });
+    let mut app = App::new(jobs);
+    app.theme = theme::load(theme::config_path());
     let result = event_loop(
         &mut terminal,
-        App::new(jobs),
+        app,
         replies,
         prompt_rx,
         registry.0.as_deref(),

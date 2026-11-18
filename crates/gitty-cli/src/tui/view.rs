@@ -1,4 +1,5 @@
 //! Rendering only: every function reads `App` and draws; none of them change state.
+use super::theme::{self, t};
 use super::{Action, App, Confirm, GraphCell, Hit, Prompt, Tone, View, WRITES};
 use gitty_core::{
     dto::{CommitDetail, DiffFile, FileDiff, StatusEntry},
@@ -13,29 +14,6 @@ use ratatui::{
 };
 use std::cell::Cell;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-
-// 256-colour indices so terminals without truecolor still match.
-const ACCENT: Color = Color::Indexed(75);
-const MUTED: Color = Color::Indexed(245);
-const FAINT: Color = Color::Indexed(240);
-const BORDER: Color = Color::Indexed(238);
-const SELECT: Color = Color::Indexed(236);
-const BAR: Color = Color::Indexed(235);
-const GREEN: Color = Color::Indexed(114);
-const RED: Color = Color::Indexed(204);
-const YELLOW: Color = Color::Indexed(179);
-const GOLD: Color = Color::Indexed(137);
-const PURPLE: Color = Color::Indexed(141);
-const CYAN: Color = Color::Indexed(80);
-const LANES: [Color; 7] = [
-    ACCENT,
-    Color::Indexed(176),
-    GREEN,
-    YELLOW,
-    CYAN,
-    RED,
-    PURPLE,
-];
 
 /// Escapes control and bidirectional characters from repository-controlled text.
 pub(super) fn safe(s: &str) -> String {
@@ -128,10 +106,13 @@ fn spinner() -> &'static str {
 fn panel(title: impl Into<String>, focused: bool) -> Block<'static> {
     Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(fg(if focused { ACCENT } else { BORDER }))
+        .border_style(fg(if focused { t().accent } else { t().border }))
         .title(Line::from(vec![
             Span::raw(" "),
-            Span::styled(title.into(), bold(if focused { ACCENT } else { MUTED })),
+            Span::styled(
+                title.into(),
+                bold(if focused { t().accent } else { t().muted }),
+            ),
             Span::raw(" "),
         ]))
         .padding(Padding::horizontal(1))
@@ -157,9 +138,10 @@ fn window(top: &Cell<usize>, selected: usize, len: usize, height: usize) -> usiz
 /// Places a dimmed backdrop and returns a centred, cleared area for a dialog.
 fn modal(frame: &mut Frame, width: u16, height: u16) -> Rect {
     let area = frame.area();
-    frame
-        .buffer_mut()
-        .set_style(area, Style::new().fg(FAINT).remove_modifier(Modifier::BOLD));
+    frame.buffer_mut().set_style(
+        area,
+        Style::new().fg(t().faint).remove_modifier(Modifier::BOLD),
+    );
     let w = width.min(area.width.saturating_sub(2));
     let h = height.min(area.height.saturating_sub(2));
     let rect = Rect::new(
@@ -169,7 +151,17 @@ fn modal(frame: &mut Frame, width: u16, height: u16) -> Rect {
         h,
     );
     frame.render_widget(Clear, rect);
+    paint(frame, rect);
     rect
+}
+
+/// Fills `area` with the theme's background, when it has one.
+fn paint(frame: &mut Frame, area: Rect) {
+    if let Some(bg) = t().bg {
+        frame
+            .buffer_mut()
+            .set_style(area, Style::new().bg(bg).fg(t().text));
+    }
 }
 
 fn dialog(title: impl Into<String>) -> Block<'static> {
@@ -190,10 +182,10 @@ fn hints(keys: &[(&str, &str)], width: usize) -> Line<'static> {
         }
         used += w;
         if i > 0 {
-            spans.push(Span::styled(gap, fg(BORDER)));
+            spans.push(Span::styled(gap, fg(t().border)));
         }
-        spans.push(Span::styled(key.to_string(), bold(ACCENT)));
-        spans.push(Span::styled(format!(" {label}"), fg(MUTED)));
+        spans.push(Span::styled(key.to_string(), bold(t().accent)));
+        spans.push(Span::styled(format!(" {label}"), fg(t().muted)));
     }
     Line::from(spans)
 }
@@ -215,12 +207,19 @@ fn target(app: &App, rect: Rect, hit: Hit) {
 
 pub(super) fn render(frame: &mut Frame, app: &App, prompt: Option<&Prompt>) {
     app.hits.borrow_mut().clear();
+    // Settings previews the highlighted theme; everywhere else uses the applied one.
+    theme::set(if app.view == View::Settings {
+        app.settings
+    } else {
+        app.theme
+    });
     let area = frame.area();
+    paint(frame, area);
     if area.width < 40 || area.height < 10 {
         frame.render_widget(
             Paragraph::new(vec![
-                Line::styled("Gitty needs a larger terminal", bold(ACCENT)),
-                Line::styled("at least 40 × 10 · Ctrl-C quits", fg(MUTED)),
+                Line::styled("Gitty needs a larger terminal", bold(t().accent)),
+                Line::styled("at least 40 × 10 · Ctrl-C quits", fg(t().muted)),
             ])
             .centered()
             .wrap(Wrap { trim: true }),
@@ -250,6 +249,7 @@ pub(super) fn render(frame: &mut Frame, app: &App, prompt: Option<&Prompt>) {
         View::Working => working(frame, body, app),
         View::Diff => full_diff(frame, body, app),
         View::Remote => sync(frame, body, app),
+        View::Settings => settings(frame, body, app),
         _ => history(frame, body, app),
     }
     if let Some(status) = status {
@@ -257,7 +257,7 @@ pub(super) fn render(frame: &mut Frame, app: &App, prompt: Option<&Prompt>) {
     }
     frame.render_widget(
         Paragraph::new(footer(app, prompt.is_some(), usize::from(area.width)))
-            .style(Style::new().bg(BAR)),
+            .style(Style::new().bg(t().bar)),
         bottom,
     );
     match app.view {
@@ -272,7 +272,7 @@ pub(super) fn render(frame: &mut Frame, app: &App, prompt: Option<&Prompt>) {
 }
 
 fn header(frame: &mut Frame, area: Rect, app: &App) {
-    frame.render_widget(Block::new().style(Style::new().bg(BAR)), area);
+    frame.render_widget(Block::new().style(Style::new().bg(t().bar)), area);
     let mut left = vec![Span::styled(
         format!(
             " {} ",
@@ -281,8 +281,8 @@ fn header(frame: &mut Frame, area: Rect, app: &App) {
                 .map_or("gitty".into(), |s| safe(&s.session.name))
         ),
         Style::new()
-            .fg(Color::Black)
-            .bg(ACCENT)
+            .fg(t().on_accent)
+            .bg(t().accent)
             .add_modifier(Modifier::BOLD),
     )];
     if let Some(state) = &app.state {
@@ -290,7 +290,7 @@ fn header(frame: &mut Frame, area: Rect, app: &App) {
         match state.session.head_ref.as_deref() {
             Some(head) => left.push(Span::styled(
                 safe(head.strip_prefix("refs/heads/").unwrap_or(head)),
-                bold(GREEN),
+                bold(t().green),
             )),
             None => left.push(Span::styled(
                 format!(
@@ -301,7 +301,7 @@ fn header(frame: &mut Frame, area: Rect, app: &App) {
                         .as_deref()
                         .map_or("—", |h| &h[..h.len().min(7)])
                 ),
-                bold(YELLOW),
+                bold(t().yellow),
             )),
         }
         if let Some(sync) = app.sync.as_ref().filter(|s| s.upstream.is_some()) {
@@ -309,18 +309,18 @@ fn header(frame: &mut Frame, area: Rect, app: &App) {
             left.push(pad(1));
             left.push(Span::styled(
                 format!("↑{ahead}"),
-                fg(if ahead > 0 { YELLOW } else { FAINT }),
+                fg(if ahead > 0 { t().yellow } else { t().faint }),
             ));
             left.push(Span::styled(
                 format!(" ↓{behind}"),
-                fg(if behind > 0 { CYAN } else { FAINT }),
+                fg(if behind > 0 { t().cyan } else { t().faint }),
             ));
         }
         left.push(pad(3));
         left.push(match (state.session.bare, app.changes) {
-            (true, _) => Span::styled("bare repository", fg(MUTED)),
-            (_, Some(0)) => Span::styled("✓ clean", fg(GREEN)),
-            (_, Some(n)) => Span::styled(format!("● {n} changed"), fg(YELLOW)),
+            (true, _) => Span::styled("bare repository", fg(t().muted)),
+            (_, Some(0)) => Span::styled("✓ clean", fg(t().green)),
+            (_, Some(n)) => Span::styled(format!("● {n} changed"), fg(t().yellow)),
             (_, None) => Span::raw(""),
         });
     }
@@ -331,26 +331,32 @@ fn header(frame: &mut Frame, area: Rect, app: &App) {
         View::Remote | View::Publish => 2,
         View::Diff | View::Confirm if app.back == View::Working => 1,
         View::Confirm if app.back == View::Remote => 2,
+        View::Settings => 3,
         _ => 0,
     };
     let mut right = Vec::new();
     if app.busy && !app.writing {
-        right.push(Span::styled(format!("{} ", spinner()), fg(ACCENT)));
+        right.push(Span::styled(format!("{} ", spinner()), fg(t().accent)));
     }
     let mut tabs = Vec::new();
-    for (i, (name, key)) in [("History", "h"), ("Changes", "w"), ("Sync", "m")]
-        .into_iter()
-        .enumerate()
+    for (i, (name, key)) in [
+        ("History", "h"),
+        ("Changes", "w"),
+        ("Sync", "m"),
+        ("Settings", ","),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let start: usize = right.iter().map(|s: &Span| s.content.width()).sum();
         if i == active {
             right.push(Span::styled(
                 format!(" {name} "),
-                bold(ACCENT).add_modifier(Modifier::UNDERLINED),
+                bold(t().accent).add_modifier(Modifier::UNDERLINED),
             ));
         } else {
-            right.push(Span::styled(format!(" {name}"), fg(MUTED)));
-            right.push(Span::styled(format!(" {key} "), fg(FAINT)));
+            right.push(Span::styled(format!(" {name}"), fg(t().muted)));
+            right.push(Span::styled(format!(" {key} "), fg(t().faint)));
         }
         let end: usize = right.iter().map(|s| s.content.width()).sum();
         tabs.push((start, end - start, i as u8));
@@ -399,25 +405,32 @@ fn toolbar(frame: &mut Frame, area: Rect, app: &App) {
             "Z",
         ),
     ];
-    let mut spans = vec![pad(1)];
-    let mut x = area.x + 1;
+    // Each button is its label, the ` key ` hint and a one-column gap.
+    let mut fitted = Vec::new();
+    let mut total = 0;
     for (action, label, key) in buttons {
-        let enabled = app.unavailable(action).is_none() && !app.writing;
         let label = format!(" {label} ");
         let width = label.width() as u16;
-        if x + width + 3 > area.right() {
+        if total + width + 3 + 2 > area.width {
             break;
         }
+        total += width + 4;
+        fitted.push((action, label, key, width));
+    }
+    let mut x = area.x + area.width.saturating_sub(total.saturating_sub(1)) / 2;
+    let mut spans = vec![pad(usize::from(x - area.x))];
+    for (action, label, key, width) in fitted {
+        let enabled = app.unavailable(action).is_none() && !app.writing;
         let style = if enabled {
-            Style::new().fg(Color::Reset).bg(SELECT)
+            Style::new().fg(t().text).bg(t().select)
         } else {
-            fg(FAINT)
+            fg(t().faint)
         };
         target(app, Rect::new(x, area.y, width, 1), Hit::Action(action));
         spans.push(Span::styled(label, style));
         spans.push(Span::styled(
             format!(" {key} "),
-            fg(if enabled { MUTED } else { BORDER }),
+            fg(if enabled { t().muted } else { t().border }),
         ));
         spans.push(pad(1));
         x += width + 4;
@@ -428,32 +441,36 @@ fn toolbar(frame: &mut Frame, area: Rect, app: &App) {
 fn status_line(app: &App) -> Option<Line<'static>> {
     if app.quit {
         return Some(Line::from(vec![
-            Span::styled(format!(" {} ", spinner()), fg(YELLOW)),
+            Span::styled(format!(" {} ", spinner()), fg(t().yellow)),
             Span::styled(
                 "Finishing the running Git action before exit — cancelling is not a rollback.",
-                fg(YELLOW),
+                fg(t().yellow),
             ),
         ]));
     }
     if app.writing {
         return Some(Line::from(vec![
-            Span::styled(format!(" {} ", spinner()), fg(YELLOW)),
-            Span::styled("Running Git…", fg(YELLOW)),
+            Span::styled(format!(" {} ", spinner()), fg(t().yellow)),
+            Span::styled("Running Git…", fg(t().yellow)),
         ]));
     }
     if app.notice.is_empty() {
         return None;
     }
     let (mark, color) = match app.tone {
-        Tone::Good => ("✓", GREEN),
-        Tone::Bad => ("✗", RED),
-        Tone::Info => ("•", ACCENT),
+        Tone::Good => ("✓", t().green),
+        Tone::Bad => ("✗", t().red),
+        Tone::Info => ("•", t().accent),
     };
     Some(Line::from(vec![
         Span::styled(format!(" {mark} "), bold(color)),
         Span::styled(
             safe(&app.notice),
-            fg(if app.tone == Tone::Bad { RED } else { MUTED }),
+            fg(if app.tone == Tone::Bad {
+                t().red
+            } else {
+                t().muted
+            }),
         ),
     ]))
 }
@@ -494,8 +511,10 @@ fn footer(app: &App, prompt: bool, width: usize) -> Line<'static> {
                 ("c", "commit"),
                 ("esc", "back"),
             ],
+            View::Settings => vec![("↑↓", "preview"), ("enter", "apply"), ("esc", "back")],
             View::Diff => vec![
                 ("↑↓ pgup pgdn", "scroll"),
+                ("←→", "pan"),
                 ("g G", "top · end"),
                 ("esc", "back"),
             ],
@@ -543,7 +562,10 @@ fn footer(app: &App, prompt: bool, width: usize) -> Line<'static> {
 /// history reads without colour.
 fn lane_color(id: u8) -> Color {
     // Line 1 is the first branch drawn, usually the checked-out one.
-    LANES[(usize::from(id) + LANES.len() - 1) % LANES.len()]
+    {
+        let lanes = t().lanes;
+        lanes[(usize::from(id) + lanes.len() - 1) % lanes.len()]
+    }
 }
 
 /// Node shapes per commit kind; the selected commit's line stays bright and others dim.
@@ -551,13 +573,25 @@ struct Node {
     head: bool,
     merge: bool,
     stash: bool,
+    root: bool,
 }
 
+/// Lines that carry on below a commit row, drawn on the spacer row under it.
+fn continues(cell: &GraphCell, root: bool) -> bool {
+    if cell.node {
+        !root
+    } else {
+        matches!(cell.glyph, '│' | '╷' | '╮' | '╭' | '┤' | '├' | '┬' | '┼')
+    }
+}
+
+/// Draws a commit row, or with `connector` the spacer row below it that joins it to the next.
 fn graph_spans(
     row: &[GraphCell],
     width: usize,
-    node: Node,
+    node: &Node,
     focus: Option<u8>,
+    connector: bool,
 ) -> Vec<Span<'static>> {
     let mut spans: Vec<Span> = row
         .iter()
@@ -566,7 +600,20 @@ fn graph_spans(
         .map(|(x, cell)| {
             let color = lane_color(cell.color);
             if x + 1 == width && row.len() > width {
-                return Span::styled("…", fg(MUTED));
+                return Span::styled(if connector { " " } else { "…" }, fg(t().muted));
+            }
+            let style = match focus {
+                Some(line) if line != cell.color => fg(color).add_modifier(Modifier::DIM),
+                Some(_) => bold(color),
+                None => fg(color),
+            };
+            if connector {
+                let glyph = if continues(cell, node.root) {
+                    "│"
+                } else {
+                    " "
+                };
+                return Span::styled(glyph, style);
             }
             if cell.node {
                 let glyph = if node.head {
@@ -580,11 +627,6 @@ fn graph_spans(
                 };
                 return Span::styled(glyph, bold(color));
             }
-            let style = match focus {
-                Some(line) if line != cell.color => fg(color).add_modifier(Modifier::DIM),
-                Some(_) => bold(color),
-                None => fg(color),
-            };
             Span::styled(cell.glyph.to_string(), style)
         })
         .collect();
@@ -622,21 +664,21 @@ fn ref_spans(app: &App, id: &str, budget: usize) -> (Vec<Span<'static>>, usize) 
             "local" if Some(name.as_str()) == head => (
                 format!(" {} ", safe(name)),
                 Style::new()
-                    .fg(Color::Black)
-                    .bg(GREEN)
+                    .fg(t().on_accent)
+                    .bg(t().green)
                     .add_modifier(Modifier::BOLD),
             ),
-            "local" => (safe(name), bold(GREEN)),
-            "remote" => (safe(name), fg(Color::Indexed(174))),
-            "tag" => (format!("◆ {}", safe(name)), bold(YELLOW)),
-            _ => (format!("≡ {}", safe(name)), fg(PURPLE)),
+            "local" => (safe(name), bold(t().green)),
+            "remote" => (safe(name), fg(t().remote)),
+            "tag" => (format!("◆ {}", safe(name)), bold(t().yellow)),
+            _ => (format!("≡ {}", safe(name)), fg(t().purple)),
         };
         let w = text.width() + 1;
         if used + w > budget {
             let more = format!("+{}", sorted.len() - i);
             if used + more.width() < budget {
                 used += more.width() + 1;
-                spans.push(Span::styled(more, fg(MUTED)));
+                spans.push(Span::styled(more, fg(t().muted)));
                 spans.push(pad(1));
             }
             break;
@@ -676,12 +718,14 @@ fn history(frame: &mut Frame, area: Rect, app: &App) {
         } else {
             "Opening repository…"
         };
-        empty(frame, inner, text, MUTED);
+        empty(frame, inner, text, t().muted);
     } else {
         let height = usize::from(inner.height);
         let width = usize::from(inner.width);
-        let start = window(&app.tops[0], app.history, app.commits.len(), height);
-        let end = (start + height).min(app.commits.len());
+        // Each commit takes a row plus a spacer row that joins it to the next one.
+        let visible = height.div_ceil(2);
+        let start = window(&app.tops[0], app.history, app.commits.len(), visible);
+        let end = (start + visible).min(app.commits.len());
         let graph_cap = (width / 3).clamp(3, 31);
         // Measure beyond the visible rows so the hash column does not shift while scrolling.
         let graph = app.rows[start.saturating_sub(height)..(end + height).min(app.rows.len())]
@@ -700,15 +744,20 @@ fn history(frame: &mut Frame, area: Rect, app: &App) {
         let show_date = width >= 50;
         let right = usize::from(show_author) * 15 + usize::from(show_date) * 5;
         for i in start..end {
-            let y = inner.y + (i - start) as u16;
-            target(app, Rect::new(inner.x, y, inner.width, 1), Hit::Commit(i));
+            let y = inner.y + 2 * (i - start) as u16;
+            let rows = (inner.bottom() - y).min(2);
+            target(
+                app,
+                Rect::new(inner.x, y, inner.width, rows),
+                Hit::Commit(i),
+            );
         }
         let lines: Vec<Line> = (start..end)
-            .map(|i| {
+            .flat_map(|i| {
                 let commit = &app.commits[i];
                 let selected = i == app.history;
                 let mut spans = vec![if selected {
-                    Span::styled("▌", fg(ACCENT))
+                    Span::styled("▌", fg(t().accent))
                 } else {
                     pad(1)
                 }];
@@ -716,19 +765,19 @@ fn history(frame: &mut Frame, area: Rect, app: &App) {
                     .refs
                     .get(&commit.id)
                     .is_some_and(|refs| refs.iter().any(|(_, kind)| kind == "stash"));
-                spans.extend(graph_spans(
-                    &app.rows[i],
-                    graph,
-                    Node {
-                        head: head == Some(&commit.id),
-                        merge: commit.parents.len() > 1 && !stash,
-                        stash,
-                    },
-                    focus,
-                ));
+                let node = Node {
+                    head: head == Some(&commit.id),
+                    merge: commit.parents.len() > 1 && !stash,
+                    stash,
+                    root: commit.parents.is_empty(),
+                };
+                let mut spacer = vec![spans[0].clone()];
+                spacer.extend(graph_spans(&app.rows[i], graph, &node, focus, true));
+                spacer.push(pad(width.saturating_sub(graph + 2)));
+                spans.extend(graph_spans(&app.rows[i], graph, &node, focus, false));
                 spans.push(Span::styled(
                     commit.id.get(..7).unwrap_or(&commit.id).to_string(),
-                    fg(GOLD),
+                    fg(t().gold),
                 ));
                 spans.push(pad(1));
                 let mut used = 1 + graph + 1 + 8;
@@ -743,9 +792,9 @@ fn history(frame: &mut Frame, area: Rect, app: &App) {
                 spans.push(Span::styled(
                     subject,
                     if selected {
-                        bold(Color::Reset)
+                        bold(t().text)
                     } else if merge {
-                        fg(MUTED)
+                        fg(t().muted)
                     } else {
                         Style::new()
                     },
@@ -754,21 +803,24 @@ fn history(frame: &mut Frame, area: Rect, app: &App) {
                 if show_author {
                     spans.push(Span::styled(
                         format!("{:>14} ", clip(&safe(&commit.author), 14)),
-                        fg(MUTED),
+                        fg(t().muted),
                     ));
                 }
                 if show_date {
                     spans.push(Span::styled(
                         format!("{:>4} ", ago(commit.timestamp)),
-                        fg(FAINT),
+                        fg(t().faint),
                     ));
                 }
-                let line = Line::from(spans);
-                if selected {
-                    line.style(Style::new().bg(SELECT))
+                let style = if selected {
+                    Style::new().bg(t().select)
                 } else {
-                    line
-                }
+                    Style::new()
+                };
+                [
+                    Line::from(spans).style(style),
+                    Line::from(spacer).style(style),
+                ]
             })
             .collect();
         frame.render_widget(Paragraph::new(lines), inner);
@@ -790,7 +842,7 @@ fn history(frame: &mut Frame, area: Rect, app: &App) {
                 lines.extend(files.iter().map(|f| file_line(f, width, false)));
                 frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
             }
-            None if selected.is_some() => empty(frame, inner, "Loading…", FAINT),
+            None if selected.is_some() => empty(frame, inner, "Loading…", t().faint),
             None => {}
         }
     }
@@ -813,28 +865,28 @@ fn message_body(detail: &CommitDetail) -> Vec<String> {
 fn commit_card(detail: &CommitDetail, files: &[DiffFile]) -> Vec<Line<'static>> {
     let c = &detail.summary;
     let mut lines = vec![
-        Line::styled(safe(&c.subject), bold(Color::Reset)),
+        Line::styled(safe(&c.subject), bold(t().text)),
         Line::raw(""),
         Line::from(vec![
-            Span::styled(safe(&c.author), bold(MUTED)),
-            Span::styled(format!(" <{}>", safe(&c.email)), fg(FAINT)),
+            Span::styled(safe(&c.author), bold(t().muted)),
+            Span::styled(format!(" <{}>", safe(&c.email)), fg(t().faint)),
             Span::styled(
                 match ago(c.timestamp).as_str() {
                     "now" => " · just now".into(),
                     age => format!(" · {age} ago"),
                 },
-                fg(FAINT),
+                fg(t().faint),
             ),
         ]),
         Line::from(vec![
-            Span::styled(c.id.get(..12).unwrap_or(&c.id).to_string(), fg(GOLD)),
+            Span::styled(c.id.get(..12).unwrap_or(&c.id).to_string(), fg(t().gold)),
             Span::styled(
                 match c.parents.len() {
                     0 => " · root commit".into(),
                     1 => String::new(),
                     n => format!(" · merge of {n} parents, diff vs first"),
                 },
-                fg(FAINT),
+                fg(t().faint),
             ),
         ]),
     ];
@@ -854,25 +906,25 @@ fn commit_card(detail: &CommitDetail, files: &[DiffFile]) -> Vec<Line<'static>> 
                 files.len(),
                 if files.len() == 1 { "" } else { "s" }
             ),
-            bold(MUTED),
+            bold(t().muted),
         ),
-        Span::styled(format!("  +{add}"), fg(GREEN)),
-        Span::styled(format!(" −{del}"), fg(RED)),
+        Span::styled(format!("  +{add}"), fg(t().green)),
+        Span::styled(format!(" −{del}"), fg(t().red)),
     ]));
     lines
 }
 
 fn status_style(code: &str) -> (&'static str, Color) {
     match code {
-        "A" => ("added", GREEN),
-        "M" => ("modified", YELLOW),
-        "D" => ("deleted", RED),
-        "R" => ("renamed", PURPLE),
-        "C" => ("copied", PURPLE),
-        "T" => ("type", CYAN),
-        "U" => ("conflict", RED),
-        "?" => ("new", GREEN),
-        _ => ("changed", MUTED),
+        "A" => ("added", t().green),
+        "M" => ("modified", t().yellow),
+        "D" => ("deleted", t().red),
+        "R" => ("renamed", t().purple),
+        "C" => ("copied", t().purple),
+        "T" => ("type", t().cyan),
+        "U" => ("conflict", t().red),
+        "?" => ("new", t().green),
+        _ => ("changed", t().muted),
     }
 }
 
@@ -880,7 +932,7 @@ fn path_spans(path: &str, width: usize) -> Vec<Span<'static>> {
     let path = clip_left(&safe(path), width);
     match path.rfind('/') {
         Some(i) => vec![
-            Span::styled(path[..=i].to_string(), fg(MUTED)),
+            Span::styled(path[..=i].to_string(), fg(t().muted)),
             Span::raw(path[i + 1..].to_string()),
         ],
         None => vec![Span::raw(path)],
@@ -905,7 +957,7 @@ fn file_line(file: &DiffFile, width: usize, selected: bool) -> Line<'static> {
         _ => file.path.clone(),
     };
     let mut spans = vec![
-        Span::styled(if selected { "▌" } else { " " }, fg(ACCENT)),
+        Span::styled(if selected { "▌" } else { " " }, fg(t().accent)),
         Span::styled(code.to_string(), bold(color)),
         pad(2),
     ];
@@ -914,20 +966,20 @@ fn file_line(file: &DiffFile, width: usize, selected: bool) -> Line<'static> {
     spans.extend(path);
     spans.push(pad(room.saturating_sub(used) + 1));
     if file.binary {
-        spans.push(Span::styled(stats, fg(FAINT)));
+        spans.push(Span::styled(stats, fg(t().faint)));
     } else {
         spans.push(Span::styled(
             format!("+{}", file.additions.unwrap_or(0)),
-            fg(GREEN),
+            fg(t().green),
         ));
         spans.push(Span::styled(
             format!(" −{}", file.deletions.unwrap_or(0)),
-            fg(RED),
+            fg(t().red),
         ));
     }
     let line = Line::from(spans);
     if selected {
-        line.style(Style::new().bg(SELECT))
+        line.style(Style::new().bg(t().select))
     } else {
         line
     }
@@ -960,7 +1012,7 @@ fn inspect(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(bottom);
     frame.render_widget(block, bottom);
     if files.is_empty() {
-        empty(frame, inner, "No file changes", MUTED);
+        empty(frame, inner, "No file changes", t().muted);
     } else {
         let height = usize::from(inner.height);
         let start = window(&app.tops[1], app.file, files.len(), height);
@@ -992,10 +1044,10 @@ fn inspect(frame: &mut Frame, area: Rect, app: &App) {
 
 fn working_label(entry: &StatusEntry, staged: bool) -> (&'static str, Color) {
     if entry.conflicted {
-        return ("conflict", RED);
+        return ("conflict", t().red);
     }
     if entry.untracked {
-        return ("new", GREEN);
+        return ("new", t().green);
     }
     let code = if staged {
         &entry.index_status
@@ -1027,18 +1079,18 @@ fn working(frame: &mut Frame, area: Rect, app: &App) {
         if on {
             Span::styled(
                 format!(" {name} {n} "),
-                bold(ACCENT).add_modifier(Modifier::UNDERLINED),
+                bold(t().accent).add_modifier(Modifier::UNDERLINED),
             )
         } else {
-            Span::styled(format!(" {name} {n} "), fg(MUTED))
+            Span::styled(format!(" {name} {n} "), fg(t().muted))
         }
     };
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(fg(ACCENT))
+        .border_style(fg(t().accent))
         .title(Line::from(vec![
             tab("Unstaged", unstaged, !app.staged),
-            Span::styled("│", fg(BORDER)),
+            Span::styled("│", fg(t().border)),
             tab("Staged", staged, app.staged),
         ]))
         .padding(Padding::horizontal(1));
@@ -1059,9 +1111,9 @@ fn working(frame: &mut Frame, area: Rect, app: &App) {
     let rows: Vec<&StatusEntry> = app.working_rows().collect();
     if rows.is_empty() {
         let (text, color) = match (app.entries.is_empty(), app.staged) {
-            (true, _) => ("✓ Working tree clean", GREEN),
-            (false, true) => ("Nothing staged · tab to switch, s to stage", MUTED),
-            (false, false) => ("Everything is staged · c to commit", GREEN),
+            (true, _) => ("✓ Working tree clean", t().green),
+            (false, true) => ("Nothing staged · tab to switch, s to stage", t().muted),
+            (false, false) => ("Everything is staged · c to commit", t().green),
         };
         empty(frame, inner, text, color);
     } else {
@@ -1085,7 +1137,7 @@ fn working(frame: &mut Frame, area: Rect, app: &App) {
                     None => entry.path.clone(),
                 };
                 let mut spans = vec![
-                    Span::styled(if selected { "▌" } else { " " }, fg(ACCENT)),
+                    Span::styled(if selected { "▌" } else { " " }, fg(t().accent)),
                     Span::styled(format!("{label:<9}"), fg(color)),
                 ];
                 spans.extend(path_spans(&path, width.saturating_sub(11)));
@@ -1093,7 +1145,7 @@ fn working(frame: &mut Frame, area: Rect, app: &App) {
                 spans.push(pad(width.saturating_sub(used)));
                 let line = Line::from(spans);
                 if selected {
-                    line.style(Style::new().bg(SELECT))
+                    line.style(Style::new().bg(t().select))
                 } else {
                     line
                 }
@@ -1131,19 +1183,23 @@ fn diff_panel(
     let mut block = panel(title, app.view == View::Diff);
     if let Some(diff) = diff {
         let (add, del) = counts(diff);
-        block = block.title(
-            Line::from(vec![
-                Span::styled(format!(" +{add}"), fg(GREEN)),
-                Span::styled(format!(" −{del} "), fg(RED)),
-            ])
-            .right_aligned(),
-        );
+        let mut title = vec![
+            Span::styled(format!(" +{add}"), fg(t().green)),
+            Span::styled(format!(" −{del} "), fg(t().red)),
+        ];
+        if app.hscroll > 0 {
+            title.insert(
+                0,
+                Span::styled(format!(" ◂ +{}", app.hscroll), fg(t().muted)),
+            );
+        }
+        block = block.title(Line::from(title).right_aligned());
     }
     let inner = block.inner(area);
     frame.render_widget(block, area);
     match diff {
         Some(diff) => {
-            let lines = diff_lines(diff);
+            let lines = diff_lines(diff, usize::from(inner.width), app.hscroll);
             if lines.is_empty() {
                 let text = if diff.binary {
                     "Binary file — no text preview".to_string()
@@ -1155,18 +1211,18 @@ fn diff_panel(
                         .map(safe)
                         .unwrap_or_else(|| "No text changes".into())
                 };
-                empty(frame, inner, &text, MUTED);
+                empty(frame, inner, &text, t().muted);
             } else {
                 let height = usize::from(inner.height);
                 let mut visible: Vec<Line> = lines.into_iter().skip(scroll).take(height).collect();
                 if diff.truncated && visible.len() < height {
-                    visible.push(Line::styled("… preview limit reached", fg(YELLOW)));
+                    visible.push(Line::styled("… preview limit reached", fg(t().yellow)));
                 }
                 frame.render_widget(Paragraph::new(visible), inner);
             }
         }
         None if path.is_some() && app.wide || app.view == View::Diff => {
-            empty(frame, inner, "Loading…", FAINT)
+            empty(frame, inner, "Loading…", t().faint)
         }
         None => {}
     }
@@ -1183,7 +1239,98 @@ fn counts(diff: &FileDiff) -> (usize, usize) {
         })
 }
 
-pub(super) fn diff_lines(diff: &FileDiff) -> Vec<Line<'static>> {
+/// The changed character ranges of an edited line pair, after trimming their shared start and
+/// end and widening to whole words. `None` when too little is shared to be worth marking.
+fn changed(old: &[char], new: &[char]) -> Option<((usize, usize), (usize, usize))> {
+    let word = |c: Option<&char>| c.is_some_and(|c| c.is_alphanumeric() || *c == '_');
+    let mut pre = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+    while pre > 0 && word(old.get(pre - 1)) && (word(old.get(pre)) || word(new.get(pre))) {
+        pre -= 1;
+    }
+    let shortest = old.len().min(new.len()) - pre;
+    let mut suf = old
+        .iter()
+        .rev()
+        .zip(new.iter().rev())
+        .take(shortest)
+        .take_while(|(a, b)| a == b)
+        .count();
+    while suf > 0
+        && word(old.get(old.len() - suf))
+        && (word(old.len().checked_sub(suf + 1).and_then(|i| old.get(i)))
+            || word(new.len().checked_sub(suf + 1).and_then(|i| new.get(i))))
+    {
+        suf -= 1;
+    }
+    if (pre + suf) * 3 < old.len().max(new.len()) {
+        return None;
+    }
+    Some(((pre, old.len() - suf), (pre, new.len() - suf)))
+}
+
+/// Cuts `skip` columns off the front and keeps `width` columns, split into runs by whether
+/// each character falls inside `mark`.
+fn columns(
+    text: &[char],
+    mark: Option<(usize, usize)>,
+    skip: usize,
+    width: usize,
+) -> Vec<(String, bool)> {
+    let mut runs: Vec<(String, bool)> = Vec::new();
+    let (mut at, mut used) = (0, 0);
+    for (i, &c) in text.iter().enumerate() {
+        let w = c.width().unwrap_or(0);
+        let start = at;
+        at += w;
+        // Characters before the pan, including a wide one cut by it, are hidden.
+        if start < skip {
+            continue;
+        }
+        if used + w > width {
+            break;
+        }
+        used += w;
+        let marked = mark.is_some_and(|(a, b)| (a..b).contains(&i));
+        match runs.last_mut() {
+            Some((run, m)) if *m == marked => run.push(c),
+            _ => runs.push((c.to_string(), marked)),
+        }
+    }
+    runs
+}
+
+/// The widest line of `diff`, in columns, as drawn.
+pub(super) fn widest(diff: &FileDiff) -> usize {
+    diff.hunks
+        .iter()
+        .flat_map(|h| &h.lines)
+        .map(|l| safe(&l.content.replace('\t', "    ")).width())
+        .max()
+        .unwrap_or(0)
+}
+
+fn hunk_bar(header: &str, width: usize) -> Line<'static> {
+    let header = safe(header);
+    let split = header
+        .strip_prefix("@@")
+        .and_then(|rest| rest.find("@@"))
+        .map_or(header.len(), |i| i + 4);
+    let (ranges, context) = header.split_at(split);
+    let ranges = clip(ranges, width.saturating_sub(1));
+    let context = clip(context, width.saturating_sub(1 + ranges.width()));
+    let used = 1 + ranges.width() + context.width();
+    Line::from(vec![
+        pad(1),
+        Span::styled(ranges, fg(t().cyan)),
+        Span::styled(context, bold(t().text)),
+        pad(width.saturating_sub(used)),
+    ])
+    .style(Style::new().bg(t().hunk_bg))
+}
+
+/// Diff rows `width` columns wide: a line-number gutter, then content panned by `hscroll`.
+/// Added and removed lines are tinted, with the edited words of a changed line tinted harder.
+pub(super) fn diff_lines(diff: &FileDiff, width: usize, hscroll: usize) -> Vec<Line<'static>> {
     let max = diff
         .hunks
         .iter()
@@ -1193,31 +1340,70 @@ pub(super) fn diff_lines(diff: &FileDiff) -> Vec<Line<'static>> {
         .unwrap_or(0);
     let digits = max.to_string().len().max(3);
     let number = |n: Option<u64>| n.map_or(" ".repeat(digits), |n| format!("{n:>digits$}"));
+    let room = width.saturating_sub(2 * digits + 5);
     let mut lines = Vec::new();
     for (i, hunk) in diff.hunks.iter().enumerate() {
         if i > 0 {
             lines.push(Line::raw(""));
         }
-        lines.push(Line::from(vec![
-            Span::styled(format!("{} ", "┄".repeat(digits * 2 + 1)), fg(BORDER)),
-            Span::styled(safe(&hunk.header), fg(CYAN).add_modifier(Modifier::DIM)),
-        ]));
-        for line in &hunk.lines {
-            let content = safe(&line.content.replace('\t', "    "));
-            let (sign, style) = match line.kind.as_str() {
-                "add" => ("+", fg(GREEN)),
-                "remove" => ("-", fg(RED)),
-                "context" => (" ", Style::new()),
-                _ => (" ", fg(FAINT).add_modifier(Modifier::ITALIC)),
+        lines.push(hunk_bar(&hunk.header, width));
+        let texts: Vec<Vec<char>> = hunk
+            .lines
+            .iter()
+            .map(|l| safe(&l.content.replace('\t', "    ")).chars().collect())
+            .collect();
+        let kind = |k: usize| hunk.lines[k].kind.as_str();
+        // Pair each run of removed lines with the added lines right after it, in order.
+        let mut marks = vec![None; texts.len()];
+        let mut k = 0;
+        while k < texts.len() {
+            if kind(k) != "remove" {
+                k += 1;
+                continue;
+            }
+            let removed = k;
+            while k < texts.len() && kind(k) == "remove" {
+                k += 1;
+            }
+            let added = k;
+            while k < texts.len() && kind(k) == "add" {
+                k += 1;
+            }
+            for j in 0..(added - removed).min(k - added) {
+                if let Some((a, b)) = changed(&texts[removed + j], &texts[added + j]) {
+                    marks[removed + j] = Some(a);
+                    marks[added + j] = Some(b);
+                }
+            }
+        }
+        for (j, line) in hunk.lines.iter().enumerate() {
+            let (sign, color, tint, strong) = match line.kind.as_str() {
+                "add" => ("+", t().green, Some(t().add_bg), t().add_word),
+                "remove" => ("−", t().red, Some(t().del_bg), t().del_word),
+                _ => (" ", t().faint, None, t().select),
             };
-            lines.push(Line::from(vec![
+            let base = match (tint, line.kind.as_str()) {
+                (Some(bg), _) => Style::new().bg(bg),
+                (None, "context") => Style::new(),
+                _ => fg(t().faint).add_modifier(Modifier::ITALIC),
+            };
+            let mut spans = vec![
                 Span::styled(
                     format!("{} {} ", number(line.old_line), number(line.new_line)),
-                    fg(FAINT),
+                    fg(t().faint),
                 ),
-                Span::styled(format!("{sign} "), style.add_modifier(Modifier::BOLD)),
-                Span::styled(content, style),
-            ]));
+                Span::styled(format!(" {sign} "), base.patch(bold(color))),
+            ];
+            let mut used = 0;
+            for (text, marked) in columns(&texts[j], marks[j], hscroll, room) {
+                used += text.width();
+                spans.push(Span::styled(
+                    text,
+                    if marked { base.bg(strong) } else { base },
+                ));
+            }
+            spans.push(Span::styled(" ".repeat(room.saturating_sub(used)), base));
+            lines.push(Line::from(spans));
         }
     }
     lines
@@ -1233,23 +1419,23 @@ fn sync(frame: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let Some(sync) = &app.sync else {
-        empty(frame, inner, "Loading…", FAINT);
+        empty(frame, inner, "Loading…", t().faint);
         return;
     };
-    let key = |k: &str| Span::styled(format!("{k:<11}"), fg(MUTED));
+    let key = |k: &str| Span::styled(format!("{k:<11}"), fg(t().muted));
     let mut lines = vec![
         Line::from(vec![
             key("Branch"),
             Span::styled(
                 safe(sync.branch.as_deref().unwrap_or("detached HEAD")),
-                bold(GREEN),
+                bold(t().green),
             ),
         ]),
         Line::from(vec![
             key("Upstream"),
             match &sync.upstream {
-                Some(upstream) => Span::styled(safe(upstream), fg(Color::Indexed(174))),
-                None => Span::styled("none · publish to set one", fg(FAINT)),
+                Some(upstream) => Span::styled(safe(upstream), fg(t().remote)),
+                None => Span::styled("none · publish to set one", fg(t().faint)),
             },
         ]),
     ];
@@ -1259,36 +1445,36 @@ fn sync(frame: &mut Frame, area: Rect, app: &App) {
             key("Status"),
             Span::styled(
                 format!("↑ {ahead} to push"),
-                fg(if ahead > 0 { YELLOW } else { MUTED }),
+                fg(if ahead > 0 { t().yellow } else { t().muted }),
             ),
-            Span::styled("   ", fg(FAINT)),
+            Span::styled("   ", fg(t().faint)),
             Span::styled(
                 format!("↓ {behind} to pull"),
-                fg(if behind > 0 { CYAN } else { MUTED }),
+                fg(if behind > 0 { t().cyan } else { t().muted }),
             ),
-            Span::styled("   as of the last fetch", fg(FAINT)),
+            Span::styled("   as of the last fetch", fg(t().faint)),
         ]));
     }
     lines.push(Line::raw(""));
-    lines.push(Line::styled("Remotes", bold(MUTED)));
+    lines.push(Line::styled("Remotes", bold(t().muted)));
     if sync.remotes.is_empty() {
-        lines.push(Line::styled("  No remotes configured", fg(FAINT)));
+        lines.push(Line::styled("  No remotes configured", fg(t().faint)));
     }
     for (i, remote) in sync.remotes.iter().enumerate() {
         let selected = i == app.remote;
         let line = Line::from(vec![
-            Span::styled(if selected { "▌ " } else { "  " }, fg(ACCENT)),
+            Span::styled(if selected { "▌ " } else { "  " }, fg(t().accent)),
             Span::styled(
                 safe(remote),
                 if selected {
-                    bold(Color::Reset)
+                    bold(t().text)
                 } else {
-                    fg(MUTED)
+                    fg(t().muted)
                 },
             ),
         ]);
         lines.push(if selected {
-            line.style(Style::new().bg(SELECT))
+            line.style(Style::new().bg(t().select))
         } else {
             line
         });
@@ -1316,21 +1502,24 @@ fn sync(frame: &mut Frame, area: Rect, app: &App) {
     if !WRITES {
         lines.push(Line::styled(
             "Sync actions are read-only on this platform.",
-            fg(FAINT),
+            fg(t().faint),
         ));
     } else if app.uncertain.is_some() {
         lines.push(Line::from(vec![
-            Span::styled("! ", bold(YELLOW)),
+            Span::styled("! ", bold(t().yellow)),
             Span::styled(
                 "The last push could not be confirmed. Press v to check the destination before pushing again.",
-                fg(YELLOW),
+                fg(t().yellow),
             ),
         ]));
     } else {
         let action = |k: &str, label: &str| {
             vec![
-                Span::styled(format!(" {k} "), Style::new().fg(Color::Black).bg(ACCENT)),
-                Span::styled(format!(" {label}    "), fg(MUTED)),
+                Span::styled(
+                    format!(" {k} "),
+                    Style::new().fg(t().on_accent).bg(t().accent),
+                ),
+                Span::styled(format!(" {label}    "), fg(t().muted)),
             ]
         };
         let mut actions = vec![action("f", "Fetch")];
@@ -1344,10 +1533,112 @@ fn sync(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::raw(""));
         lines.push(Line::styled(
             "Every action is reviewed before it runs. Fetch never prunes.",
-            fg(FAINT),
+            fg(t().faint),
         ));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn settings(frame: &mut Frame, area: Rect, app: &App) {
+    let block = panel("Settings", true).padding(Padding::new(2, 2, 1, 0));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let themes = theme::themes();
+    let [list, sample] = if inner.width >= 70 {
+        Layout::horizontal([Constraint::Length(30), Constraint::Min(30)]).areas(inner)
+    } else {
+        let rows = (themes.len() as u16 + 3).min(inner.height);
+        Layout::vertical([Constraint::Length(rows), Constraint::Min(0)]).areas(inner)
+    };
+    let mut lines = vec![Line::styled("Theme", bold(t().muted)), Line::raw("")];
+    for (i, theme) in themes.iter().enumerate() {
+        let selected = i == app.settings;
+        let y = list.y + lines.len() as u16;
+        if y < list.bottom() {
+            target(app, Rect::new(list.x, y, list.width, 1), Hit::Setting(i));
+        }
+        let line = Line::from(vec![
+            Span::styled(if selected { "▌ " } else { "  " }, fg(t().accent)),
+            Span::styled(
+                format!("{:<20}", theme.name),
+                if selected {
+                    bold(t().text)
+                } else {
+                    fg(t().muted)
+                },
+            ),
+            Span::styled(if i == app.theme { "✓" } else { " " }, fg(t().green)),
+        ]);
+        lines.push(if selected {
+            line.style(Style::new().bg(t().select))
+        } else {
+            line
+        });
+    }
+    frame.render_widget(Paragraph::new(lines), list);
+
+    let lanes: Vec<Span> = t()
+        .lanes
+        .iter()
+        .flat_map(|&c| [Span::styled("●", bold(c)), Span::styled("──", fg(c))])
+        .collect();
+    let word = |text: &str, bg: Color| Span::styled(text.to_string(), Style::new().bg(bg));
+    let mut lines = vec![
+        Line::styled("Preview", bold(t().muted)),
+        Line::raw(""),
+        Line::from(lanes),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled(
+                " main ",
+                Style::new()
+                    .fg(t().on_accent)
+                    .bg(t().green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            pad(1),
+            Span::styled("origin/main", fg(t().remote)),
+            pad(1),
+            Span::styled("◆ v1.0", bold(t().yellow)),
+            pad(2),
+            Span::styled(" enter ", Style::new().fg(t().on_accent).bg(t().accent)),
+        ]),
+        Line::raw(""),
+        Line::from(vec![
+            pad(1),
+            Span::styled("@@ -4 +4 @@ ", fg(t().cyan)),
+            Span::styled("fn greet", bold(t().text)),
+        ])
+        .style(Style::new().bg(t().hunk_bg)),
+        Line::from(vec![
+            Span::styled(" − ", bold(t().red)),
+            word("let name = ", t().del_bg),
+            word("\"world\"", t().del_word),
+            word(";", t().del_bg),
+        ])
+        .style(Style::new().bg(t().del_bg)),
+        Line::from(vec![
+            Span::styled(" + ", bold(t().green)),
+            word("let name = ", t().add_bg),
+            word("\"gitty\"", t().add_word),
+            word(";", t().add_bg),
+        ])
+        .style(Style::new().bg(t().add_bg)),
+        Line::raw(""),
+    ];
+    if t().bg.is_some() && !theme::truecolor() {
+        lines.push(Line::styled(
+            "Shown with 256 colours; set COLORTERM=truecolor for exact colours.",
+            fg(t().faint),
+        ));
+    }
+    if let Some(path) = theme::config_path() {
+        lines.push(Line::styled(
+            format!("Saved to {}", safe(&path.to_string_lossy())),
+            fg(t().faint),
+        ));
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), sample);
 }
 
 fn composer(frame: &mut Frame, app: &App) {
@@ -1367,7 +1658,7 @@ fn composer(frame: &mut Frame, app: &App) {
     let block = dialog(format!("Commit to {branch}")).title_bottom(
         Line::styled(
             format!(" summary {summary}/72 "),
-            fg(if summary > 72 { YELLOW } else { FAINT }),
+            fg(if summary > 72 { t().yellow } else { t().faint }),
         )
         .right_aligned(),
     );
@@ -1387,7 +1678,7 @@ fn composer(frame: &mut Frame, app: &App) {
             files.len(),
             if files.len() == 1 { "" } else { "s" }
         ),
-        bold(MUTED),
+        bold(t().muted),
     )];
     lines.extend(
         files
@@ -1397,13 +1688,16 @@ fn composer(frame: &mut Frame, app: &App) {
     );
     frame.render_widget(Paragraph::new(lines), list);
     frame.render_widget(
-        Paragraph::new(Line::styled("─".repeat(usize::from(gap.width)), fg(BORDER))),
+        Paragraph::new(Line::styled(
+            "─".repeat(usize::from(gap.width)),
+            fg(t().border),
+        )),
         gap,
     );
     let text: Vec<Line> = if app.message.is_empty() {
         vec![Line::styled(
             " Summary of the change, then a blank line and details",
-            fg(FAINT),
+            fg(t().faint),
         )]
     } else {
         app.message
@@ -1412,7 +1706,7 @@ fn composer(frame: &mut Frame, app: &App) {
             .map(|(i, line)| {
                 let text = safe(&line.replace('\t', "    "));
                 if i == 0 {
-                    Line::styled(text, bold(Color::Reset))
+                    Line::styled(text, bold(t().text))
                 } else {
                     Line::raw(text)
                 }
@@ -1466,11 +1760,11 @@ fn confirm(frame: &mut Frame, app: &App) {
                     let mut spans = vec![Span::styled(
                         if *untracked { "new      " } else { "changed  " },
                         fg(if stays {
-                            FAINT
+                            t().faint
                         } else if *untracked {
-                            GREEN
+                            t().green
                         } else {
-                            YELLOW
+                            t().yellow
                         }),
                     )];
                     spans.extend(path_spans(
@@ -1478,7 +1772,7 @@ fn confirm(frame: &mut Frame, app: &App) {
                         usize::from(inner.width).saturating_sub(18),
                     ));
                     if stays {
-                        spans.push(Span::styled("  stays", fg(FAINT)));
+                        spans.push(Span::styled("  stays", fg(t().faint)));
                     }
                     Line::from(spans)
                 })
@@ -1486,14 +1780,14 @@ fn confirm(frame: &mut Frame, app: &App) {
             if kept > 0 {
                 lines.push(Line::raw(""));
                 lines.push(Line::from(vec![
-                    Span::styled(" u ", Style::new().fg(Color::Black).bg(MUTED)),
+                    Span::styled(" u ", Style::new().fg(t().on_accent).bg(t().muted)),
                     Span::styled(
                         if review.include_untracked {
                             " Untracked files are included"
                         } else {
                             " Untracked files stay in place"
                         },
-                        fg(MUTED),
+                        fg(t().muted),
                     ),
                 ]));
             }
@@ -1502,13 +1796,13 @@ fn confirm(frame: &mut Frame, app: &App) {
                 Span::styled(
                     " enter ",
                     Style::new()
-                        .fg(Color::Black)
-                        .bg(ACCENT)
+                        .fg(t().on_accent)
+                        .bg(t().accent)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(" stash    ", fg(MUTED)),
-                Span::styled(" esc ", Style::new().fg(Color::Black).bg(MUTED)),
-                Span::styled(" cancel", fg(MUTED)),
+                Span::styled(" stash    ", fg(t().muted)),
+                Span::styled(" esc ", Style::new().fg(t().on_accent).bg(t().muted)),
+                Span::styled(" cancel", fg(t().muted)),
             ]));
             frame.render_widget(Paragraph::new(lines), inner);
         }
@@ -1517,41 +1811,41 @@ fn confirm(frame: &mut Frame, app: &App) {
             let block = dialog("Pop the latest stash");
             let inner = block.inner(rect);
             frame.render_widget(block, rect);
-            let key = |k: &str| Span::styled(format!("{k:<9}"), fg(MUTED));
+            let key = |k: &str| Span::styled(format!("{k:<9}"), fg(t().muted));
             frame.render_widget(
                 Paragraph::new(vec![
                     Line::from(vec![
                         key("Stash"),
-                        Span::styled(safe(&entry.selector), fg(PURPLE)),
+                        Span::styled(safe(&entry.selector), fg(t().purple)),
                     ]),
                     Line::from(vec![
                         key("Message"),
-                        Span::styled(safe(&entry.message), bold(Color::Reset)),
+                        Span::styled(safe(&entry.message), bold(t().text)),
                     ]),
                     Line::from(vec![
                         key("Commit"),
                         Span::styled(
                             entry.oid.get(..12).unwrap_or(&entry.oid).to_string(),
-                            fg(GOLD),
+                            fg(t().gold),
                         ),
                     ]),
                     Line::raw(""),
                     Line::styled(
                         "Needs a clean working tree. The stash is removed only after it applies.",
-                        fg(FAINT),
+                        fg(t().faint),
                     ),
                     Line::raw(""),
                     Line::from(vec![
                         Span::styled(
                             " enter ",
                             Style::new()
-                                .fg(Color::Black)
-                                .bg(ACCENT)
+                                .fg(t().on_accent)
+                                .bg(t().accent)
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::styled(" pop    ", fg(MUTED)),
-                        Span::styled(" esc ", Style::new().fg(Color::Black).bg(MUTED)),
-                        Span::styled(" cancel", fg(MUTED)),
+                        Span::styled(" pop    ", fg(t().muted)),
+                        Span::styled(" esc ", Style::new().fg(t().on_accent).bg(t().muted)),
+                        Span::styled(" cancel", fg(t().muted)),
                     ]),
                 ])
                 .wrap(Wrap { trim: false }),
@@ -1570,7 +1864,7 @@ fn confirm(frame: &mut Frame, app: &App) {
             let block = dialog(format!("{verb} {}", paths.join(" ← ")));
             let inner = block.inner(rect);
             frame.render_widget(block, rect);
-            let mut lines = diff_lines(&review.preview);
+            let mut lines = diff_lines(&review.preview, usize::from(inner.width), app.hscroll);
             if lines.is_empty() {
                 lines.push(Line::styled(
                     if review.preview.binary {
@@ -1580,7 +1874,7 @@ fn confirm(frame: &mut Frame, app: &App) {
                     } else {
                         "No text changes"
                     },
-                    fg(MUTED),
+                    fg(t().muted),
                 ));
             }
             let skip = app.scroll.min(lines.len().saturating_sub(1));
@@ -1619,19 +1913,19 @@ fn confirm(frame: &mut Frame, app: &App) {
             let block = dialog(verb);
             let inner = block.inner(rect);
             frame.render_widget(block, rect);
-            let key = |k: &str| Span::styled(format!("{k:<9}"), fg(MUTED));
+            let key = |k: &str| Span::styled(format!("{k:<9}"), fg(t().muted));
             let mut lines = vec![
                 Line::from(vec![
                     key("Remote"),
-                    Span::styled(safe(&review.endpoint_label()), fg(FAINT)),
+                    Span::styled(safe(&review.endpoint_label()), fg(t().faint)),
                 ]),
                 Line::from(vec![key("From"), Span::raw(from)]),
-                Line::from(vec![key("To"), Span::styled(to, bold(Color::Reset))]),
+                Line::from(vec![key("To"), Span::styled(to, bold(t().text))]),
             ];
             if let Some(oid) = review.oid() {
                 lines.push(Line::from(vec![
                     key("Commit"),
-                    Span::styled(oid.get(..12).unwrap_or(oid).to_string(), fg(GOLD)),
+                    Span::styled(oid.get(..12).unwrap_or(oid).to_string(), fg(t().gold)),
                 ]));
             }
             lines.push(Line::raw(""));
@@ -1639,13 +1933,13 @@ fn confirm(frame: &mut Frame, app: &App) {
                 Span::styled(
                     " enter ",
                     Style::new()
-                        .fg(Color::Black)
-                        .bg(ACCENT)
+                        .fg(t().on_accent)
+                        .bg(t().accent)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(" confirm    ", fg(MUTED)),
-                Span::styled(" esc ", Style::new().fg(Color::Black).bg(MUTED)),
-                Span::styled(" cancel", fg(MUTED)),
+                Span::styled(" confirm    ", fg(t().muted)),
+                Span::styled(" esc ", Style::new().fg(t().on_accent).bg(t().muted)),
+                Span::styled(" cancel", fg(t().muted)),
             ]));
             frame.render_widget(
                 Paragraph::new(lines)
@@ -1662,7 +1956,7 @@ fn confirm(frame: &mut Frame, app: &App) {
 fn field(frame: &mut Frame, area: Rect, text: &str) {
     let shown = clip_left(text, usize::from(area.width.saturating_sub(3)));
     frame.render_widget(
-        Paragraph::new(format!(" {shown}")).style(Style::new().bg(SELECT)),
+        Paragraph::new(format!(" {shown}")).style(Style::new().bg(t().select)),
         area,
     );
     frame.set_cursor_position((area.x + 1 + shown.width() as u16, area.y));
@@ -1680,11 +1974,11 @@ fn publish(frame: &mut Frame, app: &App) {
     frame.render_widget(block, rect);
     frame.render_widget(
         Paragraph::new(vec![
-            Line::styled("Destination branch", fg(MUTED)),
+            Line::styled("Destination branch", fg(t().muted)),
             Line::raw(""),
             Line::raw(""),
             Line::raw(""),
-            Line::styled("You will review the push before it runs.", fg(FAINT)),
+            Line::styled("You will review the push before it runs.", fg(t().faint)),
         ]),
         inner,
     );
@@ -1708,13 +2002,16 @@ fn credentials(frame: &mut Frame, prompt: &Prompt) {
     );
     frame.render_widget(
         Paragraph::new(vec![
-            Line::styled(clip(&context, usize::from(inner.width)), fg(FAINT)),
+            Line::styled(clip(&context, usize::from(inner.width)), fg(t().faint)),
             Line::raw(""),
-            Line::styled(prompt.question, bold(Color::Reset)),
+            Line::styled(prompt.question, bold(t().text)),
             Line::raw(""),
             Line::raw(""),
             Line::raw(""),
-            Line::styled("Answers stay in memory for this request only.", fg(FAINT)),
+            Line::styled(
+                "Answers stay in memory for this request only.",
+                fg(t().faint),
+            ),
         ]),
         inner,
     );
@@ -1758,5 +2055,62 @@ mod tests {
             edit_disabled_reason: None,
         };
         assert_eq!(message_body(&detail), ["Why it changed"]);
+    }
+
+    fn text(spans: &[Span]) -> String {
+        spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn spacer_rows_continue_every_line_that_goes_down() {
+        let row = |s: &str| -> Vec<GraphCell> {
+            s.chars()
+                .map(|glyph| GraphCell {
+                    glyph,
+                    color: 0,
+                    node: glyph == '●',
+                })
+                .collect()
+        };
+        let node = |root| Node {
+            head: false,
+            merge: false,
+            stash: false,
+            root,
+        };
+        let spacer = |s: &str, root| text(&graph_spans(&row(s), 5, &node(root), None, true));
+        assert_eq!(spacer("●─┬─╮", false), "│ │ │ ");
+        assert_eq!(spacer("│ ● │", false), "│ │ │ ");
+        assert_eq!(spacer("●─┴─╯", true), "      ");
+        assert_eq!(spacer("● ╭─╯", false), "│ │   ");
+    }
+
+    #[test]
+    fn edited_lines_mark_whole_changed_words() {
+        let chars = |s: &str| s.chars().collect::<Vec<_>>();
+        let (old, new) = (chars("let x = foo(1);"), chars("let x = foobar(1);"));
+        assert_eq!(changed(&old, &new), Some(((8, 11), (8, 14))));
+        assert_eq!(changed(&chars("alpha"), &chars("omega")), None);
+        let runs = columns(&new, Some((8, 14)), 6, 6);
+        assert_eq!(
+            runs,
+            [("= ".to_string(), false), ("foob".to_string(), true)]
+        );
+    }
+
+    #[test]
+    fn toolbar_buttons_are_centred() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let (jobs, _) = std::sync::mpsc::sync_channel(1);
+        let app = App::new(jobs);
+        let mut terminal = Terminal::new(TestBackend::new(100, 3)).unwrap();
+        terminal
+            .draw(|frame| toolbar(frame, frame.area(), &app))
+            .unwrap();
+        let hits = app.hits.borrow();
+        let (first, last) = (hits.first().unwrap().0, hits.last().unwrap().0);
+        let (left, right) = (first.x, 100 - (last.right() + 3));
+        assert_eq!(hits.len(), 5);
+        assert!(left.abs_diff(right) <= 1, "{left} vs {right}");
     }
 }

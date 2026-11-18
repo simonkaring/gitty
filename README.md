@@ -55,11 +55,18 @@ unstaged), `m` for sync, `r` to refresh, `Esc` to go back, and `q` or Ctrl-C to
 quit. With the mouse, click a row or header tab to select it, double-click to
 open, and scroll to move; the TUI captures the mouse, so hold Shift (Option in
 some macOS terminals) to select text. The graph keeps each branch in its own
-lane until it joins its parent: `●` is a commit, `○` a merge, `◇` a stash, and
+lane until it joins its parent, with a spacer row under each commit so lines run
+unbroken from node to node: `●` is a commit, `○` a merge, `◇` a stash, and
 `◉` HEAD; the selected commit's line stays bright while other lines dim. The
-toolbar under the header has Fetch (`f`), Pull (`l`), Push or Publish (`p`),
-Stash (`z`, with `u` in the review to include untracked files) and Pop (`Z`)
-buttons; each opens a review before anything runs.
+centred toolbar under the header has Fetch (`f`), Pull (`l`), Push or Publish
+(`p`), Stash (`z`, with `u` in the review to include untracked files) and Pop
+(`Z`) buttons; each opens a review before anything runs. Diffs tint added and
+removed lines, mark the changed words of an edited line, and pan long lines with
+`←`/`→`. Settings (`,`) picks a theme, either the terminal's own palette or a
+port of the desktop's built-in themes, previewed as you move and saved to
+`$XDG_CONFIG_HOME/gitty/tui.json` (default `~/.config/gitty/tui.json`). Themes
+use exact colours when `COLORTERM` is `truecolor` or `24bit`, and the nearest
+256 colours otherwise.
 
 TUI writes are currently enabled only on macOS; other builds are read-only.
 On macOS, use `s` to review staging or unstaging a file, `c` then `F2` to

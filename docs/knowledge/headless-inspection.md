@@ -10,6 +10,8 @@ sources:
     resource: ../../crates/gitty-cli/src/main.rs
   - id: tui
     resource: ../../crates/gitty-cli/src/tui.rs
+  - id: tui-theme
+    resource: ../../crates/gitty-cli/src/tui/theme.rs
   - id: service
     resource: ../../crates/gitty-core/src/repository.rs
   - id: dto
@@ -53,7 +55,9 @@ for every registered desktop operation and its current headless disposition.
 a stdio client. It browses one native-local repository, loading history in
 pinned pages and reading diffs on demand. It requires a terminal; writes are
 enabled only on macOS. It uses typed in-process reviews and scoped askpass,
-without changing the one-shot or stdio contracts.[^tui]
+without changing the one-shot or stdio contracts. Its only local state is the
+chosen theme in `tui.json` under the XDG config directory; an unreadable or
+unknown choice falls back to the terminal palette.[^tui][^tui-theme]
 
 `npm run test:e2e` runs the rendered React workspace against a disposable real
 Git fixture through a dev-only authenticated Vite bridge and CLI child process.
@@ -73,6 +77,7 @@ See [verification boundaries](demo-and-native-verification.md).[^cli][^cli-tests
 [^cli]: CLI commands, protocol methods and lifecycle.
 [^cli-tests]: Bounded queue discard after EOF and response correlation.
 [^tui]: Terminal entry point, worker, navigation, and test-backend checks.
+[^tui-theme]: Theme palettes, 256-colour fallback, and settings file round-trip tests.
 [^service]: Repository session ownership and history cursors.
 [^dispatcher]: Supported agent methods and per-request deadline boundary.
 [^bridge]: Fixture authorization, method restrictions, and child protocol.
