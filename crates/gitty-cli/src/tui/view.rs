@@ -15,6 +15,9 @@ use ratatui::{
 use std::cell::Cell;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+const LOCAL_BRANCH: &str = "💻";
+const REMOTE_BRANCH: &str = "🌐";
+
 /// Escapes control and bidirectional characters from repository-controlled text.
 pub(super) fn safe(s: &str) -> String {
     let mut text = String::new();
@@ -249,7 +252,9 @@ pub(super) fn render(frame: &mut Frame, app: &App, prompt: Option<&Prompt>) {
         View::Working => working(frame, body, app),
         View::Diff => full_diff(frame, body, app),
         View::Remote => sync(frame, body, app),
+        View::Repositories => repositories(frame, body, app),
         View::Settings => settings(frame, body, app),
+        View::Profiles | View::ProfileEdit => profiles(frame, body, app),
         _ => history(frame, body, app),
     }
     if let Some(status) = status {
@@ -289,7 +294,10 @@ fn header(frame: &mut Frame, area: Rect, app: &App) {
         left.push(pad(2));
         match state.session.head_ref.as_deref() {
             Some(head) => left.push(Span::styled(
-                safe(head.strip_prefix("refs/heads/").unwrap_or(head)),
+                format!(
+                    "{LOCAL_BRANCH} {}",
+                    safe(head.strip_prefix("refs/heads/").unwrap_or(head))
+                ),
                 bold(t().green),
             )),
             None => left.push(Span::styled(
@@ -324,14 +332,13 @@ fn header(frame: &mut Frame, area: Rect, app: &App) {
             (_, None) => Span::raw(""),
         });
     }
-    frame.render_widget(Paragraph::new(Line::from(left)), area);
-
     let active = match app.view {
         View::Working => 1,
         View::Remote | View::Publish => 2,
         View::Diff | View::Confirm if app.back == View::Working => 1,
         View::Confirm if app.back == View::Remote => 2,
-        View::Settings => 3,
+        View::Settings | View::Profiles | View::ProfileEdit => 3,
+        View::Repositories => 4,
         _ => 0,
     };
     let mut right = Vec::new();
@@ -339,17 +346,27 @@ fn header(frame: &mut Frame, area: Rect, app: &App) {
         right.push(Span::styled(format!("{} ", spinner()), fg(t().accent)));
     }
     let mut tabs = Vec::new();
-    for (i, (name, key)) in [
-        ("History", "h"),
-        ("Changes", "w"),
-        ("Sync", "m"),
-        ("Settings", ","),
+    for (i, (name, short, key)) in [
+        ("History", "h", "h"),
+        ("Changes", "w", "w"),
+        ("Sync", "m", "m"),
+        ("Settings", ",", ","),
+        ("Repos", "o", "o"),
     ]
     .into_iter()
     .enumerate()
     {
         let start: usize = right.iter().map(|s: &Span| s.content.width()).sum();
-        if i == active {
+        if area.width < 70 {
+            right.push(Span::styled(
+                format!(" {short} "),
+                if i == active {
+                    bold(t().accent)
+                } else {
+                    fg(t().muted)
+                },
+            ));
+        } else if i == active {
             right.push(Span::styled(
                 format!(" {name} "),
                 bold(t().accent).add_modifier(Modifier::UNDERLINED),
@@ -364,6 +381,10 @@ fn header(frame: &mut Frame, area: Rect, app: &App) {
     right.push(pad(1));
     let total: usize = right.iter().map(|s| s.content.width()).sum();
     let left_edge = area.right().saturating_sub(total as u16);
+    frame.render_widget(
+        Paragraph::new(Line::from(left)),
+        Rect::new(area.x, area.y, left_edge.saturating_sub(area.x), 1),
+    );
     for (start, width, tab) in tabs {
         target(
             app,
@@ -371,7 +392,10 @@ fn header(frame: &mut Frame, area: Rect, app: &App) {
             Hit::Tab(tab),
         );
     }
-    frame.render_widget(Paragraph::new(Line::from(right)).right_aligned(), area);
+    frame.render_widget(
+        Paragraph::new(Line::from(right)),
+        Rect::new(left_edge, area.y, total as u16, 1),
+    );
 }
 
 /// Clickable sync and stash buttons; unavailable ones stay visible but faint.
@@ -420,7 +444,12 @@ fn toolbar(frame: &mut Frame, area: Rect, app: &App) {
     let mut x = area.x + area.width.saturating_sub(total.saturating_sub(1)) / 2;
     let mut spans = vec![pad(usize::from(x - area.x))];
     for (action, label, key, width) in fitted {
-        let enabled = app.unavailable(action).is_none() && !app.writing;
+        let enabled = app.unavailable(action).is_none()
+            && !app.writing
+            && !matches!(
+                app.view,
+                View::Repositories | View::Profiles | View::ProfileEdit
+            );
         let style = if enabled {
             Style::new().fg(t().text).bg(t().select)
         } else {
@@ -452,6 +481,12 @@ fn status_line(app: &App) -> Option<Line<'static>> {
         return Some(Line::from(vec![
             Span::styled(format!(" {} ", spinner()), fg(t().yellow)),
             Span::styled("Running Git…", fg(t().yellow)),
+        ]));
+    }
+    if app.switching {
+        return Some(Line::from(vec![
+            Span::styled(format!(" {} ", spinner()), fg(t().accent)),
+            Span::styled("Opening repository…", fg(t().muted)),
         ]));
     }
     if app.notice.is_empty() {
@@ -486,6 +521,7 @@ fn footer(app: &App, prompt: bool, width: usize) -> Line<'static> {
     } else {
         match app.view {
             View::History => vec![
+                ("o", "repos"),
                 ("↑↓", "move"),
                 ("enter", "open"),
                 ("w", "changes"),
@@ -511,7 +547,26 @@ fn footer(app: &App, prompt: bool, width: usize) -> Line<'static> {
                 ("c", "commit"),
                 ("esc", "back"),
             ],
-            View::Settings => vec![("↑↓", "preview"), ("enter", "apply"), ("esc", "back")],
+            View::Settings => vec![
+                ("tab", "profiles"),
+                ("↑↓", "preview"),
+                ("enter", "apply"),
+                ("esc", "back"),
+            ],
+            View::Repositories => vec![
+                ("enter", "open"),
+                ("↑↓", "recent"),
+                ("esc", "back"),
+                ("ctrl-c", "quit"),
+            ],
+            View::Profiles => vec![
+                ("enter", "assign"),
+                ("n", "new"),
+                ("e", "edit"),
+                ("del", "delete"),
+                ("esc", "back"),
+            ],
+            View::ProfileEdit => vec![("tab", "next field"), ("enter", "save"), ("esc", "cancel")],
             View::Diff => vec![
                 ("↑↓ pgup pgdn", "scroll"),
                 ("←→", "pan"),
@@ -662,14 +717,14 @@ fn ref_spans(app: &App, id: &str, budget: usize) -> (Vec<Span<'static>>, usize) 
         let (name, kind) = *item;
         let (text, style) = match kind.as_str() {
             "local" if Some(name.as_str()) == head => (
-                format!(" {} ", safe(name)),
+                format!(" {LOCAL_BRANCH} {} ", safe(name)),
                 Style::new()
                     .fg(t().on_accent)
                     .bg(t().green)
                     .add_modifier(Modifier::BOLD),
             ),
-            "local" => (safe(name), bold(t().green)),
-            "remote" => (safe(name), fg(t().remote)),
+            "local" => (format!("{LOCAL_BRANCH} {}", safe(name)), bold(t().green)),
+            "remote" => (format!("{REMOTE_BRANCH} {}", safe(name)), fg(t().remote)),
             "tag" => (format!("◆ {}", safe(name)), bold(t().yellow)),
             _ => (format!("≡ {}", safe(name)), fg(t().purple)),
         };
@@ -1540,7 +1595,7 @@ fn sync(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn settings(frame: &mut Frame, area: Rect, app: &App) {
-    let block = panel("Settings", true).padding(Padding::new(2, 2, 1, 0));
+    let block = panel("Settings", true).padding(Padding::new(2, 2, 0, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let themes = theme::themes();
@@ -1550,8 +1605,21 @@ fn settings(frame: &mut Frame, area: Rect, app: &App) {
         let rows = (themes.len() as u16 + 3).min(inner.height);
         Layout::vertical([Constraint::Length(rows), Constraint::Min(0)]).areas(inner)
     };
-    let mut lines = vec![Line::styled("Theme", bold(t().muted)), Line::raw("")];
-    for (i, theme) in themes.iter().enumerate() {
+    let mut lines = vec![
+        Line::styled("Tab → Commit Profiles", bold(t().accent)),
+        Line::styled("Theme", bold(t().muted)),
+    ];
+    if list.height > 0 {
+        target(
+            app,
+            Rect::new(list.x, list.y, list.width, 1),
+            Hit::ProfilePage,
+        );
+    }
+    let start = app
+        .settings
+        .saturating_sub(usize::from(list.height.saturating_sub(3)));
+    for (i, theme) in themes.iter().enumerate().skip(start) {
         let selected = i == app.settings;
         let y = list.y + lines.len() as u16;
         if y < list.bottom() {
@@ -1590,14 +1658,14 @@ fn settings(frame: &mut Frame, area: Rect, app: &App) {
         Line::raw(""),
         Line::from(vec![
             Span::styled(
-                " main ",
+                format!(" {LOCAL_BRANCH} main "),
                 Style::new()
                     .fg(t().on_accent)
                     .bg(t().green)
                     .add_modifier(Modifier::BOLD),
             ),
             pad(1),
-            Span::styled("origin/main", fg(t().remote)),
+            Span::styled(format!("{REMOTE_BRANCH} origin/main"), fg(t().remote)),
             pad(1),
             Span::styled("◆ v1.0", bold(t().yellow)),
             pad(2),
@@ -1632,13 +1700,153 @@ fn settings(frame: &mut Frame, area: Rect, app: &App) {
             fg(t().faint),
         ));
     }
-    if let Some(path) = theme::config_path() {
+    if let Some(path) = &app.config_path {
         lines.push(Line::styled(
             format!("Saved to {}", safe(&path.to_string_lossy())),
             fg(t().faint),
         ));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), sample);
+}
+
+fn choice(frame: &mut Frame, area: Rect, text: &str, selected: bool) {
+    let mark = if selected { "▌ " } else { "  " };
+    let text = clip(text, usize::from(area.width.saturating_sub(2)));
+    let line = Line::from(vec![Span::styled(mark, fg(t().accent)), Span::raw(text)]);
+    let style = if selected {
+        bold(t().text).bg(t().select)
+    } else {
+        fg(t().muted)
+    };
+    frame.render_widget(Paragraph::new(line).style(style), area);
+}
+
+fn repositories(frame: &mut Frame, area: Rect, app: &App) {
+    let block = panel("Repositories", true).padding(Padding::horizontal(2));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 {
+        return;
+    }
+    let path = safe(&app.repo_path);
+    let input = if path.is_empty() {
+        "Enter a local repository path…".into()
+    } else {
+        clip_left(&path, usize::from(inner.width.saturating_sub(3)))
+    };
+    let row = Rect::new(inner.x, inner.y, inner.width, 1);
+    choice(frame, row, &input, app.repo_selection == 0);
+    target(app, row, Hit::Repository(0));
+    if app.repo_selection == 0 && !app.switching && inner.width >= 3 {
+        let end = if path.is_empty() {
+            0
+        } else {
+            input.width() as u16
+        };
+        frame.set_cursor_position((row.x + 2 + end, row.y));
+    }
+    if inner.height < 2 {
+        return;
+    }
+    let label = if app.config.recent.is_empty() {
+        "No recent repositories"
+    } else {
+        "Recent repositories"
+    };
+    frame.render_widget(
+        Paragraph::new(label).style(bold(t().muted)),
+        Rect::new(inner.x, inner.y + 1, inner.width, 1),
+    );
+    let available = usize::from(inner.height - 2);
+    let start = app.repo_selection.saturating_sub(available);
+    for (row, (i, path)) in app
+        .config
+        .recent
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(available)
+        .enumerate()
+    {
+        let active = app.root() == Some(path.as_str());
+        let path = clip_left(&safe(path), usize::from(inner.width.saturating_sub(4)));
+        let text = format!("{} {path}", if active { "✓" } else { " " });
+        let row = Rect::new(inner.x, inner.y + 2 + row as u16, inner.width, 1);
+        choice(frame, row, &text, app.repo_selection == i + 1);
+        target(app, row, Hit::Repository(i + 1));
+    }
+}
+
+fn profiles(frame: &mut Frame, area: Rect, app: &App) {
+    let block = panel("Settings · Commit Profiles", true).padding(Padding::horizontal(2));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if let Some(editor) = &app.profile_editor {
+        for (i, label) in ["Profile label", "Author name", "Email"]
+            .into_iter()
+            .enumerate()
+            .take(usize::from(inner.height))
+        {
+            let row = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
+            let label = format!("{label:<14} ");
+            let value = clip_left(
+                &safe(&editor.values[i]),
+                usize::from(inner.width).saturating_sub(label.width() + 3),
+            );
+            choice(frame, row, &format!("{label}{value}"), editor.field == i);
+            target(app, row, Hit::ProfileField(i));
+            if editor.field == i && usize::from(inner.width) > label.width() + 2 {
+                frame.set_cursor_position((
+                    row.x + (2 + label.width() + value.width()) as u16,
+                    row.y,
+                ));
+            }
+        }
+        return;
+    }
+    if inner.height == 0 {
+        return;
+    }
+    let assigned = app.selected_profile();
+    let title = app.state.as_ref().map_or_else(
+        || "Open a repository to assign a profile.".into(),
+        |s| {
+            format!(
+                "{}: {}",
+                safe(&s.session.name),
+                assigned.map_or("Use Git default".into(), |p| safe(&p.label))
+            )
+        },
+    );
+    frame.render_widget(
+        Paragraph::new(clip(&title, usize::from(inner.width))).style(bold(t().accent)),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
+    let available = usize::from(inner.height - 1);
+    let start = (app.profile_selection + 1).saturating_sub(available);
+    let choices = std::iter::once((assigned.is_none(), "Use Git default".into())).chain(
+        app.config.profiles.iter().map(|p| {
+            (
+                assigned.is_some_and(|selected| selected.id == p.id),
+                format!(
+                    "{} · {} <{}>",
+                    safe(&p.label),
+                    safe(&p.name),
+                    safe(&p.email)
+                ),
+            )
+        }),
+    );
+    for (row, (i, (active, text))) in choices.enumerate().skip(start).take(available).enumerate() {
+        let row = Rect::new(inner.x, inner.y + 1 + row as u16, inner.width, 1);
+        choice(
+            frame,
+            row,
+            &format!("{} {text}", if active { "✓" } else { " " }),
+            i == app.profile_selection,
+        );
+        target(app, row, Hit::Profile(i));
+    }
 }
 
 fn composer(frame: &mut Frame, app: &App) {
@@ -1665,21 +1873,32 @@ fn composer(frame: &mut Frame, app: &App) {
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
     let files = review.files();
-    let list_height = (files.len() as u16 + 1).min(inner.height / 3).max(2);
+    let list_height = (files
+        .len()
+        .saturating_add(2)
+        .min(usize::from(inner.height / 3)) as u16)
+        .max(3);
     let [list, gap, editor] = Layout::vertical([
         Constraint::Length(list_height),
         Constraint::Length(1),
         Constraint::Min(3),
     ])
     .areas(inner);
-    let mut lines = vec![Line::styled(
-        format!(
-            "Staged · {} file{}",
-            files.len(),
-            if files.len() == 1 { "" } else { "s" }
+    let identity = review.identity().map_or_else(
+        || "Commit as: Git default".into(),
+        |id| format!("Commit as: {} <{}>", safe(&id.name), safe(&id.email)),
+    );
+    let mut lines = vec![
+        Line::styled(clip(&identity, usize::from(list.width)), bold(t().accent)),
+        Line::styled(
+            format!(
+                "Staged · {} file{}",
+                files.len(),
+                if files.len() == 1 { "" } else { "s" }
+            ),
+            bold(t().muted),
         ),
-        bold(t().muted),
-    )];
+    ];
     lines.extend(
         files
             .iter()
@@ -2059,6 +2278,28 @@ mod tests {
 
     fn text(spans: &[Span]) -> String {
         spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn branch_icons_keep_ref_labels_within_budget() {
+        let (jobs, _) = std::sync::mpsc::sync_channel(1);
+        let mut app = App::new(jobs);
+        app.refs.insert(
+            "a".into(),
+            vec![
+                ("origin/main".into(), "remote".into()),
+                ("origin/HEAD".into(), "remote".into()),
+                ("topic".into(), "local".into()),
+                ("v1".into(), "tag".into()),
+            ],
+        );
+        let (spans, _) = ref_spans(&app, "a", 80);
+        assert_eq!(text(&spans), "💻 topic 🌐 origin/main ◆ v1 ");
+        for budget in 0..80 {
+            let (spans, used) = ref_spans(&app, "a", budget);
+            assert_eq!(text(&spans).width(), used);
+            assert!(used <= budget);
+        }
     }
 
     #[test]

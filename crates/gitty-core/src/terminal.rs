@@ -1,6 +1,6 @@
 //! Typed reviews for the terminal client. Existing CLI and desktop writes keep their contracts.
 use crate::{
-    dto::{CreatedCommit, DiffFile, DiffSpec, Error, FileDiff, Result},
+    dto::{CommitIdentity, CreatedCommit, DiffFile, DiffSpec, Error, FileDiff, Result},
     repository::{fingerprint, Repository, Service},
 };
 use std::{collections::hash_map::DefaultHasher, hash::Hasher};
@@ -30,10 +30,12 @@ impl StageReview {
 }
 
 pub struct CommitReview {
+    handle: String,
     head_ref: Option<String>,
     files: Vec<DiffFile>,
     head: Option<String>,
     index: Vec<u8>,
+    identity: Option<CommitIdentity>,
 }
 
 impl CommitReview {
@@ -43,6 +45,10 @@ impl CommitReview {
 
     pub fn files(&self) -> &[DiffFile] {
         &self.files
+    }
+
+    pub fn identity(&self) -> Option<&CommitIdentity> {
+        self.identity.as_ref()
     }
 }
 
@@ -209,6 +215,14 @@ impl Repository {
     }
 
     pub fn terminal_review_commit(&self) -> Result<CommitReview> {
+        self.terminal_review_commit_with_identity(None)
+    }
+
+    pub fn terminal_review_commit_with_identity(
+        &self,
+        identity: Option<CommitIdentity>,
+    ) -> Result<CommitReview> {
+        crate::mutate::validate_identity(identity.as_ref())?;
         let (head, head_ref) = self.terminal_head()?;
         let index = self.terminal_index(&[])?;
         let files = self.diff_files(&DiffSpec::Staged)?;
@@ -218,10 +232,12 @@ impl Repository {
             return Err(stale());
         }
         Ok(CommitReview {
+            handle: self.session.handle.clone(),
             head_ref,
             head,
             index,
             files,
+            identity,
         })
     }
 }
@@ -270,12 +286,13 @@ impl Service {
         message: &str,
     ) -> Result<(CreatedCommit, Option<bool>)> {
         self.mutate_reviewed(handle, |repo| {
-            if repo.terminal_head()? != (review.head, review.head_ref)
+            if review.handle != handle
+                || repo.terminal_head()? != (review.head, review.head_ref)
                 || repo.terminal_index(&[])? != review.index
             {
                 return Err(stale());
             }
-            let commit = repo.create_commit(message, None)?;
+            let commit = repo.create_commit(message, review.identity.as_ref())?;
             let matches = repo
                 .check(&["ls-tree", "-r", "-z", &commit.oid])
                 .ok()

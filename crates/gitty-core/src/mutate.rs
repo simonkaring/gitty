@@ -62,6 +62,12 @@ pub(crate) fn validate_message(message: &str) -> Result<()> {
     Ok(())
 }
 
+impl CommitIdentity {
+    pub fn validate(&self) -> Result<()> {
+        validate_identity(Some(self))
+    }
+}
+
 pub(crate) fn validate_identity(identity: Option<&CommitIdentity>) -> Result<()> {
     let Some(identity) = identity else {
         return Ok(());

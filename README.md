@@ -51,24 +51,33 @@ ahead/behind counts, and working-change count. Terminals at least 110 columns
 wide get side-by-side panes, previewing the selected commit or file diff as you
 move. Use `↑`/`↓` or `j`/`k` to move (`g`/`G` for top and end), `Enter` to open
 a commit or a full diff, `w` for working changes (`Tab` switches staged and
-unstaged), `m` for sync, `r` to refresh, `Esc` to go back, and `q` or Ctrl-C to
+unstaged), `o` to open a local repository by path or choose a recent one,
+`m` for sync, `r` to refresh, `Esc` to go back, and `q` or Ctrl-C to
 quit. With the mouse, click a row or header tab to select it, double-click to
 open, and scroll to move; the TUI captures the mouse, so hold Shift (Option in
 some macOS terminals) to select text. The graph keeps each branch in its own
 lane until it joins its parent, with a spacer row under each commit so lines run
 unbroken from node to node: `●` is a commit, `○` a merge, `◇` a stash, and
-`◉` HEAD; the selected commit's line stays bright while other lines dim. The
+`◉` HEAD; 💻 labels local branches and 🌐 labels remote-tracking branches.
+The selected commit's line stays bright while other lines dim. The
 centred toolbar under the header has Fetch (`f`), Pull (`l`), Push or Publish
 (`p`), Stash (`z`, with `u` in the review to include untracked files) and Pop
 (`Z`) buttons; each opens a review before anything runs. Diffs tint added and
 removed lines, mark the changed words of an edited line, and pan long lines with
 `←`/`→`. Settings (`,`) picks a theme, either the terminal's own palette or a
-port of the desktop's built-in themes, previewed as you move and saved to
-`$XDG_CONFIG_HOME/gitty/tui.json` (default `~/.config/gitty/tui.json`). Themes
+port of the desktop's built-in themes, previewed as you move. In Settings,
+press `Tab` for **Commit Profiles**: use `n` to create a profile, `e` to edit,
+`Delete` to remove, and `Enter` to assign the highlighted profile (or **Use Git
+default**) to the current repository or worktree. The chosen identity appears
+in the commit review and affects only TUI commits; it doesn't change Git config
+or credentials. TUI settings and recent repositories are saved separately from
+the desktop in `$XDG_CONFIG_HOME/gitty/tui.json` (falls back to `~/.config` or,
+when `HOME` is unset on Windows, `%APPDATA%`). Themes
 use exact colours when `COLORTERM` is `truecolor` or `24bit`, and the nearest
 256 colours otherwise.
 
-TUI writes are currently enabled only on macOS; other builds are read-only.
+TUI Git writes are currently enabled only on macOS; other builds can browse
+repositories and manage profiles but can't write to Git.
 On macOS, use `s` to review staging or unstaging a file, `c` then `F2` to
 review and commit the index, and `f`/`l`/`p`/`b` in the remote view to review
 fetch, fast-forward-only pull, push, or publish. Use `v` to verify an uncertain

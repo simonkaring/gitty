@@ -90,8 +90,10 @@ for exact requirements.[^contract]
 The terminal client adds in-process reviewed writes without changing desktop
 or stdio contracts. Stage checks selected status, index entries, and content;
 unstage checks selected index entries and its HEAD/ref reset base. Commit checks
-HEAD/ref and staged entries and reports a mismatch if hooks change the committed
-tree. Sync rechecks reviewed local inputs and the configured endpoint; a
+the review's session, HEAD/ref and staged entries and reports a mismatch if hooks
+change the committed tree. A selected TUI profile's name and email are pinned
+in the review and apply only to that commit process, not Git config. Sync
+rechecks reviewed local inputs and the configured endpoint; a
 non-force push with an uncertain result requires an explicit lookup of the
 destination at the push endpoint. That lookup only reports current state.
 Its stash rechecks the reviewed changed-path set and HEAD (content is kept, not

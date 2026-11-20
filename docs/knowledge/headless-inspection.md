@@ -12,6 +12,8 @@ sources:
     resource: ../../crates/gitty-cli/src/tui.rs
   - id: tui-theme
     resource: ../../crates/gitty-cli/src/tui/theme.rs
+  - id: tui-settings
+    resource: ../../crates/gitty-cli/src/tui/settings.rs
   - id: service
     resource: ../../crates/gitty-core/src/repository.rs
   - id: dto
@@ -52,12 +54,16 @@ dialogs and OS shell actions remain host-only. See the
 for every registered desktop operation and its current headless disposition.
 
 `gitty-cli tui` is a separate interactive frontend over the same engine, not
-a stdio client. It browses one native-local repository, loading history in
-pinned pages and reading diffs on demand. It requires a terminal; writes are
-enabled only on macOS. It uses typed in-process reviews and scoped askpass,
-without changing the one-shot or stdio contracts. Its only local state is the
-chosen theme in `tui.json` under the XDG config directory; an unreadable or
-unknown choice falls back to the terminal palette.[^tui][^tui-theme]
+a stdio client. It browses one active native-local repository at a time,
+loading pinned history pages and reading diffs on demand. Opening from a
+path or recent list replaces the worker session only after the candidate's
+initial snapshot loads. Drafts and unresolved push checks stay with their
+worktree while the app runs. It requires a terminal; Git writes are enabled
+only on macOS. It uses typed in-process reviews and scoped askpass without
+changing the one-shot or stdio contracts. TUI-local `tui.json` stores theme,
+recent roots, profiles, and worktree-root profile assignments separately from
+the desktop. The old theme-only file still loads; unreadable settings are
+not overwritten and changes apply only in memory in that case.[^tui][^tui-theme][^tui-settings]
 
 `npm run test:e2e` runs the rendered React workspace against a disposable real
 Git fixture through a dev-only authenticated Vite bridge and CLI child process.
@@ -77,7 +83,8 @@ See [verification boundaries](demo-and-native-verification.md).[^cli][^cli-tests
 [^cli]: CLI commands, protocol methods and lifecycle.
 [^cli-tests]: Bounded queue discard after EOF and response correlation.
 [^tui]: Terminal entry point, worker, navigation, and test-backend checks.
-[^tui-theme]: Theme palettes, 256-colour fallback, and settings file round-trip tests.
+[^tui-theme]: Theme palettes and 256-colour fallback.
+[^tui-settings]: Settings migration, profile assignments and round-trip tests.
 [^service]: Repository session ownership and history cursors.
 [^dispatcher]: Supported agent methods and per-request deadline boundary.
 [^bridge]: Fixture authorization, method restrictions, and child protocol.
