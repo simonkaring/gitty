@@ -331,14 +331,18 @@
   transform: translate(-50%, -50%);
   z-index: 3;
   display: flex;
+  /* Padding leaves a clean gap between the photo and the lane ring instead of a border blending into its edge.
+     Border + padding stay 3px per side so the node is 28px and its center lands on a whole pixel. */
+  padding: 2px;
   border: 1px solid var(--branch-color);
   border-radius: 50%;
-  box-shadow: 0 0 0 1px var(--bg);
   pointer-events: none;
 }
 .graph-avatar-node.merge {
-  border: 3px double var(--branch-color);
+  padding: 1px;
+  border-width: 2px;
 }
+
 .commit-row.dimmed .graph-avatar-node {
   opacity: 0.3;
 }
@@ -500,13 +504,13 @@
   position: relative;
   overflow: hidden;
 }
+/* 1px overscan: at fractional scaling the image box rounds smaller than its clip, leaving a dark sliver of the initials background. */
 .avatar img {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  inset: -1px;
+  width: calc(100% + 2px);
+  height: calc(100% + 2px);
   object-fit: cover;
-  border-radius: inherit;
   opacity: 0;
   transition: opacity 120ms ease;
 }

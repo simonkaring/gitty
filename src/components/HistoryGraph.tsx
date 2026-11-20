@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Check, GitMerge, Globe2, Laptop, Settings as SettingsIcon, Tag } from 'lucide-react';
 import { indexEdges, laneX, LANE_WIDTH, ROW_HEIGHT, type GraphLayout } from '../graph/layout';
+import { GRAPH_STYLES } from '../model/themes';
 import { assignBranchColors, branchName } from '../graph/branchColor';
 import { WORKING_ID } from '../model/native';
 import type { Commit, GitRef } from '../model/types';
@@ -87,6 +88,8 @@ interface Props {
 
 const WIDTH_VAR: Record<HistoryColumnId, string> = { refs: 'var(--ref-width)', graph: 'var(--graph-width)', message: 'var(--message-width)', author: 'var(--author-width)', hash: 'var(--hash-width)', date: 'var(--date-width)' };
 const MIN_GRAPH_WIDTH = laneX(2) + 14; // three lanes plus padding; also fits the "GRAPH" label
+const AUTO_GRAPH_WIDTH = 200;
+const AVATAR_CUTOUT = 15; // 22px avatar + 2px gap + ring (.graph-avatar-node outline) + 1px clearance
 export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onContextActions, onSwitchBranch, pickOrder, onTogglePick }, ref) {
   const uid = useId();
   const { settings, updateSettings } = useSettings();
@@ -102,6 +105,8 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const [hbar, setHbar] = useState(0);
   const graphScroller = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(600);
+  const [dpr, setDpr] = useState(() => window.devicePixelRatio || 1);
+  useEffect(() => { const update = () => setDpr(window.devicePixelRatio || 1); window.addEventListener('resize', update); return () => window.removeEventListener('resize', update); }, []);
   const [viewportWidth, setViewportWidth] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   // Roving focus: the listbox keeps DOM focus while ArrowLeft/Right move this "active control" through the selected row's pills, pick checkbox and actions button.
@@ -110,16 +115,18 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const [widths, setWidths] = useState<Record<HistoryColumnId, number>>({ refs: 170, graph: MIN_GRAPH_WIDTH, message: 130, author: 110, hash: 90, date: 120 });
   type Column = HistoryColumnId;
   const limits: Record<Column, [number, number]> = { refs: [90, 420], graph: [minGraphWidth, 600], message: [100, Math.max(600, viewportWidth)], author: [70, 260], hash: [70, 180], date: [80, 220] };
+  const [graphResized, setGraphResized] = useState(false);
   function resize(column: Column, delta: number, initial: number) {
     if (column === 'message') setMessageResized(true);
+    if (column === 'graph') setGraphResized(true);
     setWidths(current => ({ ...current, [column]: Math.max(limits[column][0], Math.min(limits[column][1], initial + delta)) }));
   }
   function resizeHandle(column: Column) {
     return <button className="history-column-resize" aria-label={`Resize ${COLUMN_LABELS[column]} column`} title="Drag or use arrow keys to resize" onClick={event => event.stopPropagation()}
-      onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); resize(column, event.key === 'ArrowRight' ? 10 : -10, column === 'message' ? event.currentTarget.parentElement!.getBoundingClientRect().width : widths[column]); } }}
+      onKeyDown={event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); resize(column, event.key === 'ArrowRight' ? 10 : -10, column === 'message' ? event.currentTarget.parentElement!.getBoundingClientRect().width : column === 'graph' ? graphWidth : widths[column]); } }}
       onPointerDown={event => {
         event.preventDefault();
-        const target = event.currentTarget, start = event.clientX, initial = column === 'message' ? target.parentElement!.getBoundingClientRect().width : widths[column];
+        const target = event.currentTarget, start = event.clientX, initial = column === 'message' ? target.parentElement!.getBoundingClientRect().width : column === 'graph' ? graphWidth : widths[column];
         target.setPointerCapture(event.pointerId);
         const move = (moveEvent: PointerEvent) => resize(column, moveEvent.clientX - start, initial);
         const end = () => { target.removeEventListener('pointermove', move); target.removeEventListener('pointerup', end); target.removeEventListener('pointercancel', end); };
@@ -136,8 +143,12 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   useEffect(() => { window.addEventListener('dragend', stopDrag); window.addEventListener('drop', stopDrag, true); return () => { stopDrag(); window.removeEventListener('dragend', stopDrag); window.removeEventListener('drop', stopDrag, true); }; }, []);
   // The column keeps its own width however wide the lane tree gets; the canvas shows a window scrolled by graphScroll.
   const graphContent = Math.max(112, layout.laneCount * graphLaneWidth + 32);
-  const graphWidth = Math.max(widths.graph, minGraphWidth);
+  // Until the user resizes it, the graph column fits its lanes (capped) so lane changes are not cut off at the column edge.
+  const graphWidth = graphResized ? Math.max(widths.graph, minGraphWidth) : Math.max(minGraphWidth, Math.min(graphContent, AUTO_GRAPH_WIDTH));
   const graphScrollMax = Math.max(0, graphContent - graphWidth);
+  // Device pixels per CSS pixel, including the browser preview's CSS zoom (native zoom already changes devicePixelRatio).
+  const scale = dpr * (Number(document.documentElement.style.zoom) || 1);
+  const pixelWidth = Math.round(graphWidth * scale), pixelHeight = Math.round(height * scale);
   const graphX = Math.min(graphScroll, graphScrollMax);
   const loaded = commits.length;
   const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - 8);
@@ -202,6 +213,19 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     return () => observer.disconnect();
   }, []);
 
+  // At fractional scaling (125%, 150%) layout can place the canvas between device pixels, and the browser then
+  // resamples the whole bitmap (blurry lines). Nudge it by the sub-pixel remainder so its pixels map 1:1.
+  const canvasNudge = useRef({ x: 0, y: 0 });
+  useLayoutEffect(() => {
+    const el = canvas.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect(), nudge = canvasNudge.current;
+    const dx = (Math.round(rect.left * scale) - rect.left * scale) / scale, dy = (Math.round(rect.top * scale) - rect.top * scale) / scale;
+    if (Math.abs(dx) < 1e-3 && Math.abs(dy) < 1e-3) return;
+    nudge.x += dx; nudge.y += dy;
+    el.style.translate = `${nudge.x}px ${nudge.y}px`;
+  });
+
   // Sit above the list's own horizontal scrollbar when it is showing.
   useLayoutEffect(() => { const el = scroller.current; if (el) setHbar(el.offsetHeight - el.clientHeight); });
 
@@ -210,29 +234,41 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     if (!element) return;
     const ctx = element.getContext('2d');
     if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
     // Assigning width/height clears and reallocates the backing store, so only do it when the size really changed.
-    const pixelWidth = Math.floor(graphWidth * dpr), pixelHeight = Math.floor(height * dpr);
+    // The CSS size is derived from these same pixel counts, so the bitmap is never resampled.
     if (element.width !== pixelWidth) element.width = pixelWidth;
     if (element.height !== pixelHeight) element.height = pixelHeight;
-    const y = (row: number) => row * ROW_HEIGHT + ROW_HEIGHT / 2 - scrollTop;
-    const bg = theme.colors.bg;
-    ctx.setTransform(dpr, 0, 0, dpr, -graphX * dpr, 0);
-    ctx.clearRect(graphX, 0, graphWidth, height);
-    ctx.lineWidth = 1.8;
+    const g = GRAPH_STYLES[theme.style ?? 'default'];
+    // Whole device-pixel stroke width, with coordinates snapped to pixel centers (odd widths) or edges (even
+    // widths), keeps straight runs crisp instead of smeared across two pixels at fractional scales.
+    const devLine = Math.max(1, Math.round(g.line * scale)), off = (devLine % 2) / 2;
+    const snap = (v: number) => (Math.round(v * scale - off) + off) / scale;
+    // Subtract the sub-pixel nudge so drawings stay aligned with the DOM rows and avatars.
+    const nudge = canvasNudge.current;
+    const rawX = (lane: number) => graphLaneX(lane) - graphX - nudge.x, rawY = (row: number) => row * ROW_HEIGHT + ROW_HEIGHT / 2 - scrollTop - nudge.y;
+    const X = (lane: number) => snap(rawX(lane)), y = (row: number) => snap(rawY(row));
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    ctx.clearRect(0, 0, pixelWidth / scale, pixelHeight / scale);
+    const line = devLine / scale;
+    ctx.lineWidth = line;
     ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     for (const edge of visibleEdges(Math.floor(scrollTop / ROW_HEIGHT) - 1, Math.min(loaded, Math.ceil((scrollTop + height) / ROW_HEIGHT) + 1))) {
-      const x1 = graphLaneX(edge.fromLane), xt = graphLaneX(edge.track), x2 = graphLaneX(edge.toLane);
+      const x1 = X(edge.fromLane), xt = X(edge.track), x2 = X(edge.toLane);
       const y1 = y(edge.fromRow), y2 = y(edge.toRow);
       const colorRow = commits[edge.fromRow]?.parents[0] === edge.to ? edge.fromRow : edge.toRow;
       ctx.strokeStyle = palette[branchColors.rows[colorRow] ?? branchColors.rows[edge.fromRow] ?? edge.track % colors.length];
-      ctx.globalAlpha = matches ? 0.3 : 0.78;
+      ctx.globalAlpha = matches ? 0.3 : 1;
       ctx.beginPath();
+      // Rails: leave and enter nodes vertically and change lanes halfway between rows, with rounded corners.
+      // arcTo degrades to a straight lineTo when points coincide, so same-lane edges stay straight.
+      const ym1 = y1 + ROW_HEIGHT / 2, ym2 = y2 - ROW_HEIGHT / 2;
       ctx.moveTo(x1, y1);
-      const bend = ROW_HEIGHT / 4, reach = ROW_HEIGHT * 5 / 12;
-      ctx.bezierCurveTo(x1, y1 + bend, xt, y1 + bend, xt, y1 + reach);
-      ctx.lineTo(xt, y2 - reach);
-      ctx.bezierCurveTo(xt, y2 - bend, x2, y2 - bend, x2, y2);
+      ctx.arcTo(x1, ym1, xt, ym1, g.corner);
+      ctx.arcTo(xt, ym1, xt, ym2, g.corner);
+      ctx.arcTo(xt, ym2, x2, ym2, g.corner);
+      ctx.arcTo(x2, ym2, x2, y2, g.corner);
+      ctx.lineTo(x2, y2);
       ctx.stroke();
     }
     // The worker can still be laying out newly loaded history when this effect
@@ -240,21 +276,32 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     for (let row = start; row < Math.min(end, layout.nodes.length, commits.length); row++) {
       const node = layout.nodes[row];
       const commit = commits[row];
-      if (settings.graphAuthorAvatars && commit.id !== WORKING_ID) continue;
-      const x = graphLaneX(node.lane), cy = y(row);
       const lane = palette[branchColors.rows[row] ?? node.lane % colors.length];
+      if (settings.graphAuthorAvatars && commit.id !== WORKING_ID) {
+        // The avatar and its ring are DOM (painted together, so always concentric); the canvas only clears the lines beneath.
+        ctx.globalAlpha = 1; ctx.beginPath(); ctx.arc(rawX(node.lane), rawY(row), AVATAR_CUTOUT, 0, Math.PI * 2);
+        ctx.globalCompositeOperation = 'destination-out'; ctx.fill(); ctx.globalCompositeOperation = 'source-over';
+        continue;
+      }
+      const x = X(node.lane), cy = y(row);
+      const working = commit.id === WORKING_ID, merge = commit.parents.length > 1, isHead = commit.id === head;
+      const r = merge ? g.node + 0.5 : g.node, outer = isHead ? r + 3.5 : r;
       ctx.globalAlpha = matches && !matches.has(node.id) ? 0.3 : 1;
+      // Erase the lines around the node so it sits cleanly on its rail; erasing (not painting bg) lets selected/hover row tints show through.
       ctx.beginPath();
-      if (commit.id === WORKING_ID) ctx.roundRect(x - 5, cy - 5, 10, 10, 2.5);
-      else ctx.arc(x, cy, commit.parents.length > 1 ? 5.5 : 5, 0, Math.PI * 2);
-      // Merges and the working tree are hollow rings; ordinary commits are solid with a background gap ring.
-      const hollow = commit.parents.length > 1 || commit.id === WORKING_ID;
-      ctx.fillStyle = hollow ? bg : lane; ctx.fill();
-      ctx.lineWidth = hollow ? 2 : 2.5; ctx.strokeStyle = hollow ? lane : bg; ctx.stroke();
-      if (!hollow) { ctx.beginPath(); ctx.arc(x, cy, 5, 0, Math.PI * 2); ctx.lineWidth = 1; ctx.strokeStyle = lane; ctx.stroke(); }
+      if (working) ctx.roundRect(x - r - 2, cy - r - 2, r * 2 + 4, r * 2 + 4, 3); else ctx.arc(x, cy, outer + 2, 0, Math.PI * 2);
+      ctx.globalCompositeOperation = 'destination-out'; ctx.fill(); ctx.globalCompositeOperation = 'source-over';
+      ctx.beginPath();
+      if (working) ctx.roundRect(x - r, cy - r, r * 2, r * 2, 2);
+      else ctx.arc(x, cy, r, 0, Math.PI * 2);
+      // Merges and the working tree are hollow; ordinary commits are solid dots.
+      if (working || merge) { ctx.lineWidth = line; ctx.strokeStyle = lane; ctx.stroke(); }
+      else { ctx.fillStyle = lane; ctx.fill(); }
+      // HEAD: a thin concentric ring, a target mark rather than a glow.
+      if (isHead) { ctx.beginPath(); ctx.arc(x, cy, outer, 0, Math.PI * 2); ctx.lineWidth = line; ctx.strokeStyle = lane; ctx.stroke(); }
     }
     ctx.globalAlpha = 1;
-  }, [commits, layout, visibleEdges, start, end, scrollTop, height, graphWidth, graphX, theme, matches, loaded, colors, palette, branchColors, settings.graphAuthorAvatars, graphLaneX]);
+  }, [commits, layout, visibleEdges, start, end, scrollTop, height, graphX, theme, matches, loaded, colors, palette, branchColors, settings.graphAuthorAvatars, graphLaneX, head, scale, pixelWidth, pixelHeight]);
 
   useEffect(() => {
     const node = layout.nodes[selectedIndex];
@@ -479,7 +526,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
         </div>
       </div>
       {isGraphVisible && graphScrollMax > 0 && <div ref={graphScroller} className="graph-hscroll" aria-label="Scroll graph horizontally" style={{ width: graphWidth, left: graphOffset - scrollLeft, bottom: hbar }} onScroll={event => setGraphScroll(event.currentTarget.scrollLeft)}><div style={{ width: graphContent }} /></div>}
-      {isGraphVisible && <canvas ref={canvas} className="graph-canvas" aria-hidden="true" style={{ width: graphWidth, height, left: graphOffset - scrollLeft }} />}
+      {isGraphVisible && <canvas ref={canvas} className="graph-canvas" aria-hidden="true" style={{ width: pixelWidth / scale, height: pixelHeight / scale, left: graphOffset - scrollLeft }} />}
     </div>
     <div className="history-bottom"><span><span className="live-dot" />{(loaded - (commits[0]?.id === WORKING_ID ? 1 : 0)).toLocaleString()} commits loaded{shallow ? ' · Shallow repository boundary' : ''}</span>
       {hasMore ? <button className="text-button" disabled={paging} onClick={onLoadMore}>{paging ? 'Loading…' : 'Load older history ↓'}</button> : <span className="muted">{shallow ? 'Available history loaded' : 'All history loaded'}</span>}

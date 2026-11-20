@@ -11,7 +11,7 @@ let browser;
 const errors = [];
 const checks = [];
 const presets = [
-  ['gitty-light', 'light', '#fafafa', '#2563a8'], ['gitty-dark', 'dark', '#141416', '#6ea8f0'],
+  ['gitty-light', 'light', '#fafafa', '#2563a8'], ['gitty-dark', 'dark', '#141416', '#6ea8f0'], ['gitty-editorial-dark', 'dark', '#131211', '#86a8c7'],
   ['gruvbox-light', 'light', '#fbf1c7', '#076678'], ['gruvbox-dark', 'dark', '#282828', '#8ec07c'],
   ['dracula', 'dark', '#282a36', '#bd93f9'], ['nord', 'dark', '#2e3440', '#88c0d0'],
   ['catppuccin-latte', 'light', '#eff1f5', '#8839ef'], ['catppuccin-mocha', 'dark', '#1e1e2e', '#cba6f7'],

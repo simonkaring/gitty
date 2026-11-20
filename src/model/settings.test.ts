@@ -145,10 +145,10 @@ describe('theme files and render tokens', () => {
     expect(() => importTheme(' '.repeat(100_001))).toThrow();
   });
   it('renders complete semantic and graph tokens for all builtins', () => {
-    expect(BUILTIN_THEMES).toHaveLength(8);
+    expect(BUILTIN_THEMES).toHaveLength(9);
     for (const theme of BUILTIN_THEMES) {
       expect(Object.keys(theme.colors)).toEqual([...COLOR_KEYS]);
-      expect(() => validateTheme({ ...theme, id: 'custom-check' })).not.toThrow();
+      expect(() => validateTheme({ id: 'custom-check', name: theme.name, mode: theme.mode, colors: theme.colors })).not.toThrow();
       const tokens = themeTokens(theme);
       expect(tokens['--accent-text']).toBe(theme.colors.accentText);
       expect(tokens['--button-foreground']).toBe(theme.colors.buttonForeground);
@@ -157,10 +157,16 @@ describe('theme files and render tokens', () => {
     }
   });
   it('keeps Gitty presets at WCAG AA for text on every surface', () => {
-    for (const { colors } of BUILTIN_THEMES.slice(0, 2)) {
+    for (const { colors } of BUILTIN_THEMES.filter(t => t.id.startsWith('gitty-'))) {
       for (const fg of ['text', 'secondary', 'muted']) for (const bg of ['bg', 'chrome', 'sidebar', 'raised', 'subtle']) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
       for (const [fg, bg] of [['buttonForeground', 'accentText'], ['accentText', 'accentWash'], ['accentText', 'selected'], ['green', 'greenWash'], ['red', 'redWash']]) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
     }
+  });
+  it('keeps theme styles and fonts on built-ins only', () => {
+    const editorial = BUILTIN_THEMES.find(t => t.id === 'gitty-editorial-dark')!;
+    expect(editorial).toMatchObject({ mode: 'dark', style: 'editorial', monoFont: 'IBM Plex Mono' });
+    expect(() => validateTheme({ ...custom(), style: 'editorial' })).toThrow();
+    expect(() => validateTheme({ ...custom(), monoFont: 'IBM Plex Mono' })).toThrow();
   });
   it('computes WCAG luminance contrast with symmetry and known endpoints', () => {
     expect(contrastRatio('#000000', '#ffffff')).toBe(21);

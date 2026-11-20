@@ -1,6 +1,12 @@
 @import '@fontsource-variable/geist';
 @import '@fontsource-variable/geist-mono';
 @import '@fontsource/jetbrains-mono';
+/* Editorial theme fonts; browsers only download a face once a rule uses it. */
+@import '@fontsource-variable/fraunces/opsz.css';
+@import '@fontsource-variable/fraunces/opsz-italic.css';
+@import '@fontsource/instrument-serif';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
 
 /* Workspace styles split by area. Import order is the cascade order, so keep
    tokens first and the responsive/accessibility overrides last. */
@@ -11,4 +17,5 @@
 @import './styles/working.css';
 @import './styles/feedback.css';
 @import './styles/motion.css';
+@import './styles/themes/editorial.css';
 @import './styles/overrides.css';

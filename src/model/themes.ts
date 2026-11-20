@@ -3,7 +3,16 @@ export interface ThemeDefinition {
   name: string;
   mode: 'light' | 'dark';
   colors: Record<string, string>;
+  /** Built-in only: switches on a `[data-theme-style]` stylesheet and its graph style. Custom theme files stay colors-only. */
+  style?: 'editorial';
+  /** Built-in only: overrides the user's code font while the theme is active. */
+  monoFont?: string;
 }
+export interface GraphStyle { line: number; node: number; corner: number }
+export const GRAPH_STYLES: Record<'default' | 'editorial', GraphStyle> = {
+  default: { line: 1.6, node: 5, corner: 7 },
+  editorial: { line: 1.2, node: 4, corner: 6 },
+};
 
 export const COLOR_KEYS = ['bg', 'chrome', 'sidebar', 'raised', 'subtle', 'hover', 'border', 'borderStrong', 'text', 'secondary', 'muted', 'accent', 'accentText', 'accentWash', 'selected', 'green', 'greenWash', 'red', 'redWash', 'buttonForeground', 'shadow', 'backdrop', 'graphLane1', 'graphLane2', 'graphLane3', 'graphLane4', 'graphLane5', 'graphLane6', 'graphLane7', 'graphLane8', 'graphSelection', 'graphMerge', 'graphHead'] as const;
 // Gitty defaults: neutral zinc surfaces with a single burnt-orange accent. Red leans rose so it never reads as the accent.
@@ -21,6 +30,14 @@ function family(id: string, name: string, mode: ThemeDefinition['mode'], bg: str
 }
 export const BUILTIN_THEMES: ThemeDefinition[] = [
   preset('gitty-light', 'Gitty Light', 'light'), preset('gitty-dark', 'Gitty Dark', 'dark'),
+  // Warm ink-on-paper darks, a single vermilion accent, and muted print-like lanes.
+  { ...preset('gitty-editorial-dark', 'Gitty Editorial Dark', 'dark', {
+    bg: '#131211', chrome: '#0f0e0d', sidebar: '#100f0e', raised: '#1a1917', subtle: '#201e1c', hover: '#2a2825', border: '#2a2724', borderStrong: '#45403a',
+    text: '#ece6da', secondary: '#bdb5a7', muted: '#948c80', accent: '#e0573a', accentText: '#f2795b', accentWash: '#2e1913', selected: '#36201a',
+    green: '#a7c48f', greenWash: '#1c2419', red: '#e58a9b', redWash: '#311c21', buttonForeground: '#160905', shadow: '#00000099', backdrop: '#000000b3',
+    graphLane1: '#86a8c7', graphLane2: '#82b8a6', graphLane3: '#ab9ccb', graphLane4: '#cf93a8', graphLane5: '#d3b06d', graphLane6: '#a0b77e', graphLane7: '#7fb2be', graphLane8: '#a8a196',
+    graphSelection: '#e0573a', graphMerge: '#ab9ccb', graphHead: '#e0573a',
+  }), style: 'editorial', monoFont: 'IBM Plex Mono' },
   family('gruvbox-light', 'Gruvbox Light', 'light', '#fbf1c7', '#ebdbb2', '#f9f5d7', '#3c3836', '#665c54', '#076678', '#9d0006', '#427b58'),
   family('gruvbox-dark', 'Gruvbox Dark', 'dark', '#282828', '#1d2021', '#32302f', '#ebdbb2', '#bdae93', '#8ec07c', '#fb4934', '#b8bb26'),
   family('dracula', 'Dracula', 'dark', '#282a36', '#21222c', '#343746', '#f8f8f2', '#bfc2d5', '#bd93f9', '#ff5555', '#50fa7b'),

@@ -144,7 +144,8 @@ Branch creation and merges preserve local changes when Git can safely carry them
 
 Open the gear button or **Cmd/Ctrl+,** from either workspace, including the native welcome screen.
 
-- **Presets:** Gitty Light/Dark, Gruvbox Light/Dark, Dracula, Nord, Catppuccin Latte/Mocha.
+- **Presets:** Gitty Light/Dark, Gitty Editorial Dark, Gruvbox Light/Dark, Dracula, Nord, Catppuccin Latte/Mocha.
+- **Theme styles:** Gitty Editorial Dark also changes type and shape: Instrument Serif and Fraunces headings, IBM Plex Mono code (overriding the code-font preference while active), hairline rules, square corners, thinner icons, serif tabs and a finer graph. Custom themes remain color-only.
 - **System appearance:** choose separate light and dark themes, or use one fixed theme.
 - **Custom themes:** duplicate a preset, edit UI/diff/graph colors with a live preview and contrast feedback, then save a named theme. Import/export versioned local JSON; edits can be reset or canceled.
 - **Editor preferences:** bundled code font, code size, line wrapping, and default unified/side-by-side diffs.

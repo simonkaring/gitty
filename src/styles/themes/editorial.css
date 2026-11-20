@@ -1,0 +1,260 @@
+/* ==========================================================================
+   Editorial theme style (Gitty Editorial Dark). Applied through
+   [data-theme-style='editorial'] on <html>; colors and the code font come from
+   the theme definition in src/model/themes.ts.
+   Voice: ink on paper. Hairline rules over cards and shadows, square corners,
+   Instrument Serif for display, Fraunces for working headings, small-caps
+   labels, and quiet motion.
+   ========================================================================== */
+:root[data-theme-style='editorial'] {
+  --display: 'Instrument Serif', 'Fraunces Variable', Georgia, serif;
+  --serif: 'Fraunces Variable', Georgia, serif;
+  --r-sm: 2px;
+  --r-md: 2px;
+  --r-lg: 3px;
+  --edge-highlight: 0 0 #0000;
+  --shadow-sm: 0 0 #0000;
+  --shadow-raised: 0 0 #0000;
+  --ease-spring: var(--ease-out);
+  --dur-slow: 220ms;
+  --label-tracking: 0.11em;
+}
+
+/* Small-caps labels: tracked, muted, a touch smaller. */
+[data-theme-style='editorial'] :is(.section-label, .eyebrow, .history-columns, .history-column-menu-header, .working-category-toggle, .reference-group > summary) {
+  font-family: var(--ui);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+}
+[data-theme-style='editorial'] .eyebrow {
+  color: var(--accent-text);
+}
+
+/* Display serif: large titles only, where Instrument Serif shines. */
+[data-theme-style='editorial'] :is(h1, .start-header h1, .brand) {
+  font-family: var(--display);
+  font-weight: 400;
+  letter-spacing: -0.005em;
+}
+[data-theme-style='editorial'] .brand {
+  font-size: 26px;
+}
+[data-theme-style='editorial'] .start-header h1 {
+  font-size: 44px;
+  line-height: 1.05;
+}
+[data-theme-style='editorial'] .dialog-header h2 {
+  font-family: var(--display);
+  font-size: 24px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+/* Working serif: Fraunces holds up at 13-18px with optical sizing. */
+[data-theme-style='editorial'] :is(h2, h3, .commit-summary > h2, .commit-message-body h2, .working-sidebar-header h2, .composer-heading h2, .workspace-label > span:not(.badge)) {
+  font-family: var(--serif);
+  font-optical-sizing: auto;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+[data-theme-style='editorial'] :is(.commit-summary > h2, .commit-message-body h2) {
+  font-size: 19px;
+  line-height: 1.3;
+}
+[data-theme-style='editorial'] .workspace-label > span:not(.badge) {
+  font-size: 18px;
+}
+[data-theme-style='editorial'] .section-heading {
+  background: transparent;
+  border-top: 0;
+  font-family: var(--ui);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: var(--label-tracking);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Icons: thinner, quieter strokes; they inherit accent where the control is active. */
+[data-theme-style='editorial'] .lucide:not(.lucide-check) {
+  stroke-width: 1.5;
+}
+[data-theme-style='editorial'] :is(.icon-button, .repository-toolbar button svg) {
+  color: var(--muted);
+}
+[data-theme-style='editorial'] .icon-button:hover:not(:disabled),
+[data-theme-style='editorial'] .repository-toolbar button:hover:not(:disabled) svg {
+  color: var(--text);
+}
+
+/* Surfaces: rules, not cards. */
+/* No vertical padding so tabs reach the bottom rule and the active tab's ink line sits on it. */
+[data-theme-style='editorial'] .titlebar {
+  padding-block: 0;
+  background: var(--chrome);
+  backdrop-filter: none;
+}
+[data-theme-style='editorial'] .workspace-label > svg {
+  background: none;
+  border-color: var(--border-strong);
+  color: var(--accent);
+}
+[data-theme-style='editorial'] .repository-toolbar-group {
+  background: transparent;
+  border-color: transparent;
+}
+[data-theme-style='editorial'] .repository-toolbar button:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--subtle);
+}
+[data-theme-style='editorial'] .segmented {
+  background: transparent;
+}
+[data-theme-style='editorial'] .segmented > button[aria-pressed='true'] {
+  background: transparent;
+  color: var(--accent-text);
+  box-shadow: inset 0 -1px var(--accent);
+}
+[data-theme-style='editorial'] :is(.menu, .dialog) {
+  box-shadow: 0 18px 48px var(--shadow-color);
+}
+[data-theme-style='editorial'] .dialog::backdrop {
+  backdrop-filter: none;
+}
+[data-theme-style='editorial'] .primary-button {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--button-foreground);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+[data-theme-style='editorial'] .primary-button:hover:not(:disabled) {
+  background: var(--accent-text);
+  border-color: var(--accent-text);
+}
+[data-theme-style='editorial'] :is(.badge, .count) {
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+/* History: refs read like footnote marks, the selected row like a margin rule. */
+[data-theme-style='editorial'] .ref-pill {
+  border-radius: var(--r-sm);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--branch-color, var(--border-strong)) 55%, transparent);
+  font-weight: 400;
+}
+[data-theme-style='editorial'] .ref-pill.remote-ref {
+  box-shadow: none;
+}
+[data-theme-style='editorial'] .ref-pill[data-current='true'] {
+  color: var(--accent-text);
+  background: var(--accent-wash);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  font-weight: 500;
+}
+[data-theme-style='editorial'] .commit-row:hover {
+  background: var(--subtle);
+  box-shadow: none;
+}
+[data-theme-style='editorial'] .commit-row.selected,
+[data-theme-style='editorial'] .commit-row.selected:hover {
+  background: var(--selected);
+  box-shadow: inset 2px 0 var(--accent);
+}
+[data-theme-style='editorial'] .commit-row.fresh::after {
+  display: none;
+}
+[data-theme-style='editorial'] .commit-message-body {
+  background: transparent;
+  border-width: 0 0 0 2px;
+  border-color: var(--border-strong);
+  border-radius: 0;
+}
+[data-theme-style='editorial'] .commit-eyebrow > span:first-child {
+  background: transparent;
+  padding-left: 0;
+}
+
+/* Tabs: a running header. Serif title, small-caps branch, an ink rule for the active tab. */
+[data-theme-style='editorial'] .repository-tabs,
+[data-theme-style='editorial'] .repository-tabs-row {
+  gap: 0;
+  align-self: stretch;
+}
+[data-theme-style='editorial'] .repository-tab {
+  align-self: stretch;
+  border: 0;
+  border-radius: 0;
+  color: var(--muted);
+}
+[data-theme-style='editorial'] .repository-tab + .repository-tab::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 30%;
+  bottom: 30%;
+  width: 1px;
+  background: var(--border);
+}
+[data-theme-style='editorial'] .repository-tab:hover {
+  background: transparent;
+  color: var(--secondary);
+}
+[data-theme-style='editorial'] .repository-tab[data-selected='true'] {
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+}
+[data-theme-style='editorial'] .repository-tab[data-selected='true']::after {
+  left: 14px;
+  right: 14px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 0;
+  background: var(--accent);
+}
+[data-theme-style='editorial'] .repository-tab-select {
+  padding: 4px 6px 4px 14px;
+  border-radius: 0;
+}
+[data-theme-style='editorial'] .repository-tab-icon {
+  display: none;
+}
+[data-theme-style='editorial'] .repository-tab-title {
+  font-family: var(--serif);
+  font-optical-sizing: auto;
+  font-size: 15px;
+  font-weight: 450;
+  letter-spacing: -0.01em;
+}
+[data-theme-style='editorial'] .repository-tab[data-selected='true'] .repository-tab-title {
+  font-style: italic;
+}
+[data-theme-style='editorial'] .repository-tab-branch {
+  font-family: var(--ui);
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+[data-theme-style='editorial'] .repository-tab-close {
+  opacity: 0;
+}
+[data-theme-style='editorial'] .repository-tab:is(:hover, :focus-within, [data-selected='true']) .repository-tab-close {
+  opacity: 0.7;
+}
+[data-theme-style='editorial'] .repository-tab[data-dragging='true'] {
+  background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* Motion: no hops, wiggles or springy entrances. */
+[data-theme-style='editorial'] :is(.ref-action-row:hover .current-branch-check, .ref-pill[data-current='true']:hover svg.lucide-check) {
+  animation: none;
+}
+[data-theme-style='editorial'] .ref-action-row:hover .ref-item > span:first-of-type {
+  transform: none;
+}

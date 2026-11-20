@@ -41,8 +41,10 @@ elements (the author-column size) centered on 30px-spaced graph lanes above
 canvas connections. Dot mode retains 18px lane spacing. The graph column's
 minimum width expands to fit three avatar lanes. Horizontal
 graph panning shifts their positions; row virtualization limits rendered
-avatars. Search-dimmed rows also dim their avatar nodes. Branch-colored borders
-identify lanes; merges use double borders and retain the message merge icon.
+avatars. Search-dimmed rows also dim their avatar nodes. A branch-colored ring,
+separated from the photo by a 2px padding gap, identifies the lane (28px node,
+so its center lands on a whole pixel); merges use a thicker ring and retain the
+message merge icon. The canvas erases lines beneath each avatar node.
 The working tree keeps its canvas square. Pending layouts show rows without
 inventing avatar positions.[^graph]
 

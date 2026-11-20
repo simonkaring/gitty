@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, expect, it, vi } from 'vitest';
 import { laneX, layoutHistory } from '../graph/layout';
-import { BUILTIN_THEMES } from '../model/themes';
+import { BUILTIN_THEMES, GRAPH_STYLES } from '../model/themes';
 import { DEFAULT_HISTORY_COLUMNS } from '../model/settings';
 import { acceptsGraphDrop, COMMIT_DRAG_TYPE, graphDropAction, groupRefs, groupRefsByCommit, HistoryGraph, REF_DRAG_TYPE, sortRefs } from './HistoryGraph';
 import { WORKING_ID } from '../model/native';
@@ -150,7 +150,8 @@ it('switches graph nodes between dots, initials and Gravatar while preserving wo
     expect(host.querySelector(`[id$="-commit-${WORKING_ID}"] .graph-avatar-node`)).toBeNull();
     expect(host.querySelector('[id$="-commit-merge"] .graph-avatar-node.merge')?.textContent).toBe('AL');
     expect(host.querySelector('[id$="-commit-b"].dimmed .graph-avatar-node')?.textContent).toBe('GH');
-    expect(arc).not.toHaveBeenCalled();
+    // Avatar mode draws no commit dots on the canvas, only the line cut-out behind each avatar.
+    expect(arc.mock.calls.map(call => call[2])).toEqual([15, 15, 15]);
     expect(roundRect).toHaveBeenCalled();
     expect(avatarUrl).not.toHaveBeenCalled();
     const pan = host.querySelector('.graph-hscroll') as HTMLDivElement;
@@ -320,7 +321,7 @@ it('renders graph nodes without selection halo, HEAD glow, or HEAD center dot', 
     clearRect: vi.fn(),
     beginPath: vi.fn(),
     moveTo: vi.fn(),
-    bezierCurveTo: vi.fn(),
+    arcTo: vi.fn(),
     lineTo: vi.fn(),
     stroke: vi.fn(),
     fill: vi.fn(),
@@ -370,9 +371,10 @@ it('renders graph nodes without selection halo, HEAD glow, or HEAD center dot', 
     // No halo (radius 11) or HEAD center dot (radius 2)
     expect(drawnArcs.some(a => a.radius === 11)).toBe(false);
     expect(drawnArcs.some(a => a.radius === 2)).toBe(false);
-    // Standard node radii: 5 for normal commits and 5.5 for merge commits
-    expect(drawnArcs.some(a => a.radius === 5)).toBe(true);
-    expect(drawnArcs.some(a => a.radius === 5.5)).toBe(true);
+    // Node radii come from the theme's graph style; merges are half a pixel larger
+    expect(drawnArcs.some(a => a.radius === GRAPH_STYLES.default.node)).toBe(true);
+    expect(drawnArcs.some(a => a.radius === GRAPH_STYLES.default.node + 0.5)).toBe(true);
+    expect(ctx.arcTo).toHaveBeenCalledWith(expect.any(Number), expect.any(Number), expect.any(Number), expect.any(Number), GRAPH_STYLES.default.corner);
     // Working tree drawn as roundRect
     expect(roundRectCalls).toBeGreaterThan(0);
 
@@ -398,6 +400,11 @@ it('renders graph nodes without selection halo, HEAD glow, or HEAD center dot', 
     expect(host.querySelector('.graph-head-pulse')).toBeNull();
     expect(drawnArcs.some(a => a.radius === 11)).toBe(false);
     expect(drawnArcs.some(a => a.radius === 2)).toBe(false);
+
+    drawnArcs.length = 0;
+    const editorial = BUILTIN_THEMES.find(t => t.style === 'editorial')!;
+    await act(async () => { root.render(<HistoryGraph commits={commits} layout={layout} refs={[]} selectedId="c-1" head="head-1" matches={null} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={editorial} />); });
+    expect(drawnArcs.some(a => a.radius === GRAPH_STYLES.editorial.node)).toBe(true);
   } finally {
     await act(async () => { root.unmount(); });
     canvas.mockRestore();

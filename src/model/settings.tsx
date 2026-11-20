@@ -121,10 +121,11 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   useLayoutEffect(() => {
     const root = document.documentElement;
     root.dataset.theme = theme.mode;
+    if (theme.style) root.dataset.themeStyle = theme.style; else delete root.dataset.themeStyle;
     root.dataset.diffWrap = String(settings.diffWrap);
     root.style.colorScheme = theme.mode;
     for (const [key, value] of Object.entries(themeTokens(theme))) root.style.setProperty(key, value);
-    root.style.setProperty('--mono', `'${settings.monoFont}', monospace`);
+    root.style.setProperty('--mono', `'${theme.monoFont ?? settings.monoFont}', monospace`);
     root.style.setProperty('--editor-font-size', `${settings.fontSize}px`);
   }, [theme, settings.diffWrap, settings.fontSize, settings.monoFont]);
   const resetWorkspace = () => {

@@ -29,7 +29,8 @@ grid track, so shrinking and growing move the visible boundary immediately.
 The header and commit rows share the grid template. When columns are reordered,
 canvas positioning accounts for message fill only before manual resizing.
 Message widths are bounded from 100px to the greater of 600px or the viewport
-width.[^graph]
+width. The graph column likewise fits its lane content (between three lanes and
+200px) until its first resize, which starts from that rendered width.[^graph]
 
 Narrow windows shrink the history pane instead of covering it: side panes stay
 in the workspace flow rather than becoming overlays. At or below 1100px the
