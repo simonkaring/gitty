@@ -27,5 +27,5 @@ okf_version: "0.2"
 - [Headless inspection](headless-inspection.md) - Headless CLI and stdio repository API, conditional host discovery, and real-Git browser test bridge.
 - [Real-Git browser agent testing](browser-agent-testing.md) - Fixture-bounded Playwright access to real Git mutations and its desktop verification limits.
 - [Agent command and host parity](agent-command-matrix.md) - Registered Tauri commands, events, channels, and current headless dispositions.
-- [Performance benchmarks](performance-benchmarks.md) - Backend timing harness, Gitty-versus-GitKraken app comparison, and what each measurement can and cannot show.
+- [Performance benchmarks](performance-benchmarks.md) - Backend timing and macOS/Windows app comparisons, with the limits of each measurement.
 - [Knowledge maintenance](maintenance.md) - How to keep this small source-backed OKF bundle aligned with code and tests.

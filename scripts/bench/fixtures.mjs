@@ -12,6 +12,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { benchDir, parseArgs } from './common.mjs';
 
 const args = parseArgs(process.argv.slice(2));
@@ -83,7 +84,7 @@ function fastImport(dir, { commits, files, mergeEvery = 0, openBranches = 0, tag
 }
 
 function selfOrigin(dir, branch) {
-  git(dir, 'remote', 'add', 'origin', `file://${dir}`);
+  git(dir, 'remote', 'add', 'origin', pathToFileURL(dir).href);
   git(dir, 'config', 'remote.origin.fetch', `+refs/heads/${branch}:refs/remotes/origin/${branch}`);
   git(dir, 'config', 'remote.origin.tagOpt', '--no-tags');
   git(dir, 'update-ref', `refs/remotes/origin/${branch}`, branch);
@@ -132,7 +133,7 @@ if (args.real) {
   }
   // Point origin at the clone itself, as for the synthetic fixtures.
   const branch = git(dir, 'symbolic-ref', '--short', 'HEAD');
-  git(dir, 'remote', 'set-url', 'origin', `file://${dir}`);
+  git(dir, 'remote', 'set-url', 'origin', pathToFileURL(dir).href);
   git(dir, 'config', 'remote.origin.fetch', `+refs/heads/${branch}:refs/remotes/origin/${branch}`);
   git(dir, 'config', 'gc.auto', '0');
   console.log(`+ git-git: ${git(dir, 'rev-list', '--count', '--all')} commits, ${git(dir, 'for-each-ref').split('\n').length} refs`);

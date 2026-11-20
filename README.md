@@ -350,9 +350,24 @@ safety tests can be run against temporary repositories with
 npm run bench:fixtures -- --real   # Synthetic repositories (+ a git/git clone, ~300 MB)
 npm run bench:backend              # Release-mode timings of Gitty's native reads
 npm run bench:apps                 # macOS: Gitty vs GitKraken launch, memory, idle CPU
+npm run bench:apps:windows -- --gitty "target/release/gitty.exe" --gitcraft "C:/path/to/gitcraft.exe"
 ```
 
 Fixtures, the compiled probe and JSON results go to `$TMPDIR/gitty-bench` (override with `GITTY_BENCH_DIR` or `--dir`). `bench:backend` runs the ignored `bench_tests::backend_benchmark` Rust test and reports median wall time and Git processes launched for opening a tab, the five-second refresh snapshot, status, history pages, commit detail/files and search, next to raw `git` floors. `bench:apps` **quits running Gitty and GitKraken instances**, launches each with the repository path (Gitty from `target/release/bundle/macos` when built with `npm run tauri -- build --bundles app`, otherwise `/Applications`), and records first-window time, when the window stops visibly changing, process-family memory footprint and idle CPU including child `git` processes. It needs Screen Recording permission for the terminal. Visual completion is pixel-based and cannot tell a finished graph from a static loading state; check the per-run `changes` in the JSON. Both apps keep their own restored tabs, which affects their startup work (Gitty only opens the active restored tab; the rest load when first selected).
+
+On Windows, generate the same fixtures with `npm run bench:fixtures`, build Gitty with `npm run desktop:build -- --no-bundle`, and extract `gitcraft.exe` from the [GitCraft Windows release ZIP](https://github.com/Vancete/gitcraft/releases). Pass executables, not installers. Close both apps first; the runner refuses to close existing instances. Use an unlocked desktop, leave the app in the foreground, and preferably use a dedicated Windows test account: the runner uses the current user's app profiles and does not reset them. Turn off avatars and automatic fetch in both apps and close unrelated restored tabs. Use `--repos` to select a comma-separated set of fixture paths or `--dir` to use a different fixture/output root.
+
+`bench:apps:windows` runs one warm-up per app/repo, then alternates app order and writes per-run JSON under `results` plus a median table. It records first visible window, pixel settling during a fixed observation period (not verified graph readiness), private and working-set bytes for the live process tree, and idle CPU relative to one logical core. An unobservable or unchanging window gives no settling result; working-set sums can double-count shared pages, and process snapshots miss short-lived or detached children. It does not measure deep paging, refresh latency, or scrolling. `--help` lists timing options.
+
+To measure **Gitty's usable history graph on Windows**, rather than window creation:
+
+```powershell
+npm run bench:fixtures
+npm run desktop:build -- --no-bundle --config src-tauri/tauri.bench.conf.json
+npm run bench:history:windows -- --runs 3 --rows 2000 --commit-graph both
+```
+
+Use an unlocked desktop and keep the benchmark window visible. The separate `gitty-bench.exe` uses a benchmark app identifier and a fresh WebView2 profile for each run. The runner attaches Playwright to that WebView's temporary loopback-only debug port; it doesn't open a debug port in the regular app. It uses disposable copies of `large-history` and ignores user/system Git configuration. It measures launch to a laid-out graph row and keyboard selection, loading pages and jumping to their tail, deep scroll frame gaps, and external branch update to the new HEAD in the graph. `--commit-graph both` alternates Git commit-graph off/on; index construction is outside the timed measurements. Results include raw samples under `results` (`--dir` overrides the fixture/output root). This uses real Git and the desktop binary, not screen capture; DOM and animation-frame timings don't measure monitor presentation. It is Gitty-only.
 
 SSH transport tests use a `ssh` double that joins the remote arguments as OpenSSH does and runs the result through a real shell (Unix only, `crates/gitty-core/src/ssh_tests.rs`); they do not exercise authentication, host keys or a real network. `ssh_test` in the connect form is the manual check for a real host. Testing is local-only for now; pushes and pull requests do not trigger GitHub Actions checks. Run `npm run build` before the Rust checks so the frontend assets are available. For native compilation, run `npm run tauri -- build --no-bundle` on the target platform. Local checks validate the host platform; Windows and Linux runtime behavior require testing on those platforms. Automated cross-platform checks can be introduced in Azure DevOps when needed. The signed-release GitHub workflow has been removed while the app is validated locally.
 

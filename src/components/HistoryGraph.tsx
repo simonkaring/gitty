@@ -164,6 +164,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   // First loaded commit of each calendar day, with that day's loaded count (shown as a divider label by the Material design).
   const dayStarts = useMemo(() => {
     const counts = new Map<string, number>(), starts = new Map<number, { label: string; key: string }>();
+    if (!material) return { counts, starts };
     let previous = '';
     commits.forEach((commit, row) => {
       const day = commit.id === WORKING_ID ? null : commitDay(commit.timestamp);
@@ -173,7 +174,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       previous = day.key;
     });
     return { counts, starts };
-  }, [commits]);
+  }, [commits, material]);
   const loadedIds = useMemo(() => new Set(commits.map(commit => commit.id)), [commits]);
   const visibleEdges = useMemo(() => indexEdges(layout.edges, layout.edgeMaxTo), [layout.edges, layout.edgeMaxTo]);
   const colors = useMemo(() => Array.from({ length: 8 }, (_, index) => theme.colors[`graphLane${index + 1}` as keyof ThemeDefinition['colors']]), [theme]);
@@ -524,7 +525,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
           {apple && <div ref={hoverRect} className="history-hover" aria-hidden="true" hidden style={{ height: rowHeight - 2, left: 10, right: 10 }} />}
           {/* Apple design: the reference draws one rounded blue rect behind the selected row, spanning the whole row. */}
           {apple && selectedIndex >= 0 && <div className="history-selection" aria-hidden="true" style={{ top: selectedIndex * rowHeight, height: rowHeight - 2, left: 10, right: 10 }} />}
-          {isGraphVisible && <canvas ref={canvas} className="graph-canvas" aria-hidden="true" style={{ width: graphWidth, height: windowHeight, left: graphOffset, top: windowTop }} />}
+          {isGraphVisible && <canvas ref={canvas} className="graph-canvas" aria-hidden="true" data-layout-rows={layout.nodes.length} style={{ width: graphWidth, height: windowHeight, left: graphOffset, top: windowTop }} />}
           {commits.slice(start, end).map((commit, offset) => {
             const row = start + offset;
             const node = layout.nodes[row];

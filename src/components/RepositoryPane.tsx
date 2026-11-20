@@ -4,7 +4,7 @@ import type { PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
 import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
 import { isCancelledSearch } from '../model/searchFlow';
-import { appendUnique, errorMessage, graphCommit, isDemoHandle, native, readNativeSnapshot, subscribeNative, validateHistory, WORKING_ID } from '../model/native';
+import { appendHistoryPage, errorMessage, graphCommit, isDemoHandle, native, readNativeSnapshot, subscribeNative, WORKING_ID } from '../model/native';
 import { HistoryGraph, type GraphAnchor, type GraphHandle } from './HistoryGraph';
 import { NativeInspector } from './NativeInspector';
 import { NativeSidebar } from './NativeSidebar';
@@ -169,6 +169,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   const lock = useRef(false);
   const session = useRef<RepositoryState | null>(null);
   const history = useRef<CommitSummary[]>([]);
+  const historyIds = useRef(new Set<string>());
   const nextCursor = useRef<string | null>(null);
   const fingerprint = useRef('');
   const generation = useRef('');
@@ -203,7 +204,10 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   useEffect(() => { if (!active) { setActionContext(null); setMenuTarget(null); setPublishInfo(null); setDeleteBranch(null); setFolderMenu(null); setDeleteFolder(null); setBlockedSwitch(null); setOriginReset(null); setConflictPath(null); setPrSource(null); setStashOpen(false); } }, [active]);
   const close = (handle: string) => native('repository_close', { handle }).catch(() => {});
   useEffect(() => () => { epoch.current++; revealToken.current++; if (session.current) void close(session.current.session.handle); session.current = null; }, []);
-  function installHistory(items: CommitSummary[], next: string | null) { history.current = items; nextCursor.current = next; setCommits(items); setCursor(next); }
+  function installHistory(items: CommitSummary[], next: string | null, paging = false) {
+    if (!paging) historyIds.current = new Set(items.map(commit => commit.id));
+    history.current = items; nextCursor.current = next; setCommits(items); setCursor(next);
+  }
   const open = useCallback(async () => {
     if (mutationLock.current) return;
     const token = ++epoch.current; revealToken.current++; setBusy(true); setError(''); lock.current = true;
@@ -539,17 +543,18 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     const token = epoch.current; const request = ++revealToken.current; lock.current = true; setBusy(true); setError('');
     try {
       let items = history.current;
-      while (nextCursor.current && (!reveal || !items.some(commit => commit.id === reveal))) {
+      while (nextCursor.current && (!reveal || !historyIds.current.has(reveal))) {
         const page = await native<HistoryPage>('repository_history', { handle: session.current.session.handle, cursor: nextCursor.current, limit: 200, query: {} });
         if (token !== epoch.current) return;
         if (page.generation !== generation.current) throw new Error('History changed while paging. Refresh to load a consistent history.');
         if (page.cursor === nextCursor.current) throw new Error('History cursor did not advance. Refresh and retry.');
-        items = appendUnique(items, page.commits); validateHistory(items); installHistory(items, page.cursor);
+        items = appendHistoryPage(items, page.commits, historyIds.current);
+        installHistory(items, page.cursor, true);
         if (request !== revealToken.current) return;
         if (!reveal) break;
       }
       if (reveal) {
-        if (items.some(commit => commit.id === reveal)) { setSelected(reveal); jumpTo.current = reveal; setCommits([...items]); }
+        if (historyIds.current.has(reveal)) { setSelected(reveal); jumpTo.current = reveal; setCommits([...items]); }
         else setNotice(`Commit ${reveal.slice(0, 12)} is outside available history${session.current.session.shallow ? ' (shallow boundary)' : ''}.`);
       }
     } catch (e) { if (token === epoch.current) setError(errorMessage(e)); }
@@ -567,7 +572,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       graph.current?.scrollTo(0);
       return;
     }
-    if (history.current.some(commit => commit.id === id)) {
+    if (historyIds.current.has(id)) {
       setSelected(id);
       jumpTo.current = id;
       setRevealTick(value => value + 1);
@@ -583,7 +588,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   // The stash record's second parent is Git's index commit: it never appears in
   // history, so the graph branches the stash from the commit it was taken from.
   const stashOids = useMemo(() => new Set(state?.refs.filter(ref => ref.kind === 'stash').map(ref => ref.commitId) ?? []), [state?.refs]);
-  const baseGraphCommits = useMemo(() => commits.map(commit => stashOids.has(commit.id) ? { ...graphCommit(commit), parents: commit.parents.slice(0, 1) } : graphCommit(commit)), [commits, stashOids]);
+  const baseGraphCommits = useMemo(() => commits.map(commit => graphCommit(commit, stashOids.has(commit.id))), [commits, stashOids]);
   const graphCommits = useMemo(() => {
     // Never attach live working status to a different pinned HEAD. Only the working
     // row is rebuilt when status changes; loaded history is not remapped again.

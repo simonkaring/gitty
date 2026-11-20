@@ -53,6 +53,12 @@ generations, nonadvancing cursors, and inconsistent ancestry are rejected before
 publication. Snapshot `history` is required: `null` permits unchanged-state reuse,
 but missing changed history fails instead of launching a legacy client walk.[^history][^loader]
 
+The replay spool appends validated OIDs in a bounded write per page instead of
+per record. On the client, snapshot replacement rebuilds a loaded-ID index;
+paging validates only new rows against that prefix and the rest of the page.
+An invalid page leaves the index unchanged. Graph row adaptations reuse the
+same immutable summary objects across appends.[^history][^loader][^pane]
+
 Only one history generation per session retains a walker/spool. A new generation
 explicitly expires older cursors with `staleCursor`; replay in the retained walk
 never re-resolves current refs. This bounds paused native/SSH process retention,

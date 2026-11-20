@@ -186,9 +186,16 @@ it('renders pending history without drawing nodes the layout worker has not retu
   const host = document.createElement('div');
   const root = createRoot(host);
   try {
-    await act(async () => { root.render(<HistoryGraph commits={[{ id: 'a', parents: [], subject: 'Pending commit', body: '', author: 'Test', email: '', timestamp: 1, branch: 'main', files: [] }]} layout={layoutHistory([])} refs={[]} selectedId="a" head="a" matches={null} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />); });
+    const commits = [{ id: 'a', parents: [], subject: 'Pending commit', body: '', author: 'Test', email: '', timestamp: 1, branch: 'main', files: [] }];
+    const render = (layout = layoutHistory([])) => act(async () => {
+      root.render(<HistoryGraph commits={commits} layout={layout} refs={[]} selectedId="a" head="a" matches={null} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />);
+    });
+    await render();
     expect(host.querySelector('[role="option"]')?.textContent).toContain('Pending commit');
+    expect(host.querySelector('.graph-canvas')?.getAttribute('data-layout-rows')).toBe('0');
     expect(canvas).toHaveBeenCalled();
+    await render(layoutHistory(commits));
+    expect(host.querySelector('.graph-canvas')?.getAttribute('data-layout-rows')).toBe('1');
   } finally {
     await act(async () => { root.unmount(); });
     canvas.mockRestore();
