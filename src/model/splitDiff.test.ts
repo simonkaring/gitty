@@ -18,6 +18,11 @@ it('keeps no-newline metadata at its original boundary instead of folding it int
   expect(splitDiffRows([])).toEqual([]);
 });
 
+it('pairs by side order when additions arrive before or between removals', () => {
+  const rows = splitDiffRows([line('add', 'a'), line('remove', 'b'), line('remove', 'c'), line('add', 'd'), line('add', 'e')]);
+  expect(rows.map(row => [row.before?.index, row.after?.index])).toEqual([[1, 0], [2, 3], [undefined, 4]]);
+});
+
 it('flattens hunks into header and line rows that keep original line indices in both layouts', () => {
   const hunks = [
     { header: '@@ a @@', lines: [line('context', 'c', 1, 1), line('remove', 'old', 2), line('add', 'new', null, 2)] },

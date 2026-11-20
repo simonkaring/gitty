@@ -61,6 +61,16 @@ describe('history topology and lane reservations', () => {
     }
     expect(appendHistory(createLayoutState(), [{ id: 'a', parents: ['b'] }]).edges[0].toRow).toBe(1);
   });
+  it('keeps the slot index consistent with lane reservations and dedupes repeated parents', () => {
+    const state = createLayoutState();
+    const tips = Array.from({ length: 40 }, (_, i) => ({ id: `tip${i}`, parents: ['base'] }));
+    appendHistory(state, [...tips, { id: 'merge', parents: ['x', 'y', 'x'] }]);
+    const expected = new Map<string, number>();
+    state.slots.forEach((id, lane) => { if (id !== null) expected.set(id, lane); });
+    expect(state.slotOf).toEqual(expected);
+    expect(state.edges.filter(edge => edge.from === 'merge').map(edge => edge.to)).toEqual(['x', 'y']);
+    expect(state.laneCount).toBeGreaterThanOrEqual(2);
+  });
   it('handles roots, missing parents, convergence, disconnected and invalid histories', () => {
     expect(layoutHistory([]).nodes).toEqual([]);
     const small = layoutHistory([

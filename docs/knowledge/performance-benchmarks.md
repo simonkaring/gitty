@@ -30,9 +30,16 @@ sources:
     resource: ../../src-tauri/tauri.bench.conf.json
   - id: windows-history-test
     resource: ../../src/components/HistoryGraph.ui.test.tsx
+  - id: experiments
+    resource: ../performance-experiments.md
 ---
 
 # Performance benchmarks
+
+The [optimization decision log](../performance-experiments.md) tracks hypotheses,
+per-change timings, reproduction commands and keep/revert decisions. Diff navigation
+measures browser key dispatch through React commit; split-row construction measures
+the model in Node. Neither measures native Git or time to displayed pixels.[^experiments]
 
 `npm run bench:fixtures` writes deterministic repositories with `git fast-import`
 (small, 100k-commit/566-ref history, and 10,000 working entries) and, with
@@ -128,3 +135,4 @@ Related: [working changes at scale](working-changes-at-scale.md) and
 [^windows-history]: Disposable fixture, WebView attachment, scripted interactions, and timing.
 [^windows-history-build]: Release configuration with a distinct binary and app identifier.
 [^windows-history-test]: Pending history rows and the canvas layout row count.
+[^experiments]: Large-diff workloads, comparisons, checks and decisions.

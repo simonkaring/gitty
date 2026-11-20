@@ -90,12 +90,27 @@ async function renderDiff(props: Parameters<typeof DiffPreview>[0]) {
   const render = (next: Parameters<typeof DiffPreview>[0]) => act(async () => { root.render(createElement(DiffPreview, next)); });
   await render(props);
   return {
+    host,
     toggles: () => [...host.querySelectorAll<HTMLButtonElement>('.line-select-toggle')],
     hunks: () => [...host.querySelectorAll<HTMLButtonElement>('.hunk-action-button')],
     render,
     unmount: async () => { await act(async () => { root.unmount(); }); host.remove(); },
   };
 }
+
+it('resizes the split gutter when a refreshed diff for the same path has wider line numbers', async () => {
+  const view = await renderDiff({ diff, split: false });
+  const width = () => view.host.querySelector<HTMLElement>('.split-content')?.style.getPropertyValue('--split-line-number-width');
+  try {
+    await view.render({ diff, split: true });
+    expect(width()).toBe('4ch');
+    const refreshed = { ...diff, hunks: [{ header: '@@ -100000,1 +0,0 @@', lines: [
+      { kind: 'remove' as const, oldLine: 100000, newLine: null, content: 'removed' },
+    ] }] };
+    await view.render({ diff: refreshed, split: true });
+    expect(width()).toBe('6ch');
+  } finally { await view.unmount(); }
+});
 
 describe('hunk preview actions', () => {
   it('keeps before/after selection scoped to original line indices after pairing replacements', async () => {

@@ -355,6 +355,9 @@ safety tests can be run against temporary repositories with
 
 ### Performance benchmarks
 
+The [optimization decision log](docs/performance-experiments.md) records per-change
+baselines, measurements, reproduction commands, and keep/revert decisions.
+
 ```sh
 npm run bench:fixtures -- --real   # Synthetic repositories (+ a git/git clone, ~300 MB)
 npm run bench:backend              # Release-mode timings of Gitty's native reads
