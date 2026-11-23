@@ -74,7 +74,8 @@
   border-radius: var(--r-sm);
   background: var(--section);
 }
-.ref-action-row.current .ref-item {
+.ref-action-row.current .ref-item,
+.worktree-row.current small {
   color: var(--text);
 }
 .ref-item .current-branch-check {

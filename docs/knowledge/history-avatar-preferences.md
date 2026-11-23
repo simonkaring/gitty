@@ -36,9 +36,14 @@ preferences. Unknown keys are ignored on read and preserved through a save, so a
 blob written by a newer build (one added preference) does not reset the rest. Demo and desktop workspaces use the same frontend settings
 provider.[^settings][^controls]
 
+The Material design draws avatar nodes whatever the toggle says. There the
+Appearance checkbox shows checked and disabled with a note, and the stored
+preference is left untouched for other designs.[^graph][^controls]
+
 When enabled, visible, laid-out commit rows render 22px `AuthorAvatar`
 elements (the author-column size) centered on 30px-spaced graph lanes above
-canvas connections. Dot mode uses 24px lane spacing and 40px rows (44px under the Apple design, 52px under Material). The graph column's
+canvas connections. Dot mode uses 24px lane spacing. Rows are 40px, 34px under
+the Apple design and 52px under Material. The graph column's
 minimum width expands to fit three avatar lanes. Horizontal
 graph panning shifts their positions; row virtualization limits rendered
 avatars. Search-dimmed rows also dim their avatar nodes. Avatars are filled with

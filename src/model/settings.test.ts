@@ -198,6 +198,18 @@ describe('theme files and render tokens', () => {
       for (const [fg, bg] of [['accentText', 'accentWash'], ['accentText', 'selected'], ['green', 'greenWash'], ['red', 'redWash']] as const) expect(contrastRatio(colors[fg], colors[bg])).toBeGreaterThanOrEqual(4.5);
     }
   });
+  it('keeps every built-in theme at WCAG AA for text, accent and diff colors', () => {
+    for (const { id, colors } of BUILTIN_THEMES) {
+      for (const fg of ['text', 'secondary', 'muted', 'accentText', 'green', 'red'] as const) for (const bg of ['bg', 'chrome', 'sidebar', 'raised', 'subtle'] as const) expect(contrastRatio(colors[fg], colors[bg]), `${id}: ${fg} on ${bg}`).toBeGreaterThanOrEqual(4.5);
+      for (const [fg, bg] of [['accentText', 'accentWash'], ['accentText', 'selected'], ['green', 'greenWash'], ['red', 'redWash']] as const) expect(contrastRatio(colors[fg], colors[bg]), `${id}: ${fg} on ${bg}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+  it('keeps the palette hues of derived presets on fills and graph lanes', () => {
+    const nord = BUILTIN_THEMES.find(theme => theme.id === 'nord')!.colors;
+    expect([nord.accent, nord.graphLane1, nord.graphLane2, nord.graphLane3]).toEqual(['#88c0d0', '#88c0d0', '#bf616a', '#a3be8c']);
+    // Nord's red is too dim to label a surface, so the text token moves toward the text color.
+    expect(nord.red).not.toBe('#bf616a');
+  });
   it('computes WCAG luminance contrast with symmetry and known endpoints', () => {
     expect(contrastRatio('#000000', '#ffffff')).toBe(21);
     expect(contrastRatio('#ffffff', '#ffffff')).toBe(1);

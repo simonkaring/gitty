@@ -747,7 +747,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     const writeBlocked = mutationBusy || mutationBlocked;
     const { head, headRef } = state.session;
     const repo: PaletteCommand[] = [
-      commitGraphCommand(() => void speedUpHistory(), !state || commitGraphBusy),
+      { ...commitGraphCommand(() => void speedUpHistory(), !state || commitGraphBusy), icon: <Icons.Clock3 size={15} /> },
       { id: 'fetch', group: 'Repository', label: 'Fetch', icon: <Icons.RefreshCw size={15} />, disabled: writeBlocked, run: () => void runMenuRemote({ kind: 'fetch' }) },
       { id: 'pull', group: 'Repository', label: 'Pull', icon: <Icons.Download size={15} />, disabled: writeBlocked || !headRef, run: () => void runMenuRemote({ kind: 'pull', pullMode: DEFAULT_PULL_MODE }) },
       { id: 'push', group: 'Repository', label: 'Push', icon: <Icons.Upload size={15} />, disabled: writeBlocked || !headRef, run: () => { if (headRef) void pushFromMenu(headRef); } },

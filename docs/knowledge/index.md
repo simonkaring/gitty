@@ -20,6 +20,7 @@ okf_version: "0.2"
 - [Split diff review](split-diff-review.md) - Paired before/after rows, fixed gutters, shared horizontal scrolling, virtualized rows, roving line focus, and original line-selection identity.
 - [Working changes at scale](working-changes-at-scale.md) - Memoized working-file data, measured viewport-only rows, and targeted native patch reads.
 - [Design family icons](design-family-icons.md) - How every in-app icon switches between Lucide and animated Material-style glyphs for the Material Google design family.
+- [Theme palettes and contrast](theme-palettes-and-contrast.md) - How preset palettes become CSS tokens, which colors are derived for readability, and what the contrast guard covers.
 
 # Verification and upkeep
 

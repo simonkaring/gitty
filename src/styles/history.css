@@ -515,6 +515,10 @@
   color: var(--muted);
   padding-left: 12px;
 }
+/* The selection tint is darker than any surface the secondary tones are tuned for. */
+.commit-row.selected :is(.row-author, .row-hash, .row-date) {
+  color: var(--text);
+}
 .row-date {
   font-family: var(--mono);
   font-size: var(--fs-xs);
