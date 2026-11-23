@@ -33,10 +33,12 @@ export function needsPublish(sync: SyncInfo | null): boolean {
 }
 
 /** A menu push may name a non-current local branch. Require its exact
- * same-name origin upstream and known local commits, then pin both the source
- * and destination so the backend cannot fall back to the checked-out branch. */
+ * same-name origin upstream and known local commits, or no upstream at all
+ * (publish as origin/<branch>), then pin both the source and destination so
+ * the backend cannot fall back to the checked-out branch. */
 export function branchPushRequest(branch: string, sync: SyncInfo | null): Extract<RemoteActionRequest, { kind: 'push' }> | null {
   if (!sync || sync.branch !== branch || !sync.remotes.includes('origin')) return null;
+  if (!sync.upstream) return { kind: 'push', remote: 'origin', branch, source: branch, setUpstream: true };
   if (sync.upstream !== `origin/${branch}` || sync.ahead === null || sync.ahead <= 0) return null;
   return { kind: 'push', remote: 'origin', branch, source: branch };
 }

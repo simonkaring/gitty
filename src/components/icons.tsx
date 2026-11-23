@@ -1,5 +1,5 @@
 import type { ReactElement, SVGProps } from 'react';
-import { AlertTriangle, Archive, ArchiveRestore, ArrowDown, ArrowUp, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronUp, Clock3, Cloud, Copy, CornerDownLeft, Download, FileCode2, FileDiff, FileMinus2, FilePenLine, FilePlus2, FileSymlink, Folder, FolderGit2, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, GitMerge, Globe2, Info, KeyRound, Laptop, Loader2, LocateFixed, Lock, LockKeyhole, Minus, Monitor, Palette, PanelLeft as PanelStart, PanelRight as PanelEnd, Pencil, Plus, RefreshCw, RotateCcw, RotateCw, ScrollText, Search, Server, Settings, ShieldCheck, Sparkles, Square, SquareTerminal, Tag, Trash2, Undo2, Upload, User, UserRound, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { AlertTriangle, Archive, ArchiveRestore, ArrowDown, ArrowUp, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronUp, Clock3, Cloud, Copy, CornerDownLeft, Download, FileCode2, FileDiff, FileMinus2, FilePenLine, FilePlus2, FileSymlink, Folder, FolderGit2, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, GitMerge, Globe2, Info, KeyRound, Laptop, Loader2, LocateFixed, Lock, LockKeyhole, Minus, Monitor, Palette, PanelLeft as PanelStart, PanelRight as PanelEnd, Pencil, Plus, RefreshCw, RotateCcw, RotateCw, ScrollText, Search, Server, Settings, ShieldCheck, Sparkles, Square, SquareTerminal, Tag, Trash2, TreePine, Undo2, Upload, User, UserRound, X, ZoomIn, ZoomOut } from 'lucide-react';
 
 /* Every app icon goes through here so a design family can restyle them. The
    Material design uses animated Material-style glyphs, the Apple design uses
@@ -72,6 +72,7 @@ const PARTS: Record<string, Part> = {
   open: '<g class="ai-tilt"><path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></g>',
   square: '<g class="ai-pulse"><rect x="5" y="5" width="14" height="14" rx="2"/></g>',
   server: '<g class="ai-bounce"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></g>',
+  tree: '<g class="ai-tilt"><path d="M12 3 6.5 10H10l-4.5 6h13L14 10h3.5z"/></g><path d="M12 16v5"/>',
 };
 
 /* Apple design family: glyphs drawn after SF Symbols (regular weight, 24px
@@ -150,6 +151,8 @@ const APPLE_PARTS: Record<string, Part> = {
   square: '<rect x="4.5" y="4.5" width="15" height="15" rx="3"/>',
   server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><circle cx="7" cy="7.5" r="1" fill="currentColor" stroke="none"/><circle cx="7" cy="16.5" r="1" fill="currentColor" stroke="none"/>',
   loader: '<circle cx="12" cy="12" r="8.5" opacity=".22"/><path class="spin" d="M12 3.5a8.5 8.5 0 0 1 8.5 8.5"/>',
+  // tree
+  tree: '<path d="M8.2 16.5a4.3 4.3 0 0 1-1.9-8.2 5.8 5.8 0 0 1 11.4 0 4.3 4.3 0 0 1-1.9 8.2z"/><path d="M12 21v-9M12 14.5l-2.4-2M12 13l2.2-1.8"/>',
 };
 /** Lucide name -> animated glyph. Names without an entry keep their Lucide icon. */
 const MATERIAL: Partial<Record<keyof typeof LUCIDE, keyof typeof PARTS>> = {
@@ -167,9 +170,9 @@ const MATERIAL: Partial<Record<keyof typeof LUCIDE, keyof typeof PARTS>> = {
   FileMinus2: 'note', FilePlus2: 'notePlus', FilePenLine: 'noteEdit', FileSymlink: 'link',
   Undo2: 'undo', RotateCcw: 'undo', RotateCw: 'redo', LocateFixed: 'target',
   ZoomIn: 'zoomIn', ZoomOut: 'zoomOut', CornerDownLeft: 'send', ArrowUpRight: 'open',
-  Square: 'square', Server: 'server',
+  Square: 'square', Server: 'server', TreePine: 'tree',
 };
-const LUCIDE = { AlertTriangle, Archive, ArchiveRestore, ArrowDown, ArrowUp, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronUp, Clock3, Cloud, Copy, CornerDownLeft, Download, FileCode2, FileDiff, FileMinus2, FilePenLine, FilePlus2, FileSymlink, Folder, FolderGit2, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, GitMerge, Globe2, Info, KeyRound, Laptop, Loader2, LocateFixed, Lock, LockKeyhole, Minus, Monitor, Palette, PanelStart, PanelEnd, Pencil, Plus, RefreshCw, RotateCcw, RotateCw, ScrollText, Search, Server, Settings, ShieldCheck, Sparkles, Square, SquareTerminal, Tag, Trash2, Undo2, Upload, User, UserRound, X, ZoomIn, ZoomOut };
+const LUCIDE = { AlertTriangle, Archive, ArchiveRestore, ArrowDown, ArrowUp, ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronUp, Clock3, Cloud, Copy, CornerDownLeft, Download, FileCode2, FileDiff, FileMinus2, FilePenLine, FilePlus2, FileSymlink, Folder, FolderGit2, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, GitMerge, Globe2, Info, KeyRound, Laptop, Loader2, LocateFixed, Lock, LockKeyhole, Minus, Monitor, Palette, PanelStart, PanelEnd, Pencil, Plus, RefreshCw, RotateCcw, RotateCw, ScrollText, Search, Server, Settings, ShieldCheck, Sparkles, Square, SquareTerminal, Tag, Trash2, TreePine, Undo2, Upload, User, UserRound, X, ZoomIn, ZoomOut };
 /** Lucide name -> Apple glyph. Same coverage as MATERIAL; names without an entry keep their Lucide icon in every design. */
 const APPLE_GLYPHS: Partial<Record<keyof typeof LUCIDE, keyof typeof APPLE_PARTS>> = MATERIAL;
 

@@ -86,11 +86,13 @@ interface Props {
   onTogglePick?: (oid: string) => void;
   /** Full name of a ref hovered elsewhere (the sidebar): its branch is emphasised and everything else dims. */
   highlightRef?: string | null;
+  /** Local branches checked out in another worktree; their pills show a tree instead of a laptop. */
+  worktreeRefs?: ReadonlySet<string>;
 }
 
 const WIDTH_VAR: Record<HistoryColumnId, string> = { refs: 'var(--ref-width)', graph: 'var(--graph-width)', message: 'var(--message-width)', author: 'var(--author-width)', hash: 'var(--hash-width)', date: 'var(--date-width)' };
 const MIN_GRAPH_WIDTH = laneX(2) + 14; // three lanes plus padding; also fits the "GRAPH" label
-export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onContextActions, onSwitchBranch, pickOrder, onTogglePick, highlightRef }, ref) {
+export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onContextActions, onSwitchBranch, pickOrder, onTogglePick, highlightRef, worktreeRefs }, ref) {
   const uid = useId();
   const { settings, updateSettings } = useSettings();
   // Material draws every node as a shaped author avatar; other designs follow the setting.
@@ -205,9 +207,10 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   function renderRef({ ref, remote }: { ref: GitRef & { fullName?: string }; remote?: GitRef }, commit: Commit, controls: RowControls) {
     const name = branchName(ref);
     const control = ref.fullName ? rowControl(commit.id, controls) : null;
+    const worktree = ref.kind === 'local' && !!ref.fullName && !!worktreeRefs?.has(ref.fullName);
     return <span key={ref.fullName ?? ref.name} id={control?.id} data-row-control={control ? '' : undefined} className={`ref-pill ${ref.kind === 'tag' ? 'tag-ref' : ref.kind === 'remote' ? 'remote-ref' : ref.kind === 'stash' ? 'stash-ref' : ''}${control?.active ? ' row-control-active' : ''}`}
                       style={name !== null ? { '--branch-color': palette[branchColors.branches.get(name)!] } as React.CSSProperties : undefined}
-                      data-name={ref.name} title={remote ? `${ref.fullName} + ${remote.name}` : ref.fullName ?? ref.name}
+                      data-name={ref.name} data-worktree={worktree || undefined} title={`${remote ? `${ref.fullName} + ${remote.name}` : ref.fullName ?? ref.name}${worktree ? ' (checked out in another worktree)' : ''}`}
                       role={ref.fullName ? 'button' : undefined} tabIndex={ref.fullName ? -1 : undefined} aria-label={ref.fullName ? `Select tip of ${ref.fullName}; right-click or press Shift+F10 for actions` : undefined}
                       onKeyDown={event => { if (!ref.fullName) return; if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && onContextActions) { event.preventDefault(); event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); onContextActions({ oid: commit.id, ref: ref.fullName }, rect.left, rect.bottom, scroller.current ?? event.currentTarget); } else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onSelect(commit.id); } }}
                       data-current={!!headRef && ref.fullName === headRef} draggable={!!onActions && !!ref.fullName && ref.kind !== 'tag'}
@@ -216,7 +219,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                       onDrop={event => { event.preventDefault(); event.stopPropagation(); stopDrag(); const action = graphDropAction(event.dataTransfer, ref.fullName, headRef, commits, refs); if (action) onActions?.(action); }}
                       onContextMenu={event => { if (onContextActions && ref.fullName) { event.preventDefault(); event.stopPropagation(); onContextActions({ oid: commit.id, ref: ref.fullName }, event.clientX, event.clientY, scroller.current ?? event.currentTarget); } }} onClick={event => { event.stopPropagation(); onSelect(commit.id); scroller.current?.focus(); }}
                       onDoubleClick={event => { if (ref.fullName && (ref.kind === 'local' || (ref.kind === 'remote' && ref.fullName.startsWith('refs/remotes/origin/') && ref.fullName !== 'refs/remotes/origin/HEAD')) && onSwitchBranch) { event.stopPropagation(); onSwitchBranch(ref.fullName); } }}>
-                      {!!headRef && ref.fullName === headRef && <Icons.Check size={10} strokeWidth={3} aria-hidden="true" />}{ref.kind === 'tag' ? <Icons.Tag size={10} /> : ref.kind === 'remote' ? <Icons.Globe2 size={10} /> : ref.kind === 'stash' ? <Icons.Archive size={10} /> : <Icons.Laptop size={10} />}{remote && <Icons.Globe2 size={10} />}<span className="ref-pill-name">{ref.name}</span>
+                      {!!headRef && ref.fullName === headRef && <Icons.Check size={10} strokeWidth={3} aria-hidden="true" />}{ref.kind === 'tag' ? <Icons.Tag size={10} /> : ref.kind === 'remote' ? <Icons.Globe2 size={10} /> : ref.kind === 'stash' ? <Icons.Archive size={10} /> : worktree ? <Icons.TreePine size={10} /> : <Icons.Laptop size={10} />}{remote && <Icons.Globe2 size={10} />}<span className="ref-pill-name">{ref.name}</span>
                     </span>;
   }
 

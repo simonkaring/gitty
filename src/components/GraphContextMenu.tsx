@@ -70,7 +70,7 @@ export function GraphContextMenu({ target, state, busy, hasTrackedChanges = fals
     </>}
     {tracking && <><button role="menuitem" disabled={busy} onClick={() => onRemoteAction({ kind: 'fetch', remote: tracking, branch: ref!.fullName.slice(`refs/remotes/${tracking}/`.length) })}>Fetch this remote branch</button><div className="menu-divider" role="separator" /></>}
     {ref?.kind === 'local' && !current && <button role="menuitem" disabled={busy} onClick={() => onSwitchBranch(ref.fullName)}>Switch to {ref.name}</button>}
-    {branchPush && ref && <><button role="menuitem" disabled={busy} onClick={() => onPush(ref.fullName)}>Push {ref.name} to origin</button><div className="menu-divider" role="separator" /></>}
+    {branchPush && ref && <><button role="menuitem" disabled={busy} onClick={() => onPush(ref.fullName)}>{branchPush.setUpstream ? 'Publish' : 'Push'} {ref.name} to origin</button><div className="menu-divider" role="separator" /></>}
     {(showPull || showReset) && <>
       {showPull && (syncCurrent
         ? (Object.keys(PULL_MODE_LABELS) as PullMode[]).map(mode => <button key={mode} role="menuitem" disabled={busy || demo} title={demo ? 'Pull is unavailable in the demo.' : undefined} onClick={() => onRemoteAction({ kind: 'pull', remote: 'origin', branch: originBranch, pullMode: mode })}>{PULL_MODE_LABELS[mode]}{mode === DEFAULT_PULL_MODE && ' (default)'}</button>)

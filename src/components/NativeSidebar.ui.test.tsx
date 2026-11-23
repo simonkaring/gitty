@@ -30,6 +30,25 @@ it('double-click switches local and origin branches but not tags or other remote
   } finally { await act(async () => { root.unmount(); }); }
 });
 
+it('shows a tree icon for a local branch checked out in another worktree', async () => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const state: RepositoryState = {
+    session: { handle: 'test', location: { kind: 'native', path: '/repo' }, name: 'repo', root: '/repo', gitDir: '/repo/.git', commonDir: '/repo/.git', linkedWorktree: false, shallow: false, bare: false, head: 'tip', headRef: 'refs/heads/main' },
+    refs: [
+      { name: 'topic', fullName: 'refs/heads/topic', kind: 'local', commitId: 'tip' },
+      { name: 'other', fullName: 'refs/heads/other', kind: 'local', commitId: 'tip' },
+    ], remotes: [], fingerprint: '',
+  };
+  const host = document.createElement('div'); const root = createRoot(host);
+  try {
+    await act(async () => { root.render(<NativeSidebar state={state} commits={[]} filters={null} busy={false} reveal={() => {}} switchBranch={() => {}} openMenu={() => {}} onAction={() => {}} folderOpen={{}} onFolderOpen={() => {}} worktreeRefs={new Set(['refs/heads/topic'])} />); });
+    const item = (name: string) => host.querySelector(`[aria-label="local refs/heads/${name}"]`)!;
+    expect(item('topic').querySelector('.lucide-tree-pine')).not.toBeNull();
+    expect(item('topic').getAttribute('title')).toContain('another worktree');
+    expect(item('other').querySelector('.lucide-tree-pine')).toBeNull();
+  } finally { await act(async () => { root.unmount(); }); }
+});
+
 it('opens folder actions for local and origin folders by right-click, button and keyboard only', async () => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const state: RepositoryState = {

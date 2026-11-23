@@ -32,6 +32,7 @@ import { BranchFolderMenu, type FolderMenuTarget } from './BranchFolderMenu';
 import type { BranchBatchDeleteExecution, BranchBatchDeleteRequest, BranchBatchDeleteResult, BranchDeleteExecution, BranchDeleteRequest, BranchDeleteResult, BranchDeleteTargetResult } from '../model/operations';
 import { SearchResults } from './SearchResults';
 import { Worktrees } from './Worktrees';
+import { worktreeEvents, type Worktree } from '../model/worktrees';
 import { CommitGraphNotice } from './CommitGraphNotice';
 import { commitGraphCommand } from '../model/commitGraph';
 
@@ -132,6 +133,20 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   const [deleteBranch, setDeleteBranch] = useState<{ target: NonNullable<ReturnType<typeof branchDeleteTargets>>; scope: BranchDeleteScope } | null>(null);
   const [folderOpen, setFolderOpen] = useState<Record<string, boolean>>({});
   const [hoverRef, setHoverRef] = useState<string | null>(null);
+  const [worktreeRefs, setWorktreeRefs] = useState<ReadonlySet<string>>(new Set());
+  const worktreeHandle = state?.session.handle, worktreeHead = state?.session.headRef;
+  useEffect(() => {
+    if (!active || !worktreeHandle) return;
+    let live = true;
+    // The graph needs these even while the sidebar's Worktrees section is closed or hidden.
+    const load = () => void native<Worktree[]>('repository_worktrees', { handle: worktreeHandle })
+      .then(items => { if (live) setWorktreeRefs(new Set(items.flatMap(item => item.branch && item.branch !== worktreeHead ? [item.branch] : []))); })
+      .catch(() => { if (live) setWorktreeRefs(new Set()); });
+    load();
+    worktreeEvents.addEventListener('change', load);
+    window.addEventListener('focus', load);
+    return () => { live = false; worktreeEvents.removeEventListener('change', load); window.removeEventListener('focus', load); };
+  }, [active, worktreeHandle, worktreeHead, stateRevision]);
   const [folderMenu, setFolderMenu] = useState<FolderMenuTarget | null>(null);
   const [deleteFolder, setDeleteFolder] = useState<{ folder: BranchFolder; scope: BranchDeleteScope; targets: FolderDeleteTargets } | null>(null);
   const [blockedSwitch, setBlockedSwitch] = useState<{ branch: string; ref: string; oid: string; reason: string } | null>(null);
@@ -795,7 +810,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
         {!error && Array.from({ length: 12 }, (_, i) => <div key={i} className="skeleton-row" aria-hidden="true" style={{ animationDelay: `${i * 60}ms` }}><span className="skeleton-node" style={{ marginLeft: `${[0, 18, 0, 36, 18, 0][i % 6]}px` }} /><span className="skeleton" style={{ width: `${40 + ((i * 37) % 45)}%` }} /><span className="skeleton" style={{ width: 70 }} /></div>)}
       </div>
     </main> : <main className="workspace">
-        {sidebarOpen && <><NativeSidebar selectedId={selected} onHoverRef={setHoverRef} sections={settings.sidebarSections} onSectionsChange={sidebarSections => updateSettings({ sidebarSections })} state={state} commits={commits} filters={filters} busy={busy} reveal={reveal} switchBranch={ref => void switchBranch(ref)} openMenu={openMenu} onAction={setActionContext} folderOpen={folderOpen} onFolderOpen={(key, open) => setFolderOpen(current => ({ ...current, [key]: open }))} openFolderMenu={(folder, x, y, trigger) => setFolderMenu({ folder, x, y, trigger })} worktrees={<Worktrees session={state.session} stateRevision={stateRevision} active={active} busy={mutationBusy || mutationBlocked} onOpen={onOpenWorktree} onWrite={operationWrite} />} onStash={action => void stashAction(action)} /><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
+        {sidebarOpen && <><NativeSidebar selectedId={selected} onHoverRef={setHoverRef} worktreeRefs={worktreeRefs} sections={settings.sidebarSections} onSectionsChange={sidebarSections => updateSettings({ sidebarSections })} state={state} commits={commits} filters={filters} busy={busy} reveal={reveal} switchBranch={ref => void switchBranch(ref)} openMenu={openMenu} onAction={setActionContext} folderOpen={folderOpen} onFolderOpen={(key, open) => setFolderOpen(current => ({ ...current, [key]: open }))} openFolderMenu={(folder, x, y, trigger) => setFolderMenu({ folder, x, y, trigger })} worktrees={<Worktrees session={state.session} stateRevision={stateRevision} active={active} busy={mutationBusy || mutationBlocked} onOpen={onOpenWorktree} onWrite={operationWrite} />} onStash={action => void stashAction(action)} /><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
       <div className="workspace-main">
         {!sidebarOpen && filters}
         <div className="history-workspace">
@@ -839,7 +854,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
                 <div className="search-results-container" hidden={searchView !== 'results'}><SearchResults result={result} loading={searchBusy} error={searchError} query={text} refs={state.refs} selected={selected} onSelect={id => { navigation.current++; setSelected(id); setActiveDiff(null); setInspectorOpen(true); }} onReveal={id => { setSearchView('graph'); requestAnimationFrame(() => reveal(id)); }} onRetry={() => setSearchRetry(value => value + 1)} onClear={clearFilters} /></div></>}
               <div className="search-history-container" hidden={filtering && searchView === 'results'}>
               {!graphCommits.length && <div className="empty-state"><Icons.GitCommitHorizontal size={28} /><h2>No commits yet</h2><p>This repository has no commits or working changes. Add files, stage them, and make your first commit.</p></div>}
-                <HistoryGraph ref={graph} highlightRef={hoverRef} commits={graphCommits} layout={layout} refs={state.refs} selectedId={selected} head={state.session.head ?? ''} headRef={state.session.headRef} onActions={context => setActionContext(context)} onContextActions={openMenu} onSwitchBranch={ref => void switchBranch(ref)} pickOrder={pickOrder} onTogglePick={pickMode ? id => setPickOrder(order => toggleCommit(order, id)) : undefined} matches={matches} onSelect={id => reveal(id)} onLoadMore={() => void load()} onOpenDetails={() => setInspectorOpen(true)} theme={theme} hasMore={!!cursor} paging={busy} shallow={state.session.shallow} />
+                <HistoryGraph ref={graph} highlightRef={hoverRef} commits={graphCommits} layout={layout} refs={state.refs} worktreeRefs={worktreeRefs} selectedId={selected} head={state.session.head ?? ''} headRef={state.session.headRef} onActions={context => setActionContext(context)} onContextActions={openMenu} onSwitchBranch={ref => void switchBranch(ref)} pickOrder={pickOrder} onTogglePick={pickMode ? id => setPickOrder(order => toggleCommit(order, id)) : undefined} matches={matches} onSelect={id => reveal(id)} onLoadMore={() => void load()} onOpenDetails={() => setInspectorOpen(true)} theme={theme} hasMore={!!cursor} paging={busy} shallow={state.session.shallow} />
               </div>
             </section>
           )}
