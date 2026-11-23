@@ -352,6 +352,10 @@
 .file-name > span:empty {
   display: none;
 }
+/* --muted is not tuned for the selection fill. */
+.file-row.active .file-name > span {
+  color: var(--text);
+}
 .file-status {
   margin-left: auto;
   font-family: var(--mono);
@@ -401,7 +405,6 @@
   flex-shrink: 0;
   color: var(--muted);
   user-select: none;
-  opacity: 0.8;
 }
 .native-diff {
   overflow: auto;

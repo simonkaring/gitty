@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { laneX, layoutHistory } from '../graph/layout';
 import { BUILTIN_THEMES } from '../model/themes';
 import { DEFAULT_HISTORY_COLUMNS } from '../model/settings';
-import { acceptsGraphDrop, COMMIT_DRAG_TYPE, graphDropAction, groupRefs, groupRefsByCommit, HistoryGraph, REF_DRAG_TYPE, sortRefs } from './HistoryGraph';
+import { acceptsGraphDrop, COMMIT_DRAG_TYPE, graphDropAction, groupRefs, groupRefsByCommit, HistoryGraph, pixelSnap, REF_DRAG_TYPE, sortRefs } from './HistoryGraph';
 import { WORKING_ID } from '../model/native';
 import type { Commit } from '../model/types';
 
@@ -186,9 +186,16 @@ it('renders pending history without drawing nodes the layout worker has not retu
   const host = document.createElement('div');
   const root = createRoot(host);
   try {
-    await act(async () => { root.render(<HistoryGraph commits={[{ id: 'a', parents: [], subject: 'Pending commit', body: '', author: 'Test', email: '', timestamp: 1, branch: 'main', files: [] }]} layout={layoutHistory([])} refs={[]} selectedId="a" head="a" matches={null} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />); });
+    const commits = [{ id: 'a', parents: [], subject: 'Pending commit', body: '', author: 'Test', email: '', timestamp: 1, branch: 'main', files: [] }];
+    const render = (layout = layoutHistory([])) => act(async () => {
+      root.render(<HistoryGraph commits={commits} layout={layout} refs={[]} selectedId="a" head="a" matches={null} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />);
+    });
+    await render();
     expect(host.querySelector('[role="option"]')?.textContent).toContain('Pending commit');
+    expect(host.querySelector('.graph-canvas')?.getAttribute('data-layout-rows')).toBe('0');
     expect(canvas).toHaveBeenCalled();
+    await render(layoutHistory(commits));
+    expect(host.querySelector('.graph-canvas')?.getAttribute('data-layout-rows')).toBe('1');
   } finally {
     await act(async () => { root.unmount(); });
     canvas.mockRestore();
@@ -304,6 +311,33 @@ it.each(['refs/heads/topic', 'refs/remotes/origin/feature/topic'])('branch pill 
     expect(onContextActions).toHaveBeenCalledTimes(2);
     await act(async () => { pill.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); });
     expect(onSwitchBranch).toHaveBeenCalledWith(fullName);
+  } finally {
+    await act(async () => { root.unmount(); });
+    canvas.mockRestore(); globalThis.ResizeObserver = originalObserver;
+  }
+});
+it('snaps graph coordinates to device pixel centers for odd strokes and edges for even ones', () => {
+  // 125%: a 3-device-pixel line is centered on a device pixel (x.5 in device space).
+  expect(pixelSnap(14, 1.25, 3) * 1.25 % 1).toBeCloseTo(0.5);
+  // 150%: a 4-device-pixel line sits between device pixels.
+  expect(pixelSnap(14.1, 1.5, 4) * 1.5 % 1).toBeCloseTo(0);
+  expect(Math.abs(pixelSnap(14.1, 1.5, 4) - 14.1)).toBeLessThanOrEqual(0.5 / 1.5);
+});
+
+it('marks a local branch checked out in another worktree with a tree icon', async () => {
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  const originalObserver = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} unobserve() {} } as typeof ResizeObserver;
+  const canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(new Proxy({}, { get: () => () => {} }) as CanvasRenderingContext2D);
+  const host = document.createElement('div'); const root = createRoot(host);
+  const commits = [{ id: 'tip', parents: [], subject: 'Tip', body: '', author: 'A', email: '', timestamp: 1, branch: 'topic', files: [] }];
+  const refs = [{ name: 'topic', fullName: 'refs/heads/topic', kind: 'local' as const, commitId: 'tip' }, { name: 'other', fullName: 'refs/heads/other', kind: 'local' as const, commitId: 'tip' }];
+  try {
+    await act(async () => { root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={refs} worktreeRefs={new Set(['refs/heads/topic'])} selectedId="tip" head="tip" headRef="refs/heads/main" matches={null} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={BUILTIN_THEMES[0]} />); });
+    const pill = (name: string) => host.querySelector(`.ref-pill[data-name="${name}"]`) as HTMLElement;
+    expect(pill('topic').querySelector('.lucide-tree-pine')).not.toBeNull();
+    expect(pill('topic').title).toContain('another worktree');
+    expect(pill('other').querySelector('.lucide-tree-pine')).toBeNull();
   } finally {
     await act(async () => { root.unmount(); });
     canvas.mockRestore(); globalThis.ResizeObserver = originalObserver;

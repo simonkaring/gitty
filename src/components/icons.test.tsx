@@ -5,6 +5,15 @@ import { Icons } from './icons';
 
 afterEach(() => delete document.documentElement.dataset.design);
 
+it('draws a custom worktree tree glyph in the Material and Apple designs', () => {
+  document.documentElement.dataset.design = 'material';
+  expect(renderToStaticMarkup(<Icons.TreePine size={10} />)).toContain('class="ai-tilt"');
+  document.documentElement.dataset.design = 'apple';
+  const apple = renderToStaticMarkup(<Icons.TreePine size={10} />);
+  expect(apple).toContain('lucide-tree-pine');
+  expect(apple).toContain('M12 21v-9');
+});
+
 it('renders SF Symbols-style glyphs at 1.8 stroke in the Apple design only', () => {
   document.documentElement.dataset.design = 'default';
   const lucide = renderToStaticMarkup(<Icons.GitBranch size={14} className="current-branch-check" />);

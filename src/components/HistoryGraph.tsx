@@ -48,6 +48,12 @@ export function graphDropAction(data: DataTransfer, targetRef: string | undefine
   const oid = data.getData(COMMIT_DRAG_TYPE);
   return oid !== WORKING_ID && commits.some(commit => commit.id === oid) ? { oid, commits: [oid], initial: 'cherryPick' } : null;
 }
+/** Snaps a CSS coordinate to device pixel centers (odd stroke widths) or edges (even), so a whole-device-pixel stroke
+ * stays crisp instead of smearing across two pixels at fractional scaling such as 125% or 150%. */
+export function pixelSnap(value: number, dpr: number, deviceLine: number): number {
+  const offset = (deviceLine % 2) / 2;
+  return (Math.round(value * dpr - offset) + offset) / dpr;
+}
 const REF_ORDER = { local: 0, remote: 1, tag: 2 } as const;
 export function sortRefs<T extends GitRef & { fullName?: string }>(list: T[], headRef?: string | null): T[] {
   const rank = (ref: T) => ref.fullName && ref.fullName === headRef ? -1 : REF_ORDER[ref.kind as keyof typeof REF_ORDER] ?? 3;
@@ -86,11 +92,13 @@ interface Props {
   onTogglePick?: (oid: string) => void;
   /** Full name of a ref hovered elsewhere (the sidebar): its branch is emphasised and everything else dims. */
   highlightRef?: string | null;
+  /** Local branches checked out in another worktree; their pills show a tree instead of a laptop. */
+  worktreeRefs?: ReadonlySet<string>;
 }
 
 const WIDTH_VAR: Record<HistoryColumnId, string> = { refs: 'var(--ref-width)', graph: 'var(--graph-width)', message: 'var(--message-width)', author: 'var(--author-width)', hash: 'var(--hash-width)', date: 'var(--date-width)' };
 const MIN_GRAPH_WIDTH = laneX(2) + 14; // three lanes plus padding; also fits the "GRAPH" label
-export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onContextActions, onSwitchBranch, pickOrder, onTogglePick, highlightRef }, ref) {
+export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onContextActions, onSwitchBranch, pickOrder, onTogglePick, highlightRef, worktreeRefs }, ref) {
   const uid = useId();
   const { settings, updateSettings } = useSettings();
   // Material draws every node as a shaped author avatar; other designs follow the setting.
@@ -164,6 +172,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   // First loaded commit of each calendar day, with that day's loaded count (shown as a divider label by the Material design).
   const dayStarts = useMemo(() => {
     const counts = new Map<string, number>(), starts = new Map<number, { label: string; key: string }>();
+    if (!material) return { counts, starts };
     let previous = '';
     commits.forEach((commit, row) => {
       const day = commit.id === WORKING_ID ? null : commitDay(commit.timestamp);
@@ -173,7 +182,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       previous = day.key;
     });
     return { counts, starts };
-  }, [commits]);
+  }, [commits, material]);
   const loadedIds = useMemo(() => new Set(commits.map(commit => commit.id)), [commits]);
   const visibleEdges = useMemo(() => indexEdges(layout.edges, layout.edgeMaxTo), [layout.edges, layout.edgeMaxTo]);
   const colors = useMemo(() => Array.from({ length: 8 }, (_, index) => theme.colors[`graphLane${index + 1}` as keyof ThemeDefinition['colors']]), [theme]);
@@ -204,9 +213,10 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   function renderRef({ ref, remote }: { ref: GitRef & { fullName?: string }; remote?: GitRef }, commit: Commit, controls: RowControls) {
     const name = branchName(ref);
     const control = ref.fullName ? rowControl(commit.id, controls) : null;
+    const worktree = ref.kind === 'local' && !!ref.fullName && !!worktreeRefs?.has(ref.fullName);
     return <span key={ref.fullName ?? ref.name} id={control?.id} data-row-control={control ? '' : undefined} className={`ref-pill ${ref.kind === 'tag' ? 'tag-ref' : ref.kind === 'remote' ? 'remote-ref' : ref.kind === 'stash' ? 'stash-ref' : ''}${control?.active ? ' row-control-active' : ''}`}
                       style={name !== null ? { '--branch-color': palette[branchColors.branches.get(name)!] } as React.CSSProperties : undefined}
-                      data-name={ref.name} title={remote ? `${ref.fullName} + ${remote.name}` : ref.fullName ?? ref.name}
+                      data-name={ref.name} data-worktree={worktree || undefined} title={`${remote ? `${ref.fullName} + ${remote.name}` : ref.fullName ?? ref.name}${worktree ? ' (checked out in another worktree)' : ''}`}
                       role={ref.fullName ? 'button' : undefined} tabIndex={ref.fullName ? -1 : undefined} aria-label={ref.fullName ? `Select tip of ${ref.fullName}; right-click or press Shift+F10 for actions` : undefined}
                       onKeyDown={event => { if (!ref.fullName) return; if ((event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) && onContextActions) { event.preventDefault(); event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); onContextActions({ oid: commit.id, ref: ref.fullName }, rect.left, rect.bottom, scroller.current ?? event.currentTarget); } else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onSelect(commit.id); } }}
                       data-current={!!headRef && ref.fullName === headRef} draggable={!!onActions && !!ref.fullName && ref.kind !== 'tag'}
@@ -215,7 +225,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
                       onDrop={event => { event.preventDefault(); event.stopPropagation(); stopDrag(); const action = graphDropAction(event.dataTransfer, ref.fullName, headRef, commits, refs); if (action) onActions?.(action); }}
                       onContextMenu={event => { if (onContextActions && ref.fullName) { event.preventDefault(); event.stopPropagation(); onContextActions({ oid: commit.id, ref: ref.fullName }, event.clientX, event.clientY, scroller.current ?? event.currentTarget); } }} onClick={event => { event.stopPropagation(); onSelect(commit.id); scroller.current?.focus(); }}
                       onDoubleClick={event => { if (ref.fullName && (ref.kind === 'local' || (ref.kind === 'remote' && ref.fullName.startsWith('refs/remotes/origin/') && ref.fullName !== 'refs/remotes/origin/HEAD')) && onSwitchBranch) { event.stopPropagation(); onSwitchBranch(ref.fullName); } }}>
-                      {!!headRef && ref.fullName === headRef && <Icons.Check size={10} strokeWidth={3} aria-hidden="true" />}{ref.kind === 'tag' ? <Icons.Tag size={10} /> : ref.kind === 'remote' ? <Icons.Globe2 size={10} /> : ref.kind === 'stash' ? <Icons.Archive size={10} /> : <Icons.Laptop size={10} />}{remote && <Icons.Globe2 size={10} />}<span className="ref-pill-name">{ref.name}</span>
+                      {!!headRef && ref.fullName === headRef && <Icons.Check size={10} strokeWidth={3} aria-hidden="true" />}{ref.kind === 'tag' ? <Icons.Tag size={10} /> : ref.kind === 'remote' ? <Icons.Globe2 size={10} /> : ref.kind === 'stash' ? <Icons.Archive size={10} /> : worktree ? <Icons.TreePine size={10} /> : <Icons.Laptop size={10} />}{remote && <Icons.Globe2 size={10} />}<span className="ref-pill-name">{ref.name}</span>
                     </span>;
   }
 
@@ -248,21 +258,24 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   // Sit above the list's own horizontal scrollbar when it is showing.
   useLayoutEffect(() => { const el = scroller.current; if (el) setHbar(el.offsetHeight - el.clientHeight); });
 
+  // The canvas's CSS size is derived from these same pixel counts, so the bitmap is never resampled.
+  const dpr = window.devicePixelRatio || 1;
+  const pixelWidth = Math.floor(graphWidth * dpr), pixelHeight = Math.floor(windowHeight * dpr);
   useLayoutEffect(() => {
     const element = canvas.current;
     if (!element) return;
     const ctx = element.getContext('2d');
     if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
     // Assigning width/height clears and reallocates the backing store, so only do it when the size really changed.
-    const pixelWidth = Math.floor(graphWidth * dpr), pixelHeight = Math.floor(windowHeight * dpr);
     if (element.width !== pixelWidth) element.width = pixelWidth;
     if (element.height !== pixelHeight) element.height = pixelHeight;
-    const y = (row: number) => row * rowHeight + rowHeight / 2 - windowTop;
+    const deviceLine = Math.max(1, Math.round((apple ? 1.75 : 2.5) * dpr));
+    const y = (row: number) => pixelSnap(row * rowHeight + rowHeight / 2 - windowTop, dpr, deviceLine);
+    const laneAt = (lane: number) => graphX + pixelSnap(graphLaneX(lane) - graphX, dpr, deviceLine);
     const firstRow = Math.max(0, Math.floor(windowTop / rowHeight) - 1), lastRow = Math.min(loaded, Math.ceil((windowTop + windowHeight) / rowHeight) + 1);
     ctx.setTransform(dpr, 0, 0, dpr, -graphX * dpr, 0);
     ctx.clearRect(graphX, 0, graphWidth, windowHeight);
-    ctx.lineWidth = apple ? 1.75 : 2.5;
+    ctx.lineWidth = deviceLine / dpr;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     const colorRowOf = (edge: GraphEdge) => commits[edge.fromRow]?.parents[0] === edge.to ? edge.fromRow : edge.toRow;
@@ -271,7 +284,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     const onBranch = (edge: GraphEdge) => !!focus && focus.branch !== null && branchColors.owned[colorRowOf(edge)] === focus.branch;
     if (focus) edges.sort((a, b) => Number(onBranch(a)) - Number(onBranch(b)));
     const traceEdge = (edge: GraphEdge) => {
-      const x1 = graphLaneX(edge.fromLane), xt = graphLaneX(edge.track), x2 = graphLaneX(edge.toLane);
+      const x1 = laneAt(edge.fromLane), xt = laneAt(edge.track), x2 = laneAt(edge.toLane);
       const y1 = y(edge.fromRow), y2 = y(edge.toRow);
       const bend = rowHeight / 4, reach = rowHeight * 5 / 12;
       // Uncommitted work hangs off HEAD by a dotted line (round caps turn near-zero dashes into dots).
@@ -306,7 +319,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       const node = layout.nodes[row];
       const commit = commits[row];
       const working = commit.id === WORKING_ID;
-      const x = graphLaneX(node.lane), cy = y(row);
+      const x = laneAt(node.lane), cy = y(row);
       const onSelection = selectedBand && row === selectedIndex;
       const lane = onSelection ? theme.colors.buttonForeground : palette[branchColors.rows[row] ?? node.lane % colors.length];
       const alpha = shown && !shown.has(node.id) ? (focus ? 0.25 : 0.3) : 1;
@@ -342,7 +355,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       }
     }
     ctx.globalAlpha = 1;
-  }, [commits, layout, visibleEdges, windowTop, windowHeight, graphWidth, graphX, theme, matches, focus, shown, loaded, colors, palette, branchColors, avatars, material, apple, graphLaneX, joinRefs, refsByCommit, selectedId, selectedIndex, head]);
+  }, [commits, layout, visibleEdges, windowTop, windowHeight, graphWidth, graphX, theme, matches, focus, shown, loaded, colors, palette, branchColors, avatars, material, apple, graphLaneX, joinRefs, refsByCommit, selectedId, selectedIndex, head, dpr, pixelWidth, pixelHeight]);
 
   useEffect(() => {
     const node = layout.nodes[selectedIndex];
@@ -524,7 +537,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
           {apple && <div ref={hoverRect} className="history-hover" aria-hidden="true" hidden style={{ height: rowHeight - 2, left: 10, right: 10 }} />}
           {/* Apple design: the reference draws one rounded blue rect behind the selected row, spanning the whole row. */}
           {apple && selectedIndex >= 0 && <div className="history-selection" aria-hidden="true" style={{ top: selectedIndex * rowHeight, height: rowHeight - 2, left: 10, right: 10 }} />}
-          {isGraphVisible && <canvas ref={canvas} className="graph-canvas" aria-hidden="true" style={{ width: graphWidth, height: windowHeight, left: graphOffset, top: windowTop }} />}
+          {isGraphVisible && <canvas ref={canvas} className="graph-canvas" aria-hidden="true" data-layout-rows={layout.nodes.length} style={{ width: pixelWidth / dpr, height: pixelHeight / dpr, left: graphOffset, top: windowTop }} />}
           {commits.slice(start, end).map((commit, offset) => {
             const row = start + offset;
             const node = layout.nodes[row];

@@ -23,10 +23,12 @@ sources:
 `splitDiffRows` pairs removed and added lines by position within each contiguous
 change block. Context appears on both sides; excess changes get blank counterpart
 cells. Metadata remains a full-width row and terminates a change block. Pairing is
-presentation-only and retains each line's original hunk index.[^pairing]
+presentation-only and retains each line's original index within its hunk.[^pairing]
 
 `DiffPreview` (re-exported from `WorkingChanges.tsx`) renders equal Before /
 After columns with dedicated selection, line-number, and change-sign gutters.
+The line-number width is derived from the hunk list in split mode and reused
+when only focus, selection, or the virtual window changes.[^viewer]
 One horizontal scrollbar shifts the code on both sides, leaving columns and
 gutters fixed; trackpad horizontal scrolling and Shift+wheel use the same
 offset without React state updates per scroll event. Wrapping hides the

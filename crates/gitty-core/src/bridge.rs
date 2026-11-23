@@ -43,12 +43,18 @@ impl ConnectionLimiter {
     }
 
     pub(crate) fn try_acquire(&self) -> Option<ConnectionPermit> {
-        self.active
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
-                (n < self.max).then_some(n + 1)
-            })
-            .ok()
-            .map(|_| ConnectionPermit(self.active.clone()))
+        // `try_update` is not available on our minimum supported Rust version.
+        let mut n = self.active.load(Ordering::SeqCst);
+        while n < self.max {
+            match self
+                .active
+                .compare_exchange_weak(n, n + 1, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => return Some(ConnectionPermit(self.active.clone())),
+                Err(actual) => n = actual,
+            }
+        }
+        None
     }
 
     #[cfg(test)]

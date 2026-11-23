@@ -172,6 +172,53 @@ fn terminal_reviews_scope_staging_and_commit_to_the_displayed_inputs() {
 }
 
 #[test]
+fn terminal_commit_uses_the_reviewed_identity_without_changing_git_config() {
+    let f = Fixture::new();
+    f.write("file", "edited\n");
+    f.git(&["add", "--", "file"]);
+    let identity = crate::dto::CommitIdentity {
+        name: "Work Author".into(),
+        email: "work@example.invalid".into(),
+    };
+    let review = f
+        .repo
+        .terminal_review_commit_with_identity(Some(identity.clone()))
+        .unwrap();
+    assert_eq!(review.identity().unwrap().email, identity.email);
+    let other = f
+        .service
+        .open(f.repo.session.location.clone())
+        .unwrap()
+        .session
+        .handle;
+    assert_eq!(
+        f.service
+            .terminal_commit(&other, review, "wrong session")
+            .unwrap_err()
+            .code,
+        "staleOperation"
+    );
+    let review = f
+        .repo
+        .terminal_review_commit_with_identity(Some(identity))
+        .unwrap();
+    let config = std::fs::read(f.dir.path().join(".git/config")).unwrap();
+    let (_, matches) = f
+        .service
+        .terminal_commit(&f.handle, review, "profile commit")
+        .unwrap();
+    assert_eq!(matches, Some(true));
+    assert_eq!(
+        f.git(&["log", "-1", "--format=%an <%ae> | %cn <%ce>"]),
+        "Work Author <work@example.invalid> | Work Author <work@example.invalid>"
+    );
+    assert_eq!(
+        std::fs::read(f.dir.path().join(".git/config")).unwrap(),
+        config
+    );
+}
+
+#[test]
 fn terminal_stash_refuses_a_changed_file_set_and_keeps_untracked_files_unless_asked() {
     let f = Fixture::new();
     f.write("file", "edited\n");

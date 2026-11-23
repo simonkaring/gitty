@@ -92,7 +92,7 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   History rows use committer timestamps, matching this ordering; original author dates
   remain in the underlying commit objects.
   It consumes only the requested page plus one lookahead ID. Backpressure pauses
-  stdout consumption between pages. Consumed IDs are spooled to an anonymous temp
+  stdout consumption between pages. Consumed IDs are spooled in bounded page batches to an anonymous temp
   file, so replaying a cursor uses exactly the same order without keeping the entire
   history in memory. This never re-runs `--all`, re-resolves refs, or applies skip
   offsets to a new walk. **There is no 100,000-commit or whole-repository size rejection.**

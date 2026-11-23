@@ -4,7 +4,7 @@ import type { PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
 import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
 import { isCancelledSearch } from '../model/searchFlow';
-import { appendUnique, errorMessage, graphCommit, isDemoHandle, native, readNativeSnapshot, subscribeNative, validateHistory, WORKING_ID } from '../model/native';
+import { appendHistoryPage, errorMessage, graphCommit, isDemoHandle, native, readNativeSnapshot, subscribeNative, WORKING_ID } from '../model/native';
 import { HistoryGraph, type GraphAnchor, type GraphHandle } from './HistoryGraph';
 import { NativeInspector } from './NativeInspector';
 import { NativeSidebar } from './NativeSidebar';
@@ -32,6 +32,7 @@ import { BranchFolderMenu, type FolderMenuTarget } from './BranchFolderMenu';
 import type { BranchBatchDeleteExecution, BranchBatchDeleteRequest, BranchBatchDeleteResult, BranchDeleteExecution, BranchDeleteRequest, BranchDeleteResult, BranchDeleteTargetResult } from '../model/operations';
 import { SearchResults } from './SearchResults';
 import { Worktrees } from './Worktrees';
+import { worktreeEvents, type Worktree } from '../model/worktrees';
 import { CommitGraphNotice } from './CommitGraphNotice';
 import { commitGraphCommand } from '../model/commitGraph';
 
@@ -132,6 +133,20 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   const [deleteBranch, setDeleteBranch] = useState<{ target: NonNullable<ReturnType<typeof branchDeleteTargets>>; scope: BranchDeleteScope } | null>(null);
   const [folderOpen, setFolderOpen] = useState<Record<string, boolean>>({});
   const [hoverRef, setHoverRef] = useState<string | null>(null);
+  const [worktreeRefs, setWorktreeRefs] = useState<ReadonlySet<string>>(new Set());
+  const worktreeHandle = state?.session.handle, worktreeHead = state?.session.headRef;
+  useEffect(() => {
+    if (!active || !worktreeHandle) return;
+    let live = true;
+    // The graph needs these even while the sidebar's Worktrees section is closed or hidden.
+    const load = () => void native<Worktree[]>('repository_worktrees', { handle: worktreeHandle })
+      .then(items => { if (live) setWorktreeRefs(new Set(items.flatMap(item => item.branch && item.branch !== worktreeHead ? [item.branch] : []))); })
+      .catch(() => { if (live) setWorktreeRefs(new Set()); });
+    load();
+    worktreeEvents.addEventListener('change', load);
+    window.addEventListener('focus', load);
+    return () => { live = false; worktreeEvents.removeEventListener('change', load); window.removeEventListener('focus', load); };
+  }, [active, worktreeHandle, worktreeHead, stateRevision]);
   const [folderMenu, setFolderMenu] = useState<FolderMenuTarget | null>(null);
   const [deleteFolder, setDeleteFolder] = useState<{ folder: BranchFolder; scope: BranchDeleteScope; targets: FolderDeleteTargets } | null>(null);
   const [blockedSwitch, setBlockedSwitch] = useState<{ branch: string; ref: string; oid: string; reason: string } | null>(null);
@@ -169,6 +184,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   const lock = useRef(false);
   const session = useRef<RepositoryState | null>(null);
   const history = useRef<CommitSummary[]>([]);
+  const historyIds = useRef(new Set<string>());
   const nextCursor = useRef<string | null>(null);
   const fingerprint = useRef('');
   const generation = useRef('');
@@ -203,7 +219,10 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   useEffect(() => { if (!active) { setActionContext(null); setMenuTarget(null); setPublishInfo(null); setDeleteBranch(null); setFolderMenu(null); setDeleteFolder(null); setBlockedSwitch(null); setOriginReset(null); setConflictPath(null); setPrSource(null); setStashOpen(false); } }, [active]);
   const close = (handle: string) => native('repository_close', { handle }).catch(() => {});
   useEffect(() => () => { epoch.current++; revealToken.current++; if (session.current) void close(session.current.session.handle); session.current = null; }, []);
-  function installHistory(items: CommitSummary[], next: string | null) { history.current = items; nextCursor.current = next; setCommits(items); setCursor(next); }
+  function installHistory(items: CommitSummary[], next: string | null, paging = false) {
+    if (!paging) historyIds.current = new Set(items.map(commit => commit.id));
+    history.current = items; nextCursor.current = next; setCommits(items); setCursor(next);
+  }
   const open = useCallback(async () => {
     if (mutationLock.current) return;
     const token = ++epoch.current; revealToken.current++; setBusy(true); setError(''); lock.current = true;
@@ -539,17 +558,18 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     const token = epoch.current; const request = ++revealToken.current; lock.current = true; setBusy(true); setError('');
     try {
       let items = history.current;
-      while (nextCursor.current && (!reveal || !items.some(commit => commit.id === reveal))) {
+      while (nextCursor.current && (!reveal || !historyIds.current.has(reveal))) {
         const page = await native<HistoryPage>('repository_history', { handle: session.current.session.handle, cursor: nextCursor.current, limit: 200, query: {} });
         if (token !== epoch.current) return;
         if (page.generation !== generation.current) throw new Error('History changed while paging. Refresh to load a consistent history.');
         if (page.cursor === nextCursor.current) throw new Error('History cursor did not advance. Refresh and retry.');
-        items = appendUnique(items, page.commits); validateHistory(items); installHistory(items, page.cursor);
+        items = appendHistoryPage(items, page.commits, historyIds.current);
+        installHistory(items, page.cursor, true);
         if (request !== revealToken.current) return;
         if (!reveal) break;
       }
       if (reveal) {
-        if (items.some(commit => commit.id === reveal)) { setSelected(reveal); jumpTo.current = reveal; setCommits([...items]); }
+        if (historyIds.current.has(reveal)) { setSelected(reveal); jumpTo.current = reveal; setCommits([...items]); }
         else setNotice(`Commit ${reveal.slice(0, 12)} is outside available history${session.current.session.shallow ? ' (shallow boundary)' : ''}.`);
       }
     } catch (e) { if (token === epoch.current) setError(errorMessage(e)); }
@@ -567,7 +587,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       graph.current?.scrollTo(0);
       return;
     }
-    if (history.current.some(commit => commit.id === id)) {
+    if (historyIds.current.has(id)) {
       setSelected(id);
       jumpTo.current = id;
       setRevealTick(value => value + 1);
@@ -583,7 +603,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   // The stash record's second parent is Git's index commit: it never appears in
   // history, so the graph branches the stash from the commit it was taken from.
   const stashOids = useMemo(() => new Set(state?.refs.filter(ref => ref.kind === 'stash').map(ref => ref.commitId) ?? []), [state?.refs]);
-  const baseGraphCommits = useMemo(() => commits.map(commit => stashOids.has(commit.id) ? { ...graphCommit(commit), parents: commit.parents.slice(0, 1) } : graphCommit(commit)), [commits, stashOids]);
+  const baseGraphCommits = useMemo(() => commits.map(commit => graphCommit(commit, stashOids.has(commit.id))), [commits, stashOids]);
   const graphCommits = useMemo(() => {
     // Never attach live working status to a different pinned HEAD. Only the working
     // row is rebuilt when status changes; loaded history is not remapped again.
@@ -742,7 +762,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     const writeBlocked = mutationBusy || mutationBlocked;
     const { head, headRef } = state.session;
     const repo: PaletteCommand[] = [
-      commitGraphCommand(() => void speedUpHistory(), !state || commitGraphBusy),
+      { ...commitGraphCommand(() => void speedUpHistory(), !state || commitGraphBusy), icon: <Icons.Clock3 size={15} /> },
       { id: 'fetch', group: 'Repository', label: 'Fetch', icon: <Icons.RefreshCw size={15} />, disabled: writeBlocked, run: () => void runMenuRemote({ kind: 'fetch' }) },
       { id: 'pull', group: 'Repository', label: 'Pull', icon: <Icons.Download size={15} />, disabled: writeBlocked || !headRef, run: () => void runMenuRemote({ kind: 'pull', pullMode: DEFAULT_PULL_MODE }) },
       { id: 'push', group: 'Repository', label: 'Push', icon: <Icons.Upload size={15} />, disabled: writeBlocked || !headRef, run: () => { if (headRef) void pushFromMenu(headRef); } },
@@ -790,7 +810,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
         {!error && Array.from({ length: 12 }, (_, i) => <div key={i} className="skeleton-row" aria-hidden="true" style={{ animationDelay: `${i * 60}ms` }}><span className="skeleton-node" style={{ marginLeft: `${[0, 18, 0, 36, 18, 0][i % 6]}px` }} /><span className="skeleton" style={{ width: `${40 + ((i * 37) % 45)}%` }} /><span className="skeleton" style={{ width: 70 }} /></div>)}
       </div>
     </main> : <main className="workspace">
-        {sidebarOpen && <><NativeSidebar selectedId={selected} onHoverRef={setHoverRef} sections={settings.sidebarSections} onSectionsChange={sidebarSections => updateSettings({ sidebarSections })} state={state} commits={commits} filters={filters} busy={busy} reveal={reveal} switchBranch={ref => void switchBranch(ref)} openMenu={openMenu} onAction={setActionContext} folderOpen={folderOpen} onFolderOpen={(key, open) => setFolderOpen(current => ({ ...current, [key]: open }))} openFolderMenu={(folder, x, y, trigger) => setFolderMenu({ folder, x, y, trigger })} worktrees={<Worktrees session={state.session} stateRevision={stateRevision} active={active} busy={mutationBusy || mutationBlocked} onOpen={onOpenWorktree} onWrite={operationWrite} />} onStash={action => void stashAction(action)} /><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
+        {sidebarOpen && <><NativeSidebar selectedId={selected} onHoverRef={setHoverRef} worktreeRefs={worktreeRefs} sections={settings.sidebarSections} onSectionsChange={sidebarSections => updateSettings({ sidebarSections })} state={state} commits={commits} filters={filters} busy={busy} reveal={reveal} switchBranch={ref => void switchBranch(ref)} openMenu={openMenu} onAction={setActionContext} folderOpen={folderOpen} onFolderOpen={(key, open) => setFolderOpen(current => ({ ...current, [key]: open }))} openFolderMenu={(folder, x, y, trigger) => setFolderMenu({ folder, x, y, trigger })} worktrees={<Worktrees session={state.session} stateRevision={stateRevision} active={active} busy={mutationBusy || mutationBlocked} onOpen={onOpenWorktree} onWrite={operationWrite} />} onStash={action => void stashAction(action)} /><PaneResizer label="Resize repository sidebar" width={sidebarWidth} onChange={setSidebarWidth} min={210} max={340} direction={1} /></>}
       <div className="workspace-main">
         {!sidebarOpen && filters}
         <div className="history-workspace">
@@ -834,7 +854,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
                 <div className="search-results-container" hidden={searchView !== 'results'}><SearchResults result={result} loading={searchBusy} error={searchError} query={text} refs={state.refs} selected={selected} onSelect={id => { navigation.current++; setSelected(id); setActiveDiff(null); setInspectorOpen(true); }} onReveal={id => { setSearchView('graph'); requestAnimationFrame(() => reveal(id)); }} onRetry={() => setSearchRetry(value => value + 1)} onClear={clearFilters} /></div></>}
               <div className="search-history-container" hidden={filtering && searchView === 'results'}>
               {!graphCommits.length && <div className="empty-state"><Icons.GitCommitHorizontal size={28} /><h2>No commits yet</h2><p>This repository has no commits or working changes. Add files, stage them, and make your first commit.</p></div>}
-                <HistoryGraph ref={graph} highlightRef={hoverRef} commits={graphCommits} layout={layout} refs={state.refs} selectedId={selected} head={state.session.head ?? ''} headRef={state.session.headRef} onActions={context => setActionContext(context)} onContextActions={openMenu} onSwitchBranch={ref => void switchBranch(ref)} pickOrder={pickOrder} onTogglePick={pickMode ? id => setPickOrder(order => toggleCommit(order, id)) : undefined} matches={matches} onSelect={id => reveal(id)} onLoadMore={() => void load()} onOpenDetails={() => setInspectorOpen(true)} theme={theme} hasMore={!!cursor} paging={busy} shallow={state.session.shallow} />
+                <HistoryGraph ref={graph} highlightRef={hoverRef} commits={graphCommits} layout={layout} refs={state.refs} worktreeRefs={worktreeRefs} selectedId={selected} head={state.session.head ?? ''} headRef={state.session.headRef} onActions={context => setActionContext(context)} onContextActions={openMenu} onSwitchBranch={ref => void switchBranch(ref)} pickOrder={pickOrder} onTogglePick={pickMode ? id => setPickOrder(order => toggleCommit(order, id)) : undefined} matches={matches} onSelect={id => reveal(id)} onLoadMore={() => void load()} onOpenDetails={() => setInspectorOpen(true)} theme={theme} hasMore={!!cursor} paging={busy} shallow={state.session.shallow} />
               </div>
             </section>
           )}

@@ -70,6 +70,7 @@ def main(root, auth):
         # Closing the master after the restore sequence must not signal the child.
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
         os.environ["TERM"] = "xterm-256color"
+        os.environ["XDG_CONFIG_HOME"] = str(root / "config")
         os.execv(BIN, [str(BIN), "tui", "--repo", str(repo)])
 
     screen = {}
@@ -146,6 +147,20 @@ def main(root, auth):
     try:
         resize(80)
         expect(b"fixture initial commit")
+        key(b",")
+        expect(b"Commit Profiles")
+        key(b"\t")
+        expect(b"Use Git default")
+        key(b"n")
+        expect(b"Author name")
+        key(b"Work\tProfile Author\tprofile@example.invalid\r")
+        expect(b"Profile saved.")
+        key(b"\r")
+        expect(b"Profile assigned")
+        key(b"\x1b")
+        expect(b"Tab")
+        key(b"\x1b")
+        expect(b"fixture initial commit")
         # A double click on the first history row (screen row 4) opens the commit.
         click = b"\x1b[<0;30;4M\x1b[<0;30;4m"
         key(click + click)
@@ -167,9 +182,14 @@ def main(root, auth):
         assert git(repo, "diff", "--cached", "--name-only") == b"file.txt"
         key(b"c")
         expect(b"Summary of the change")
+        expect(b"Profile Author <profile@example.invalid>")
         key(b"terminal commit\x1bOQ")
         expect(b"Committed")
         assert git(repo, "log", "-1", "--format=%s") == b"terminal commit"
+        assert git(repo, "log", "-1", "--format=%ae %ce") == (
+            b"profile@example.invalid profile@example.invalid"
+        )
+        assert git(repo, "config", "user.email") == b"tui@example.invalid"
         assert (repo / ".git/tui-isolated").read_text() == "isolated"
         key(b"m")
         expect(b"publish to set one")

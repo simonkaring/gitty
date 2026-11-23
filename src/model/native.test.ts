@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { appendUnique, graphCommit, hostLive, setDemoMode, statusGroups } from './native';
+import { appendHistoryPage, graphCommit, hostLive, setDemoMode, statusGroups } from './native';
 import type { CommitSummary, StatusEntry } from './repository';
 
 describe('native history adaptation', () => {
@@ -9,7 +9,26 @@ describe('native history adaptation', () => {
     expect(commit).not.toHaveProperty('files');
   });
   it('deduplicates overlapping history pages without reordering ancestry', () => {
-    expect(appendUnique([commit], [commit, { ...commit, id: 'b' }]).map(item => item.id)).toEqual(['a', 'b']);
+    const loaded = new Set(['a']);
+    expect(appendHistoryPage([commit], [commit, { ...commit, id: 'b', parents: ['c'] }], loaded).map(item => item.id)).toEqual(['a', 'b']);
+    expect([...loaded]).toEqual(['a', 'b']);
+  });
+  it('rejects duplicates, self-parenting, and ancestry pointing back into the loaded prefix or page without polluting the index', () => {
+    const loaded = new Set(['a']);
+    const b = { ...commit, id: 'b', parents: [] };
+    for (const invalid of [b, { ...b, id: 'c', parents: ['a'] }, { ...b, id: 'c', parents: ['b'] }, { ...b, id: 'c', parents: ['c'] }]) {
+      expect(() => appendHistoryPage([commit], [b, invalid], loaded)).toThrow('inconsistent ancestry');
+      expect([...loaded]).toEqual(['a']);
+    }
+    expect(appendHistoryPage([commit], [b], loaded)).toEqual([commit, b]);
+  });
+  it('reuses row adaptations without confusing normal and stash ancestry', () => {
+    const normal = graphCommit(commit);
+    const stash = graphCommit(commit, true);
+    expect(graphCommit(commit)).toBe(normal);
+    expect(graphCommit(commit, true)).toBe(stash);
+    expect(stash.parents).toEqual(['b']);
+    expect(normal.parents).toEqual(['b', 'c']);
   });
 });
 describe('working status categories', () => {

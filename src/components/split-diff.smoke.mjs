@@ -55,6 +55,13 @@ let browser;
 try {
   await server.listen();
   browser = await chromium.launch({ headless: true, ...(process.env.CHROMIUM_EXECUTABLE_PATH ? { executablePath: process.env.CHROMIUM_EXECUTABLE_PATH } : {}) });
+  if (process.argv.includes('--bench-navigation')) {
+    const { benchmarkNavigation } = await import('../../scripts/bench/diff-navigation.mjs');
+    await benchmarkNavigation(browser, `${server.resolvedUrls.local[0]}split-preview`);
+  } else await smoke(browser);
+} finally { await browser?.close(); await server.close(); }
+
+async function smoke(browser) {
   const page = await browser.newPage({ viewport: { width: 1100, height: 780 }, reducedMotion: 'reduce' });
   const errors = []; page.on('pageerror', error => { errors.push(error.message); console.error(error.message); });
   await page.goto(`${server.resolvedUrls.local[0]}split-preview`);
@@ -113,10 +120,14 @@ try {
     assert.equal(await view.getAttribute('data-virtual'), 'true');
     const count = () => view.locator(':scope > div > [data-row]').count();
     assert.ok(await count() < 200, `rendered ${await count()} rows`);
+    // Font readiness invalidates measured widths. Let the top-of-file long
+    // line be measured with final fonts before scrolling it out of the DOM.
+    await big.evaluate(() => document.fonts.ready);
+    if (layout === 'split') await big.locator('.split-horizontal-scroll').waitFor({ state: 'visible' });
     // Rows directly at the viewport top must exist after a long jump (no blank gap).
     const firstVisible = () => view.evaluate(el => { const top = el.getBoundingClientRect().top + (el.querySelector('.split-column-header')?.offsetHeight ?? 0) + 1; const row = [...el.querySelectorAll('[data-row]')].find(node => { const box = (node.classList.contains('split-row') ? node.firstElementChild : node).getBoundingClientRect(); return box.top <= top && box.bottom > top; }); return row ? Number(row.dataset.row) : -1; });
     await view.evaluate(el => { el.scrollTop = el.scrollHeight / 2; });
-    await big.waitForTimeout(100);
+    await big.waitForFunction(() => Number(document.querySelector('.native-diff [data-row]')?.dataset.row) > 5000);
     const middle = await firstVisible();
     assert.ok(middle > 5000, `first visible row ${middle}`);
     assert.ok(await count() < 200);
@@ -153,4 +164,4 @@ try {
   }
   assert.deepEqual(errors, []);
   console.log('Split diff browser smoke passed: equal columns, paired rows, original line indices, shared scrolling, wrapped alignment, both themes, narrow layouts, and virtualized large diffs.');
-} finally { await browser?.close(); await server.close(); }
+}

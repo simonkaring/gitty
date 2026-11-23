@@ -65,7 +65,7 @@ fn parse_batch(ids: &[String], mut bytes: &[u8]) -> Result<Vec<CommitSummary>> {
         // the 32 MiB aggregate output limit for the entire page. Rows are display
         // only, so one commit in a legacy encoding (a Latin-1 author name) shows
         // replacement characters instead of failing the whole page of 200.
-        commits.push(parse_text(id, &String::from_utf8_lossy(object))?.summary);
+        commits.push(parse_summary(id, &String::from_utf8_lossy(object))?.0);
         bytes = &bytes[size + 1..];
     }
     if !bytes.is_empty() {
@@ -79,6 +79,16 @@ pub fn parse(id: &str, bytes: &[u8]) -> Result<CommitDetail> {
 }
 
 fn parse_text(id: &str, raw: &str) -> Result<CommitDetail> {
+    let (summary, body) = parse_summary(id, raw)?;
+    Ok(CommitDetail {
+        summary,
+        body: body.to_string(),
+        can_edit_message: false,
+        edit_disabled_reason: None,
+    })
+}
+
+fn parse_summary<'a>(id: &str, raw: &'a str) -> Result<(CommitSummary, &'a str)> {
     let (headers, body) = raw
         .split_once("\n\n")
         .ok_or_else(|| Error::new("gitParse", "Malformed commit"))?;
@@ -103,8 +113,8 @@ fn parse_text(id: &str, raw: &str) -> Result<CommitDetail> {
         .and_then(|date| date.split_whitespace().next())
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| Error::new("gitParse", "Malformed committer timestamp"))?;
-    Ok(CommitDetail {
-        summary: CommitSummary {
+    Ok((
+        CommitSummary {
             id: id.into(),
             parents,
             subject: body.lines().next().unwrap_or("").into(),
@@ -112,10 +122,8 @@ fn parse_text(id: &str, raw: &str) -> Result<CommitDetail> {
             email: email.into(),
             timestamp,
         },
-        body: body.to_string(),
-        can_edit_message: false,
-        edit_disabled_reason: None,
-    })
+        body,
+    ))
 }
 
 #[cfg(test)]

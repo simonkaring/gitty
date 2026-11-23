@@ -103,6 +103,7 @@ struct UnixChild {
 /// the owner finishes cleanup. Killing and reaping serialize on the same mutex.
 /// Reader completion shares the channel so inherited pipes remain deadline-bound.
 pub(crate) struct ChildWait {
+    #[cfg(unix)]
     id: u32,
     waiter: Option<thread::JoinHandle<()>>,
     #[cfg(unix)]
@@ -123,6 +124,7 @@ impl ChildWait {
                 return Err(e);
             }
         };
+        #[cfg(unix)]
         let id = child.id();
         #[cfg(unix)]
         let unix = Arc::new(std::sync::Mutex::new(UnixChild {
@@ -158,6 +160,7 @@ impl ChildWait {
             let _ = sender.send(ProcessEvent::Exited(status));
         });
         Ok(Self {
+            #[cfg(unix)]
             id,
             waiter: Some(waiter),
             #[cfg(unix)]
@@ -166,7 +169,7 @@ impl ChildWait {
             job,
         })
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn id(&self) -> u32 {
         self.id
     }
@@ -480,25 +483,24 @@ static SSH_CONTROL_DIR: OnceLock<PathBuf> = OnceLock::new();
 pub fn set_ssh_control_dir(path: PathBuf) {
     let _ = SSH_CONTROL_DIR.set(path);
 }
+#[cfg(unix)]
 fn ssh_control_dir() -> PathBuf {
-    let dir = SSH_CONTROL_DIR
+    SSH_CONTROL_DIR
         .get()
         .cloned()
-        .unwrap_or_else(temp_control_dir);
-    dir
+        .unwrap_or_else(temp_control_dir)
 }
 /// The per-process directory used when no app-data directory is configured or when
 /// that directory is too long for a socket path.
+#[cfg(unix)]
 fn temp_control_dir() -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
     static TEMP: OnceLock<Option<tempfile::TempDir>> = OnceLock::new();
     TEMP.get_or_init(|| {
         let mut builder = tempfile::Builder::new();
         builder.prefix("gs-");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            builder.permissions(std::fs::Permissions::from_mode(0o700));
-        }
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
         builder.tempdir().ok()
     })
     .as_ref()
@@ -509,14 +511,13 @@ fn temp_control_dir() -> PathBuf {
 }
 /// Creates `dir` if needed and keeps it user-only: sockets here grant access to the
 /// user's authenticated sessions.
+#[cfg(unix)]
 fn private_dir(dir: &std::path::Path) -> bool {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
+    builder.mode(0o700);
     if let Err(error) = builder.create(dir) {
         if error.kind() != std::io::ErrorKind::AlreadyExists {
             return false;
@@ -528,13 +529,7 @@ fn private_dir(dir: &std::path::Path) -> bool {
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return false;
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        return metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o077 == 0;
-    }
-    #[cfg(not(unix))]
-    true
+    metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o077 == 0
 }
 /// The kernel rejects a Unix socket path past `sun_path` (104 bytes on macOS, 108
 /// on Linux), and OpenSSH also appends `.XXXXXXXXXX` while it creates the listening

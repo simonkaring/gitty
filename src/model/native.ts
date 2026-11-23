@@ -193,7 +193,17 @@ export function errorMessage(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'message' in error) return String(error.message);
   return String(error);
 }
-export function graphCommit(commit: CommitSummary): Commit { return { ...commit, body: '', branch: '', files: [] }; }
+const graphRows = new WeakMap<CommitSummary, Commit>();
+const stashGraphRows = new WeakMap<CommitSummary, Commit>();
+export function graphCommit(commit: CommitSummary, stash = false): Commit {
+  const cache = stash ? stashGraphRows : graphRows;
+  let row = cache.get(commit);
+  if (!row) {
+    row = { ...commit, parents: stash ? commit.parents.slice(0, 1) : commit.parents, body: '', branch: '', files: [] };
+    cache.set(commit, row);
+  }
+  return row;
+}
 export const WORKING_ID = 'gitty:working-tree';
 export type WorkingGroup = Extract<DiffSpec['kind'], 'staged' | 'unstaged' | 'untracked' | 'conflict'>;
 export function statusGroups(entries: StatusEntry[]): Record<WorkingGroup, StatusEntry[]> {
@@ -208,9 +218,20 @@ export function statusGroups(entries: StatusEntry[]): Record<WorkingGroup, Statu
   }
   return groups;
 }
-export function appendUnique(current: CommitSummary[], next: CommitSummary[]) {
-  const ids = new Set(current.map(commit => commit.id));
-  return [...current, ...next.filter(commit => !ids.has(commit.id))];
+/** A page may replay already loaded rows. Validate only new rows against the
+ * committed prefix and this page; a rejected page must not alter the index. */
+export function appendHistoryPage(current: CommitSummary[], next: CommitSummary[], loaded: Set<string>) {
+  const fresh: CommitSummary[] = [];
+  const seen = new Set<string>();
+  for (const commit of next) {
+    if (loaded.has(commit.id)) continue;
+    checkAncestry(commit, seen, loaded);
+    fresh.push(commit);
+    seen.add(commit.id);
+  }
+  const combined = fresh.length ? [...current, ...fresh] : current;
+  for (const id of seen) loaded.add(id);
+  return combined;
 }
 
 export interface NativeSnapshot {
@@ -223,12 +244,16 @@ export interface NativeSnapshot {
 }
 
 /** Reject malformed/mixed walks at the IPC boundary, before calling the graph layout. */
+function checkAncestry(commit: CommitSummary, seen: Set<string>, prefix?: Set<string>) {
+  if (seen.has(commit.id) || commit.parents.some(id => id === commit.id || seen.has(id) || prefix?.has(id))) {
+    throw new Error('Repository returned inconsistent ancestry. Refresh to retry.');
+  }
+}
+
 export function validateHistory(commits: CommitSummary[]) {
   const seen = new Set<string>();
   for (const commit of commits) {
-    if (seen.has(commit.id) || commit.parents.some(id => id === commit.id || seen.has(id))) {
-      throw new Error('Repository returned inconsistent ancestry. Refresh to retry.');
-    }
+    checkAncestry(commit, seen);
     seen.add(commit.id);
   }
 }

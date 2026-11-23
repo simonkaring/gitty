@@ -6,12 +6,12 @@ use crossterm::event::{
 use gitty_core::{
     askpass::{self, AskpassContext, AskpassRegistry},
     dto::{
-        CommitDetail, CommitSummary, DiffFile, DiffSpec, FileDiff, HistoryPage, RepositoryLocation,
-        RepositoryState, Result, StatusEntry,
+        CommitDetail, CommitIdentity, CommitSummary, DiffFile, DiffSpec, FileDiff, HistoryPage,
+        RepositoryLocation, RepositoryState, Result, StatusEntry,
     },
     remote::{TerminalRemoteReview, TerminalSync},
     remote_dto::{StashAction, StashEntry, SyncInfo},
-    repository::Service,
+    repository::{Repository, Service},
     terminal::{CommitReview, StageReview, StashReview},
     Error,
 };
@@ -19,6 +19,7 @@ use ratatui::DefaultTerminal;
 use std::{
     collections::HashMap,
     io::{self, IsTerminal},
+    path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc,
@@ -26,8 +27,10 @@ use std::{
     time::Duration,
 };
 
+mod settings;
 mod theme;
 mod view;
+use settings::{Profile, Settings};
 use view::{render, safe};
 
 const WRITES: bool = cfg!(target_os = "macos");
@@ -206,13 +209,14 @@ struct Snapshot {
 
 /// The `bool` on Commit/Diff jobs opens the result; otherwise it only fills a preview pane.
 enum Job {
+    Open(String),
     History(Option<String>),
     Commit(String, bool),
     Diff(DiffSpec, String, bool),
     Working,
     StageReview(String, bool),
     Stage(StageReview),
-    CommitReview,
+    CommitReview(Option<CommitIdentity>),
     Save(CommitReview, String),
     Sync,
     RemoteReview(TerminalSync, String, Option<String>),
@@ -224,6 +228,7 @@ enum Job {
 }
 
 enum Reply {
+    Opened(Snapshot, HistoryPage),
     History(Option<Snapshot>, HistoryPage),
     Commit(CommitDetail, Vec<DiffFile>, bool),
     Diff(String, FileDiff, bool),
@@ -258,8 +263,35 @@ enum PromptEvent {
     Expired(usize),
 }
 
+fn snapshot(repo: &Repository, bare: bool) -> Result<(Snapshot, HistoryPage)> {
+    // Reading status first also reconciles the index after a write.
+    let changes = if bare {
+        None
+    } else {
+        Some(repo.status_entries()?.entries.len())
+    };
+    for _ in 0..3 {
+        let state = repo.state()?;
+        let page = repo.history(None, PAGE, Default::default())?;
+        if repo.state()?.fingerprint == state.fingerprint {
+            return Ok((
+                Snapshot {
+                    state,
+                    sync: repo.sync_info().ok(),
+                    changes,
+                    stashes: repo.stashes().unwrap_or_default(),
+                },
+                page,
+            ));
+        }
+    }
+    Err(Error::new(
+        "unstable",
+        "Repository refs changed during refresh. Try again.",
+    ))
+}
+
 fn worker(
-    path: String,
     jobs: mpsc::Receiver<Job>,
     replies: mpsc::Sender<Result<Reply>>,
     registry: Option<Arc<AskpassRegistry>>,
@@ -268,51 +300,40 @@ fn worker(
     gitty_core::process::terminal_worker(cancel);
     let data = tempfile::tempdir()?;
     let service = Service::new(data.path().into());
-    let session = service.open(RepositoryLocation::Native { path })?.session;
-    let handle = &session.handle;
-    let repo = service.repo(handle)?;
-    let history = |cursor: Option<String>| repo.history(cursor, PAGE, Default::default());
-    let fresh = || -> Result<_> {
-        for _ in 0..3 {
-            let state = repo.state()?;
-            let page = history(None)?;
-            if repo.state()?.fingerprint == state.fingerprint {
-                return Ok((state, page));
-            }
-        }
-        Err(Error::new(
-            "unstable",
-            "Repository refs changed during refresh. Try again.",
-        ))
-    };
-    // Reading status first also reconciles the index after a write.
-    let snapshot = || -> Result<(Snapshot, HistoryPage)> {
-        let changes = if session.bare {
-            None
-        } else {
-            Some(repo.status_entries()?.entries.len())
-        };
-        let (state, page) = fresh()?;
-        let sync = repo.sync_info().ok();
-        let stashes = repo.stashes().unwrap_or_default();
-        Ok((
-            Snapshot {
-                state,
-                sync,
-                changes,
-                stashes,
-            },
-            page,
-        ))
-    };
+    let mut active: Option<(String, bool)> = None;
     for job in jobs {
         let reply = (|| -> Result<Reply> {
+            if let Job::Open(path) = job {
+                let session = service.open(RepositoryLocation::Native { path })?.session;
+                let result = service
+                    .repo(&session.handle)
+                    .and_then(|repo| snapshot(&repo, session.bare));
+                let (snapshot, page) = match result {
+                    Ok(loaded) => loaded,
+                    Err(error) => {
+                        service.close(&session.handle)?;
+                        return Err(error);
+                    }
+                };
+                if let Some((handle, _)) = &active {
+                    service.close(handle)?;
+                }
+                active = Some((session.handle, session.bare));
+                return Ok(Reply::Opened(snapshot, page));
+            }
+            let (handle, bare) = active
+                .as_ref()
+                .ok_or_else(|| Error::new("noRepository", "Open a repository first."))?;
+            let repo = service.repo(handle)?;
+            let snapshot = || snapshot(&repo, *bare);
             Ok(match job {
                 Job::History(None) => {
                     let (snapshot, page) = snapshot()?;
                     Reply::History(Some(snapshot), page)
                 }
-                Job::History(cursor) => Reply::History(None, history(cursor)?),
+                Job::History(cursor) => {
+                    Reply::History(None, repo.history(cursor, PAGE, Default::default())?)
+                }
                 Job::Commit(oid, open) => {
                     let spec = DiffSpec::Commit {
                         oid: oid.clone(),
@@ -340,7 +361,9 @@ fn worker(
                         refresh: snapshot(),
                     }
                 }
-                Job::CommitReview => Reply::CommitReview(repo.terminal_review_commit()?),
+                Job::CommitReview(identity) => {
+                    Reply::CommitReview(repo.terminal_review_commit_with_identity(identity)?)
+                }
                 Job::Save(review, message) if WRITES => {
                     let outcome = service.terminal_commit(handle, review, &message);
                     let committed = outcome.is_ok();
@@ -421,7 +444,10 @@ fn worker(
             break;
         }
     }
-    service.close(handle)
+    if let Some((handle, _)) = active {
+        service.close(&handle)?;
+    }
+    Ok(())
 }
 
 fn error_text(error: Error) -> String {
@@ -450,6 +476,7 @@ fn remote_error(error: Error) -> Error {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum View {
+    Repositories,
     History,
     Files,
     Working,
@@ -459,6 +486,26 @@ enum View {
     Publish,
     Confirm,
     Settings,
+    Profiles,
+    ProfileEdit,
+}
+
+struct ProfileEditor {
+    id: usize,
+    field: usize,
+    values: [String; 3],
+}
+
+impl ProfileEditor {
+    fn profile(&self) -> Profile {
+        let [label, name, email] = self.values.each_ref().map(|s| s.trim().to_owned());
+        Profile {
+            id: self.id,
+            label,
+            name,
+            email,
+        }
+    }
 }
 
 enum Confirm {
@@ -488,6 +535,10 @@ enum Hit {
     Staged(bool),
     Remote(usize),
     Setting(usize),
+    ProfilePage,
+    Repository(usize),
+    Profile(usize),
+    ProfileField(usize),
     Action(Action),
 }
 
@@ -502,6 +553,7 @@ struct App {
     jobs: mpsc::SyncSender<Job>,
     busy: bool,
     writing: bool,
+    switching: bool,
     quit: bool,
     locked: bool,
     wide: bool,
@@ -540,6 +592,8 @@ struct App {
     diff: Option<FileDiff>,
     review: Option<CommitReview>,
     message: String,
+    /// Drafts and uncertain push checks survive switching away from a worktree.
+    inactive: HashMap<String, (String, Option<TerminalRemoteReview>)>,
     sync: Option<SyncInfo>,
     publish: String,
     uncertain: Option<TerminalRemoteReview>,
@@ -548,6 +602,14 @@ struct App {
     /// Index of the applied theme, and of the one highlighted in settings.
     theme: usize,
     settings: usize,
+    config: Settings,
+    config_path: Option<PathBuf>,
+    config_unreadable: bool,
+    repo_selection: usize,
+    repo_path: String,
+    repo_back: View,
+    profile_selection: usize,
+    profile_editor: Option<ProfileEditor>,
     /// Columns the diff is panned to the right.
     hscroll: usize,
 }
@@ -558,6 +620,7 @@ impl App {
             jobs,
             busy: false,
             writing: false,
+            switching: false,
             quit: false,
             locked: false,
             wide: false,
@@ -591,6 +654,7 @@ impl App {
             diff: None,
             review: None,
             message: String::new(),
+            inactive: HashMap::new(),
             sync: None,
             publish: String::new(),
             uncertain: None,
@@ -598,11 +662,20 @@ impl App {
             notice: String::new(),
             theme: 0,
             settings: 0,
+            config: Settings::default(),
+            config_path: None,
+            config_unreadable: false,
+            repo_selection: 0,
+            repo_path: String::new(),
+            repo_back: View::History,
+            profile_selection: 0,
+            profile_editor: None,
             hscroll: 0,
         }
     }
 
     fn send(&mut self, job: Job) {
+        let switching = matches!(job, Job::Open(_));
         let write = matches!(
             job,
             Job::Stage(_) | Job::Save(..) | Job::Remote(_) | Job::Stash(_) | Job::Pop(_)
@@ -614,7 +687,8 @@ impl App {
             Ok(()) => {
                 self.busy = true;
                 self.writing = write;
-                if write {
+                self.switching = switching;
+                if write || switching {
                     self.notice.clear();
                 }
             }
@@ -634,6 +708,149 @@ impl App {
     fn say(&mut self, tone: Tone, notice: impl Into<String>) {
         self.tone = tone;
         self.notice = notice.into();
+    }
+
+    fn root(&self) -> Option<&str> {
+        self.state.as_ref().map(|s| s.session.root.as_str())
+    }
+
+    fn selected_profile(&self) -> Option<&Profile> {
+        self.config.profile(self.root()?)
+    }
+
+    fn save_config(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        let result = if self.config_unreadable {
+            Err(io::Error::other("existing settings could not be read"))
+        } else {
+            self.config.save(self.config_path.as_deref())
+        };
+        match result {
+            Ok(()) => self.say(Tone::Good, message),
+            Err(error) => self.say(Tone::Bad, format!("{message} In memory only: {error}.")),
+        }
+    }
+
+    fn opened(&mut self, snapshot: Snapshot, page: HistoryPage) {
+        let root = snapshot.state.session.root.clone();
+        let name = snapshot.state.session.name.clone();
+        let mut fresh = Self::new(self.jobs.clone());
+        fresh.wide = self.wide;
+        fresh.quit = self.quit;
+        fresh.theme = self.theme;
+        fresh.config = std::mem::take(&mut self.config);
+        fresh.config_path = self.config_path.take();
+        fresh.config_unreadable = self.config_unreadable;
+        fresh.inactive = std::mem::take(&mut self.inactive);
+        if let Some(from) = self.root().map(str::to_owned) {
+            if !self.message.is_empty() || self.uncertain.is_some() {
+                fresh.inactive.insert(
+                    from,
+                    (std::mem::take(&mut self.message), self.uncertain.take()),
+                );
+            }
+        }
+        if let Some((message, uncertain)) = fresh.inactive.remove(&root) {
+            fresh.message = message;
+            fresh.uncertain = uncertain;
+        }
+        fresh.page(Some(snapshot), page);
+        let message = format!("Opened {name}.");
+        if fresh.config.remember(&root) {
+            fresh.save_config(message);
+        } else {
+            fresh.say(Tone::Good, message);
+        }
+        *self = fresh;
+    }
+
+    fn edit_profile(&mut self, new: bool) {
+        let existing = self
+            .profile_selection
+            .checked_sub(1)
+            .and_then(|i| self.config.profiles.get(i));
+        let editor = if new {
+            if self.config.profiles.len() >= settings::MAX_PROFILES {
+                self.say(Tone::Bad, "Delete a profile before adding another.");
+                return;
+            }
+            let id = (1..)
+                .find(|id| !self.config.profiles.iter().any(|p| p.id == *id))
+                .unwrap();
+            ProfileEditor {
+                id,
+                field: 0,
+                values: Default::default(),
+            }
+        } else if let Some(p) = existing {
+            ProfileEditor {
+                id: p.id,
+                field: 0,
+                values: [p.label.clone(), p.name.clone(), p.email.clone()],
+            }
+        } else {
+            return;
+        };
+        self.profile_editor = Some(editor);
+        self.view = View::ProfileEdit;
+    }
+
+    fn save_profile(&mut self) {
+        let Some(editor) = &self.profile_editor else {
+            return;
+        };
+        let profile = editor.profile();
+        if !profile.valid_label() {
+            self.say(Tone::Bad, "Enter a profile label (up to 80 bytes).");
+            return;
+        }
+        if let Err(error) = profile.identity().validate() {
+            self.say(Tone::Bad, error_text(error));
+            return;
+        }
+        if let Some(i) = self.config.profiles.iter().position(|p| p.id == profile.id) {
+            self.config.profiles[i] = profile;
+            self.profile_selection = i + 1;
+        } else {
+            self.config.profiles.push(profile);
+            self.profile_selection = self.config.profiles.len();
+        }
+        self.profile_editor = None;
+        self.view = View::Profiles;
+        self.save_config("Profile saved.");
+    }
+
+    fn paste(&mut self, text: &str) {
+        let (field, limit, multiline) = match self.view {
+            View::Composer => (&mut self.message, 65536, true),
+            View::Repositories if self.repo_selection == 0 => (&mut self.repo_path, 32768, false),
+            View::ProfileEdit => {
+                let Some(editor) = &mut self.profile_editor else {
+                    return;
+                };
+                (
+                    &mut editor.values[editor.field],
+                    [80, 120, 254][editor.field],
+                    false,
+                )
+            }
+            _ => return,
+        };
+        let normalized = text.replace("\r\n", "\n");
+        for c in if multiline {
+            normalized.as_str()
+        } else {
+            normalized.lines().next().unwrap_or("")
+        }
+        .chars()
+        {
+            if field.len() + c.len_utf8() > limit {
+                break;
+            }
+            if !c.is_control() || (multiline && matches!(c, '\n' | '\t')) {
+                field.push(c);
+            }
+        }
     }
 
     fn file_target(&self) -> Option<(DiffSpec, String)> {
@@ -782,7 +999,9 @@ impl App {
     fn reply(&mut self, reply: Result<Reply>) {
         self.busy = false;
         self.writing = false;
+        self.switching = false;
         match reply {
+            Ok(Reply::Opened(snapshot, page)) => self.opened(snapshot, page),
             Ok(Reply::History(snapshot, page)) => self.page(snapshot, page),
             Ok(Reply::Commit(detail, files, open)) => {
                 self.detail = Some((detail, files));
@@ -1007,7 +1226,10 @@ impl App {
 
     /// Clicking selects; a second click on the same item within a moment opens it.
     fn click(&mut self, column: u16, row: u16) {
-        if self.writing || matches!(self.view, View::Composer | View::Confirm | View::Publish) {
+        if self.writing
+            || self.switching
+            || matches!(self.view, View::Composer | View::Confirm | View::Publish)
+        {
             return;
         }
         let at = ratatui::layout::Position::new(column, row);
@@ -1020,6 +1242,15 @@ impl App {
         else {
             return;
         };
+        if matches!(
+            self.view,
+            View::Repositories | View::Profiles | View::ProfileEdit
+        ) && !matches!(
+            hit,
+            Hit::Repository(_) | Hit::Profile(_) | Hit::ProfileField(_)
+        ) {
+            return;
+        }
         let now = std::time::Instant::now();
         let double = self.last_click.is_some_and(|(at, last)| {
             last == hit && now.duration_since(at) < Duration::from_millis(450)
@@ -1029,10 +1260,29 @@ impl App {
             Hit::Tab(0) => self.key(Key::Char('h'), false, 1),
             Hit::Tab(1) => self.key(Key::Char('w'), false, 1),
             Hit::Tab(2) => self.key(Key::Char('m'), false, 1),
-            Hit::Tab(_) => self.key(Key::Char(','), false, 1),
+            Hit::Tab(3) => self.key(Key::Char(','), false, 1),
+            Hit::Tab(_) => self.key(Key::Char('o'), false, 1),
             Hit::Staged(staged) if staged != self.staged => self.key(Key::Tab, false, 1),
             Hit::Staged(_) => {}
             Hit::Remote(i) => self.remote = i,
+            Hit::ProfilePage => self.key(Key::Tab, false, 1),
+            Hit::Repository(i) => {
+                self.repo_selection = i;
+                if double && i != 0 {
+                    self.key(Key::Enter, false, 1);
+                }
+            }
+            Hit::Profile(i) => {
+                self.profile_selection = i;
+                if double {
+                    self.key(Key::Enter, false, 1);
+                }
+            }
+            Hit::ProfileField(i) => {
+                if let Some(editor) = &mut self.profile_editor {
+                    editor.field = i;
+                }
+            }
             Hit::Action(action) => self.action(action),
             Hit::Commit(i) | Hit::File(i) | Hit::Change(i) | Hit::Setting(i) => {
                 match hit {
@@ -1061,20 +1311,31 @@ impl App {
     }
 
     fn key(&mut self, key: Key, ctrl: bool, height: usize) {
-        if (key == Key::Char('q') && !matches!(self.view, View::Composer | View::Publish))
+        if (key == Key::Char('q')
+            && !matches!(
+                self.view,
+                View::Composer | View::Publish | View::Repositories | View::ProfileEdit
+            ))
             || (ctrl && key == Key::Char('c'))
         {
             self.quit = true;
             return;
         }
         // Navigation stays live during reads; nothing changes while a write runs.
-        if self.writing {
+        if self.writing || self.switching {
             return;
         }
         if key == Key::Esc {
             self.view = match self.view {
                 View::Diff | View::Confirm => self.back,
                 View::Publish => View::Remote,
+                View::Profiles => View::Settings,
+                View::ProfileEdit => {
+                    self.profile_editor = None;
+                    View::Profiles
+                }
+                View::Repositories if self.state.is_none() => View::Repositories,
+                View::Repositories => self.repo_back,
                 _ => View::History,
             };
             self.confirm = None;
@@ -1102,6 +1363,102 @@ impl App {
             return;
         }
         match self.view {
+            View::Repositories => {
+                match key {
+                    Key::Up => self.repo_selection = self.repo_selection.saturating_sub(1),
+                    Key::Down => {
+                        self.repo_selection =
+                            (self.repo_selection + 1).min(self.config.recent.len())
+                    }
+                    Key::Enter => {
+                        let path = if self.repo_selection == 0 {
+                            self.repo_path.clone()
+                        } else {
+                            self.config.recent[self.repo_selection - 1].clone()
+                        };
+                        if path.is_empty() {
+                            self.say(Tone::Bad, "Enter a local repository path.");
+                        } else {
+                            self.send(Job::Open(path));
+                        }
+                    }
+                    Key::Backspace if self.repo_selection == 0 => {
+                        self.repo_path.pop();
+                    }
+                    Key::Char('u') if ctrl && self.repo_selection == 0 => self.repo_path.clear(),
+                    Key::Char(c)
+                        if !ctrl
+                            && !c.is_control()
+                            && self.repo_selection == 0
+                            && self.repo_path.len() + c.len_utf8() <= 32768 =>
+                    {
+                        self.repo_path.push(c)
+                    }
+                    _ => {}
+                }
+                return;
+            }
+            View::Profiles => {
+                match key {
+                    Key::Up | Key::Char('k') => {
+                        self.profile_selection = self.profile_selection.saturating_sub(1)
+                    }
+                    Key::Down | Key::Char('j') => {
+                        self.profile_selection =
+                            (self.profile_selection + 1).min(self.config.profiles.len())
+                    }
+                    Key::Tab | Key::BackTab => self.view = View::Settings,
+                    Key::Char('n') => self.edit_profile(true),
+                    Key::Char('e') => self.edit_profile(false),
+                    Key::Delete if self.profile_selection > 0 => {
+                        let profile = self.config.profiles.remove(self.profile_selection - 1);
+                        self.config.assignments.retain(|_, id| *id != profile.id);
+                        self.profile_selection =
+                            self.profile_selection.min(self.config.profiles.len());
+                        self.save_config(
+                            "Profile deleted. Its repositories will use Git defaults.",
+                        );
+                    }
+                    Key::Enter => {
+                        if let Some(root) = self.root().map(str::to_owned) {
+                            if let Some(i) = self.profile_selection.checked_sub(1) {
+                                self.config
+                                    .assignments
+                                    .insert(root, self.config.profiles[i].id);
+                                self.save_config("Profile assigned to this repository.");
+                            } else {
+                                self.config.assignments.remove(&root);
+                                self.save_config("This repository will use Git defaults.");
+                            }
+                        } else {
+                            self.say(Tone::Info, "Open a repository before choosing its profile.");
+                        }
+                    }
+                    _ => {}
+                }
+                return;
+            }
+            View::ProfileEdit => {
+                if let Some(editor) = &mut self.profile_editor {
+                    match key {
+                        Key::Tab | Key::Down => editor.field = (editor.field + 1) % 3,
+                        Key::BackTab | Key::Up => editor.field = (editor.field + 2) % 3,
+                        Key::Enter => self.save_profile(),
+                        Key::Backspace => {
+                            editor.values[editor.field].pop();
+                        }
+                        Key::Char('u') if ctrl => editor.values[editor.field].clear(),
+                        Key::Char(c) if !ctrl && !c.is_control() => {
+                            let field = &mut editor.values[editor.field];
+                            if field.len() + c.len_utf8() <= [80, 120, 254][editor.field] {
+                                field.push(c);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                return;
+            }
             View::Composer => {
                 match key {
                     Key::F(2) if WRITES && !self.busy => {
@@ -1186,6 +1543,20 @@ impl App {
         }
         let worktree = self.state.as_ref().is_some_and(|s| !s.session.bare);
         match key {
+            Key::Char('o') => {
+                if self.busy {
+                    self.say(
+                        Tone::Info,
+                        "Wait for the current read before switching repositories.",
+                    );
+                } else {
+                    self.repo_path.clear();
+                    self.repo_selection = 0;
+                    self.repo_back = self.view;
+                    self.view = View::Repositories;
+                }
+                return;
+            }
             Key::Char('h') => {
                 self.view = View::History;
                 self.next = None;
@@ -1206,13 +1577,18 @@ impl App {
                 return;
             }
             Key::Char(',') => {
+                if self.busy {
+                    return;
+                }
                 self.settings = self.theme;
                 self.view = View::Settings;
                 self.next = None;
                 return;
             }
             Key::Char('c') if WRITES && !self.locked && worktree => {
-                self.request(Job::CommitReview);
+                self.request(Job::CommitReview(
+                    self.selected_profile().map(Profile::identity),
+                ));
                 return;
             }
             Key::Char('z') => return self.action(Action::Stash),
@@ -1294,16 +1670,22 @@ impl App {
             }
             View::Settings => {
                 shift(&mut self.settings, move_by, theme::themes().len());
-                if key == Key::Enter {
+                if matches!(key, Key::Tab | Key::BackTab) {
+                    self.profile_selection = self
+                        .selected_profile()
+                        .and_then(|selected| {
+                            self.config
+                                .profiles
+                                .iter()
+                                .position(|p| p.id == selected.id)
+                        })
+                        .map_or(0, |i| i + 1);
+                    self.view = View::Profiles;
+                } else if key == Key::Enter {
                     self.theme = self.settings;
                     let name = theme::themes()[self.theme].name;
-                    match theme::save(theme::config_path(), self.theme) {
-                        Ok(()) => self.say(Tone::Good, format!("Theme set to {name}.")),
-                        Err(error) => self.say(
-                            Tone::Bad,
-                            format!("Theme set to {name} for this session; saving failed: {error}"),
-                        ),
-                    }
+                    self.config.set_theme(self.theme);
+                    self.save_config(format!("Theme set to {name}."));
                 }
             }
             View::Remote => {
@@ -1426,12 +1808,23 @@ pub fn run(args: &[String]) -> Result<()> {
     let cancel = Cancel(Arc::new(AtomicBool::new(false)));
     let worker_cancel = cancel.0.clone();
     let worker = std::thread::spawn(move || {
-        if let Err(error) = worker(path, input, reply.clone(), worker_registry, worker_cancel) {
+        if let Err(error) = worker(input, reply.clone(), worker_registry, worker_cancel) {
             let _ = reply.send(Err(error));
         }
     });
     let mut app = App::new(jobs);
-    app.theme = theme::load(theme::config_path());
+    app.config_path = settings::config_path();
+    if let Some(file) = &app.config_path {
+        match Settings::load(file) {
+            Ok(config) => app.config = config,
+            Err(_) => app.config_unreadable = true,
+        }
+    }
+    app.theme = app.config.theme();
+    app.view = View::Repositories;
+    // Keep a failed startup open recoverable, with recent paths still available.
+    app.repo_path = path;
+    app.send(Job::Open(app.repo_path.clone()));
     let result = event_loop(
         &mut terminal,
         app,
@@ -1466,15 +1859,11 @@ fn event_loop(
     let mut prompt: Option<Prompt> = None;
     let mut redraw = true;
     let mut exit_after_write = false;
-    app.send(Job::History(None));
     loop {
         loop {
             match replies.try_recv() {
                 Ok(reply) => {
                     redraw = true;
-                    if app.state.is_none() && app.busy && reply.is_err() {
-                        return reply.map(|_| None);
-                    }
                     app.reply(reply);
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
@@ -1544,21 +1933,15 @@ fn event_loop(
             }
         }
         if let Event::Paste(text) = &event {
-            if prompt.is_none() && !app.busy && !app.quit && app.view == View::Composer {
-                for c in text.replace("\r\n", "\n").chars() {
-                    if app.message.len() + c.len_utf8() > 65536 {
-                        break;
-                    }
-                    if !c.is_control() || matches!(c, '\n' | '\t') {
-                        app.message.push(c);
-                    }
-                }
+            if prompt.is_none() && !app.busy && !app.quit {
+                app.paste(text);
                 redraw = true;
             }
         }
         if let Event::Key(key) = event {
             if key.kind == KeyEventKind::Release
-                || (key.kind == KeyEventKind::Repeat && matches!(key.code, Key::Enter | Key::F(2)))
+                || (key.kind == KeyEventKind::Repeat
+                    && matches!(key.code, Key::Enter | Key::F(2) | Key::Delete))
             {
                 continue;
             }
@@ -1746,6 +2129,91 @@ mod tests {
     }
 
     #[test]
+    fn terminal_switches_repositories_without_leaking_reviews_or_assignments() {
+        use std::process::Command;
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first repo");
+        let second = dir.path().join("second repo");
+        for repo in [&first, &second] {
+            assert!(Command::new("git")
+                .args(["init", "-q", "-b", "main"])
+                .arg(repo)
+                .status()
+                .unwrap()
+                .success());
+        }
+        let (jobs, incoming) = mpsc::sync_channel(1);
+        let (outgoing, replies) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            worker(incoming, outgoing, None, Arc::new(AtomicBool::new(false))).unwrap()
+        });
+        let mut app = App::new(jobs);
+        let config = dir.path().join("settings.json");
+        app.config_path = Some(config.clone());
+        let receive =
+            |app: &mut App| app.reply(replies.recv_timeout(Duration::from_secs(10)).unwrap());
+        let key = |app: &mut App, code| app.key(code, false, 10);
+        for (path, label) in [(&first, "Work"), (&second, "Personal")] {
+            key(&mut app, Key::Char('o'));
+            app.paste(&path.to_string_lossy());
+            key(&mut app, Key::Enter);
+            receive(&mut app);
+            assert!(app.view == View::History);
+            assert!(app.selected_profile().is_none());
+            assert!(app.message.is_empty());
+            key(&mut app, Key::Char(','));
+            key(&mut app, Key::Tab);
+            key(&mut app, Key::Char('n'));
+            for field in [label, "Example Author", "author@example.invalid"] {
+                app.paste(field);
+                key(&mut app, Key::Tab);
+            }
+            key(&mut app, Key::Enter);
+            assert!(app.view == View::Profiles);
+            key(&mut app, Key::Enter);
+            assert_eq!(app.selected_profile().unwrap().label, label);
+            key(&mut app, Key::Esc);
+            key(&mut app, Key::Esc);
+            app.message = format!("draft for {label}");
+            app.diff_key = Some(label.into());
+        }
+        let second_root = app.root().unwrap().to_owned();
+        key(&mut app, Key::Char('o'));
+        app.paste(&dir.path().join("not-a-repo").to_string_lossy());
+        key(&mut app, Key::Enter);
+        receive(&mut app);
+        assert!(app.view == View::Repositories);
+        assert_eq!(app.root(), Some(second_root.as_str()));
+        assert_eq!(app.diff_key.as_deref(), Some("Personal"));
+        key(&mut app, Key::Esc);
+        key(&mut app, Key::Char('r'));
+        receive(&mut app);
+        assert_eq!(app.root(), Some(second_root.as_str()));
+
+        key(&mut app, Key::Char('o'));
+        for _ in 0..2 {
+            key(&mut app, Key::Down);
+        }
+        key(&mut app, Key::Enter);
+        receive(&mut app);
+        let first_root = app.root().unwrap().to_owned();
+        assert_ne!(first_root, second_root);
+        assert_eq!(app.selected_profile().unwrap().label, "Work");
+        assert_eq!(app.message, "draft for Work");
+        assert!(app.diff_key.is_none());
+        let persisted = Settings::load(&config).unwrap();
+        assert_eq!(persisted.profile(&first_root).unwrap().label, "Work");
+        assert_eq!(persisted.profile(&second_root).unwrap().label, "Personal");
+        key(&mut app, Key::Char(','));
+        key(&mut app, Key::Tab);
+        key(&mut app, Key::Delete);
+        assert!(app.selected_profile().is_none());
+        assert_eq!(app.config.profile(&second_root).unwrap().label, "Personal");
+        drop(app);
+        worker.join().unwrap();
+    }
+
+    #[test]
     fn terminal_worker_pages_real_merge_history_without_moving_refs_or_index() {
         use std::process::Command;
         let dir = tempfile::tempdir().unwrap();
@@ -1798,17 +2266,10 @@ mod tests {
         let (outgoing, replies) = mpsc::channel();
         let path = dir.path().to_string_lossy().into_owned();
         let worker = std::thread::spawn(move || {
-            worker(
-                path,
-                incoming,
-                outgoing,
-                None,
-                Arc::new(AtomicBool::new(false)),
-            )
-            .unwrap()
+            worker(incoming, outgoing, None, Arc::new(AtomicBool::new(false))).unwrap()
         });
         let mut app = App::new(jobs);
-        app.send(Job::History(None));
+        app.send(Job::Open(path));
         app.reply(replies.recv_timeout(Duration::from_secs(10)).unwrap());
         assert_eq!(app.commits[0].id, merge);
         assert_eq!(app.commits.len(), PAGE);

@@ -71,6 +71,10 @@
   --inspector-width: 400px;
   interpolate-size: allow-keywords;
 }
+/* Lane 5 is tuned as a graph line. As warning text on light surfaces it leans toward the text color to stay readable. */
+:root[data-theme='light'] {
+  --amber: color-mix(in srgb, var(--graph-lane5, #92660a) 82%, var(--text));
+}
 
 /* ==========================================================================
    Base

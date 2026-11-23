@@ -45,6 +45,22 @@ it('offers Push for a non-current local branch ahead of its same-name origin', a
   } finally { await act(async () => root.unmount()); }
 });
 
+it('offers Publish for a non-current local branch without an upstream', async () => {
+  nativeCall.mockImplementation(async (command: string, args: Record<string, unknown>) => {
+    if (command === 'repository_branch_relation') return [1, 0];
+    if (command === 'repository_sync_info') return { branch: args.branch, upstream: null, ahead: null, behind: null, remotes: ['origin'] };
+    return undefined;
+  });
+  const onPush = vi.fn();
+  const { root, menuItems } = await renderMenu(makeState(), onPush);
+  try {
+    const publish = menuItems().find(button => button.textContent === 'Publish topic to origin');
+    expect(publish).toBeDefined();
+    await act(async () => publish!.click());
+    expect(onPush).toHaveBeenCalledWith('refs/heads/topic');
+  } finally { await act(async () => root.unmount()); }
+});
+
 it('does not offer branch push without commits ahead or a same-name origin upstream', async () => {
   const scenarios = [
     { ahead: 0, upstream: 'origin/topic' },

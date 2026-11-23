@@ -27,7 +27,9 @@
     "bench:fixtures": "node scripts/bench/fixtures.mjs",
     "bench:backend": "node scripts/bench/backend.mjs",
     "bench:compare": "node scripts/bench/compare.mjs",
-    "bench:apps": "node scripts/bench/apps.mjs"
+    "bench:apps": "node scripts/bench/apps.mjs",
+    "bench:apps:windows": "node scripts/bench/apps-windows.mjs",
+    "bench:history:windows": "node scripts/bench/history-windows.mjs"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

@@ -86,7 +86,9 @@ export function DiffPreview({
   };
 
   const actionVerb = hunkAction === 'unstage_hunk' ? 'unstaging' : 'staging';
-  const lineDigits = diff.hunks.reduce((max, hunk) => hunk.lines.reduce((digits, line) => Math.max(digits, String(line.oldLine ?? '').length, String(line.newLine ?? '').length), max), 4);
+  const lineDigits = useMemo(() => split
+    ? diff.hunks.reduce((max, hunk) => hunk.lines.reduce((digits, line) => Math.max(digits, String(line.oldLine ?? '').length, String(line.newLine ?? '').length), max), 4)
+    : 4, [diff.hunks, split]);
   const isSelectable = (line: DiffLine) => !!hunkAction && !reason && !!fingerprint && (line.kind === 'add' || line.kind === 'remove');
 
   // ----- Row model and virtual window -----

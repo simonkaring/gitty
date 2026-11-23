@@ -7,6 +7,8 @@ export interface GraphLayout { nodes: GraphNode[]; edges: GraphEdge[]; laneCount
 /** Mutable, worker-owned state for appending older pages to a pinned walk. */
 export interface LayoutState {
   slots: (string | null)[];
+  /** Inverse of `slots` for non-null entries, so a lane lookup is not a string scan. */
+  slotOf: Map<string, number>;
   nodes: GraphNode[];
   edges: GraphEdge[];
   positions: Map<string, GraphNode>;
@@ -18,7 +20,7 @@ export interface LayoutState {
 }
 
 export function createLayoutState(): LayoutState {
-  return { slots: [], nodes: [], edges: [], positions: new Map(), laneCount: 1, pending: new Map(), lastResolved: [] };
+  return { slots: [], slotOf: new Map(), nodes: [], edges: [], positions: new Map(), laneCount: 1, pending: new Map(), lastResolved: [] };
 }
 
 /**
@@ -34,7 +36,7 @@ export function layoutHistory(commits: readonly GraphCommit[]): GraphLayout {
 
 /** The worker builds the edge index separately (`buildEdgeIndex`) so it can transfer the buffer. */
 export function appendHistory(state: LayoutState, commits: readonly GraphCommit[]): Omit<GraphLayout, 'edgeMaxTo'> {
-  const { slots, positions } = state;
+  const { slots, slotOf, positions } = state;
   // Copy the containers, not the records: previous snapshots keep their arrays
   // and edge objects, while only edges whose endpoint moved are reallocated.
   const nodes = [...state.nodes];
@@ -42,11 +44,12 @@ export function appendHistory(state: LayoutState, commits: readonly GraphCommit[
   const resolved: number[] = [];
   state.lastResolved = resolved;
   function reserve(id: string): number {
-    const existing = slots.indexOf(id);
-    if (existing >= 0) return existing;
+    const existing = slotOf.get(id);
+    if (existing !== undefined) return existing;
     const empty = slots.indexOf(null);
     const lane = empty >= 0 ? empty : slots.length;
     slots[lane] = id;
+    slotOf.set(id, lane);
     return lane;
   }
   function resolve(index: number, row: number, lane: number) {
@@ -55,7 +58,7 @@ export function appendHistory(state: LayoutState, commits: readonly GraphCommit[
     edges[index] = { ...edge, toRow: row, toLane: lane };
     resolved.push(index);
   }
-  commits.forEach(commit => {
+  for (const commit of commits) {
     const row = nodes.length;
     if (positions.has(commit.id)) throw new Error(`Duplicate commit: ${commit.id}`);
     const lane = reserve(commit.id);
@@ -63,24 +66,30 @@ export function appendHistory(state: LayoutState, commits: readonly GraphCommit[
     nodes.push(node);
     positions.set(commit.id, node);
     slots[lane] = null;
+    slotOf.delete(commit.id);
     // Edges from earlier pages that were waiting for this parent. Scans only
     // the parents that just arrived, never the whole edge list.
-    for (const index of state.pending.get(commit.id) ?? []) resolve(index, row, lane);
-    state.pending.delete(commit.id);
-    [...new Set(commit.parents)].forEach((parent, index) => {
+    const arrived = state.pending.get(commit.id);
+    if (arrived) {
+      for (const index of arrived) resolve(index, row, lane);
+      state.pending.delete(commit.id);
+    }
+    const parents = commit.parents.length > 1 ? [...new Set(commit.parents)] : commit.parents;
+    for (let index = 0; index < parents.length; index++) {
+      const parent = parents[index];
       if (positions.has(parent)) throw new Error(`History is not child-before-parent: ${parent}`);
-      let track = slots.indexOf(parent);
+      let track = slotOf.get(parent) ?? -1;
       if (track < 0) {
-        if (index === 0) { slots[lane] = parent; track = lane; }
+        if (index === 0) { slots[lane] = parent; slotOf.set(parent, lane); track = lane; }
         else track = reserve(parent);
       }
       edges.push({ from: commit.id, to: parent, fromRow: row, fromLane: lane, track, toRow: row + 1, toLane: track });
       const waiting = state.pending.get(parent);
       if (waiting) waiting.push(edges.length - 1); else state.pending.set(parent, [edges.length - 1]);
-    });
+    }
     state.laneCount = Math.max(state.laneCount, slots.length, lane + 1);
     while (slots.length && slots[slots.length - 1] === null) slots.pop();
-  });
+  }
   // A parent that never appears ends at the loaded boundary, which moves with
   // each page; only those few edges are re-pointed.
   for (const waiting of state.pending.values()) {

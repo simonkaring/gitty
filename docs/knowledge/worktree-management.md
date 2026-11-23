@@ -16,6 +16,8 @@ sources:
     resource: ../../src-tauri/BACKEND.md
   - id: tabs
     resource: ../../src/model/tabs.ts
+  - id: graph
+    resource: ../../src/components/RepositoryPane.tsx
 ---
 
 # Worktree management
@@ -25,6 +27,9 @@ using NUL-delimited Git porcelain. Opening a sibling preserves native/WSL origin
 and uses existing canonical tab deduplication. Discovery refreshes with pane
 revision/activation, window focus, manual refresh, and in-app worktree
 notifications. Demo management is explicitly unavailable.[^backend][^ui][^tabs]
+`RepositoryPane` loads the same list independently of the Worktrees section so graph
+pills and sidebar rows of local branches checked out in another worktree (excluding
+the tab's own HEAD) show a tree icon (`Icons.TreePine`, with Material/Apple glyphs).[^graph]
 
 Create, move, remove (including force), lock/unlock, and prune use captured review
 tokens, revalidated under the shared repository mutation lock. Removal pins
@@ -55,3 +60,4 @@ not Windows/WSL or packaged-GUI runtime evidence.[^backend][^ui-tests]
 [^ui-tests]: Mocked dialog and opening regressions.
 [^contract]: Detailed worktree IPC and safety limitations.
 [^tabs]: Canonical worktree tab identity.
+[^graph]: Worktree branch loading in `RepositoryPane.tsx`; icons in `HistoryGraph.tsx` and `NativeSidebar.tsx`, covered by their `.ui.test.tsx` files and `icons.test.tsx`.

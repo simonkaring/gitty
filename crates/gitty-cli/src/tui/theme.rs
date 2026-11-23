@@ -1,6 +1,6 @@
 //! Colour themes: the terminal's own palette, plus ports of the desktop app's built-in themes.
 use ratatui::style::Color;
-use std::{cell::Cell, path::PathBuf, sync::OnceLock};
+use std::{cell::Cell, sync::OnceLock};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Theme {
@@ -244,33 +244,6 @@ pub(super) fn set(index: usize) {
     CURRENT.set(themes().get(index).copied().unwrap_or(TERMINAL));
 }
 
-pub(super) fn config_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    Some(base.join("gitty").join("tui.json"))
-}
-
-/// The saved theme's index; a missing, unreadable or unknown choice is the terminal theme.
-pub(super) fn load(path: Option<PathBuf>) -> usize {
-    let id = path
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|value| value.get("theme")?.as_str().map(str::to_owned));
-    id.and_then(|id| themes().iter().position(|t| t.id == id))
-        .unwrap_or(0)
-}
-
-pub(super) fn save(path: Option<PathBuf>, index: usize) -> std::io::Result<()> {
-    let path = path.ok_or_else(|| std::io::Error::other("no home directory"))?;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let id = themes().get(index).map_or(TERMINAL.id, |t| t.id);
-    std::fs::write(path, serde_json::json!({ "theme": id }).to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,16 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn theme_choice_round_trips_and_falls_back() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("nested").join("tui.json");
-        assert_eq!(load(Some(path.clone())), 0);
-        save(Some(path.clone()), 5).unwrap();
-        assert_eq!(load(Some(path.clone())), 5);
-        std::fs::write(&path, r#"{"theme":"gone"}"#).unwrap();
-        assert_eq!(load(Some(path.clone())), 0);
-        std::fs::write(&path, "not json").unwrap();
-        assert_eq!(load(Some(path)), 0);
+    fn other_themes_have_a_background() {
         assert!(themes()
             .iter()
             .all(|t| t.id == "terminal" || t.bg.is_some()));

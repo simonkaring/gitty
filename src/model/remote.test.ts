@@ -29,6 +29,10 @@ describe('branch push request', () => {
   it('pins a non-current branch as both source and destination', () => {
     expect(branchPushRequest('topic', sync())).toEqual({ kind: 'push', remote: 'origin', branch: 'topic', source: 'topic' });
   });
+  it('publishes a branch without an upstream to the same name on origin', () => {
+    expect(branchPushRequest('topic', sync({ upstream: null, ahead: null }))).toEqual({ kind: 'push', remote: 'origin', branch: 'topic', source: 'topic', setUpstream: true });
+    expect(branchPushRequest('topic', sync({ upstream: null, remotes: ['team'] }))).toBeNull();
+  });
   it('requires commits ahead of the same-name origin upstream', () => {
     expect(branchPushRequest('topic', sync({ ahead: 0 }))).toBeNull();
     expect(branchPushRequest('topic', sync({ ahead: null }))).toBeNull();

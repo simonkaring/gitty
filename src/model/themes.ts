@@ -34,7 +34,14 @@ function preset(id: string, name: string, mode: ThemeDefinition['mode'], overrid
 }
 function family(id: string, name: string, mode: ThemeDefinition['mode'], bg: string, chrome: string, raised: string, text: string, secondary: string, accent: string, red: string, green: string): ThemeDefinition {
   const mix = (a: string, b: string, weight: number) => '#' + [1, 3, 5].map(i => Math.round(parseInt(a.slice(i, i + 2), 16) * weight + parseInt(b.slice(i, i + 2), 16) * (1 - weight)).toString(16).padStart(2, '0')).join('');
-  return preset(id, name, mode, { bg, chrome, sidebar: chrome, raised, text, secondary, muted: secondary, accent, accentText: accent, subtle: mix(text, bg, .06), hover: mix(text, bg, .12), border: mix(text, bg, .18), borderStrong: mix(text, bg, .3), accentWash: mix(accent, bg, .14), selected: mix(accent, bg, .2), red, green, redWash: mix(red, bg, .13), greenWash: mix(green, bg, .13), buttonForeground: bg, graphLane1: accent, graphLane2: red, graphLane3: green, graphSelection: accent, graphHead: green });
+  // The palette's own hues stay on fills and graph lanes. As text they are nudged toward the text color, only as far as WCAG AA needs on the surfaces they label.
+  const readable = (color: string, surfaces: string[]) => {
+    for (let step = 0; step < 25; step++) { const candidate = mix(color, text, 1 - step / 25); if (surfaces.every(surface => contrastRatio(candidate, surface) >= 4.5)) return candidate; }
+    return text;
+  };
+  const subtle = mix(text, bg, .06), accentWash = mix(accent, bg, .14), selected = mix(accent, bg, .2), redWash = mix(red, bg, .13), greenWash = mix(green, bg, .13);
+  const surfaces = [bg, chrome, raised, subtle];
+  return preset(id, name, mode, { bg, chrome, sidebar: chrome, raised, text, secondary, muted: secondary, accent, accentText: readable(accent, [...surfaces, accentWash, selected]), subtle, hover: mix(text, bg, .12), border: mix(text, bg, .18), borderStrong: mix(text, bg, .3), accentWash, selected, red: readable(red, [...surfaces, redWash]), green: readable(green, [...surfaces, greenWash]), redWash, greenWash, buttonForeground: bg, graphLane1: accent, graphLane2: red, graphLane3: green, graphSelection: accent, graphHead: green });
 }
 export const BUILTIN_THEMES: ThemeDefinition[] = [
   preset('gitty-light', 'Gitty Light', 'light'), preset('gitty-dark', 'Gitty Dark', 'dark'),

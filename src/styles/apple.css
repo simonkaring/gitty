@@ -34,6 +34,14 @@ html[data-design='apple'] {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
+  /* Lane 5 is the system green here, so warnings use the system orange (darkened to read as text on light surfaces). */
+  &[data-theme='dark'] {
+    --amber: #ff9f0a;
+  }
+  &[data-theme='light'] {
+    --amber: #8a4f00;
+  }
+
   .sidebar.native-sidebar {
     padding-bottom: 8px;
   }
@@ -731,6 +739,16 @@ html[data-design='apple'] {
     border-color: var(--accent);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
   }
+  /* The palette's field is the bar itself, as in Spotlight: no inner box or ring. */
+  .command-palette .palette-search input,
+  .command-palette .palette-search input:focus-visible {
+    min-height: 48px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    font-size: 15px;
+  }
   :focus-visible {
     outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent);
     outline-offset: 1px;
@@ -984,8 +1002,9 @@ html[data-design='apple'] {
     height: 26px;
     border-radius: 50%;
   }
+  /* OKLCH keeps every author hue at one lightness, so white initials read on yellows and greens too. */
   .avatar {
-    background: hsl(var(--h, 210) 60% 45%);
+    background: oklch(0.52 0.14 var(--h, 250));
     color: #fff;
   }
   .button-row.inspector-block {
@@ -1105,6 +1124,9 @@ html[data-design='apple'] {
     border-color: var(--accent);
     background: radial-gradient(circle, var(--button-foreground) 0 2.5px, var(--accent) 3px);
   }
+  input:is([type='checkbox'], [type='radio']):disabled {
+    opacity: 0.5;
+  }
 
   /* ======== Settings: System Settings layout. Centered title, tinted icon tiles, grouped rows with the control on the right ======== */
   .settings-dialog .dialog-header {
@@ -1128,6 +1150,12 @@ html[data-design='apple'] {
   }
   .settings-layout {
     grid-template-columns: 220px minmax(0, 1fr);
+  }
+  /* Narrow windows stack the section list above the pane, as the shared layout does. */
+  @media (max-width: 680px) {
+    .settings-layout {
+      grid-template-columns: 1fr;
+    }
   }
   .settings-layout > nav {
     padding: 12px 10px;
@@ -1212,6 +1240,10 @@ html[data-design='apple'] {
   }
   .settings-pair {
     display: contents;
+  }
+  /* A switch needs no 230px control column, so its label keeps the row. */
+  .settings-checkbox {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
   .settings-checkbox input {
     order: 2;

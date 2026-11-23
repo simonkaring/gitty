@@ -87,6 +87,14 @@ html[data-design='material'] {
   font-family: var(--ui);
   letter-spacing: 0.01em;
 
+  /* Material lanes rotate around the seed hue, so lane 5 is not an amber here: warnings get their own tone. */
+  &[data-theme='dark'] {
+    --amber: #fdd663;
+  }
+  &[data-theme='light'] {
+    --amber: #8a5300;
+  }
+
   /* ---- Icons (animated glyphs, see src/components/icons.tsx) -------- */
   & .ai {
     overflow: visible;
@@ -711,6 +719,10 @@ html[data-design='material'] {
   }
   & input[type='checkbox']:hover:not(:disabled) {
     border-color: var(--text);
+  }
+  & input[type='checkbox']:disabled {
+    opacity: 0.38;
+    cursor: default;
   }
   & input[type='checkbox']:checked {
     border-color: var(--accent);

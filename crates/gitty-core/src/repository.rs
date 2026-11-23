@@ -141,7 +141,9 @@ impl Walk {
             .checked_add(limit + 1)
             .ok_or_else(|| Error::new("invalidCursor", "History offset overflow"))?;
         let mut skipped = false;
-        while self.cached_count < wanted {
+        let mut pending = Vec::new();
+        let mut added = 0;
+        while self.cached_count + added < wanted {
             let Some(stream) = self.stream.as_mut() else {
                 break;
             };
@@ -168,10 +170,14 @@ impl Walk {
                 continue;
             }
             self.oid_width = id.len();
+            pending.extend_from_slice(&id);
+            pending.push(b'\n');
+            added += 1;
+        }
+        if added != 0 {
             self.cache.seek(SeekFrom::End(0))?;
-            self.cache.write_all(&id)?;
-            self.cache.write_all(b"\n")?;
-            self.cached_count += 1;
+            self.cache.write_all(&pending)?;
+            self.cached_count += added;
         }
         // Skipped records never reach the spool, so a page still ends where the spool ends.
         let end = (start + limit).min(self.cached_count);
