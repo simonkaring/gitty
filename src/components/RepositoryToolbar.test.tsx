@@ -6,17 +6,20 @@ import { RepositoryToolbar } from './RepositoryToolbar';
 
 const mocks = vi.hoisted(() => ({ native: vi.fn<(...args: unknown[]) => Promise<unknown>>() }));
 vi.mock('../model/native', () => ({ native: mocks.native, errorMessage: String }));
+vi.mock('../model/settings', () => ({ useSettings: () => ({ settings: { authorAvatarMode: 'initials' } }) }));
 
+const syncInfo = { branch: 'main', upstream: null, ahead: 0, behind: 0, remotes: [] };
+const identity = { local: { name: null, email: null }, effective: { name: 'Global Author', email: 'global@example.org' }, effectiveSources: { name: 'global', email: 'global' } };
 let host: HTMLDivElement;
 let root: Root;
 beforeEach(async () => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  mocks.native.mockReset().mockResolvedValue({ branch: 'main', upstream: null, ahead: 0, behind: 0, remotes: [] });
+  mocks.native.mockReset().mockImplementation(async command => command === 'repository_git_identity' ? identity : syncInfo);
   host = document.createElement('div');
   document.body.append(host);
   root = createRoot(host);
   await act(async () => {
-    root.render(<RepositoryToolbar handle="repo" active revision={0} stateRevision={0} busy={false} pickCount={1} pickMode onCreateBranch={() => {}} onSwitchBranch={() => {}} onCherryPick={() => {}} onClearPick={() => {}} onStartPickMode={() => {}} selectedOid="" onRefresh={() => {}} onWrite={async () => ''} notify={() => {}} />);
+    root.render(<RepositoryToolbar handle="repo" active stateRevision={0} busy={false} pickCount={1} pickMode onCreateBranch={() => {}} onSwitchBranch={() => {}} onCherryPick={() => {}} onClearPick={() => {}} onStartPickMode={() => {}} selectedOid="" onRefresh={() => {}} onWrite={async () => ''} notify={() => {}} />);
   });
 });
 afterEach(async () => { await act(async () => { root.unmount(); }); host.remove(); });
@@ -27,9 +30,9 @@ const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>('
 
 async function popWith(selectedOid: string, stashes: unknown[]) {
   const onWrite = vi.fn(async (..._args: unknown[]) => 'Dropped refs/stash@{0} (abc)');
-  mocks.native.mockImplementation(((...args: unknown[]) => Promise.resolve(args[0] === 'repository_stashes' ? stashes : { branch: 'main', upstream: null, ahead: 0, behind: 0, remotes: [] })));
+  mocks.native.mockImplementation(async command => command === 'repository_stashes' ? stashes : command === 'repository_git_identity' ? identity : syncInfo);
   await act(async () => {
-    root.render(<RepositoryToolbar handle="repo" active revision={0} stateRevision={0} busy={false} pickCount={0} pickMode={false} onCreateBranch={() => {}} onSwitchBranch={() => {}} onCherryPick={() => {}} onClearPick={() => {}} onStartPickMode={() => {}} selectedOid={selectedOid} onRefresh={() => {}} onWrite={onWrite} notify={() => {}} />);
+    root.render(<RepositoryToolbar handle="repo" active stateRevision={0} busy={false} pickCount={0} pickMode={false} onCreateBranch={() => {}} onSwitchBranch={() => {}} onCherryPick={() => {}} onClearPick={() => {}} onStartPickMode={() => {}} selectedOid={selectedOid} onRefresh={() => {}} onWrite={onWrite} notify={() => {}} />);
   });
   await act(async () => { button('Pop').click(); });
   return onWrite.mock.lastCall;
@@ -41,10 +44,17 @@ it('pops the selected stash entry, else the newest stash, and stashes with a gen
   expect((await popWith('not-a-stash', stashes))![1]).toEqual({ action: { kind: 'pop', oid: 'b', restoreIndex: true } });
   const onWrite = vi.fn(async (..._args: unknown[]) => 'Saved working directory and index state');
   await act(async () => {
-    root.render(<RepositoryToolbar handle="repo" active revision={0} stateRevision={0} busy={false} pickCount={0} pickMode={false} onCreateBranch={() => {}} onSwitchBranch={() => {}} onCherryPick={() => {}} onClearPick={() => {}} onStartPickMode={() => {}} selectedOid="" onRefresh={() => {}} onWrite={onWrite} notify={() => {}} />);
+    root.render(<RepositoryToolbar handle="repo" active stateRevision={0} busy={false} pickCount={0} pickMode={false} onCreateBranch={() => {}} onSwitchBranch={() => {}} onCherryPick={() => {}} onClearPick={() => {}} onStartPickMode={() => {}} selectedOid="" onRefresh={() => {}} onWrite={onWrite} notify={() => {}} />);
   });
   await act(async () => { button('Stash').click(); });
   expect((onWrite.mock.lastCall as unknown[])[1]).toEqual({ action: { kind: 'save', message: expect.stringMatching(/^main - stash - /) } });
+});
+
+it('refreshes the identity even if repository state has not changed', async () => {
+  expect(host.querySelector('.repository-identity-avatar')?.textContent).toBe('GA');
+  mocks.native.mockResolvedValueOnce({ ...identity, effective: { name: 'Another Author', email: 'another@example.org' } });
+  await act(async () => { host.querySelector<HTMLButtonElement>('[aria-label="Refresh"]')!.click(); });
+  expect(host.querySelector('.repository-identity-avatar')?.textContent).toBe('AA');
 });
 
 it('focuses the first pull-menu item on open and moves with arrows, Home and End', async () => {

@@ -163,11 +163,28 @@ pub struct GitIdentityValues {
     pub name: Option<String>,
     pub email: Option<String>,
 }
+#[derive(Debug, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum GitIdentitySource {
+    Repository,
+    RepositoryInclude,
+    Worktree,
+    Global,
+    System,
+    Command,
+    Other,
+}
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct GitIdentitySources {
+    pub name: Option<GitIdentitySource>,
+    pub email: Option<GitIdentitySource>,
+}
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryGitIdentity {
     pub local: GitIdentityValues,
     pub effective: GitIdentityValues,
+    pub effective_sources: GitIdentitySources,
 }
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct HistoryPage {

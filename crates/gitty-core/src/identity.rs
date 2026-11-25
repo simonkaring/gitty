@@ -6,8 +6,14 @@ use crate::{
 };
 use std::time::Duration;
 
-fn config_value(repo: &Repository, local: bool, key: &str) -> Result<Option<String>> {
-    let mut command = vec!["config", "--null"];
+struct ConfigEntry {
+    value: String,
+    scope: Vec<u8>,
+    origin: Vec<u8>,
+}
+
+fn config_entry(repo: &Repository, local: bool, key: &str) -> Result<Option<ConfigEntry>> {
+    let mut command = vec!["config", "--null", "--show-scope", "--show-origin"];
     if local {
         command.extend(["--local", "--no-includes"]);
     }
@@ -22,24 +28,58 @@ fn config_value(repo: &Repository, local: bool, key: &str) -> Result<Option<Stri
             String::from_utf8_lossy(&output.stderr).trim(),
         ));
     }
-    let value = output
+    let entry = output
         .stdout
         .strip_suffix(&[0])
         .ok_or_else(|| Error::new("gitParse", "Malformed Git config value"))?;
-    Ok(Some(process::text(value.to_vec())?))
+    let mut fields = entry.split(|byte| *byte == 0);
+    match (fields.next(), fields.next(), fields.next(), fields.next()) {
+        (Some(scope), Some(origin), Some(value), None) => Ok(Some(ConfigEntry {
+            scope: scope.to_vec(),
+            origin: origin.to_vec(),
+            value: process::text(value.to_vec())?,
+        })),
+        _ => Err(Error::new("gitParse", "Malformed Git config entry")),
+    }
+}
+
+fn effective_source(entry: &ConfigEntry, local: Option<&ConfigEntry>) -> GitIdentitySource {
+    use GitIdentitySource::*;
+    match entry.scope.as_slice() {
+        b"local" if local.is_some_and(|local| local.origin == entry.origin) => Repository,
+        b"local" => RepositoryInclude,
+        b"worktree" => Worktree,
+        b"global" => Global,
+        b"system" => System,
+        b"command" => Command,
+        _ => Other,
+    }
 }
 
 impl Repository {
     pub fn git_identity(&self) -> Result<RepositoryGitIdentity> {
-        let local = GitIdentityValues {
-            name: config_value(self, true, "user.name")?,
-            email: config_value(self, true, "user.email")?,
-        };
-        let effective = GitIdentityValues {
-            name: config_value(self, false, "user.name")?,
-            email: config_value(self, false, "user.email")?,
-        };
-        Ok(RepositoryGitIdentity { local, effective })
+        let local_name = config_entry(self, true, "user.name")?;
+        let local_email = config_entry(self, true, "user.email")?;
+        let name = config_entry(self, false, "user.name")?;
+        let email = config_entry(self, false, "user.email")?;
+        Ok(RepositoryGitIdentity {
+            effective_sources: GitIdentitySources {
+                name: name
+                    .as_ref()
+                    .map(|entry| effective_source(entry, local_name.as_ref())),
+                email: email
+                    .as_ref()
+                    .map(|entry| effective_source(entry, local_email.as_ref())),
+            },
+            local: GitIdentityValues {
+                name: local_name.map(|entry| entry.value),
+                email: local_email.map(|entry| entry.value),
+            },
+            effective: GitIdentityValues {
+                name: name.map(|entry| entry.value),
+                email: email.map(|entry| entry.value),
+            },
+        })
     }
 
     fn set_git_identity(

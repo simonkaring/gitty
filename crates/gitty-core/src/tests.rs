@@ -116,6 +116,10 @@ fn repository_git_identity_is_explicit_shared_and_detects_external_changes() {
         .git_identity()
         .unwrap();
     assert_eq!(before.local.name.as_deref(), Some("Test Author"));
+    assert_eq!(
+        before.effective_sources.name,
+        Some(GitIdentitySource::Repository)
+    );
     let selected = CommitIdentity {
         name: "Different Author".into(),
         email: "different@example.org".into(),
@@ -124,6 +128,10 @@ fn repository_git_identity_is_explicit_shared_and_detects_external_changes() {
         .set_git_identity(&worktree.session.handle, &selected, &before.local)
         .unwrap();
     assert_eq!(updated.effective.name.as_deref(), Some("Different Author"));
+    assert_eq!(
+        updated.effective_sources.name,
+        Some(GitIdentitySource::Repository)
+    );
     assert_eq!(
         git(d.path(), &["config", "--local", "user.email"]),
         selected.email
@@ -154,10 +162,52 @@ fn repository_git_identity_is_explicit_shared_and_detects_external_changes() {
         overridden.effective.email.as_deref(),
         Some("worktree@example.org")
     );
+    assert_eq!(
+        overridden.effective_sources.name,
+        Some(GitIdentitySource::Repository)
+    );
+    assert_eq!(
+        overridden.effective_sources.email,
+        Some(GitIdentitySource::Worktree)
+    );
+    git(
+        &linked_path,
+        &["config", "--worktree", "user.email", &selected.email],
+    );
+    let same_value = service
+        .repo(&worktree.session.handle)
+        .unwrap()
+        .git_identity()
+        .unwrap();
+    assert_eq!(same_value.local.email, same_value.effective.email);
+    assert_eq!(
+        same_value.effective_sources.email,
+        Some(GitIdentitySource::Worktree)
+    );
+    std::fs::write(
+        d.path().join(".git/identity.inc"),
+        "[user]\n\tname = Different Author\n",
+    )
+    .unwrap();
+    git(
+        d.path(),
+        &["config", "--local", "include.path", "identity.inc"],
+    );
+    let included = service
+        .repo(&main.session.handle)
+        .unwrap()
+        .git_identity()
+        .unwrap();
+    assert_eq!(included.local.name, included.effective.name);
+    assert_eq!(
+        included.effective_sources.name,
+        Some(GitIdentitySource::RepositoryInclude)
+    );
     git(
         d.path(),
         &["config", "--local", "user.name", "External Author"],
     );
+    git(d.path(), &["config", "--local", "--unset", "include.path"]);
     let error = service
         .set_git_identity(&main.session.handle, &selected, &before.local)
         .err()

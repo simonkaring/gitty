@@ -53,7 +53,31 @@ export interface DirectoryEntry { name: string; path: string }
 export interface CreateCommitResult { oid: string }
 export interface CommitIdentity { name: string; email: string }
 export interface GitIdentityValues { name: string | null; email: string | null }
-export interface RepositoryGitIdentity { local: GitIdentityValues; effective: GitIdentityValues }
+export type GitIdentitySource = 'repository' | 'repositoryInclude' | 'worktree' | 'global' | 'system' | 'command' | 'other';
+export interface RepositoryGitIdentity {
+  local: GitIdentityValues;
+  effective: GitIdentityValues;
+  effectiveSources: Record<keyof GitIdentityValues, GitIdentitySource | null>;
+}
+
+export function formatGitIdentity(value: GitIdentityValues) {
+  return `${value.name?.trim() ? value.name : 'Name not set'} · ${value.email?.trim() ? value.email : 'Email not set'}`;
+}
+
+const sourceLabels: Record<GitIdentitySource, string> = {
+  repository: 'Repository config',
+  repositoryInclude: 'Included repository config',
+  worktree: 'Worktree config',
+  global: 'Global config',
+  system: 'System config',
+  command: 'Command override',
+  other: 'Other Git config',
+};
+
+export function formatGitIdentitySources({ name, email }: RepositoryGitIdentity['effectiveSources']) {
+  return name && name === email ? sourceLabels[name] :
+    `Name: ${name ? sourceLabels[name] : 'not set'} · Email: ${email ? sourceLabels[email] : 'not set'}`;
+}
 /** Writes use explicit repository-relative paths; an empty array never means all.
  * File stage/unstage affect whole paths, including the remainder of partially staged
  * files. Conflicted paths cannot be mutated here. The service is authoritative

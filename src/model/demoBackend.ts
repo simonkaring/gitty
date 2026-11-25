@@ -125,7 +125,7 @@ export async function demoInvoke(command: string, args: Record<string, unknown>)
       return { branch, upstream: `origin/${branch}`, ahead: branch === 'main' ? r().ahead : 0, behind: 0, remotes: ['origin'] };
     }
     case 'repository_remotes': return [{ name: 'origin', fetchUrl: `https://example.com/${r().name}.git`, pushUrl: `https://example.com/${r().name}.git`, branches: ['main', 'feature/command-palette'], currentUpstream: 'main' }];
-    case 'repository_git_identity': return { local: { name: null, email: null }, effective: { name: 'Demo User', email: 'demo@example.com' } };
+    case 'repository_git_identity': return { local: { name: null, email: null }, effective: { name: 'Demo User', email: 'demo@example.com' }, effectiveSources: { name: 'global', email: 'global' } };
     case 'repository_stage': case 'repository_unstage': {
       for (const file of r().files) if ((args.paths as string[]).includes(file.path)) file.index = command === 'repository_stage' ? file.working : file.head;
       return;

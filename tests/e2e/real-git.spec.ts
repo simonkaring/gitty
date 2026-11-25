@@ -96,6 +96,27 @@ async function git(root: string, ...args: string[]) {
   return stdout.trimEnd();
 }
 
+test('previews the active repository Git identity without opening its dialog', async ({ page }) => {
+  const data = await fixture(page);
+  const trigger = page.getByRole('button', { name: 'Git identity…' });
+  const badge = trigger.locator('.repository-identity-avatar');
+  const preview = page.getByRole('tooltip');
+  await expect(badge).toHaveText('GE');
+  await badge.hover();
+  await expect(preview).toContainText('Gitty E2E · gitty-e2e@example.invalid');
+  await expect(preview).toContainText('Source: Repository config');
+  await preview.hover();
+  await page.keyboard.press('Escape');
+  await expect(preview).toBeHidden();
+  await expect(page.getByRole('dialog', { name: 'Repository Git identity' })).toBeHidden();
+
+  await git(data.root, 'config', '--local', 'user.name', 'New Author');
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(badge).toHaveText('NA');
+  await trigger.focus();
+  await expect(preview).toContainText('New Author');
+});
+
 test('renders a real repository, stages and commits through the UI, and preserves other work', async ({ page }) => {
   const browserErrors: string[] = [];
   page.on('pageerror', error => browserErrors.push(error.message));

@@ -471,6 +471,57 @@ button[data-danger='true']:hover:not(:disabled) {
   padding: 0;
   color: var(--secondary);
 }
+.repository-identity {
+  position: relative;
+  display: flex;
+  padding-inline-start: 16px;
+}
+.repository-identity-trigger {
+  position: relative;
+}
+.repository-identity-avatar {
+  position: absolute;
+  inset-inline-start: -16px;
+  top: 50%;
+  translate: 0 -50%;
+  display: grid;
+  place-items: center;
+  inline-size: 20px;
+  block-size: 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--raised);
+  color: var(--text);
+  font: 600 var(--fs-2xs)/1 var(--ui);
+}
+.repository-identity-avatar[data-repository='true'] {
+  border-color: var(--accent);
+}
+.repository-identity-avatar > .avatar {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+.repository-identity-preview {
+  position: absolute;
+  top: 100%;
+  inset-inline-end: 0;
+  width: max-content;
+  min-width: 0;
+  max-width: min(320px, 50vw);
+  gap: 4px;
+  padding: 8px 12px;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+  white-space: normal;
+  animation: none;
+}
+.repository-identity-preview[hidden] {
+  display: none;
+}
 .toolbar-start > .badge {
   flex: 0 1 auto;
 }
@@ -964,4 +1015,3 @@ button[data-danger='true']:hover:not(:disabled) {
 .head-button:hover:not(:disabled) {
   color: var(--text);
 }
-

@@ -21,7 +21,7 @@ Ordinary index/commit writes use these commands:
 - `repository_unstage_hunk({handle, path: string, hunkIndex: number, fingerprint: string, lineIndices?: number[]}) -> void`
 - `repository_create_commit({handle, message: string, identity?: {name: string, email: string}}) -> {oid: string}`
 - `repository_amend_commit({handle, message: string, identity?: {name: string, email: string}, expectedHead: string, expectedHeadRef: string | null, expectedStatusFingerprint: string, messageOnly?: boolean, requireUnpushed?: boolean}) -> {oid: string}`
-- `repository_git_identity({handle}) -> {local: {name: string | null, email: string | null}, effective: {name: string | null, email: string | null}}`
+ - `repository_git_identity({handle}) -> RepositoryGitIdentity`: `local` and `effective` name/email pairs plus `effectiveSources` for each field (`repository`, `repositoryInclude`, `worktree`, `global`, `system`, `command`, `other`, or `null`).
 - `repository_set_git_identity({handle, identity: {name: string, email: string}, expectedLocal: {name: string | null, email: string | null}}) -> RepositoryGitIdentity`
 
 `repository_commit({handle, oid})` resolves and reads only the commit object. Its legacy

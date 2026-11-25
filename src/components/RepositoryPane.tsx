@@ -791,7 +791,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   />;
   return <>
     {active && paletteOpen && <CommandPalette commands={paletteCommands()} onClose={onClosePalette} />}
-    {state && <RepositoryToolbar handle={state.session.handle} active={active} revision={revision} stateRevision={stateRevision} busy={mutationBusy || mutationBlocked} pickCount={pickOrder.length} pickMode={pickMode}
+    {state && <RepositoryToolbar handle={state.session.handle} active={active} stateRevision={stateRevision} busy={mutationBusy || mutationBlocked} pickCount={pickOrder.length} pickMode={pickMode}
       onCreateBranch={() => setActionContext({ oid: state.session.head ?? '', ref: state.session.headRef ?? undefined, initial: 'createBranch' })}
       onSwitchBranch={() => setActionContext({ oid: state.session.head ?? '', initial: 'switchBranch' })}
       onCherryPick={() => setActionContext({ oid: pickOrder[0], commits: pickOrder, initial: 'cherryPick' })}

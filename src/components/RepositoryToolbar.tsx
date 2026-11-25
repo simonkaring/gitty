@@ -5,14 +5,11 @@ import { native, errorMessage } from '../model/native';
 import { autoStashMessage, DEFAULT_PULL_MODE, PULL_MODE_LABELS, remoteSuccessMessage, needsPublish, sortStashes, stashSuccessMessage, syncSummary, type PullMode, type RemoteActionRequest, type StashActionRequest, type StashEntry, type SyncInfo } from '../model/remote';
 import { PublishDialog } from './PublishDialog';
 import { describeFetchStatus, type FetchStatus } from '../model/autoFetch';
-import { RepositoryIdentityDialog } from './RepositoryIdentityDialog';
-import type { CommitIdentity, GitIdentityValues } from '../model/repository';
+import { RepositoryIdentityButton } from './RepositoryIdentityButton';
 
 export interface RepositoryToolbarProps {
   handle: string;
   active: boolean;
-  /** Moves on every working-tree or operation change; the identity dialog re-reads with it. */
-  revision: number;
   /** Moves only when refs or HEAD change, which is all that ahead/behind and remotes depend on. */
   stateRevision: number;
   busy: boolean;
@@ -36,7 +33,7 @@ const IDLE_FETCH: FetchStatus = { kind: 'idle' };
 /** Compact Pull / Push / Branch / Stash / Refresh toolbar. Sync info is a
  * passive, local-only read refetched when the active repository changes.
  * RepositoryPane separately schedules background fetches of remote refs. */
-export function RepositoryToolbar({ handle, active, revision, stateRevision, busy, pickCount, pickMode, onCreateBranch, onSwitchBranch, onCherryPick, onClearPick, onStartPickMode, selectedOid, onRefresh, onWrite, notify, fetchStatus = IDLE_FETCH }: RepositoryToolbarProps) {
+export function RepositoryToolbar({ handle, active, stateRevision, busy, pickCount, pickMode, onCreateBranch, onSwitchBranch, onCherryPick, onClearPick, onStartPickMode, selectedOid, onRefresh, onWrite, notify, fetchStatus = IDLE_FETCH }: RepositoryToolbarProps) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return;
@@ -54,7 +51,7 @@ export function RepositoryToolbar({ handle, active, revision, stateRevision, bus
   const [pullMenuOpen, setPullMenuOpen] = useState(false);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
-  const [identityOpen, setIdentityOpen] = useState(false);
+  const [identityRefresh, setIdentityRefresh] = useState(0);
   const pullMenuRef = useRef<HTMLDivElement>(null);
   const pullToggleRef = useRef<HTMLButtonElement>(null);
   const branchMenuRef = useRef<HTMLDivElement>(null);
@@ -72,7 +69,7 @@ export function RepositoryToolbar({ handle, active, revision, stateRevision, bus
   // Deactivating the tab makes the browser force-close any top-layer publish
   // dialog in it; keep menus/dialog state in sync rather than leaving a
   // dropdown open behind a hidden pane.
-  useEffect(() => { if (!active) { setPullMenuOpen(false); setBranchMenuOpen(false); setPublishOpen(false); setIdentityOpen(false); } }, [active]);
+  useEffect(() => { if (!active) { setPullMenuOpen(false); setBranchMenuOpen(false); setPublishOpen(false); } }, [active]);
   const disabled = busy || !active;
   async function run(action: RemoteActionRequest, kind: 'fetch' | 'pull' | 'push') {
     if (disabled || pending) return;
@@ -152,11 +149,11 @@ export function RepositoryToolbar({ handle, active, revision, stateRevision, bus
 
     </div>
     <div className="toolbar-zone toolbar-end">
-      <button className="icon-button" aria-label="Git identity…" title="Repository Git identity" disabled={disabled} onClick={() => setIdentityOpen(true)}><Icons.UserRound size={16} /></button>
-      <button className="icon-button refresh-button" aria-label="Refresh" title="Refresh repository" data-pending={busy} disabled={busy} onClick={onRefresh}><Icons.RefreshCw size={16} /></button>
+      <RepositoryIdentityButton key={handle} handle={handle} active={active} busy={busy} revision={stateRevision} refresh={identityRefresh}
+        onApply={async (identity, expectedLocal) => { await onWrite('repository_set_git_identity', { identity, expectedLocal }); notify('Repository Git identity updated.'); }} />
+      <button className="icon-button refresh-button" aria-label="Refresh" title="Refresh repository" data-pending={busy} disabled={busy} onClick={() => { setIdentityRefresh(value => value + 1); onRefresh(); }}><Icons.RefreshCw size={16} /></button>
     </div>
   </div>
     {publishOpen && <PublishDialog remotes={sync?.remotes ?? []} branch={sync?.branch ?? ''} onPublish={publish} onClose={() => setPublishOpen(false)} />}
-    {identityOpen && <RepositoryIdentityDialog handle={handle} revision={revision} onApply={async (identity: CommitIdentity, expectedLocal: GitIdentityValues) => { await onWrite('repository_set_git_identity', { identity, expectedLocal }); notify('Repository Git identity updated.'); }} onClose={() => setIdentityOpen(false)} />}
   </>;
 }

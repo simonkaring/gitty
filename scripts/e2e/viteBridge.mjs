@@ -11,7 +11,7 @@ const METHODS = new Set([
   'repository_open', 'repository_close', 'repository_state', 'repository_snapshot', 'repository_status',
   'repository_operation_state', 'repository_branch_relation', 'repository_history', 'repository_commit',
   'repository_commit_edit_eligibility', 'repository_commit_graph_status',
-  'repository_sync_info', 'repository_worktrees',
+  'repository_sync_info', 'repository_worktrees', 'repository_git_identity',
   'repository_diff_files', 'repository_diff', 'repository_stage',
   'repository_unstage', 'repository_discard', 'repository_stage_hunk',
   'repository_unstage_hunk', 'repository_create_commit', 'repository_watch',
