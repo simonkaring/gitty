@@ -28,6 +28,8 @@ resize starts from its actual rendered width and switches it to a fixed-width
 grid track, so shrinking and growing move the visible boundary immediately.
 The header and commit rows share the grid template. When columns are reordered,
 canvas positioning (inside the scrolled content, at the graph column's offset) accounts for message fill only before manual resizing.
+Showing the Graph column mounts and repaints its canvas without requiring a
+commit selection change, even when the Branch / tag column is hidden.[^graph]
 Message widths are bounded from 100px to the greater of 600px or the viewport
 width. Until its handle is used, the Date column measures the widest rendered
 date and grows (never shrinks, capped at 320px) so no date is ellipsized; a
@@ -45,10 +47,12 @@ clamps and the single-pane rule are layout-only.[^workspace][^panes][^styles][^p
 
 The Chromium demo smoke verifies pointer shrinking, keyboard growing, equal
 header/row widths, and graph alignment after moving the message ahead of the
-graph. Browser checks use synthetic history rather than native Git.[^smoke]
+graph. It checks that branch lines repaint when Graph is hidden and shown in
+every built-in theme, without clicking a row. Browser checks use synthetic
+history rather than the packaged desktop app or native Git.[^smoke]
 
-[^graph]: Resize handlers, message grid track, and graph offset calculation.
-[^smoke]: Message resizing and history-column layout assertions.
+[^graph]: Resize handlers, message grid track, graph offset, and canvas repaint effect.
+[^smoke]: Message resizing, history-column layout, and canvas line pixel assertions.
 [^workspace]: Narrow-pane state coordination in NativeWorkspace.
 [^panes]: `setPaneOpen` and `settleSidePanes` narrow-window rules.
 [^styles]: Responsive sidebar and inspector sizing.

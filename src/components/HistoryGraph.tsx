@@ -202,6 +202,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const shown = focus?.ids ?? matches;
   const columns = settings.historyColumns ?? DEFAULT_HISTORY_COLUMNS;
   const visibleColumns = useMemo(() => columns.filter(c => c.visible), [columns]);
+  const isGraphVisible = visibleColumns.some(c => c.id === 'graph');
   // A branch-coloured connector links ref pills to their node only when the refs column sits right before the graph.
   const joinRefs = visibleColumns.findIndex(c => c.id === 'graph') > 0 && visibleColumns[visibleColumns.findIndex(c => c.id === 'graph') - 1].id === 'refs';
 
@@ -357,7 +358,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       }
     }
     ctx.globalAlpha = 1;
-  }, [commits, layout, visibleEdges, windowTop, windowHeight, graphWidth, graphX, theme, matches, focus, shown, loaded, colors, palette, branchColors, avatars, material, apple, graphLaneX, joinRefs, refsByCommit, selectedId, selectedIndex, head, dpr, pixelWidth, pixelHeight, rowHeight, highlightHeight]);
+  }, [isGraphVisible, commits, layout, visibleEdges, windowTop, windowHeight, graphWidth, graphX, theme, matches, focus, shown, loaded, colors, palette, branchColors, avatars, material, apple, graphLaneX, joinRefs, refsByCommit, selectedId, selectedIndex, head, dpr, pixelWidth, pixelHeight, rowHeight, highlightHeight]);
 
   useEffect(() => {
     const node = layout.nodes[selectedIndex];
@@ -462,8 +463,6 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     list.addEventListener('wheel', wheel, { passive: false });
     return () => list.removeEventListener('wheel', wheel);
   }, [graphScrollMax, graphOffset, graphWidth]);
-
-  const isGraphVisible = visibleColumns.some(c => c.id === 'graph');
 
   const formatDate = (timestamp: number) => timestamp ? formatCommitDate(timestamp, ROW_DATE, 'en') : '';
 

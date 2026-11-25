@@ -54,6 +54,42 @@ try {
   await page.getByRole('listbox', { name: 'Commit history' }).waitFor();
   assert.equal(await page.locator('.history-columns .date-column').count(), 0);
   console.log('PASS message column pointer/keyboard resizing, row alignment, column visibility, order, graph alignment, narrow layout, reset and persistence');
+
+  await page.setViewportSize({ width: 1500, height: 900 });
+  const history = page.getByRole('listbox', { name: 'Commit history' });
+  const theme = page.getByRole('combobox', { name: 'Theme', exact: true });
+  const openAppearance = async () => {
+    await page.getByRole('button', { name: 'Open settings' }).click();
+    await page.getByRole('button', { name: 'Appearance', exact: true }).click();
+  };
+  // Sample a row boundary, where only connecting lines (not nodes or ref connectors) can paint pixels.
+  const hasGraphLine = () => page.locator('.graph-canvas').evaluate(canvas => {
+    const y = Math.floor(document.querySelector('.commit-row').offsetHeight * devicePixelRatio * 2);
+    if (canvas.height <= y) return false;
+    const pixels = canvas.getContext('2d').getImageData(0, y, canvas.width, 1).data;
+    return pixels.some((value, i) => i % 4 === 3 && value > 0);
+  });
+  await openAppearance();
+  await page.getByRole('combobox', { name: 'Theme behavior' }).selectOption('fixed');
+  const presets = await theme.locator('option').evaluateAll(options => options.map(option => option.value));
+  for (const id of presets) {
+    await theme.selectOption(id);
+    await page.getByRole('button', { name: 'Close dialog', exact: true }).click();
+    await page.getByRole('button', { name: 'Customize columns' }).click();
+    const graph = menu.getByRole('checkbox', { name: 'Graph', exact: true });
+    // Hide refs so changing the ref-to-graph connector cannot incidentally repaint the canvas.
+    await menu.getByRole('checkbox', { name: 'Branch / tag' }).uncheck();
+    assert.ok(await hasGraphLine(), `${id}: graph lines before hiding Graph`);
+    const selected = await history.getAttribute('aria-activedescendant');
+    await graph.uncheck();
+    assert.equal(await page.locator('.graph-canvas').count(), 0);
+    await graph.check();
+    assert.ok(await hasGraphLine(), `${id}: graph lines after showing Graph without changing selection`);
+    assert.equal(await history.getAttribute('aria-activedescendant'), selected);
+    await page.keyboard.press('Escape');
+    await openAppearance();
+  }
+  console.log(`PASS graph lines repaint without a row click in all ${presets.length} built-in themes`);
 } finally {
   await browser?.close();
   await server.close();
