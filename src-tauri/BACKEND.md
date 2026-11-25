@@ -245,6 +245,13 @@ When `lineIndices` is supplied to `repository_stage_hunk` or `repository_unstage
   read complete repository status. The selected index entries are checked before
   and after actionable patch reads, and hunk tokens still fingerprint original
   patch bytes and index entries. Commit/comparison file-list behavior is unchanged.
+- Desktop `repository_diff` may also return `FileDiff.image` with `before` and
+  `after` versions (nullable for additions/deletions) and a `sourceDiff` flag for
+  SVG. Each version carries its path and either a MIME-allowlisted base64 image
+  URL or an error. The source is the selected Git blob or a bounded, regular
+  working-file read (16 MiB per side). WSL/SSH working-file previews use the
+  same repository-rooted Python 3 helper as conflicts. Unmerged files retain
+  their existing conflict diff, and headless diffs do not include image data.
   For unstaged/conflict previews only, a tracked worktree change with no raw diff
   entry returns `noPatch` with an explanation (often line-ending normalization);
   staged and untracked membership errors retain their normal behavior.

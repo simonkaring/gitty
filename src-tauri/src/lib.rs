@@ -512,7 +512,7 @@ async fn repository_diff(
     spec: DiffSpec,
     path: String,
 ) -> Result<FileDiff> {
-    with_service(state, move |s| s.repo(&handle)?.diff(&spec, &path)).await
+    with_service(state, move |s| s.repo(&handle)?.preview_diff(&spec, &path)).await
 }
 /// Stages exactly the named files. Paths are always explicit; an empty list is an
 /// error, never "everything".

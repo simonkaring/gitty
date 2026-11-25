@@ -223,6 +223,10 @@ pub struct DiffFile {
     pub additions: Option<u64>,
     pub deletions: Option<u64>,
     pub binary: bool,
+    #[serde(skip)]
+    pub(crate) before: (String, String),
+    #[serde(skip)]
+    pub(crate) after: (String, String),
 }
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -252,6 +256,22 @@ pub struct FileDiff {
     pub truncated: bool,
     pub message: Option<String>,
     pub hunk_action: Option<HunkAction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<ImageDiff>,
+}
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageDiff {
+    pub before: Option<ImageSide>,
+    pub after: Option<ImageSide>,
+    pub source_diff: bool,
+}
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageSide {
+    pub path: String,
+    pub data_url: Option<String>,
+    pub error: Option<String>,
 }
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]

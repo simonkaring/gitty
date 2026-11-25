@@ -39,7 +39,9 @@ export type DiffSpec =
 export interface DiffFile { path: string; oldPath: string | null; status: string; additions: number | null; deletions: number | null; binary: boolean }
 export interface DiffLine { kind: 'context' | 'add' | 'remove' | 'meta'; content: string; oldLine: number | null; newLine: number | null }
 export interface DiffHunk { header: string; lines: DiffLine[] }
-export interface FileDiff { path: string; hunks: DiffHunk[]; binary: boolean; truncated: boolean; message: string | null; hunkAction?: { fingerprint: string | null; reason: string | null } | null }
+export interface ImageSide { path: string; dataUrl: string | null; error: string | null }
+export interface ImageDiff { before: ImageSide | null; after: ImageSide | null; sourceDiff: boolean }
+export interface FileDiff { path: string; hunks: DiffHunk[]; binary: boolean; truncated: boolean; message: string | null; hunkAction?: { fingerprint: string | null; reason: string | null } | null; image?: ImageDiff }
 export interface SearchQuery { text: string; branch?: string; since?: string; until?: string; path?: string }
 export interface SearchResult { commits: CommitSummary[]; truncated: boolean }
 export interface RepositoryState { session: RepositorySession; refs: RepositoryRef[]; remotes: string[]; fingerprint: string }

@@ -3,7 +3,30 @@ use crate::{
     process::{self, args},
     repository::{resolve, string, validate_path, Repository},
 };
+use base64::{engine::general_purpose::STANDARD, Engine};
 use std::collections::HashMap;
+
+const IMAGE_LIMIT: usize = 16 * 1024 * 1024;
+
+fn image_mime(path: &str) -> Option<&'static str> {
+    Some(
+        match path.rsplit_once('.')?.1.to_ascii_lowercase().as_str() {
+            "svg" => "image/svg+xml",
+            "png" | "apng" => "image/png",
+            "jpg" | "jpeg" | "jfif" => "image/jpeg",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "bmp" | "dib" => "image/bmp",
+            "ico" | "cur" => "image/x-icon",
+            "avif" => "image/avif",
+            "tif" | "tiff" => "image/tiff",
+            "heic" => "image/heic",
+            "heif" => "image/heif",
+            "jxl" => "image/jxl",
+            _ => return None,
+        },
+    )
+}
 
 impl Repository {
     fn diff_args(&self, spec: &DiffSpec) -> Result<Vec<String>> {
@@ -73,8 +96,7 @@ impl Repository {
         }
         Ok(a)
     }
-    fn untracked_patch(&self, path: &str) -> Result<Vec<u8>> {
-        validate_path(path)?;
+    fn require_untracked(&self, path: &str) -> Result<()> {
         if !self
             .status_entries_at(Some(path))?
             .entries
@@ -86,6 +108,10 @@ impl Repository {
                 "The file is not currently untracked",
             ));
         }
+        Ok(())
+    }
+
+    fn untracked_patch(&self, path: &str) -> Result<Vec<u8>> {
         let a = args(&[
             "diff",
             "--no-index",
@@ -127,7 +153,13 @@ impl Repository {
         Ok(files)
     }
     pub fn diff(&self, spec: &DiffSpec, path: &str) -> Result<FileDiff> {
-        self.diff_snapshot(spec, path)
+        self.read_diff(spec, path, false)
+    }
+    pub fn preview_diff(&self, spec: &DiffSpec, path: &str) -> Result<FileDiff> {
+        self.read_diff(spec, path, true)
+    }
+    fn read_diff(&self, spec: &DiffSpec, path: &str, images: bool) -> Result<FileDiff> {
+        self.diff_with_patch(spec, path, images)
             .map(|(diff, _)| diff)
             .map_err(|e| {
                 if e.code == "outputLimit" {
@@ -136,6 +168,49 @@ impl Repository {
                     e
                 }
             })
+    }
+
+    fn image_side(
+        &self,
+        path: &str,
+        entry: Option<&(String, String)>,
+        working: bool,
+    ) -> Option<ImageSide> {
+        if entry.is_some_and(|(mode, _)| mode == "000000") {
+            return None;
+        }
+        let data = (|| {
+            let mime = image_mime(path)
+                .ok_or_else(|| Error::new("imageUnavailable", "Unsupported image format."))?;
+            let bytes = match entry {
+                Some((mode, oid)) if matches!(mode.as_str(), "100644" | "100755") => {
+                    if working {
+                        self.working_image_bytes(path)?
+                    } else {
+                        let size = string(self.location(), &["cat-file", "-s", oid])?;
+                        if size.parse::<usize>().unwrap_or(usize::MAX) > IMAGE_LIMIT {
+                            return Err(Error::new(
+                                "imageLimit",
+                                "Image exceeds the 16 MiB preview limit.",
+                            ));
+                        }
+                        process::checked(self.location(), &args(&["cat-file", "blob", oid]))?
+                    }
+                }
+                Some(_) => return Err(Error::new("imageUnavailable", "Not a regular file.")),
+                None => self.working_image_bytes(path)?,
+            };
+            Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
+        })();
+        let (data_url, error) = match data {
+            Ok(url) => (Some(url), None),
+            Err(error) => (None, Some(error.message)),
+        };
+        Some(ImageSide {
+            path: path.into(),
+            data_url,
+            error,
+        })
     }
     /// A working-file preview needs status/rename metadata, not line statistics
     /// for every changed file. Plain modifications use a path-scoped raw read.
@@ -195,6 +270,15 @@ impl Repository {
             .ok_or_else(missing)
     }
     pub(crate) fn diff_snapshot(&self, spec: &DiffSpec, path: &str) -> Result<(FileDiff, Vec<u8>)> {
+        self.diff_with_patch(spec, path, false)
+    }
+
+    fn diff_with_patch(
+        &self,
+        spec: &DiffSpec,
+        path: &str,
+        images: bool,
+    ) -> Result<(FileDiff, Vec<u8>)> {
         validate_path(path)?;
         let actionable = matches!(spec, DiffSpec::Staged | DiffSpec::Unstaged);
         let index = || {
@@ -205,8 +289,17 @@ impl Repository {
         };
         let before = if actionable { index()? } else { vec![] };
         let mut modified = false;
+        let mut image = None;
         let bytes = if matches!(spec, DiffSpec::Untracked) {
-            self.untracked_patch(path)?
+            self.require_untracked(path)?;
+            if let Some(mime) = image_mime(path).filter(|_| images) {
+                image = Some(ImageDiff {
+                    before: None,
+                    after: self.image_side(path, None, true),
+                    source_diff: mime == "image/svg+xml",
+                });
+            }
+            self.untracked_patch(path)
         } else {
             let file = if matches!(
                 spec,
@@ -221,21 +314,54 @@ impl Repository {
                         Error::new("fileNotInDiff", "File is not part of the selected diff")
                     })?
             };
+            let old_path = file.old_path.as_deref().unwrap_or(path);
+            if images && !matches!(spec, DiffSpec::Conflict) {
+                let old_mime = image_mime(old_path);
+                let new_mime = image_mime(path);
+                if old_mime.is_some() || new_mime.is_some() {
+                    image = Some(ImageDiff {
+                        before: self.image_side(old_path, Some(&file.before), false),
+                        after: self.image_side(
+                            path,
+                            Some(&file.after),
+                            matches!(spec, DiffSpec::Unstaged),
+                        ),
+                        source_diff: [old_mime, new_mime].contains(&Some("image/svg+xml")),
+                    });
+                }
+            }
             modified = file.status == "M" && file.old_path.is_none() && !file.binary;
             let mut a = self.diff_args(spec)?;
             a.extend(args(&["--patch", "--unified=3", "--", path]));
             if let Some(old_path) = &file.old_path {
                 a.push(old_path.clone());
             }
-            process::checked(self.location(), &a)?
+            process::checked(self.location(), &a)
         };
         // Patch bodies may contain arbitrary blob bytes, unlike paths. Replacement characters are display-only.
-        let mut diff = parse_patch(path, &String::from_utf8_lossy(&bytes))?;
+        let (mut diff, bytes, patch_available) = match bytes {
+            Ok(bytes) => (
+                parse_patch(path, &String::from_utf8_lossy(&bytes))?,
+                bytes,
+                true,
+            ),
+            Err(error) if error.code == "outputLimit" && image.is_some() => {
+                let mut diff = parse_patch(path, "")?;
+                diff.truncated = true;
+                diff.message = Some("The source diff exceeds the preview size limit.".into());
+                (diff, vec![], false)
+            }
+            Err(error) => return Err(error),
+        };
+        diff.image = image;
         if actionable {
             if before != index()? {
                 return Err(crate::hunk::stale());
             }
-            diff.hunk_action = Some(crate::hunk::action(&diff, &bytes, &before, spec, modified));
+            if patch_available {
+                diff.hunk_action =
+                    Some(crate::hunk::action(&diff, &bytes, &before, spec, modified));
+            }
         }
         if matches!(spec, DiffSpec::Conflict) {
             let note = "Unmerged file: showing the working tree against stage 2 (ours). This diff is read-only; use the conflict editor to resolve the full file.";
@@ -290,6 +416,8 @@ pub fn parse_diff_files(raw: &str) -> Result<Vec<DiffFile>> {
                 additions: Some(0),
                 deletions: Some(0),
                 binary: false,
+                before: (fields[0][1..].into(), fields[2].into()),
+                after: (fields[1].into(), fields[3].into()),
             });
         } else {
             let f: Vec<_> = record.splitn(3, '\t').collect();
@@ -398,6 +526,7 @@ pub fn parse_patch(path: &str, raw: &str) -> Result<FileDiff> {
         binary,
         truncated,
         hunk_action: None,
+        image: None,
         message: if metadata.is_empty() {
             None
         } else {

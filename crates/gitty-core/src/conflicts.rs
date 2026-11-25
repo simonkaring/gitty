@@ -64,8 +64,10 @@ try:
  elif stat.S_ISDIR(m.st_mode): kind, data = 'directory', b''
  elif not stat.S_ISREG(m.st_mode): kind, data = 'unsupported', b''
  else:
-  f = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=d)
-  with os.fdopen(f, 'rb') as stream: data = stream.read(16777217)
+  f = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=d)
+  with os.fdopen(f, 'rb') as stream:
+   if not stat.S_ISREG(os.fstat(f).st_mode): raise ValueError('Not a regular file')
+   data = stream.read(16777217)
   if len(data) > 16777216: raise ValueError('Working file exceeds 16 MiB; resolve it in Git')
   kind = 'executable' if m.st_mode & 0o111 else 'file'
  if len(data) > 16777216: raise ValueError('Working path exceeds 16 MiB; resolve it in Git')
@@ -246,10 +248,20 @@ impl Repository {
                 bytes: vec![],
             });
         }
+        let mut options = cap_std::fs::OpenOptions::new();
+        options.read(true);
+        use cap_std::fs::OpenOptionsExt;
+        #[cfg(unix)]
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        #[cfg(windows)]
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+        let file = dir.open_with(name, &options)?;
+        let opened = file.metadata()?;
+        if !opened.is_file() || opened.file_type().is_symlink() {
+            return Err(unsupported("Not a regular file"));
+        }
         let mut bytes = Vec::new();
-        dir.open(name)?
-            .take((LIMIT + 1) as u64)
-            .read_to_end(&mut bytes)?;
+        file.take((LIMIT + 1) as u64).read_to_end(&mut bytes)?;
         if bytes.len() > LIMIT {
             return Err(unsupported(
                 "Working file exceeds 16 MiB; resolve it in Git. Editing is never truncated.",
@@ -285,6 +297,14 @@ impl Repository {
                     bytes: output[separator + 1..].to_vec(),
                 })
             }
+        }
+    }
+    pub(crate) fn working_image_bytes(&self, path: &str) -> Result<Vec<u8>> {
+        let snapshot = self.conflict_working_snapshot(path)?;
+        if matches!(snapshot.kind.as_str(), "file" | "executable") {
+            Ok(snapshot.bytes)
+        } else {
+            Err(Error::new("imageUnavailable", "Not a regular file"))
         }
     }
     fn write_conflict_working(

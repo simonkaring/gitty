@@ -200,6 +200,7 @@ impl Repository {
                 truncated: true,
                 message: None,
                 hunk_action: None,
+                image: None,
             },
             Err(error) => return Err(error),
         };

@@ -430,6 +430,111 @@ fn normalized_line_endings_report_status_without_an_empty_preview() {
 }
 
 #[test]
+fn desktop_image_diff_uses_the_selected_git_versions() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    let d = init();
+    let path = "logo.SVG";
+    let write = |color| {
+        let svg =
+            format!("<svg xmlns=\"http://www.w3.org/2000/svg\"><rect fill=\"{color}\"/></svg>\n");
+        std::fs::write(d.path().join(path), &svg).unwrap();
+        svg.into_bytes()
+    };
+    let head = write("red");
+    let root = commit(d.path(), "add logo");
+    let staged = write("blue");
+    git(d.path(), &["add", "--", path]);
+    let working = write("green");
+    let data = tempfile::tempdir().unwrap();
+    let mut service = Service::new(data.path().into());
+    let state = open(&mut service, d.path());
+    let repo = service.repo(&state.session.handle).unwrap();
+    let bytes = |side: Option<ImageSide>| {
+        side.map(|side| {
+            let url = side.data_url.unwrap_or_else(|| panic!("{:?}", side.error));
+            STANDARD.decode(url.split_once(',').unwrap().1).unwrap()
+        })
+    };
+    let sides = |diff: FileDiff| {
+        let image = diff.image.unwrap();
+        assert!(image.source_diff);
+        (bytes(image.before), bytes(image.after))
+    };
+    assert_eq!(
+        sides(
+            repo.preview_diff(
+                &DiffSpec::Commit {
+                    oid: root.clone(),
+                    parent: None
+                },
+                path
+            )
+            .unwrap()
+        ),
+        (None, Some(head.clone()))
+    );
+    let diff = repo.preview_diff(&DiffSpec::Staged, path).unwrap();
+    assert!(diff.hunk_action.as_ref().unwrap().fingerprint.is_some());
+    assert_eq!(sides(diff), (Some(head.clone()), Some(staged.clone())));
+    assert_eq!(
+        sides(repo.preview_diff(&DiffSpec::Unstaged, path).unwrap()),
+        (Some(staged), Some(working.clone()))
+    );
+    assert!(repo.diff(&DiffSpec::Staged, path).unwrap().image.is_none());
+
+    let updated = commit(d.path(), "update logo");
+    let renamed = "new logo.svg";
+    git(d.path(), &["mv", "--", path, renamed]);
+    let tip = commit(d.path(), "rename logo");
+    let image = repo
+        .preview_diff(
+            &DiffSpec::Compare {
+                base: updated,
+                target: tip,
+            },
+            renamed,
+        )
+        .unwrap()
+        .image
+        .unwrap();
+    assert_eq!(image.before.as_ref().unwrap().path, path);
+    assert_eq!(image.after.as_ref().unwrap().path, renamed);
+    assert_eq!(bytes(image.before), Some(working.clone()));
+    assert_eq!(bytes(image.after), Some(working.clone()));
+    std::fs::remove_file(d.path().join(renamed)).unwrap();
+    assert_eq!(
+        sides(repo.preview_diff(&DiffSpec::Unstaged, renamed).unwrap()),
+        (Some(working), None)
+    );
+    let png = b"\x89PNG\r\n\x1a\n\0";
+    std::fs::write(d.path().join("new.png"), png).unwrap();
+    let image = repo
+        .preview_diff(&DiffSpec::Untracked, "new.png")
+        .unwrap()
+        .image
+        .unwrap();
+    assert!(!image.source_diff);
+    assert!(image.before.is_none());
+    assert_eq!(bytes(image.after), Some(png.to_vec()));
+
+    #[cfg(unix)]
+    {
+        let link = "link.png";
+        std::os::unix::fs::symlink(d.path().join("new.png"), d.path().join(link)).unwrap();
+        let side = repo
+            .preview_diff(&DiffSpec::Untracked, link)
+            .unwrap()
+            .image
+            .unwrap()
+            .after
+            .unwrap();
+        assert!(side.data_url.is_none());
+        assert!(side.error.unwrap().contains("Not a regular file"));
+    }
+}
+
+#[test]
 fn rename_binary_mode_and_unstaged_diff() {
     let d = init();
     let old_name = if cfg!(windows) {

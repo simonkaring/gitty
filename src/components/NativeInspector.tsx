@@ -75,13 +75,11 @@ export function NativeInspector({
   const [files, setFiles] = useState<DiffFile[]>([]);
   const [path, setPath] = useState('');
   const previousActivePath = useRef(activePath);
-  const [diff, setDiff] = useState<FileDiff | null>(null);
+  const [preview, setPreview] = useState<{ key: string; diff?: FileDiff; error?: string } | null>(null);
   const [error, setError] = useState('');
-  const [diffError, setDiffError] = useState('');
   const [filesScope, setFilesScope] = useState('');
   const [retry, setRetry] = useState(0);
   const [busy, setBusy] = useState(false);
-  const [diffBusy, setDiffBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   /** What the open editor is bound to. `original` is the normalized message the draft started from. */
   const [editor, setEditor] = useState<{ oid: string; headRef: string; original: string; token: number } | null>(null);
@@ -119,7 +117,10 @@ export function NativeInspector({
   const comparing = spec.kind === 'compare';
   /** The selection last handed to the backend, to tell a changed selection (debounced) from a refetch of the same one. */
   const dispatched = useRef<{ handle: string; selected: string } | null>(null);
-  const scope = JSON.stringify([selected, spec, stateRevision, retry]);
+  const scope = JSON.stringify([session.handle, selected, spec, stateRevision, retry]);
+  const previewKey = JSON.stringify([scope, path]);
+  const currentPreview = preview?.key === previewKey ? preview : null;
+  const diffError = currentPreview?.error;
   const eligibilityScope = JSON.stringify([session.handle, session.head, session.headRef, selected, revision, retry]);
   const hasEditMessage = !!onEditMessage;
 
@@ -137,9 +138,6 @@ export function NativeInspector({
     let live = true;
     setBusy(true);
     setError('');
-    setDiffError('');
-    setDiffBusy(false);
-    setDiff(null);
     // The previous commit/files stay on screen (dimmed) until this fetch lands; every guard below
     // still compares against `selected`/`scope`, so stale data is never treated as current.
     const load = () => {
@@ -187,28 +185,23 @@ export function NativeInspector({
     }
     onActiveDiffChange({
       path,
-      diff,
-      loading: diffBusy,
+      diff: currentPreview?.diff ?? null,
+      loading: !currentPreview && !error,
       error: diffError,
     });
-  }, [path, diff, diffBusy, diffError, onActiveDiffChange]);
+  }, [path, currentPreview, error, diffError, onActiveDiffChange]);
 
   useEffect(() => {
     let live = true;
-    setDiff(null);
-    setDiffBusy(false);
-    setDiffError('');
+    setPreview(current => current?.key === previewKey ? current : null);
     if (!path || busy || filesScope !== scope || !files.some(file => file.path === path)) return;
-    setDiffBusy(true);
     native<FileDiff>('repository_diff', { handle: session.handle, spec, path }).then(result => {
-      if (live) setDiff(result);
+      if (live) setPreview({ key: previewKey, diff: result });
     }).catch(e => {
-      if (live) setDiffError(errorMessage(e));
-    }).finally(() => {
-      if (live) setDiffBusy(false);
+      if (live) setPreview({ key: previewKey, error: errorMessage(e) });
     });
     return () => { live = false; };
-  }, [session.handle, spec, path, files, busy, retry, scope, filesScope]);
+  }, [session.handle, spec, path, files, busy, scope, filesScope, previewKey]);
 
   async function copy() {
     try {

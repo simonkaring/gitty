@@ -10,6 +10,7 @@ import { NativeInspector } from './NativeInspector';
 import { NativeSidebar } from './NativeSidebar';
 import { CommandSearchButton, INSPECTOR_MAX_WIDTH, INSPECTOR_MIN_WIDTH, PaneResizer } from './WorkspaceControls';
 import { DEFAULT_WORKING_DISCLOSURE, DiffPreview, WorkingChanges, type ActiveDiffState, type WorkingDisclosure, type WorkingDisclosureUpdate } from './WorkingChanges';
+import { ImagePreview } from './ImagePreview';
 import { writeAndRefresh, type MutationOutcome } from '../model/workflow';
 import { remoteAndRefresh } from '../model/remoteFlow';
 import type { OperationState } from '../model/operations';
@@ -780,6 +781,14 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     const goTo = state.refs.filter(ref => ref.kind !== 'local').map(ref => ({ id: `goto:${ref.fullName}`, group: 'Go to', label: `Go to ${ref.kind === 'stash' ? 'latest stash' : ref.name}`, hint: ref.kind, icon: ref.kind === 'tag' ? <Icons.Tag size={15} /> : ref.kind === 'stash' ? <Icons.Archive size={15} /> : <Icons.Globe2 size={15} />, run: () => reveal(ref.commitId) }));
     return [...repo, ...branches, ...goTo, ...workspaceCommands];
   }
+  const image = activeDiff?.diff?.image;
+  const textDiff = activeDiff?.diff && <DiffPreview
+    diff={activeDiff.diff}
+    split={split}
+    hunkAction={activeDiff.hunkAction}
+    busy={mutationBusy || mutationBlocked || activeDiff.busy}
+    onHunk={activeDiff.onHunk}
+  />;
   return <>
     {active && paletteOpen && <CommandPalette commands={paletteCommands()} onClose={onClosePalette} />}
     {state && <RepositoryToolbar handle={state.session.handle} active={active} revision={revision} stateRevision={stateRevision} busy={mutationBusy || mutationBlocked} pickCount={pickOrder.length} pickMode={pickMode}
@@ -831,7 +840,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
                       {activeDiff.isStaged ? 'Unstage File' : 'Stage File'}
                     </button>
                   )}
-                  <Segmented label="Diff layout" value={split ? 'split' : 'unified'} options={[['unified', 'Unified'], ['split', 'Split']]} onChange={value => setSplit(value === 'split')} />
+                  {(!image || image.sourceDiff) && <Segmented label="Diff layout" value={split ? 'split' : 'unified'} options={[['unified', 'Unified'], ['split', 'Split']]} onChange={value => setSplit(value === 'split')} />}
                   <button className="icon-button" aria-label="Close diff and show tree" title="Close diff" onClick={() => setActiveDiff(null)}>
                     <Icons.X size={17} />
                   </button>
@@ -840,15 +849,9 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
               <div className="diff-view-body">
                 {activeDiff.loading && <p className="diff-placeholder" role="status">Loading diff…</p>}
                 {activeDiff.error && <p className="workflow-alert error" role="alert">{activeDiff.error}</p>}
-                {!activeDiff.loading && activeDiff.diff && (
-                  <DiffPreview
-                    diff={activeDiff.diff}
-                    split={split}
-                    hunkAction={activeDiff.hunkAction}
-                    busy={mutationBusy || mutationBlocked || activeDiff.busy}
-                    onHunk={activeDiff.onHunk}
-                  />
-                )}
+                {!activeDiff.loading && (image
+                  ? <ImagePreview key={JSON.stringify([activeDiff.group, activeDiff.path])} image={image}>{textDiff}</ImagePreview>
+                  : textDiff)}
               </div>
             </section>
           ) : (

@@ -8,6 +8,10 @@ sources:
     resource: ../../src/model/splitDiff.ts
   - id: viewer
     resource: ../../src/components/DiffPreview.tsx
+  - id: image-view
+    resource: ../../src/components/ImagePreview.tsx
+  - id: image-read
+    resource: ../../crates/gitty-core/src/diff.rs
   - id: styles
     resource: ../../src/styles.css
   - id: contract
@@ -57,6 +61,12 @@ Line selection submits original zero-based diff indices, never paired row
 indices. Busy/unavailable guards and fingerprint-scoped selection are shared
 with unified mode; Git write semantics remain defined by the backend.[^viewer][^contract]
 
+In the desktop workspace, the same pane shows recognized images as **Before /
+After** versions from the selected diff. SVGs render through `<img>` and can
+switch to the ordinary source diff; whole-file staging stays available. Missing
+sides are omitted and decode failures show a message. The backend contract
+defines the size limit, source selection, and transport scope.[^image-view][^image-read][^contract]
+
 Tests cover paired replacement selection, exact original-index requests from
 deep virtualized rows in both layouts, bounded row counts and spacer totals,
 roving keyboard selection, and the shared scroll offset; jsdom has no layout,
@@ -68,6 +78,8 @@ native Git patch correctness.[^tests][^smoke]
 
 [^pairing]: Presentation pairing, flattened rows, and window math, with retained source indices.
 [^viewer]: DiffPreview rows, virtual window, selection, roving focus, measurement, and scroll handlers.
+[^image-view]: Image versions, decoding fallback, and SVG source toggle.
+[^image-read]: Desktop image payload and source selection alongside the ordinary patch.
 [^styles]: Split content grid, gutters, and wrapping rules.
 [^contract]: Hunk and selected-line write contracts.
 [^tests]: Paired replacement selection and `virtualized diff rows` regressions; `splitDiff.test.ts` covers row flattening and window math.
