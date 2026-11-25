@@ -22,6 +22,7 @@ export function OriginResetDialog({ handle, branch, busy, onWrite, onClose, onCo
     inFlight.current = true; setPending(true); setReview(null); setError('');
     try {
       const snapshot = await native<RepositorySnapshot>('repository_snapshot', { handle });
+      if (snapshot.status.warning) throw new Error(snapshot.status.warning);
       const tip = snapshot.state.refs.find(ref => ref.fullName === branch && ref.kind === 'remote');
       if (!tip) throw new Error('The origin branch no longer exists. Refresh the repository.');
       const localRef = branch.replace(/^refs\/remotes\/origin\//, 'refs/heads/');

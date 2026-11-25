@@ -47,6 +47,24 @@ pub fn fingerprint(data: impl Hash) -> String {
 }
 /// Path-list bytes per `hash-object --stdin-paths` launch, below the 8 MiB stdin cap.
 const UNTRACKED_HASH_BATCH_BYTES: usize = 4 * 1024 * 1024;
+const DISPLAY_UNTRACKED_LIMIT: usize = 4096;
+const DISPLAY_UNTRACKED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+const INCOMPLETE_STATUS_PREFIX: &str = "incomplete:";
+
+pub(crate) fn require_complete_status(fingerprint: &str) -> Result<()> {
+    if fingerprint.starts_with(INCOMPLETE_STATUS_PREFIX) {
+        return Err(Error::new(
+            "incompleteStatus",
+            "This action needs a complete working-tree check. If the untracked files are generated, ignore their directory and refresh before retrying.",
+        ));
+    }
+    Ok(())
+}
+
+fn status_error(phase: &str, mut error: Error) -> Error {
+    error.message = format!("{phase}: {}", error.message);
+    error
+}
 /// Splits paths into consecutive batches whose newline-joined size stays within `limit`.
 fn path_batches<'a>(paths: &[&'a str], limit: usize) -> Vec<Vec<&'a str>> {
     let mut batches = vec![];
@@ -1028,7 +1046,19 @@ impl Repository {
         }
     }
     pub fn status(&self) -> Result<RepositoryStatus> {
-        let mut status = self.status_entries()?;
+        self.read_status(false)
+    }
+
+    /// Display reads keep the file list usable even when checking every untracked
+    /// byte is too expensive. Writes that need a reviewed fingerprint use `status`.
+    pub fn display_status(&self) -> Result<RepositoryStatus> {
+        self.read_status(true)
+    }
+
+    fn read_status(&self, for_display: bool) -> Result<RepositoryStatus> {
+        let mut status = self
+            .status_entries()
+            .map_err(|e| status_error("Listing working-tree changes", e))?;
         let untracked: Vec<&str> = status
             .entries
             .iter()
@@ -1039,7 +1069,7 @@ impl Repository {
             .entries
             .iter()
             .any(|e| !e.untracked && e.worktree_status != ".");
-        let [tracked, untracked]: [Result<u64>; 2] = process::parallel(vec![
+        let [tracked, content]: [Result<u64>; 2] = process::parallel(vec![
             Box::new(|| {
                 if tracked_changes {
                     self.tracked_content_hash()
@@ -1047,11 +1077,41 @@ impl Repository {
                     Ok(0)
                 }
             }),
-            Box::new(|| self.untracked_content_hash(&untracked)),
+            Box::new(|| {
+                if !for_display {
+                    return self.untracked_content_hash(&untracked);
+                }
+                // ponytail: fixed path-count ceiling; use per-action review if
+                // large trees need safe writes without a full content scan.
+                if untracked.len() > DISPLAY_UNTRACKED_LIMIT {
+                    return Err(Error::new(
+                        "scanLimit",
+                        format!("more than {DISPLAY_UNTRACKED_LIMIT} untracked paths"),
+                    ));
+                }
+                process::with_read_timeout(DISPLAY_UNTRACKED_TIMEOUT, || {
+                    self.untracked_content_hash(&untracked)
+                })
+            }),
         ])
         .try_into()
         .unwrap_or_else(|_| unreachable!());
-        status.fingerprint = fingerprint((&status.fingerprint, tracked?, untracked?));
+        let tracked = tracked.map_err(|e| status_error("Checking tracked file contents", e))?;
+        let phase = format!("Checking contents of {} untracked paths", untracked.len());
+        match content {
+            Ok(content) => {
+                status.fingerprint = fingerprint((&status.fingerprint, tracked, content));
+            }
+            Err(error) if for_display && matches!(error.code.as_str(), "scanLimit" | "timeout") => {
+                let path_state = fingerprint((&status.fingerprint, tracked));
+                status.fingerprint = format!("{INCOMPLETE_STATUS_PREFIX}{path_state}");
+                status.warning = Some(format!(
+                    "{phase} was cut short ({}). The file list is available, but some actions require a full check. If these are generated files, ignore their directory and refresh.",
+                    error.message
+                ));
+            }
+            Err(error) => return Err(status_error(&phase, error)),
+        }
         Ok(status)
     }
     /// Porcelain includes index object IDs, but only status letters for working
@@ -1268,6 +1328,7 @@ impl Repository {
             head,
             head_ref,
             fingerprint,
+            warning: None,
         })
     }
     /// At most one search runs per session: starting one cancels the previous, which

@@ -332,9 +332,10 @@ impl Repository {
                     head: state.session.head.clone(),
                     head_ref: state.session.head_ref.clone(),
                     fingerprint: "bare".into(),
+                    warning: None,
                 }
             } else {
-                self.status()?
+                self.display_status()?
             };
             if status.head != state.session.head || status.head_ref != state.session.head_ref {
                 continue;

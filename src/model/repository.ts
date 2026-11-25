@@ -31,7 +31,7 @@ export interface CommitEditEligibility { canEditMessage: boolean; editDisabledRe
 export interface HistoryPage { commits: CommitSummary[]; cursor: string | null; generation: string; shallow: boolean; /** Backend time for the first page of a freshly walked snapshot history. */ firstPageMillis?: number }
 export interface HistoryQuery { branch?: string }
 export interface StatusEntry { path: string; oldPath: string | null; indexStatus: string; worktreeStatus: string; conflicted: boolean; untracked: boolean }
-export interface RepositoryStatus { entries: StatusEntry[]; head: string | null; headRef: string | null; fingerprint: string }
+export interface RepositoryStatus { entries: StatusEntry[]; head: string | null; headRef: string | null; fingerprint: string; warning?: string }
 export type DiffSpec =
   | { kind: 'commit'; oid: string; parent?: string }
   | { kind: 'compare'; base: string; target: string }

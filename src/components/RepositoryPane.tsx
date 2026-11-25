@@ -305,7 +305,8 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       if (changed || workingChanged || force) setStatus(working);
       fingerprint.current = working.fingerprint;
       if (changed) setStateRevision(value => value + 1);
-      if (changed || workingChanged || operationChanged || force) setRevision(value => value + 1);
+      // A partial fingerprint cannot detect edits to an existing untracked file.
+      if (changed || workingChanged || operationChanged || force || working.warning) setRevision(value => value + 1);
       setError('');
       setBlocked(false);
     } catch (e) { if (token === epoch.current) setError(errorMessage(e)); if (force) throw e; }
@@ -379,6 +380,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     if (isDemoHandle(current.session.handle)) return { error: 'Editing commit messages is not available in the demo workspace.' };
     if (current.session.head !== oid || current.session.headRef !== headRef) return { error: 'HEAD changed since editing started, so the message was not saved. Your draft is kept.' };
     if (!working || working.head !== oid || working.headRef !== headRef) return { error: 'The working-tree status is not current for this commit. Wait for the refresh to finish and try again.' };
+    if (working.warning) return { error: working.warning };
     const handle = current.session.handle;
     const generation = navigation.current;
     // Expectations are read now, after the target, branch and session were validated, not when the editor opened.
@@ -802,6 +804,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
       {state && selected && selected !== WORKING_ID && !result?.commits.some(commit => commit.id === selected) && !commits.some(commit => commit.id === selected) && <Toast action={cursor && <button className="secondary-button" disabled={busy} onClick={() => reveal(selected)}>Reveal</button>}>Selected commit {selected.slice(0, 12)} is {cursor ? 'outside the loaded history' : 'no longer reachable from the current references'}. Its inspector remains open by object ID.</Toast>}
     </>}
     {mutationBlocked && <div className="operation-banner" role="alert">Refresh failed after a write. Further writes are blocked until a successful refresh.<button className="secondary-button compact" onClick={() => void refresh()}>Refresh now</button></div>}
+    {status?.warning && <div className="operation-banner" role="status">{status.warning}</div>}
     {state && operation && (operation.kind !== 'none' || !!operation.conflicts.length) && <div className="operation-banner" role="status"><strong>{operation.label || operation.kind}</strong><span>{operation.current} {operation.incoming && `← ${operation.incoming}`}{operation.step !== null && ` · Step ${operation.step}${operation.total !== null ? ` / ${operation.total}` : ''}`}</span>{(['continue', 'skip', 'abort'] as const).map(kind => <button key={kind} className="secondary-button compact" disabled={mutationBusy || mutationBlocked || operation.kind === 'unsupported' || (kind === 'continue' && !operation.canContinue) || (kind === 'skip' && !operation.canSkip)} onClick={() => setActionContext({ oid: state.session.head ?? '', initial: kind })}>{kind === 'continue' ? 'Continue' : kind === 'skip' ? 'Skip' : 'Abort'}</button>)}{operation.conflicts.map(path => <button key={path} className="secondary-button compact" onClick={() => setConflictPath(path)}>Resolve {path}</button>)}</div>}
     {!state ? <main className="repo-skeleton" aria-busy={!error}>
       <div className="skeleton-sidebar" aria-hidden="true">{[70, 45, 90, 60, 80, 50].map((w, i) => <span key={i} className="skeleton" style={{ width: `${w}%` }} />)}</div>

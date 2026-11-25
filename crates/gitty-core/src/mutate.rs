@@ -525,6 +525,7 @@ impl Repository {
     /// pass the status fingerprint it showed the user; any change since is refused.
     pub(crate) fn discard(&self, paths: &[String], expected_status: &str) -> Result<()> {
         let paths = self.prepare(paths, "discard")?;
+        crate::repository::require_complete_status(expected_status)?;
         let status = self.status()?;
         if status.fingerprint != expected_status {
             return Err(Error::new(
@@ -770,6 +771,7 @@ impl Repository {
         validate_message(message)?;
         validate_identity(identity)?;
         self.require_writable()?;
+        crate::repository::require_complete_status(expected_status_fingerprint)?;
         let conflicted = self.unmerged()?;
         if !conflicted.is_empty() {
             return Err(Error::new(

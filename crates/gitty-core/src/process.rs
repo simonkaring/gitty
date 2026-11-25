@@ -422,26 +422,28 @@ pub(crate) fn count_spawns<T>(f: impl FnOnce() -> T) -> (T, usize) {
 }
 thread_local! { static REQUEST_DEADLINE: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) }; }
 pub fn request<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
-    struct Reset;
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            REQUEST_DEADLINE.with(|d| d.set(None));
-        }
-    }
-    REQUEST_DEADLINE.with(|d| d.set(Some(Instant::now() + Duration::from_secs(60))));
-    let _reset = Reset;
-    f()
+    with_read_timeout(Duration::from_secs(60), f)
+}
+
+pub(crate) fn with_read_timeout<T>(timeout: Duration, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let deadline = Instant::now() + timeout;
+    let deadline = REQUEST_DEADLINE.with(|d| d.get().map_or(deadline, |outer| outer.min(deadline)));
+    with_deadline(Some(deadline), f)
 }
 
 /// A slow hook must not consume the budget for post-write reconciliation.
 pub(crate) fn without_read_deadline<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    with_deadline(None, f)
+}
+
+fn with_deadline<T>(deadline: Option<Instant>, f: impl FnOnce() -> Result<T>) -> Result<T> {
     struct Restore(Option<Instant>);
     impl Drop for Restore {
         fn drop(&mut self) {
             REQUEST_DEADLINE.with(|d| d.set(self.0));
         }
     }
-    let _restore = Restore(REQUEST_DEADLINE.with(|d| d.replace(None)));
+    let _restore = Restore(REQUEST_DEADLINE.with(|d| d.replace(deadline)));
     f()
 }
 
@@ -992,7 +994,7 @@ pub(crate) fn remaining_timeout() -> Result<Duration> {
     if timeout.is_zero() {
         return Err(Error::new(
             "timeout",
-            "Repository request exceeded its 60 second deadline",
+            "Repository read exceeded its execution deadline",
         ));
     }
     Ok(timeout)

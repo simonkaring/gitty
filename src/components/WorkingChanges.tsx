@@ -143,7 +143,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   const fileAction = (command: 'repository_open_path' | 'repository_reveal_path', path: string) =>
     native(command, { handle: session.handle, path }).catch(error => { if (alive.current) setOutcome({ error: errorMessage(error) }); });
   const [discarding, setDiscarding] = useState<{ entries: StatusEntry[]; fingerprint: string } | null>(null);
-  const requestDiscard = (entries: StatusEntry[]) => { if (status && !blocked && entries.length) setDiscarding({ entries, fingerprint: status.fingerprint }); };
+  const requestDiscard = (entries: StatusEntry[]) => { if (status && !status.warning && !blocked && entries.length) setDiscarding({ entries, fingerprint: status.fingerprint }); };
   function confirmDiscard() {
     if (!discarding) return;
     const { entries, fingerprint } = discarding;
@@ -178,7 +178,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   // The diff pane's stage buttons act through this component, so closing the inspector must close the pane too.
   useEffect(() => () => { onActiveDiffChange?.(null); }, []);
   const composerDraft = amending ? amendDraft ?? { subject: '', body: '' } : draft;
-  const amendReady = amending && !!amendDraft && !!session.head && amendHead === session.head && status?.head === session.head && status.headRef === session.headRef;
+  const amendReady = amending && !!amendDraft && !!session.head && amendHead === session.head && status?.head === session.head && status.headRef === session.headRef && !status.warning;
   function edit(value: CommitDraft) {
     if (amending) setAmendDraft(value);
     else { setDraft(value); setPersisted(saveDraft(key, value)); }
@@ -260,7 +260,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
           <button className="secondary-button" disabled={blocked || !stagedCount} onClick={() => void perform({ kind: 'unstage', paths: stagedPaths }, stagedCount)}>
             <Icons.Minus size={13} />Unstage all ({stagedCount})
           </button>
-          <button className="secondary-button" data-danger="true" disabled={blocked || !discardable.length} onClick={() => requestDiscard(discardable)}>
+          <button className="secondary-button" data-danger="true" disabled={blocked || !!status?.warning || !discardable.length} onClick={() => requestDiscard(discardable)}>
             <Icons.Undo2 size={13} />Discard all ({discardable.length})
           </button>
         </div>
@@ -333,9 +333,9 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
       </div>
       {menu && <FileContextMenu target={menu} blocked={blocked} native={!demo} onClose={() => setMenu(null)}
         onToggleStage={() => { const kind = menu.kind === 'staged' ? 'unstage' : 'stage'; void perform({ kind, paths: operationPaths([menu.entry], kind) }); }}
-        onDiscard={() => requestDiscard([menu.entry])} onIgnore={() => void perform({ kind: 'ignore', path: menu.entry.path })}
+        onDiscard={status?.warning ? undefined : () => requestDiscard([menu.entry])} onIgnore={() => void perform({ kind: 'ignore', path: menu.entry.path })}
         onCopy={(value, label) => void copy(value, label)} onOpen={() => void fileAction('repository_open_path', menu.entry.path)} onReveal={() => void fileAction('repository_reveal_path', menu.entry.path)} />}
-      {discarding && <DiscardDialog entries={discarding.entries} blocked={blocked} onConfirm={confirmDiscard} onClose={() => setDiscarding(null)} />}
+      {discarding && <DiscardDialog entries={discarding.entries} blocked={blocked || !!status?.warning} onConfirm={confirmDiscard} onClose={() => setDiscarding(null)} />}
   </section>;
 }
 

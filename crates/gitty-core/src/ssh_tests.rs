@@ -286,6 +286,8 @@ fn ssh_fetch_and_push_use_the_remote_hosts_own_git() {
     // A commit made elsewhere on the remote host is picked up by fetch.
     let other = tempfile::tempdir().unwrap();
     crate::tests::git(other.path(), &["clone", bare.path().to_str().unwrap(), "."]);
+    crate::tests::git(other.path(), &["config", "user.name", "Test Author"]);
+    crate::tests::git(other.path(), &["config", "user.email", "test@example.com"]);
     std::fs::write(other.path().join("file"), "from the other workstation\n").unwrap();
     crate::tests::commit(other.path(), "remote work");
     let theirs = crate::tests::git(other.path(), &["rev-parse", "HEAD"]);

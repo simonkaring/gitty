@@ -495,7 +495,7 @@ async fn repository_status(
     state: tauri::State<'_, Shared>,
     handle: String,
 ) -> Result<RepositoryStatus> {
-    with_service(state, move |s| s.repo(&handle)?.status()).await
+    with_service(state, move |s| s.repo(&handle)?.display_status()).await
 }
 #[tauri::command]
 async fn repository_diff_files(

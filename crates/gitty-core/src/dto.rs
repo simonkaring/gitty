@@ -201,6 +201,8 @@ pub struct RepositoryStatus {
     pub head: Option<String>,
     pub head_ref: Option<String>,
     pub fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
 }
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]

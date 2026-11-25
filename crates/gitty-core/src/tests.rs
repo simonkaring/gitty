@@ -717,6 +717,38 @@ fn untracked_empty_binary_and_symlink_files() {
         .contains("120000"));
 }
 
+#[test]
+fn snapshot_keeps_history_and_paths_visible_when_untracked_scan_is_too_large() {
+    let d = init();
+    std::fs::write(d.path().join("tracked"), "original").unwrap();
+    let head = commit(d.path(), "Initial commit");
+    std::fs::create_dir(d.path().join("build")).unwrap();
+    for i in 0..4097 {
+        std::fs::File::create(d.path().join(format!("build/{i}"))).unwrap();
+    }
+    let data = tempfile::tempdir().unwrap();
+    let mut service = Service::new(data.path().into());
+    let state = open(&mut service, d.path());
+    let repo = service.repo(&state.session.handle).unwrap();
+
+    let snapshot = repo
+        .snapshot_with_history(Some(crate::operation_dto::SnapshotHistory::default()))
+        .unwrap();
+    assert_eq!(snapshot.history.unwrap().commits[0].id, head);
+    assert_eq!(snapshot.status.entries.len(), 4097);
+    assert!(snapshot.status.warning.unwrap().contains("4097 untracked"));
+    let error = repo
+        .discard(&["build/0".into()], &snapshot.status.fingerprint)
+        .unwrap_err();
+    assert_eq!(error.code, "incompleteStatus");
+    assert!(d.path().join("build/0").exists());
+
+    std::fs::write(d.path().join(".gitignore"), "/build/\n").unwrap();
+    let status = repo.display_status().unwrap();
+    assert!(status.warning.is_none());
+    assert_eq!(status.fingerprint, repo.status().unwrap().fingerprint);
+}
+
 /// `git hash-object --stdin-paths` stops at a dangling symlink or a symlink to a
 /// folder. Those files must be hashed alone: falling back to one process for every
 /// untracked file made each refresh cost seconds in a project with many of them.

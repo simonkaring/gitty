@@ -31,6 +31,7 @@ const entries = [{ path: 'edited.txt', oldPath: null, indexStatus: '.', worktree
 const state = () => ({ session: { handle: 'real-1', location: { kind: 'native', path: '/repo' }, name: 'repo', root: '/repo', gitDir: '/repo/.git', commonDir: '/repo/.git', linkedWorktree: false, shallow: false, bare: false, head: 'h1', headRef: 'refs/heads/main' }, refs: [], remotes: [], fingerprint: 'state-1' });
 const status = () => ({ entries, head: 'h1', headRef: 'refs/heads/main', fingerprint: 'status-1' });
 const commit = { id: 'h1', parents: [], subject: 'Subject h1', author: 'Ada', email: 'ada@example.com', timestamp: 100 };
+const scanWarning = 'Checking contents of 4097 untracked paths was cut short.';
 
 beforeEach(() => {
   mocks.invoke.mockImplementation(async command => {
@@ -44,7 +45,11 @@ beforeEach(() => {
 });
 afterEach(() => { vi.clearAllMocks(); });
 
-it('scrolls the graph to the working-changes row when it is revealed', async () => {
+it.each([undefined, scanWarning])('reveals working changes with scan warning: %s', async warning => {
+  const invoke = mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation((command, args) => command === 'repository_snapshot'
+    ? Promise.resolve({ state: state(), status: { ...status(), warning }, operation: none, history: { commits: [commit], cursor: null, generation: 'walk', shallow: false } })
+    : invoke(command, args));
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const host = document.createElement('div'); document.body.append(host);
   const toasts = document.createElement('div'); document.body.append(toasts);
@@ -53,6 +58,8 @@ it('scrolls the graph to the working-changes row when it is revealed', async () 
   try {
     await act(async () => { root.render(<ToastProvider value={toasts}><RepositoryPane {...props} /></ToastProvider>); });
     await vi.waitFor(() => expect(host.querySelector(`[data-commit="${WORKING_ID}"]`)).not.toBeNull());
+    expect(host.textContent?.includes(scanWarning)).toBe(!!warning);
+    expect(host.querySelector('[data-commit="h1"]')).not.toBeNull();
     expect(mocks.graph.scrollTo).toHaveBeenCalledWith(1); // initial HEAD reveal
     mocks.graph.scrollTo.mockClear();
     await act(async () => { (host.querySelector(`[data-commit="${WORKING_ID}"]`) as HTMLButtonElement).click(); });
