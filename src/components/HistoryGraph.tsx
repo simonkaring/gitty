@@ -98,6 +98,7 @@ interface Props {
 
 const WIDTH_VAR: Record<HistoryColumnId, string> = { refs: 'var(--ref-width)', graph: 'var(--graph-width)', message: 'var(--message-width)', author: 'var(--author-width)', hash: 'var(--hash-width)', date: 'var(--date-width)' };
 const MIN_GRAPH_WIDTH = laneX(2) + 14; // three lanes plus padding; also fits the "GRAPH" label
+const HIGHLIGHT_INSET = 1;
 export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph({ commits, layout, refs, selectedId, head, matches, onSelect, onLoadMore, onOpenDetails, theme, hasMore, paging, shallow, headRef, onActions, onContextActions, onSwitchBranch, pickOrder, onTogglePick, highlightRef, worktreeRefs }, ref) {
   const uid = useId();
   const { settings, updateSettings } = useSettings();
@@ -105,8 +106,9 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
   const material = theme.design === 'material';
   const apple = theme.design === 'apple';
   const avatars = settings.graphAuthorAvatars || material;
-  // Material uses roomier rows so avatars, the HEAD ring and day dividers don't crowd each other.
-  const rowHeight = material ? 52 : apple ? 34 : ROW_HEIGHT;
+  // Leave room for the enlarged avatar and HEAD ring without crowding Apple's compact dot rows.
+  const rowHeight = material ? 52 : apple ? (avatars ? 44 : 34) : ROW_HEIGHT;
+  const highlightHeight = rowHeight - 2 * HIGHLIGHT_INSET;
   const graphLaneWidth = avatars ? 30 : LANE_WIDTH;
   const graphLaneX = useMemo(() => (lane: number) => laneX(0) + lane * graphLaneWidth, [graphLaneWidth]);
   const minGraphWidth = graphLaneX(2) + 14;
@@ -306,7 +308,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
     const selectedBand = apple && selectedIndex >= firstRow && selectedIndex < lastRow;
     if (selectedBand) {
       ctx.save();
-      ctx.beginPath(); ctx.rect(graphX, y(selectedIndex) - rowHeight / 2, graphWidth, rowHeight - 2); ctx.clip();
+      ctx.beginPath(); ctx.rect(graphX, selectedIndex * rowHeight - windowTop + HIGHLIGHT_INSET, graphWidth, highlightHeight); ctx.clip();
       ctx.strokeStyle = theme.colors.buttonForeground; ctx.globalAlpha = 0.9;
       edges.forEach(traceEdge);
       ctx.restore();
@@ -355,7 +357,7 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
       }
     }
     ctx.globalAlpha = 1;
-  }, [commits, layout, visibleEdges, windowTop, windowHeight, graphWidth, graphX, theme, matches, focus, shown, loaded, colors, palette, branchColors, avatars, material, apple, graphLaneX, joinRefs, refsByCommit, selectedId, selectedIndex, head, dpr, pixelWidth, pixelHeight]);
+  }, [commits, layout, visibleEdges, windowTop, windowHeight, graphWidth, graphX, theme, matches, focus, shown, loaded, colors, palette, branchColors, avatars, material, apple, graphLaneX, joinRefs, refsByCommit, selectedId, selectedIndex, head, dpr, pixelWidth, pixelHeight, rowHeight, highlightHeight]);
 
   useEffect(() => {
     const node = layout.nodes[selectedIndex];
@@ -532,11 +534,11 @@ export const HistoryGraph = forwardRef<GraphHandle, Props>(function HistoryGraph
         }}>
         <div className="history-spacer" style={{ height: loaded * rowHeight }}
           // Apple: the hover fill sits under the graph canvas like the selection, so lines and dots stay crisp. Moved directly, no re-render per row.
-          onMouseMove={apple ? event => { const el = hoverRect.current; if (!el) return; const row = Math.floor((event.clientY - event.currentTarget.getBoundingClientRect().top) / rowHeight); el.hidden = row < 0 || row >= loaded; el.style.top = `${row * rowHeight}px`; } : undefined}
+           onMouseMove={apple ? event => { const el = hoverRect.current; if (!el) return; const row = Math.floor((event.clientY - event.currentTarget.getBoundingClientRect().top) / rowHeight); el.hidden = row < 0 || row >= loaded; el.style.top = `${row * rowHeight + HIGHLIGHT_INSET}px`; } : undefined}
           onMouseLeave={apple ? () => { if (hoverRect.current) hoverRect.current.hidden = true; } : undefined}>
-          {apple && <div ref={hoverRect} className="history-hover" aria-hidden="true" hidden style={{ height: rowHeight - 2, left: 10, right: 10 }} />}
+           {apple && <div ref={hoverRect} className="history-hover" aria-hidden="true" hidden style={{ height: highlightHeight, left: 10, right: 10 }} />}
           {/* Apple design: the reference draws one rounded blue rect behind the selected row, spanning the whole row. */}
-          {apple && selectedIndex >= 0 && <div className="history-selection" aria-hidden="true" style={{ top: selectedIndex * rowHeight, height: rowHeight - 2, left: 10, right: 10 }} />}
+           {apple && selectedIndex >= 0 && <div className="history-selection" aria-hidden="true" style={{ top: selectedIndex * rowHeight + HIGHLIGHT_INSET, height: highlightHeight, left: 10, right: 10 }} />}
           {isGraphVisible && <canvas ref={canvas} className="graph-canvas" aria-hidden="true" data-layout-rows={layout.nodes.length} style={{ width: pixelWidth / dpr, height: pixelHeight / dpr, left: graphOffset, top: windowTop }} />}
           {commits.slice(start, end).map((commit, offset) => {
             const row = start + offset;

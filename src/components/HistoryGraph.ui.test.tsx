@@ -177,6 +177,32 @@ it('switches graph nodes between dots, initials and Gravatar while preserving wo
   }
 });
 
+it('keeps the first Apple HEAD ring inside the selection and aligns the canvas clip with the highlight', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  vi.stubGlobal('devicePixelRatio', 1.25);
+  const arc = vi.fn(), rect = vi.fn();
+  const canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(new Proxy({}, { get: (_, key) => key === 'arc' ? arc : key === 'rect' ? rect : () => {} }) as CanvasRenderingContext2D);
+  const host = document.createElement('div'), root = createRoot(host);
+  const commits = [{ id: 'head', parents: [], subject: 'HEAD', body: '', author: 'Test', email: '', timestamp: 1, branch: 'main', files: [] }];
+  const theme = BUILTIN_THEMES.find(theme => theme.design === 'apple')!;
+  preferences.graphAuthorAvatars = true;
+  try {
+    await act(async () => root.render(<HistoryGraph commits={commits} layout={layoutHistory(commits)} refs={[]} selectedId="head" head="head" matches={null} onSelect={() => {}} onLoadMore={() => {}} onOpenDetails={() => {}} theme={theme} />));
+    const band = host.querySelector<HTMLElement>('.history-selection')!;
+    const top = parseFloat(band.style.top), height = parseFloat(band.style.height);
+    const [, center, radius] = arc.mock.lastCall!;
+    expect(top).toBeGreaterThan(0);
+    expect(center - radius - 1).toBeGreaterThan(top);
+    expect(center + radius + 1).toBeLessThan(top + height);
+    expect(rect).toHaveBeenLastCalledWith(0, top, expect.any(Number), height);
+  } finally {
+    await act(async () => root.unmount());
+    canvas.mockRestore();
+    vi.unstubAllGlobals();
+  }
+});
+
 it('renders pending history without drawing nodes the layout worker has not returned', async () => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const originalObserver = globalThis.ResizeObserver;
