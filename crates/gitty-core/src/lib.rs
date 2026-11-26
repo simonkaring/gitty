@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod askpass;
+pub mod blame;
 pub mod branch_delete;
 pub mod bridge;
 pub mod clone;

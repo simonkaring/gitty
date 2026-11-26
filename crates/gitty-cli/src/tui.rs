@@ -5,6 +5,7 @@ use crossterm::event::{
 };
 use gitty_core::{
     askpass::{self, AskpassContext, AskpassRegistry},
+    blame::Blame,
     branch_delete::{BranchBatchDeleteItem, BranchBatchDeleteRequest},
     dto::{
         CommitDetail, CommitIdentity, CommitSummary, DiffFile, DiffSpec, FileDiff, HistoryPage,
@@ -253,6 +254,7 @@ enum Job {
     Conflicts(bool),
     Conflict(String),
     Resolve(ConflictFile, ConflictResolution),
+    Blame(Option<String>, String),
 }
 
 enum Reply {
@@ -289,6 +291,7 @@ enum Reply {
     RebasePlan(OperationRequest, HashMap<String, String>),
     Conflicts(OperationState, bool),
     Conflict(ConflictFile),
+    Blame(Blame),
 }
 
 struct Prompt {
@@ -456,6 +459,7 @@ fn worker(
                 Job::Branches(open) => Reply::Branches(repo.terminal_branches()?, open),
                 Job::Conflicts(open) => Reply::Conflicts(repo.operation_state()?, open),
                 Job::Conflict(path) => Reply::Conflict(repo.conflict_file(&path)?),
+                Job::Blame(revision, path) => Reply::Blame(repo.blame(revision.as_deref(), &path)?),
                 Job::Resolve(file, resolution) if WRITES => Reply::Wrote {
                     outcome: service
                         .resolve_conflict(handle, &file.path, &file.fingerprint, resolution)
@@ -894,6 +898,7 @@ enum View {
     RebasePlan,
     Conflicts,
     Conflict,
+    Blame,
     Message,
 }
 
@@ -1064,6 +1069,8 @@ enum Tone {
 }
 
 struct App {
+    blame: Option<Blame>,
+    blame_row: usize,
     conflict: Option<ConflictFile>,
     conflict_index: usize,
     conflict_side: usize,
@@ -1159,6 +1166,8 @@ struct App {
 impl App {
     fn new(jobs: mpsc::SyncSender<Job>) -> Self {
         Self {
+            blame: None,
+            blame_row: 0,
             conflict: None,
             conflict_index: 0,
             conflict_side: 0,
@@ -1669,6 +1678,11 @@ impl App {
                 self.conflict_side = 0;
                 self.scroll = 0;
                 self.view = View::Conflict;
+            }
+            Ok(Reply::Blame(blame)) => {
+                self.blame = Some(blame);
+                self.blame_row = 0;
+                self.view = View::Blame;
             }
             Ok(Reply::RebasePlan(review, subjects)) => {
                 self.plan = Some(review);
@@ -2252,7 +2266,7 @@ impl App {
                 return;
             }
             self.view = match self.view {
-                View::Diff | View::Confirm => self.back,
+                View::Diff | View::Confirm | View::Blame => self.back,
                 View::Conflict => View::Conflicts,
                 View::BranchName => self.back,
                 View::Files if self.stash_detail.is_some() => View::Stashes,
@@ -2673,6 +2687,21 @@ impl App {
             }
         }
         match key {
+            Command::Blame => {
+                let target = if self.view == View::Files {
+                    self.file_target().and_then(|(spec, path)| match spec {
+                        DiffSpec::Commit { oid, .. } => Some((Some(oid), path)),
+                        _ => None,
+                    })
+                } else {
+                    self.working_target().map(|(_, path)| (None, path))
+                };
+                if let Some((revision, path)) = target {
+                    self.back = self.view;
+                    self.request(Job::Blame(revision, path));
+                }
+                return;
+            }
             Command::Conflicts if worktree => {
                 self.request(Job::Conflicts(true));
                 return;
@@ -2761,6 +2790,27 @@ impl App {
             *index = index.saturating_add_signed(by).min(len.saturating_sub(1));
         }
         match self.view {
+            View::Blame => {
+                let len = self.blame.as_ref().map_or(0, |b| b.lines.len());
+                shift(&mut self.blame_row, move_by, len);
+                if key == Command::Accept {
+                    let oid = self
+                        .blame
+                        .as_ref()
+                        .and_then(|b| b.lines.get(self.blame_row))
+                        .and_then(|l| l.oid.clone());
+                    if let Some(oid) = oid {
+                        self.cancel_search();
+                        self.search_target = Some(oid);
+                        self.view = View::History;
+                    } else {
+                        self.say(
+                            Tone::Info,
+                            "This line is uncommitted; it has no commit to open.",
+                        );
+                    }
+                }
+            }
             View::Conflicts => {
                 let files = self
                     .operation
@@ -4539,5 +4589,55 @@ mod tests {
             );
             f.finish();
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn terminal_blame_uses_selected_revision_and_jumps_to_attributed_commit() {
+        let mut f = WriteFixture::new();
+        let base = f.git(&["rev-parse", "HEAD"]);
+        let changed = WriteFixture::base().replace("line 10\n", "edited line\n");
+        f.write("file", &changed);
+        f.git(&["commit", "-qam", "edit line"]);
+        let head = f.git(&["rev-parse", "HEAD"]);
+        f.key(Key::Char('r'));
+        f.key(Key::Home);
+        f.key(Key::Enter);
+        f.key(Key::Char('b'));
+        f.screen("Blame");
+        assert_eq!(
+            f.app.blame.as_ref().unwrap().revision.as_deref(),
+            Some(head.trim())
+        );
+        assert_eq!(
+            f.app.blame.as_ref().unwrap().lines[10].oid.as_deref(),
+            Some(head.trim())
+        );
+        f.app.blame_row = 0;
+        f.key(Key::Enter);
+        assert!(f.app.view == View::History);
+        assert_eq!(f.app.commits[f.app.history].id, base.trim());
+        f.key(Key::Enter);
+        f.write("file", &(changed.clone() + "uncommitted\n"));
+        f.key(Key::Char('b'));
+        assert_eq!(f.app.blame.as_ref().unwrap().lines[10].content, "line 10");
+        f.key(Key::Char('w'));
+        f.key(Key::Char('b'));
+        f.key(Key::End);
+        assert!(f
+            .app
+            .blame
+            .as_ref()
+            .unwrap()
+            .lines
+            .last()
+            .unwrap()
+            .oid
+            .is_none());
+        f.key(Key::Enter);
+        assert!(f.app.view == View::Blame);
+        assert!(f.app.notice.contains("uncommitted"));
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), head);
+        f.finish();
     }
 }

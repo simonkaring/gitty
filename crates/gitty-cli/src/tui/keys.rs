@@ -75,6 +75,7 @@ pub(super) enum Command {
     Conflicts,
     Ours,
     Theirs,
+    Blame,
     Text(char),
 }
 
@@ -131,6 +132,13 @@ pub(super) static TABLE: &[Binding] = &[
         "open"
     ),
     binding!("checkout", "Enter", v(View::Branches), Accept, "checkout"),
+    binding!(
+        "blame_commit",
+        "Enter",
+        v(View::Blame),
+        Accept,
+        "jump to commit"
+    ),
     binding!(
         "open_conflict",
         "Enter",
@@ -433,6 +441,13 @@ pub(super) static TABLE: &[Binding] = &[
         "stash local work"
     ),
     binding!("branches", "B", BROWSE, Branches, "branches"),
+    binding!(
+        "blame",
+        "b",
+        v(View::Files) | v(View::Working),
+        Blame,
+        "blame"
+    ),
     binding!("conflicts", "X", BROWSE, Conflicts, "conflicts"),
     binding!(
         "interactive_rebase",
@@ -730,6 +745,10 @@ impl Binding {
                         | Edit
                         | Delete
                         | Publish
+                        | InteractiveRebase
+                        | Ours
+                        | Theirs
+                        | SaveMessage
                 ) =>
             {
                 false

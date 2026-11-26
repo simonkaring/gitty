@@ -101,6 +101,11 @@ Tab cycles both sides/ours/theirs, using Git's operation-specific side labels.
 `1`/`2` review taking the entire ours/theirs version, or its deletion if absent.
 The engine rechecks the displayed conflict fingerprint before replacing and
 staging the file. Resolve every file, then separately review continuation.
+`b` in commit files or Working changes opens blame; Enter on a committed line
+jumps to its commit in history. Commit-file blame uses that exact revision;
+working-file blame uses current regular-file content and marks uncommitted
+lines explicitly (including changes beyond the staged version). Blame is a
+bounded text read: 8 MiB of output and at most 100,000 lines.
 
 Press `?` for the current view's bindings and action names; use `F1` while
 typing so `?` remains ordinary text. Help, the footer and keyboard dispatch

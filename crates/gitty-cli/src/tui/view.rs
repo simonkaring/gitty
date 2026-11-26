@@ -280,6 +280,7 @@ pub(super) fn render(frame: &mut Frame, app: &App, prompt: Option<&Prompt>) {
         View::Stashes => stashes(frame, body, app),
         View::RebasePlan => rebase_plan(frame, body, app),
         View::Conflicts => conflicts(frame, body, app),
+        View::Blame => blame(frame, body, app),
         View::Conflict => {
             if let Some(file) = &app.conflict {
                 let label = ["Both sides", "Ours", "Theirs"][app.conflict_side];
@@ -1278,6 +1279,60 @@ fn conflicts(frame: &mut Frame, area: Rect, app: &App) {
             Line::styled(
                 safe(path),
                 if i == app.conflict_index {
+                    bold(t().text).bg(t().select)
+                } else {
+                    fg(t().muted)
+                },
+            )
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn blame(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(blame) = &app.blame else { return };
+    let revision = blame
+        .revision
+        .as_deref()
+        .map_or("working tree", |r| r.get(..7).unwrap_or(r));
+    let block = panel(format!("Blame · {} · {revision}", safe(&blame.path)), true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if blame.lines.is_empty() {
+        empty(frame, inner, "No lines in this file", t().muted);
+        return;
+    }
+    let start = window(
+        &app.tops[1],
+        app.blame_row,
+        blame.lines.len(),
+        usize::from(inner.height),
+    );
+    let lines: Vec<_> = blame
+        .lines
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(usize::from(inner.height))
+        .map(|(i, line)| {
+            let oid = line
+                .oid
+                .as_deref()
+                .map_or("working", |s| s.get(..7).unwrap_or(s));
+            let author = line
+                .oid
+                .as_ref()
+                .and_then(|id| blame.commits.get(id))
+                .map_or("uncommitted", |c| c.author.as_str());
+            let text = format!(
+                "{:>5} {oid} {:<14} {}",
+                line.line,
+                clip(&safe(author), 14),
+                safe(&line.content)
+            );
+            Line::styled(
+                clip(&text, usize::from(inner.width)),
+                if i == app.blame_row {
                     bold(t().text).bg(t().select)
                 } else {
                     fg(t().muted)

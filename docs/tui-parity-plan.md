@@ -17,9 +17,9 @@ points for nearly everything gitui does:
 | Stash apply, drop, inspect | `StashAction::{Apply, Drop}`, `stashes()` | Reviewed save, apply, pop, drop, and tracked/untracked inspection |
 | Branch create, checkout, delete | `GitAction::{CreateBranch, SwitchBranch}`, `delete_branches` | Reviewed branch list actions |
 | Log search | `search()` / `cancel_search()` | History matches, `n`/`N`, cancellable |
-| Tags, merge, rebase, cherry-pick, continue/abort | `GitAction::*` with `reviewed()` | None |
+| Tags, merge, rebase, cherry-pick, continue/abort | `GitAction::*` with `reviewed()` | Reviewed graph/branch actions and operation controls |
 | Branch rename | `GitAction::RenameBranch` | Reviewed local rename |
-| Blame | **Missing** | None |
+| Blame | Bounded `Repository::blame` porcelain read | Commit/working-file blame and line-to-commit navigation |
 | Help for the current screen, custom key bindings | n/a | Fixed legend |
 
 Every new action follows the rule from the first release: open a review
@@ -162,7 +162,7 @@ refs; benchmark those before claiming general large-repository performance.
 Item 1 implemented: reviewed merge/rebase/cherry-pick/tag from history and
 branches, an operation header, and reviewed continue/skip/abort. Merge's stash
 option is off until explicitly toggled in review. Real-Git stale-review tests
-and PTY cherry-pick/conflicting merge/abort coverage are included.
+and PTY cherry-pick/conflicting merge coverage are included.
 Item 2 implemented: a bounded linear interactive-rebase plan with all five
 instructions and reordering, followed by an immutable review. EditorRegistry
 supplies reword/squash messages through an in-TUI editor, including cancellation,
@@ -173,6 +173,19 @@ engine's contextual labels. Whole-file side/deletion choices open a review and
 pass the displayed conflict fingerprint to `resolve_conflict`. Real-Git tests
 cover both sides, stale working content, and explicit merge continuation; the
 PTY smoke now resolves its merge conflict in the TUI and continues the merge.
+Item 4 implemented: an in-process core porcelain blame read with validated
+paths, bounded capture/parsing and per-commit metadata, plus a TUI line view
+and history jump. Historical reads pin the selected revision; working reads
+use capability-confined regular-file contents. Real-Git tests cover attribution,
+renames/literal paths, uncommitted lines, path escape refusal and unchanged index.
+Blame is not added to desktop UI or IPC/stdio. Submodule management stays out
+of scope.
+
+Release checks: CLI/core suites and formatting pass; Clippy retains only its
+baseline warnings. The extended Linux PTY smoke passes repeatedly, including
+conflict resolution and continuation, cherry-pick, interactive drop/reword,
+and blame navigation. No desktop types or IPC surface changed. macOS/Windows
+execution remains untested for this phase.
 
 gitui doesn't have these yet; the engine already has most of them.
 
