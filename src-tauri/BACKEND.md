@@ -942,8 +942,12 @@ exactly-full final page is reported truncated); Bitbucket when the envelope has 
 
 - The native pane schedules a fetch of the selected/configured remote about every
   five minutes while active and visible. The backend's `backgroundFetch` action
-  uses an explicit `+refs/heads/*:refs/remotes/<remote>/*` refspec with `--no-tags`
-  and no pruning; it never moves local heads, checks out, merges, or rebases.
+  uses an explicit `+refs/heads/*:refs/remotes/<remote>/*` refspec and no pruning;
+  it never moves local heads, checks out, merges, or rebases. All fetches (including
+  pull's) keep Git's default tag auto-follow: tags that point into fetched history
+  and do not exist locally are created; an existing local tag is never changed and
+  no tag is pruned. A `remote.<name>.tagOpt` of `--tags` makes Git fetch every tag
+  instead, and a clashing local tag then fails the fetch.
   Fetches use `--no-write-fetch-head`, including explicit fetch and pull. Pull
   fetches its selected branch to both its normal tracking ref and a random private
   `refs/gitty/pull/<UUID>` ref, resolves that exact ref once, then integrates the OID.
@@ -962,7 +966,8 @@ exactly-full final page is reported truncated); Bitbucket when the envelope has 
   walk; fetch does not read branch merge configuration. Existing conflict, lock,
   operation and target validation still applies.
   Background fetch intentionally bypasses `Service::mutate` (no Gitty mutation
-  lock and no read-deadline wrapper): it only moves `refs/remotes/*`, relies on
+  lock and no read-deadline wrapper): it only moves `refs/remotes/*` and creates
+  missing tags, relies on
   Git's own ref locks, and must not block local writes behind a slow network.
   Explicit fetch/pull/push still take the mutation lock, and the caller refreshes
   after any action result, including failure.
@@ -1138,6 +1143,23 @@ deleted, `!` refused); a failed push with no line for a branch reports the push
 error for it. Tracking-ref cleanup follows the single-branch rule. The result is
 `{branches: [{branch, local, origin}]}` using the single-branch target outcome
 shape. Nothing is rolled back or retried automatically.
+
+### Tag push and deletion
+
+`RemoteAction::PushTag` and `RemoteAction::DeleteRemoteTag` take a named
+`remote`, a short `tag` name and `expectedOid`, the commit the local tag peels
+to. Under the mutation lock the tag name is validated, the tag must still peel
+to `expectedOid` (`staleOperation` otherwise), and the remote must be a
+non-mirror with one push URL. Push uses `SAFE_PUSH` with the single refspec
+`refs/tags/<tag>:refs/tags/<tag>`; `--no-force` refuses replacing a different
+remote tag. Delete pushes `:refs/tags/<tag>` with
+`--force-with-lease=refs/tags/<tag>:<local tag object>`, so a missing or
+different remote tag is kept. Both use push credentials and askpass like branch
+push. `GitAction::DeleteTag {name, expectedOid}` is a reviewed graph operation
+that deletes the local tag with `update-ref -d` against its resolved object;
+it is allowed with working changes. The tag dialog deletes on origin first
+(the lease needs the local tag). If local deletion then fails, it reports the
+origin success and unticks origin so a retry deletes only the local tag.
 
 ### Operation safety and semantics
 

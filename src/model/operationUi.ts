@@ -13,6 +13,7 @@ export function actionReason(action: GitAction, session: RepositorySession, oper
   }
   if (operation.kind !== 'none') return 'Finish or abort the current operation first.';
   if (action.kind === 'createBranch') return action.name.trim() && action.startPoint ? '' : 'Enter a branch name and starting revision.';
+  if (action.kind === 'deleteTag') return action.name && action.expectedOid ? '' : 'Choose a tag.';
   if (action.kind === 'switchBranch') return action.branch && action.branch !== session.headRef && action.branch !== session.headRef?.replace(/^refs\/heads\//, '') ? '' : 'Choose a different local branch.';
   if (!session.head) return 'This operation needs an existing HEAD commit.';
   if (action.kind === 'createTag') return action.name.trim() && action.oid ? '' : 'Enter a tag name and commit.';

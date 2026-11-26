@@ -742,16 +742,25 @@ fn remote_fetch_skips_upstream_counts_and_branch_configuration() {
 }
 
 #[test]
-fn background_fetch_updates_remote_history_without_local_refs_tags_or_worktree() {
+fn background_fetch_updates_remote_history_and_new_tags_without_local_refs_or_worktree() {
     let f = Fixture::new();
     let bare = f.bare_remote();
     f.publish();
+    let local_tagged = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["tag", "shared-tag"]);
     let peer = f.peer(bare.path());
     peer.write("incoming", "new remote commit\n");
     let incoming = peer.commit("incoming");
     peer.remote(json!({"kind":"push"})).unwrap();
-    peer.git(&["tag", "remote-only-tag"]);
-    peer.git(&["push", "origin", "refs/tags/remote-only-tag"]);
+    peer.git(&["tag", "-a", "-m", "remote", "remote-only-tag"]);
+    peer.git(&["tag", "shared-tag"]);
+    peer.git(&[
+        "push",
+        "origin",
+        "refs/tags/remote-only-tag",
+        "refs/tags/shared-tag",
+    ]);
+    let remote_tag = peer.git(&["rev-parse", "refs/tags/remote-only-tag"]);
 
     f.write("file", "staged\n");
     f.git(&["add", "file"]);
@@ -772,7 +781,12 @@ fn background_fetch_updates_remote_history_without_local_refs_tags_or_worktree()
         std::fs::read(f.dir.path().join("file")).unwrap(),
         original_contents
     );
-    assert!(f.git(&["tag", "--list", "remote-only-tag"]).is_empty());
+    // New remote tags appear; a same-name local tag is never replaced.
+    assert_eq!(
+        f.git(&["rev-parse", "refs/tags/remote-only-tag"]),
+        remote_tag
+    );
+    assert_eq!(f.git(&["rev-parse", "refs/tags/shared-tag"]), local_tagged);
     assert!(f
         .repo
         .history(None, 20, HistoryQuery::default())
@@ -1019,6 +1033,44 @@ fn remote_push_can_name_a_non_current_source_branch_without_switching() {
             .code,
         "invalidBranch"
     );
+}
+
+#[test]
+fn tag_push_and_remote_delete_never_overwrite_a_different_remote_tag() {
+    let f = Fixture::new();
+    let bare = f.bare_remote();
+    f.publish();
+    let first = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["tag", "-a", "-m", "release", "v1"]);
+    let annotated = f.git(&["rev-parse", "refs/tags/v1"]);
+    let push = |tag: &str, oid: &str| {
+        f.remote(json!({"kind":"pushTag", "remote":"origin", "tag":tag, "expectedOid":oid}))
+    };
+    let delete = |tag: &str, oid: &str| {
+        f.remote(json!({"kind":"deleteRemoteTag", "remote":"origin", "tag":tag, "expectedOid":oid}))
+    };
+    assert_eq!(
+        push("v1", "0".repeat(40).as_str()).unwrap_err().code,
+        "staleOperation"
+    );
+    assert_eq!(push("-v1", &first).unwrap_err().code, "invalidReference");
+    push("v1", &first).unwrap();
+    assert_eq!(git(bare.path(), &["rev-parse", "refs/tags/v1"]), annotated);
+    // Only the tag is pushed, not other refs.
+    f.write("main", "moved");
+    let moved = f.commit("moved");
+    assert_ne!(git(bare.path(), &["rev-parse", "main"]), moved);
+
+    // A same-name tag on another commit is refused, both for push and delete.
+    f.git(&["tag", "-f", "v1", &moved]);
+    assert_eq!(push("v1", &moved).unwrap_err().code, "git");
+    assert_eq!(delete("v1", &moved).unwrap_err().code, "git");
+    assert_eq!(git(bare.path(), &["rev-parse", "refs/tags/v1"]), annotated);
+
+    f.git(&["update-ref", "refs/tags/v1", &annotated]);
+    delete("v1", &first).unwrap();
+    assert!(git(bare.path(), &["tag", "--list"]).is_empty());
+    assert_eq!(f.git(&["rev-parse", "refs/tags/v1"]), annotated);
 }
 
 #[test]

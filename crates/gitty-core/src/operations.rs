@@ -916,6 +916,7 @@ impl Repository {
             request.action,
             GitAction::CreateBranch { .. }
                 | GitAction::RenameBranch { .. }
+                | GitAction::DeleteTag { .. }
                 | GitAction::Merge { .. }
                 | GitAction::SwitchBranch {
                     carry_changes: true,
@@ -1391,6 +1392,10 @@ impl Repository {
                     a.extend(args(&["--no-sign"]));
                 }
                 a.extend(args(&["--", &name, &oid]));
+            }
+            GitAction::DeleteTag { name, expected_oid } => {
+                let (reference, value) = self.tag_target(&name, &expected_oid)?;
+                a.extend(args(&["update-ref", "-d", &reference, &value]));
             }
             action @ (GitAction::Continue | GitAction::Skip | GitAction::Abort) => {
                 let command = match before.kind {

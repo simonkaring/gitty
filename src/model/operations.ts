@@ -23,6 +23,7 @@ export type GitAction =
   | { kind: 'interactiveRebase'; onto: string; steps: RebaseStep[] }
   | { kind: 'cherryPick'; commits: string[]; mainline?: number }
   | { kind: 'createTag'; name: string; oid: string; message?: string }
+  | { kind: 'deleteTag'; name: string; expectedOid: string }
   | { kind: 'continue' | 'skip' | 'abort' };
 export interface RebaseStep { oid: string; instruction: 'pick' | 'drop' | 'reword' | 'squash' | 'fixup' }
 export interface OperationRequest {
