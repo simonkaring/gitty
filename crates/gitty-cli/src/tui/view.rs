@@ -268,6 +268,7 @@ pub(super) fn render(frame: &mut Frame, app: &App, prompt: Option<&Prompt>) {
         View::Publish => View::Remote,
         View::BranchName => app.back,
         View::Search => View::History,
+        View::Message => View::History,
         view => view,
     };
     match base {
@@ -277,6 +278,7 @@ pub(super) fn render(frame: &mut Frame, app: &App, prompt: Option<&Prompt>) {
         View::Remote => sync(frame, body, app),
         View::Branches => branches(frame, body, app),
         View::Stashes => stashes(frame, body, app),
+        View::RebasePlan => rebase_plan(frame, body, app),
         View::Repositories => repositories(frame, body, app),
         View::Settings => settings(frame, body, app),
         View::Profiles | View::ProfileEdit => profiles(frame, body, app),
@@ -295,6 +297,7 @@ pub(super) fn render(frame: &mut Frame, app: &App, prompt: Option<&Prompt>) {
         View::Confirm => confirm(frame, app),
         View::Publish => publish(frame, app),
         View::BranchName | View::Search => input(frame, app),
+        View::Message => message_editor(frame, app),
         _ => {}
     }
     if app.help {
@@ -1234,6 +1237,80 @@ fn input(frame: &mut Frame, app: &App) {
     );
 }
 
+fn rebase_plan(frame: &mut Frame, area: Rect, app: &App) {
+    let Some(super::OperationRequest {
+        action: GitAction::InteractiveRebase { steps, .. },
+        ..
+    }) = &app.plan
+    else {
+        return;
+    };
+    let block = panel("Interactive rebase · oldest first", true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let start = window(
+        &app.tops[1],
+        app.plan_row,
+        steps.len(),
+        usize::from(inner.height),
+    );
+    let lines: Vec<_> = steps
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(usize::from(inner.height))
+        .map(|(i, step)| {
+            Line::styled(
+                clip(
+                    &format!(
+                        "{:<7} {} {}",
+                        step.instruction.git(),
+                        step.oid.get(..7).unwrap_or(&step.oid),
+                        safe(app.plan_subjects.get(&step.oid).map_or("", String::as_str))
+                    ),
+                    usize::from(inner.width),
+                ),
+                if i == app.plan_row {
+                    bold(t().text).bg(t().select)
+                } else {
+                    fg(t().muted)
+                },
+            )
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn message_editor(frame: &mut Frame, app: &App) {
+    let Some(message) = &app.editor_message else {
+        return;
+    };
+    let area = frame.area();
+    let rect = modal(
+        frame,
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(4),
+    );
+    let block =
+        dialog(format!("Edit Git message · {}", safe(&message.name))).title_bottom(format!(
+            " {} saves · {} clears · Esc cancels Git's editor ",
+            app.keymap.label("save_message"),
+            app.keymap.label("clear")
+        ));
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    let lines: Vec<_> = message
+        .content
+        .split('\n')
+        .map(|l| Line::raw(safe(l)))
+        .collect();
+    let skip = lines.len().saturating_sub(usize::from(inner.height));
+    frame.render_widget(
+        Paragraph::new(lines.into_iter().skip(skip).collect::<Vec<_>>()),
+        inner,
+    );
+}
+
 fn working(frame: &mut Frame, area: Rect, app: &App) {
     let (left, right) = if app.wide {
         let [a, b] = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
@@ -2153,6 +2230,12 @@ fn confirm(frame: &mut Frame, app: &App) {
     match &app.confirm {
         Some(Confirm::Operation(review)) => {
             let (title, mut lines) = match &review.action {
+                GitAction::InteractiveRebase { onto, steps } => {
+                    let mut lines = vec![format!("Base: {onto}"), "Rewrite HEAD using this exact order; messages are edited in the TUI.".into()];
+                    lines.extend(steps.iter().map(|step| format!("{} {} {}", step.instruction.git(), step.oid,
+                        app.plan_subjects.get(&step.oid).map_or("", String::as_str))));
+                    ("Review interactive rebase", lines)
+                }
                 GitAction::Merge { source, stash_changes, .. } => ("Merge", vec![
                     format!("Source: {source}"),
                     "Merge into the reviewed HEAD branch; may leave conflicts.".into(),

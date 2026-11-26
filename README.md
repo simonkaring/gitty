@@ -90,6 +90,12 @@ the selection, `y` cherry-picks it, and `T` creates a lightweight tag.
 Merge reviews offer `a` to explicitly stash and restore local work; it starts
 off. An operation header shows progress/conflicts; `F5`/`F6`/`F7` review
 continue/skip/abort. These bindings also appear in help and accept overrides.
+`I` uses the selected commit/branch as an interactive-rebase base (up to 100
+linear commits): Space cycles pick/drop/reword/squash/fixup, `J`/`K` reorder,
+and Enter opens the final review. Git's reword/squash prompts open the TUI
+message editor: Ctrl-U clears, Enter inserts a newline, `F2` saves, and Esc
+cancels the editor. Cancellation leaves Git's operation state available for
+reviewed continuation or abort; no external editor takes over the terminal.
 
 Press `?` for the current view's bindings and action names; use `F1` while
 typing so `?` remains ordinary text. Help, the footer and keyboard dispatch

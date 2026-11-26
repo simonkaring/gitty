@@ -67,23 +67,30 @@ pub(super) enum Command {
     Skip,
     Abort,
     MergeStash,
+    InteractiveRebase,
+    PlanInstruction,
+    PlanUp,
+    PlanDown,
+    SaveMessage,
     Text(char),
 }
 
 const fn v(view: View) -> u32 {
     1 << view as u32
 }
-pub(super) const PROMPT: u32 = 1 << 16;
-pub(super) const HELP: u32 = 1 << 17;
+pub(super) const PROMPT: u32 = v(View::Message) << 1;
+pub(super) const HELP: u32 = PROMPT << 1;
 const ALL: u32 = (HELP << 1) - 1;
 const INPUT: u32 = v(View::Repositories)
     | v(View::Composer)
     | v(View::Publish)
     | v(View::ProfileEdit)
     | v(View::BranchName)
-    | v(View::Search);
-const BROWSE: u32 = ALL & !(INPUT | v(View::Profiles) | v(View::Confirm) | PROMPT | HELP);
-const NAV: u32 = BROWSE | v(View::Profiles) | v(View::Confirm) | HELP;
+    | v(View::Search)
+    | v(View::Message);
+const BROWSE: u32 =
+    ALL & !(INPUT | v(View::Profiles) | v(View::RebasePlan) | v(View::Confirm) | PROMPT | HELP);
+const NAV: u32 = BROWSE | v(View::Profiles) | v(View::RebasePlan) | v(View::Confirm) | HELP;
 const PAN: u32 = v(View::Files) | v(View::Working) | v(View::Diff) | v(View::Confirm);
 
 pub(super) struct Binding {
@@ -144,7 +151,42 @@ pub(super) static TABLE: &[Binding] = &[
         Accept,
         "save"
     ),
-    binding!("newline", "Enter", v(View::Composer), Accept, "new line"),
+    binding!(
+        "newline",
+        "Enter",
+        v(View::Composer) | v(View::Message),
+        Accept,
+        "new line"
+    ),
+    binding!(
+        "save_message",
+        "F2",
+        v(View::Message),
+        SaveMessage,
+        "save message"
+    ),
+    binding!(
+        "plan_review",
+        "Enter",
+        v(View::RebasePlan),
+        Accept,
+        "review plan"
+    ),
+    binding!(
+        "plan_instruction",
+        "Space",
+        v(View::RebasePlan),
+        PlanInstruction,
+        "cycle instruction"
+    ),
+    binding!("plan_up", "K", v(View::RebasePlan), PlanUp, "move earlier"),
+    binding!(
+        "plan_down",
+        "J",
+        v(View::RebasePlan),
+        PlanDown,
+        "move later"
+    ),
     binding!(
         "stage",
         "s",
@@ -366,6 +408,13 @@ pub(super) static TABLE: &[Binding] = &[
         "stash local work"
     ),
     binding!("branches", "B", BROWSE, Branches, "branches"),
+    binding!(
+        "interactive_rebase",
+        "I",
+        v(View::History) | v(View::Branches),
+        InteractiveRebase,
+        "edit rebase plan"
+    ),
     binding!("stashes", "t", BROWSE, Stashes, "stashes"),
     binding!("repositories", "o", BROWSE, Repositories, "repos"),
     binding!("history", "h", BROWSE, History, "history"),
@@ -705,7 +754,7 @@ mod tests {
         );
         assert_eq!(map.command(&app, Key::F(1), false), Some(Command::Help));
         for (binding, keys) in TABLE.iter().zip(&map.keys) {
-            for view in 0..18 {
+            for view in 0..=HELP.ilog2() {
                 if binding.scope & (1 << view) != 0 {
                     for key in keys {
                         assert_eq!(

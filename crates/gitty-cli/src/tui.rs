@@ -10,7 +10,10 @@ use gitty_core::{
         CommitDetail, CommitIdentity, CommitSummary, DiffFile, DiffSpec, FileDiff, HistoryPage,
         RepositoryLocation, RepositoryState, Result, SearchQuery, SearchResult, StatusEntry,
     },
-    operation_dto::{GitAction, OperationKind, OperationRequest, OperationState},
+    editor::{self, EditorRegistry},
+    operation_dto::{
+        GitAction, OperationKind, OperationRequest, OperationState, RebaseInstruction, RebaseStep,
+    },
     remote::{TerminalRemoteReview, TerminalSync},
     remote_dto::{StashAction, StashEntry, SyncInfo},
     repository::{Repository, Service},
@@ -245,6 +248,7 @@ enum Job {
     StoredStashReview(StashEntry, StashVerb),
     StoredStash(StoredStashReview),
     Search(u64, String, Arc<AtomicBool>),
+    RebasePlan(String),
 }
 
 enum Reply {
@@ -278,6 +282,7 @@ enum Reply {
     InspectStash(CommitDetail, Vec<DiffFile>, StashEntry, bool),
     StoredStashReview(StoredStashReview),
     Search(u64, Result<SearchResult>),
+    RebasePlan(OperationRequest, HashMap<String, String>),
 }
 
 struct Prompt {
@@ -290,6 +295,66 @@ struct Prompt {
 enum PromptEvent {
     Ask(Prompt),
     Expired(usize),
+    Edit(EditorMessage),
+    EditExpired(usize),
+}
+
+struct EditorMessage {
+    id: usize,
+    name: String,
+    content: String,
+}
+
+fn rebase_plan(
+    repo: &Repository,
+    source: &str,
+) -> Result<(OperationRequest, HashMap<String, String>)> {
+    let operation = repo.operation_state()?;
+    let state = repo.state()?;
+    let onto = repo.commit(source)?.summary.id;
+    let mut current = state
+        .session
+        .head
+        .clone()
+        .ok_or_else(|| invalid("No HEAD to rebase."))?;
+    let mut steps = Vec::new();
+    let mut subjects = HashMap::new();
+    while current != onto {
+        if steps.len() == 100 {
+            return Err(invalid("Select a base within 100 linear commits of HEAD."));
+        }
+        let commit = repo.commit(&current)?.summary;
+        if commit.parents.len() != 1 {
+            return Err(invalid(
+                "The selected base must be an ancestor in a linear history.",
+            ));
+        }
+        subjects.insert(current.clone(), commit.subject);
+        steps.push(RebaseStep {
+            oid: current,
+            instruction: RebaseInstruction::Pick,
+        });
+        current = commit.parents[0].clone();
+    }
+    if steps.is_empty() {
+        return Err(invalid("Select a commit before HEAD as the rebase base."));
+    }
+    steps.reverse();
+    if repo.operation_state()?.fingerprint != operation.fingerprint {
+        return Err(Error::new(
+            "staleOperation",
+            "Repository changed while preparing the plan.",
+        ));
+    }
+    Ok((
+        OperationRequest {
+            action: GitAction::InteractiveRebase { onto, steps },
+            expected_head: state.session.head,
+            expected_head_ref: state.session.head_ref,
+            expected_operation: operation.fingerprint,
+        },
+        subjects,
+    ))
 }
 
 fn snapshot(repo: &Repository, bare: bool) -> Result<(Snapshot, HistoryPage)> {
@@ -326,6 +391,7 @@ fn worker(
     replies: mpsc::Sender<Result<Reply>>,
     registry: Option<Arc<AskpassRegistry>>,
     cancel: Arc<AtomicBool>,
+    editor: Option<Arc<EditorRegistry>>,
 ) -> Result<()> {
     gitty_core::process::terminal_worker(cancel);
     let data = tempfile::tempdir()?;
@@ -382,6 +448,10 @@ fn worker(
                 }
                 Job::Working => Reply::Working(repo.status_entries()?.entries),
                 Job::Branches(open) => Reply::Branches(repo.terminal_branches()?, open),
+                Job::RebasePlan(source) => {
+                    let (review, subjects) = rebase_plan(&repo, &source)?;
+                    Reply::RebasePlan(review, subjects)
+                }
                 Job::OperationReview(action) => {
                     let before = repo.operation_state()?;
                     let state = repo.state()?;
@@ -413,21 +483,23 @@ fn worker(
                         _ => "Operation completed.",
                     };
                     Reply::Wrote {
-                        outcome: service.run_operation(handle, review, None).map(|r| {
-                            r.notice.unwrap_or_else(|| {
-                                if r.operation.kind == OperationKind::None
-                                    && r.operation.conflicts.is_empty()
-                                {
-                                    done.into()
-                                } else {
-                                    format!(
-                                        "Operation paused: {} · {} conflicts.",
-                                        r.operation.label,
-                                        r.operation.conflicts.len()
-                                    )
-                                }
-                            })
-                        }),
+                        outcome: service
+                            .run_operation(handle, review, editor.as_deref())
+                            .map(|r| {
+                                r.notice.unwrap_or_else(|| {
+                                    if r.operation.kind == OperationKind::None
+                                        && r.operation.conflicts.is_empty()
+                                    {
+                                        done.into()
+                                    } else {
+                                        format!(
+                                            "Operation paused: {} · {} conflicts.",
+                                            r.operation.label,
+                                            r.operation.conflicts.len()
+                                        )
+                                    }
+                                })
+                            }),
                         committed: false,
                         refresh: snapshot(),
                     }
@@ -804,6 +876,8 @@ enum View {
     BranchName,
     Stashes,
     Search,
+    RebasePlan,
+    Message,
 }
 
 struct ProfileEditor {
@@ -972,6 +1046,12 @@ enum Tone {
 }
 
 struct App {
+    editor: Option<Arc<EditorRegistry>>,
+    editor_message: Option<EditorMessage>,
+    editor_back: View,
+    plan: Option<OperationRequest>,
+    plan_subjects: HashMap<String, String>,
+    plan_row: usize,
     operation: Option<OperationState>,
     keymap: Keymap,
     help: bool,
@@ -1058,6 +1138,12 @@ struct App {
 impl App {
     fn new(jobs: mpsc::SyncSender<Job>) -> Self {
         Self {
+            editor: None,
+            editor_message: None,
+            editor_back: View::History,
+            plan: None,
+            plan_subjects: HashMap::new(),
+            plan_row: 0,
             operation: None,
             keymap: Keymap::default(),
             help: false,
@@ -1213,6 +1299,7 @@ impl App {
         fresh.config_unreadable = self.config_unreadable;
         fresh.config_error = self.config_error.take();
         fresh.keymap = self.keymap.clone();
+        fresh.editor = self.editor.clone();
         fresh.inactive = std::mem::take(&mut self.inactive);
         if let Some(from) = self.root().map(str::to_owned) {
             if !self.message.is_empty() || self.uncertain.is_some() {
@@ -1305,6 +1392,12 @@ impl App {
             return;
         }
         let (field, limit, multiline) = match self.view {
+            View::Message => {
+                let Some(message) = &mut self.editor_message else {
+                    return;
+                };
+                (&mut message.content, 256 * 1024, true)
+            }
             View::Composer => (&mut self.message, 65536, true),
             View::Search => (&mut self.search_text, 4096, false),
             View::BranchName => {
@@ -1537,6 +1630,12 @@ impl App {
                     self.view = View::Branches;
                 }
             }
+            Ok(Reply::RebasePlan(review, subjects)) => {
+                self.plan = Some(review);
+                self.plan_subjects = subjects;
+                self.plan_row = 0;
+                self.view = View::RebasePlan;
+            }
             Ok(Reply::OperationReview(review)) => {
                 self.confirm = Some(Confirm::Operation(review));
                 self.scroll = 0;
@@ -1653,6 +1752,9 @@ impl App {
                 committed,
                 refresh,
             }) => {
+                if self.editor_message.take().is_some() {
+                    self.view = self.editor_back;
+                }
                 self.cancel_search();
                 if committed {
                     self.message.clear();
@@ -2040,12 +2142,15 @@ impl App {
 
     fn command(&mut self, key: Command, height: usize) {
         if key == Command::Quit {
+            if let Some(editor) = &self.editor {
+                editor.cancel_all();
+            }
             self.cancel_search();
             self.quit = true;
             return;
         }
         // Navigation stays live during reads; nothing changes while a write runs.
-        if self.writing || self.switching {
+        if (self.writing || self.switching) && self.view != View::Message {
             return;
         }
         if self.help {
@@ -2062,6 +2167,38 @@ impl App {
         if key == Command::Help {
             self.help = true;
             self.help_scroll = 0;
+            return;
+        }
+        if self.view == View::Message {
+            match key {
+                Command::SaveMessage | Command::Cancel => {
+                    if let (Some(message), Some(editor)) =
+                        (self.editor_message.take(), &self.editor)
+                    {
+                        let result = editor.reply(
+                            message.id,
+                            (key == Command::SaveMessage).then_some(message.content),
+                        );
+                        if let Err(error) = result {
+                            self.say(Tone::Bad, error);
+                        }
+                    }
+                    self.view = self.editor_back;
+                }
+                Command::Clear => {
+                    if let Some(message) = &mut self.editor_message {
+                        message.content.clear();
+                    }
+                }
+                Command::Erase => {
+                    if let Some(message) = &mut self.editor_message {
+                        message.content.pop();
+                    }
+                }
+                Command::Accept => self.paste("\n"),
+                Command::Text(c) if !c.is_control() => self.paste(&c.to_string()),
+                _ => {}
+            }
             return;
         }
         if key == Command::Cancel {
@@ -2114,6 +2251,53 @@ impl App {
             return;
         }
         match self.view {
+            View::RebasePlan => {
+                if let Some(OperationRequest {
+                    action: GitAction::InteractiveRebase { steps, .. },
+                    ..
+                }) = &mut self.plan
+                {
+                    match key {
+                        Command::Up => self.plan_row = self.plan_row.saturating_sub(1),
+                        Command::Down => {
+                            self.plan_row = (self.plan_row + 1).min(steps.len().saturating_sub(1))
+                        }
+                        Command::PageUp => self.plan_row = self.plan_row.saturating_sub(height),
+                        Command::PageDown => {
+                            self.plan_row =
+                                (self.plan_row + height).min(steps.len().saturating_sub(1))
+                        }
+                        Command::PlanInstruction => {
+                            if let Some(step) = steps.get_mut(self.plan_row) {
+                                step.instruction = match step.instruction {
+                                    RebaseInstruction::Pick => RebaseInstruction::Drop,
+                                    RebaseInstruction::Drop => RebaseInstruction::Reword,
+                                    RebaseInstruction::Reword => RebaseInstruction::Squash,
+                                    RebaseInstruction::Squash => RebaseInstruction::Fixup,
+                                    RebaseInstruction::Fixup => RebaseInstruction::Pick,
+                                };
+                            }
+                        }
+                        Command::PlanUp | Command::PlanDown => {
+                            let next = if key == Command::PlanUp {
+                                self.plan_row.saturating_sub(1)
+                            } else {
+                                (self.plan_row + 1).min(steps.len().saturating_sub(1))
+                            };
+                            steps.swap(self.plan_row, next);
+                            self.plan_row = next;
+                        }
+                        Command::Accept => {
+                            self.confirm = self.plan.take().map(Confirm::Operation);
+                            self.back = View::History;
+                            self.scroll = 0;
+                            self.view = View::Confirm;
+                        }
+                        _ => {}
+                    }
+                }
+                return;
+            }
             View::BranchName | View::Search => {
                 match key {
                     Command::Accept if self.view == View::Search => {
@@ -2420,6 +2604,10 @@ impl App {
                             stash_changes: false,
                         }),
                         Command::Rebase => Some(GitAction::Rebase { onto: source }),
+                        Command::InteractiveRebase => {
+                            self.request(Job::RebasePlan(source));
+                            return;
+                        }
                         Command::CherryPick => Some(GitAction::CherryPick {
                             commits: vec![source],
                             mainline: None,
@@ -2801,7 +2989,7 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     let registry = AskpassCleanup(if WRITES {
         let (listener, registry) = askpass::bind()?;
-        let (ask, expire) = (prompt_tx.clone(), prompt_tx);
+        let (ask, expire) = (prompt_tx.clone(), prompt_tx.clone());
         let server = registry.clone();
         std::thread::spawn(move || {
             askpass::serve(
@@ -2832,6 +3020,36 @@ pub fn run(args: &[String]) -> Result<()> {
     } else {
         None
     });
+    struct EditorCleanup(Option<Arc<EditorRegistry>>);
+    impl Drop for EditorCleanup {
+        fn drop(&mut self) {
+            if let Some(editor) = &self.0 {
+                editor.cancel_all();
+                editor.cleanup();
+            }
+        }
+    }
+    let editor = EditorCleanup(if WRITES {
+        let (listener, registry) = editor::bind()?;
+        let (ask, expire) = (prompt_tx.clone(), prompt_tx);
+        let server = registry.clone();
+        std::thread::spawn(move || {
+            editor::serve(
+                listener,
+                server,
+                move |id, name, content| {
+                    ask.try_send(PromptEvent::Edit(EditorMessage { id, name, content }))
+                        .map_err(|_| ())
+                },
+                move |id| {
+                    let _ = expire.try_send(PromptEvent::EditExpired(id));
+                },
+            )
+        });
+        Some(registry)
+    } else {
+        None
+    });
     struct Restore;
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -2851,12 +3069,20 @@ pub fn run(args: &[String]) -> Result<()> {
     }
     let cancel = Cancel(Arc::new(AtomicBool::new(false)));
     let worker_cancel = cancel.0.clone();
+    let worker_editor = editor.0.clone();
     let worker = std::thread::spawn(move || {
-        if let Err(error) = worker(input, reply.clone(), worker_registry, worker_cancel) {
+        if let Err(error) = worker(
+            input,
+            reply.clone(),
+            worker_registry,
+            worker_cancel,
+            worker_editor,
+        ) {
             let _ = reply.send(Err(error));
         }
     });
     let mut app = App::new(jobs);
+    app.editor = editor.0.clone();
     app.config_path = settings::config_path();
     if let Some(file) = &app.config_path {
         match Settings::load(file) {
@@ -2885,6 +3111,7 @@ pub fn run(args: &[String]) -> Result<()> {
     drop(_restore);
     drop(cancel);
     drop(registry);
+    drop(editor);
     if worker.join().is_err() {
         return Err(Error::new("worker", "Repository worker stopped unexpectedly; inspect repository state before trying another action."));
     }
@@ -2928,6 +3155,29 @@ fn event_loop(
         for event in prompts.try_iter() {
             redraw = true;
             match event {
+                PromptEvent::Edit(message) => {
+                    if app.quit || !app.writing || prompt.is_some() || app.editor_message.is_some()
+                    {
+                        if let Some(editor) = &app.editor {
+                            let _ = editor.reply(message.id, None);
+                        }
+                    } else {
+                        app.editor_back = app.view;
+                        app.editor_message = Some(message);
+                        app.help = false;
+                        app.view = View::Message;
+                    }
+                }
+                PromptEvent::EditExpired(id) => {
+                    if app.editor_message.as_ref().is_some_and(|m| m.id == id) {
+                        app.editor_message = None;
+                        app.view = app.editor_back;
+                        app.say(
+                            Tone::Bad,
+                            "Message editor expired; inspect the operation before continuing.",
+                        );
+                    }
+                }
                 PromptEvent::Ask(next) if app.quit || prompt.is_some() => {
                     if let Some(registry) = registry {
                         let _ = registry.reply(next.id, None);
@@ -2983,7 +3233,7 @@ fn event_loop(
             }
         }
         if let Event::Paste(text) = &event {
-            if prompt.is_none() && !app.busy && !app.quit {
+            if prompt.is_none() && (!app.busy || app.view == View::Message) && !app.quit {
                 app.paste(text);
                 redraw = true;
             }
@@ -3006,7 +3256,12 @@ fn event_loop(
             if key.kind == KeyEventKind::Repeat
                 && matches!(
                     command,
-                    Some(Command::Accept | Command::SaveCommit | Command::Delete)
+                    Some(
+                        Command::Accept
+                            | Command::SaveCommit
+                            | Command::SaveMessage
+                            | Command::Delete
+                    )
                 )
             {
                 continue;
@@ -3048,6 +3303,11 @@ fn event_loop(
                 }
             }
             exit_after_write |= app.quit && app.writing;
+            if app.quit {
+                if let Some(editor) = &app.editor {
+                    editor.cancel_all();
+                }
+            }
         }
     }
 }
@@ -3064,7 +3324,14 @@ mod tests {
         let (jobs, incoming) = mpsc::sync_channel(1);
         let (outgoing, replies) = mpsc::channel();
         let worker = std::thread::spawn(move || {
-            worker(incoming, outgoing, None, Arc::new(AtomicBool::new(false))).unwrap()
+            worker(
+                incoming,
+                outgoing,
+                None,
+                Arc::new(AtomicBool::new(false)),
+                None,
+            )
+            .unwrap()
         });
         let mut app = App::new(jobs);
         let started = std::time::Instant::now();
@@ -3265,7 +3532,14 @@ mod tests {
         let (jobs, incoming) = mpsc::sync_channel(1);
         let (outgoing, replies) = mpsc::channel();
         let worker = std::thread::spawn(move || {
-            worker(incoming, outgoing, None, Arc::new(AtomicBool::new(false))).unwrap()
+            worker(
+                incoming,
+                outgoing,
+                None,
+                Arc::new(AtomicBool::new(false)),
+                None,
+            )
+            .unwrap()
         });
         let mut app = App::new(jobs);
         let config = dir.path().join("settings.json");
@@ -3386,7 +3660,14 @@ mod tests {
         let (outgoing, replies) = mpsc::channel();
         let path = dir.path().to_string_lossy().into_owned();
         let worker = std::thread::spawn(move || {
-            worker(incoming, outgoing, None, Arc::new(AtomicBool::new(false))).unwrap()
+            worker(
+                incoming,
+                outgoing,
+                None,
+                Arc::new(AtomicBool::new(false)),
+                None,
+            )
+            .unwrap()
         });
         let mut app = App::new(jobs);
         app.send(Job::Open(path));
@@ -3422,7 +3703,14 @@ mod tests {
             let (jobs, incoming) = mpsc::sync_channel(1);
             let (outgoing, replies) = mpsc::channel();
             let worker = std::thread::spawn(move || {
-                worker(incoming, outgoing, None, Arc::new(AtomicBool::new(false))).unwrap()
+                worker(
+                    incoming,
+                    outgoing,
+                    None,
+                    Arc::new(AtomicBool::new(false)),
+                    None,
+                )
+                .unwrap()
             });
             let mut f = Self {
                 root,
@@ -4020,5 +4308,79 @@ mod tests {
         f.git(&["merge-base", "--is-ancestor", upstream.trim(), "HEAD"]);
         assert_eq!(f.git(&["show", "HEAD:local"]), "local\n");
         f.finish();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn terminal_rebase_plan_edits_order_and_refuses_stale_review() {
+        let mut f = WriteFixture::new();
+        let base = f.git(&["rev-parse", "HEAD"]);
+        for name in ["one", "two", "three"] {
+            f.write(name, name);
+            f.git(&["add", name]);
+            f.git(&["commit", "-qm", name]);
+        }
+        let head = f.git(&["rev-parse", "HEAD"]);
+        f.key(Key::Char('r'));
+        f.app.history = f
+            .app
+            .commits
+            .iter()
+            .position(|c| c.id == base.trim())
+            .unwrap();
+        f.key(Key::Char('I'));
+        f.screen("Interactive rebase");
+        f.key(Key::Char(' '));
+        f.key(Key::Down);
+        f.key(Key::Char(' '));
+        f.key(Key::Char(' '));
+        f.key(Key::Char('K'));
+        if let Some(OperationRequest {
+            action: GitAction::InteractiveRebase { steps, .. },
+            ..
+        }) = &f.app.plan
+        {
+            assert_eq!(steps[0].instruction, RebaseInstruction::Reword);
+            assert_eq!(steps[1].instruction, RebaseInstruction::Drop);
+        } else {
+            panic!("missing plan");
+        }
+        f.key(Key::Char('J'));
+        f.key(Key::Enter);
+        f.screen("Review interactive rebase");
+        f.write("file", "changed after review\n");
+        f.key(Key::Enter);
+        assert!(
+            f.app.notice.contains("Repository changed"),
+            "{}",
+            f.app.notice
+        );
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), head);
+        f.finish();
+    }
+
+    #[test]
+    fn terminal_message_editor_accepts_input_during_a_write_and_cancels_without_quitting() {
+        let (jobs, _) = mpsc::sync_channel(1);
+        let mut app = App::new(jobs);
+        app.view = View::Message;
+        app.writing = true;
+        app.busy = true;
+        app.editor_message = Some(EditorMessage {
+            id: 1,
+            name: "COMMIT_EDITMSG".into(),
+            content: "old".into(),
+        });
+        app.key(Key::Char('u'), true, 18);
+        app.paste("new\nmessage");
+        assert_eq!(app.editor_message.as_ref().unwrap().content, "new\nmessage");
+        app.key(Key::F(1), false, 18);
+        assert!(app.help);
+        app.key(Key::Esc, false, 18);
+        assert!(!app.help);
+        app.key(Key::Esc, false, 18);
+        assert!(app.view == View::History);
+        assert!(!app.quit);
+        assert!(app.writing);
     }
 }

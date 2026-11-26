@@ -163,6 +163,11 @@ Item 1 implemented: reviewed merge/rebase/cherry-pick/tag from history and
 branches, an operation header, and reviewed continue/skip/abort. Merge's stash
 option is off until explicitly toggled in review. Real-Git stale-review tests
 and PTY cherry-pick/conflicting merge/abort coverage are included.
+Item 2 implemented: a bounded linear interactive-rebase plan with all five
+instructions and reordering, followed by an immutable review. EditorRegistry
+supplies reword/squash messages through an in-TUI editor, including cancellation,
+expiry and shutdown cleanup. Unit tests cover stale plans and editing during a
+write; the PTY smoke drops and rewords commits through the actual helper bridge.
 
 gitui doesn't have these yet; the engine already has most of them.
 
