@@ -85,6 +85,11 @@ tracked/untracked files, `a` applies, `P` pops, and `d` drops. Apply/pop reviews
 offer `i` to restore the index. Enter on a stash graph row selects it in this list.
 In history, `/` searches messages, authors, OIDs and refs; `n`/`N` jumps between
 matches (loading older history as needed), and `Esc` cancels or clears search.
+From history or branches, `M` reviews a merge into HEAD, `R` rebases HEAD onto
+the selection, `y` cherry-picks it, and `T` creates a lightweight tag.
+Merge reviews offer `a` to explicitly stash and restore local work; it starts
+off. An operation header shows progress/conflicts; `F5`/`F6`/`F7` review
+continue/skip/abort. These bindings also appear in help and accept overrides.
 
 Press `?` for the current view's bindings and action names; use `F1` while
 typing so `?` remains ordinary text. Help, the footer and keyboard dispatch

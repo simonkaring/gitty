@@ -159,6 +159,11 @@ refs; benchmark those before claiming general large-repository performance.
 
 ## Phase 5 — Beyond gitui (optional)
 
+Item 1 implemented: reviewed merge/rebase/cherry-pick/tag from history and
+branches, an operation header, and reviewed continue/skip/abort. Merge's stash
+option is off until explicitly toggled in review. Real-Git stale-review tests
+and PTY cherry-pick/conflicting merge/abort coverage are included.
+
 gitui doesn't have these yet; the engine already has most of them.
 
 - Merge, rebase, cherry-pick, tag from the graph, with continue/skip/abort

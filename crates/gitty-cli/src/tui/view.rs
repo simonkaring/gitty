@@ -234,8 +234,12 @@ pub(super) fn render(frame: &mut Frame, app: &App, prompt: Option<&Prompt>) {
         return;
     }
     let status = status_line(app);
-    let [top, bar, body, note, bottom] = Layout::vertical([
+    let operation = app.operation.as_ref().filter(|o| {
+        o.kind != gitty_core::operation_dto::OperationKind::None || !o.conflicts.is_empty()
+    });
+    let [top, op, bar, body, note, bottom] = Layout::vertical([
         Constraint::Length(1),
+        Constraint::Length(u16::from(operation.is_some())),
         Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(u16::from(status.is_some())),
@@ -243,6 +247,20 @@ pub(super) fn render(frame: &mut Frame, app: &App, prompt: Option<&Prompt>) {
     ])
     .areas(area);
     header(frame, top, app);
+    if let Some(operation) = operation {
+        frame.render_widget(
+            Paragraph::new(format!(
+                " {} · {} conflicts · {} continue / {} skip / {} abort",
+                safe(&operation.label),
+                operation.conflicts.len(),
+                app.keymap.label("continue"),
+                app.keymap.label("skip"),
+                app.keymap.label("abort")
+            ))
+            .style(fg(t().yellow)),
+            op,
+        );
+    }
     toolbar(frame, bar, app);
     let base = match app.view {
         View::Confirm => app.back,
@@ -1189,7 +1207,9 @@ fn input(frame: &mut Frame, app: &App) {
             return;
         };
         (
-            if editor.rename {
+            if editor.tag {
+                "Create tag"
+            } else if editor.rename {
                 "Rename branch"
             } else {
                 "Create branch"
@@ -2133,6 +2153,24 @@ fn confirm(frame: &mut Frame, app: &App) {
     match &app.confirm {
         Some(Confirm::Operation(review)) => {
             let (title, mut lines) = match &review.action {
+                GitAction::Merge { source, stash_changes, .. } => ("Merge", vec![
+                    format!("Source: {source}"),
+                    "Merge into the reviewed HEAD branch; may leave conflicts.".into(),
+                    format!("Stash local work: {} ({} toggles; restore staging after merge)",
+                        if *stash_changes { "yes" } else { "no" }, app.keymap.label("merge_stash")),
+                ]),
+                GitAction::Rebase { onto } => ("Rebase", vec![
+                    format!("Onto: {onto}"), "Replay the current branch; commit IDs will change.".into(),
+                ]),
+                GitAction::CherryPick { commits, .. } => ("Cherry-pick", vec![
+                    format!("Commit: {}", commits.join(", ")), "Apply this commit on the reviewed HEAD. Merge commits require a mainline in Git.".into(),
+                ]),
+                GitAction::CreateTag { name, oid, .. } => ("Create tag", vec![
+                    format!("Name: {name}"), format!("Commit: {oid}"), "Create a lightweight local tag.".into(),
+                ]),
+                GitAction::Continue => ("Continue operation", vec!["Continue with the reviewed resolutions and index.".into()]),
+                GitAction::Skip => ("Skip commit", vec!["Discard this replayed commit and its resolution progress.".into()]),
+                GitAction::Abort => ("Abort operation", vec!["Stop the operation and discard its resolution progress.".into()]),
                 GitAction::SwitchBranch { branch, .. } => (
                     "Checkout branch",
                     vec![

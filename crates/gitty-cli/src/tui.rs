@@ -10,7 +10,7 @@ use gitty_core::{
         CommitDetail, CommitIdentity, CommitSummary, DiffFile, DiffSpec, FileDiff, HistoryPage,
         RepositoryLocation, RepositoryState, Result, SearchQuery, SearchResult, StatusEntry,
     },
-    operation_dto::{GitAction, OperationRequest},
+    operation_dto::{GitAction, OperationKind, OperationRequest, OperationState},
     remote::{TerminalRemoteReview, TerminalSync},
     remote_dto::{StashAction, StashEntry, SyncInfo},
     repository::{Repository, Service},
@@ -205,6 +205,7 @@ impl Graph {
 
 /// Repository state plus the header summary read alongside it.
 struct Snapshot {
+    operation: OperationState,
     state: RepositoryState,
     sync: Option<SyncInfo>,
     changes: Option<usize>,
@@ -304,6 +305,7 @@ fn snapshot(repo: &Repository, bare: bool) -> Result<(Snapshot, HistoryPage)> {
         if repo.state()?.fingerprint == state.fingerprint {
             return Ok((
                 Snapshot {
+                    operation: repo.operation_state()?,
                     state,
                     sync: repo.sync_info().ok(),
                     changes,
@@ -400,15 +402,29 @@ fn worker(
                     let done = match review.action {
                         GitAction::CreateBranch { .. } => "Branch created.",
                         GitAction::RenameBranch { .. } => "Branch renamed.",
-                        _ => "Checked out branch.",
+                        GitAction::SwitchBranch { .. } => "Checked out branch.",
+                        GitAction::Merge { .. } => "Merge completed.",
+                        GitAction::Rebase { .. } => "Rebase completed.",
+                        GitAction::CherryPick { .. } => "Cherry-pick completed.",
+                        GitAction::CreateTag { .. } => "Tag created.",
+                        GitAction::Continue => "Operation continued.",
+                        GitAction::Skip => "Commit skipped.",
+                        GitAction::Abort => "Operation aborted.",
+                        _ => "Operation completed.",
                     };
                     Reply::Wrote {
                         outcome: service.run_operation(handle, review, None).map(|r| {
                             r.notice.unwrap_or_else(|| {
-                                if r.operation.conflicts.is_empty() {
+                                if r.operation.kind == OperationKind::None
+                                    && r.operation.conflicts.is_empty()
+                                {
                                     done.into()
                                 } else {
-                                    "Branch action left conflicts; inspect working changes.".into()
+                                    format!(
+                                        "Operation paused: {} · {} conflicts.",
+                                        r.operation.label,
+                                        r.operation.conflicts.len()
+                                    )
                                 }
                             })
                         }),
@@ -822,6 +838,7 @@ enum Confirm {
 }
 
 struct BranchEditor {
+    tag: bool,
     source: String,
     rename: bool,
     name: String,
@@ -955,6 +972,7 @@ enum Tone {
 }
 
 struct App {
+    operation: Option<OperationState>,
     keymap: Keymap,
     help: bool,
     help_scroll: usize,
@@ -1040,6 +1058,7 @@ struct App {
 impl App {
     fn new(jobs: mpsc::SyncSender<Job>) -> Self {
         Self {
+            operation: None,
             keymap: Keymap::default(),
             help: false,
             help_scroll: 0,
@@ -1432,6 +1451,7 @@ impl App {
 
     fn page(&mut self, snapshot: Option<Snapshot>, page: HistoryPage) {
         if let Some(Snapshot {
+            operation,
             state,
             sync,
             changes,
@@ -1450,6 +1470,7 @@ impl App {
                     .push((reference.name.clone(), reference.kind.clone()));
             }
             self.sync = sync;
+            self.operation = Some(operation);
             self.changes = changes;
             self.stashes = stashes;
             self.requested = None;
@@ -1913,6 +1934,7 @@ impl App {
     fn branch_name(&mut self, source: String, rename: bool) {
         self.back = self.view;
         self.branch_editor = Some(BranchEditor {
+            tag: false,
             source,
             rename,
             name: String::new(),
@@ -2107,7 +2129,13 @@ impl App {
                     }
                     Command::Accept => {
                         if let Some(editor) = &self.branch_editor {
-                            let action = if editor.rename {
+                            let action = if editor.tag {
+                                GitAction::CreateTag {
+                                    name: editor.name.clone(),
+                                    oid: editor.source.clone(),
+                                    message: None,
+                                }
+                            } else if editor.rename {
                                 GitAction::RenameBranch {
                                     branch: editor.source.clone(),
                                     name: editor.name.clone(),
@@ -2295,6 +2323,15 @@ impl App {
             }
             View::Confirm => {
                 match key {
+                    Command::MergeStash => {
+                        if let Some(Confirm::Operation(OperationRequest {
+                            action: GitAction::Merge { stash_changes, .. },
+                            ..
+                        })) = &mut self.confirm
+                        {
+                            *stash_changes = !*stash_changes;
+                        }
+                    }
                     Command::Up => self.scroll = self.scroll.saturating_sub(1),
                     Command::Down => self.scroll = self.scroll.saturating_add(1),
                     Command::PageUp => self.scroll = self.scroll.saturating_sub(height),
@@ -2353,6 +2390,55 @@ impl App {
             _ => {}
         }
         let worktree = self.state.as_ref().is_some_and(|s| !s.session.bare);
+        if WRITES && !self.locked && worktree {
+            let control = match key {
+                Command::Continue => Some(GitAction::Continue),
+                Command::Skip => Some(GitAction::Skip),
+                Command::Abort => Some(GitAction::Abort),
+                _ => None,
+            };
+            if let Some(action) = control {
+                self.back = self.view;
+                self.request(Job::OperationReview(action));
+                return;
+            }
+            if matches!(self.view, View::History | View::Branches) {
+                let source = if self.view == View::Branches {
+                    self.branches
+                        .get(self.branch)
+                        .map(|b| b.reference.full_name.clone())
+                } else {
+                    self.commits.get(self.history).map(|c| c.id.clone())
+                };
+                if let Some(source) = source {
+                    let action = match key {
+                        Command::Merge => Some(GitAction::Merge {
+                            source,
+                            destination: None,
+                            no_fast_forward: false,
+                            message: None,
+                            stash_changes: false,
+                        }),
+                        Command::Rebase => Some(GitAction::Rebase { onto: source }),
+                        Command::CherryPick => Some(GitAction::CherryPick {
+                            commits: vec![source],
+                            mainline: None,
+                        }),
+                        Command::Tag => {
+                            self.branch_name(source, false);
+                            self.branch_editor.as_mut().unwrap().tag = true;
+                            return;
+                        }
+                        _ => None,
+                    };
+                    if let Some(action) = action {
+                        self.back = self.view;
+                        self.request(Job::OperationReview(action));
+                        return;
+                    }
+                }
+            }
+        }
         match key {
             Command::Branches if self.state.is_some() => {
                 self.request(Job::Branches(true));
@@ -3870,5 +3956,69 @@ mod tests {
         assert!(app.notice.contains("In memory only"));
         assert!(app.config_error.unwrap().contains("Conflicting keys"));
         assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn terminal_graph_operations_review_and_reconcile() {
+        let mut f = WriteFixture::new();
+        f.git(&["switch", "-c", "side"]);
+        f.write("side", "picked\n");
+        f.git(&["add", "side"]);
+        f.git(&["commit", "-qm", "side"]);
+        let side = f.git(&["rev-parse", "HEAD"]);
+        f.git(&["switch", "main"]);
+        f.key(Key::Char('r'));
+        f.app.history = f
+            .app
+            .commits
+            .iter()
+            .position(|c| c.id == side.trim())
+            .unwrap();
+        f.key(Key::Char('y'));
+        f.screen("Cherry-pick");
+        f.key(Key::Enter);
+        assert_eq!(f.git(&["show", "HEAD:side"]), "picked\n");
+        f.key(Key::Char('T'));
+        f.app.paste("v-test");
+        f.key(Key::Enter);
+        f.screen("Create tag");
+        f.key(Key::Enter);
+        assert_eq!(f.git(&["rev-parse", "v-test"]), side);
+        f.git(&["switch", "side"]);
+        f.write("upstream", "upstream\n");
+        f.git(&["add", "upstream"]);
+        f.git(&["commit", "-qm", "upstream"]);
+        let upstream = f.git(&["rev-parse", "HEAD"]);
+        f.git(&["switch", "main"]);
+        f.write("local", "local\n");
+        f.git(&["add", "local"]);
+        f.git(&["commit", "-qm", "local"]);
+        f.key(Key::Char('B'));
+        f.app.branch = f
+            .app
+            .branches
+            .iter()
+            .position(|b| b.reference.name == "side")
+            .unwrap();
+        f.key(Key::Char('M'));
+        f.screen("Stash local work: no");
+        f.write("file", "external\n");
+        let before = f.git(&["rev-parse", "HEAD"]);
+        f.key(Key::Enter);
+        assert!(f.app.notice.contains("Repository changed"));
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), before);
+        f.git(&["restore", "file"]);
+        f.key(Key::Char('R'));
+        f.screen("Rebase");
+        f.key(Key::Enter);
+        assert!(
+            f.app.notice.contains("Rebase completed"),
+            "{}",
+            f.app.notice
+        );
+        f.git(&["merge-base", "--is-ancestor", upstream.trim(), "HEAD"]);
+        assert_eq!(f.git(&["show", "HEAD:local"]), "local\n");
+        f.finish();
     }
 }

@@ -59,6 +59,14 @@ pub(super) enum Command {
     MessageUp,
     MessageDown,
     Refresh,
+    Merge,
+    Rebase,
+    CherryPick,
+    Tag,
+    Continue,
+    Skip,
+    Abort,
+    MergeStash,
     Text(char),
 }
 
@@ -325,6 +333,38 @@ pub(super) static TABLE: &[Binding] = &[
         Clear,
         "clear"
     ),
+    binding!(
+        "merge",
+        "M",
+        v(View::History) | v(View::Branches),
+        Merge,
+        "merge here"
+    ),
+    binding!(
+        "rebase",
+        "R",
+        v(View::History) | v(View::Branches),
+        Rebase,
+        "rebase onto"
+    ),
+    binding!(
+        "cherry_pick",
+        "y",
+        v(View::History) | v(View::Branches),
+        CherryPick,
+        "cherry-pick"
+    ),
+    binding!("tag", "T", v(View::History) | v(View::Branches), Tag, "tag"),
+    binding!("continue", "F5", BROWSE, Continue, "continue"),
+    binding!("skip", "F6", BROWSE, Skip, "skip"),
+    binding!("abort", "F7", BROWSE, Abort, "abort"),
+    binding!(
+        "merge_stash",
+        "a",
+        v(View::Confirm),
+        MergeStash,
+        "stash local work"
+    ),
     binding!("branches", "B", BROWSE, Branches, "branches"),
     binding!("stashes", "t", BROWSE, Stashes, "stashes"),
     binding!("repositories", "o", BROWSE, Repositories, "repos"),
@@ -562,7 +602,24 @@ impl Keymap {
 impl Binding {
     fn visible(&self, app: &App) -> bool {
         use Command::*;
+        if !WRITES
+            && matches!(
+                self.command,
+                Merge | Rebase | CherryPick | Tag | Continue | Skip | Abort | MergeStash
+            )
+        {
+            return false;
+        }
         match self.command {
+            MergeStash => {
+                matches!(&app.confirm, Some(Confirm::Operation(r)) if matches!(r.action, gitty_core::operation_dto::GitAction::Merge { .. }))
+            }
+            Continue => app.operation.as_ref().is_some_and(|o| o.can_continue),
+            Skip => app.operation.as_ref().is_some_and(|o| o.can_skip),
+            Abort => app
+                .operation
+                .as_ref()
+                .is_some_and(|o| o.kind != gitty_core::operation_dto::OperationKind::None),
             Amend => app.review.as_ref().is_some_and(|r| r.can_amend()),
             NextMatch | PreviousMatch => app.search_cancel.is_some(),
             Stage | StageAll | Discard | NextHunk | PreviousHunk | SelectLines
