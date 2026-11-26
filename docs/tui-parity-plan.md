@@ -125,11 +125,25 @@ graph code, rendering a 120×40 test terminal after each page.
 | Cumulative paging at 50k / 100k / 150k / 200k commits | 3.58 / 8.23 / 13.90 / 20.64 s |
 
 No graph-layout explosion appeared in this fixture. Paging did slow down:
-successive 50k blocks took 3.58, 4.65, 5.67 and 6.75 seconds. Core's reverse
-cursor lookup (`history_with_state`: `cursors.iter().find`) scans a growing map,
-giving quadratic total lookup work; its share of the measured slowdown has
-not been isolated from Git process/read costs. No speculative paging-contract
-change was made. This empty-tree fixture is not a Linux-kernel checkout or a
+successive 50k blocks took 3.58, 4.65, 5.67 and 6.75 seconds.
+
+Cause (measured, not yet fixed): the per-page `git cat-file --batch` spawn.
+Git's own time is flat (4 ms for the newest or oldest 100 commits). TUI-launched
+Git gets `pre_exec(setsid)` in `process::spawn_piped` for terminal isolation,
+which makes std use `fork()` instead of `posix_spawn`, and `fork()` cost grows
+with the TUI's resident memory (every loaded commit). With the hook disabled
+as an experiment, paging all 200k commits fell from 42.5 s to 14.1 s on the
+same machine, with flat 3.5 s per 50k commits. The cursor-map scan is not a
+factor (≤2,000 entries). Per page this is ~6 → ~13 ms at 200k commits deep,
+so it only matters when loading a whole very large history.
+
+The isolation itself must stay. Fix options, in order of preference:
+1. Use `CommandExt::setsid` (`POSIX_SPAWN_SETSID`) once `process_setsid` is
+   stable; still unstable on Rust 1.98.
+2. Call `posix_spawn` with `POSIX_SPAWN_SETSID` directly via `libc` for the
+   TUI path. Needs a replacement for `std::process::Child` in every
+   `spawn_piped` caller, so it's a large change.
+3. Keep TUI memory per commit lower; this reduces the slope but doesn't remove it. This empty-tree fixture is not a Linux-kernel checkout or a
 bound on repositories with many concurrent lanes, large files or thousands of
 refs; benchmark those before claiming general large-repository performance.
 
