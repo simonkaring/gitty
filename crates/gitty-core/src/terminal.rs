@@ -1,6 +1,8 @@
 //! Typed reviews for the terminal client. Existing CLI and desktop writes keep their contracts.
 use crate::{
-    dto::{CommitIdentity, CreatedCommit, DiffFile, DiffSpec, Error, FileDiff, Result},
+    dto::{
+        CommitIdentity, CreatedCommit, DiffFile, DiffSpec, Error, FileDiff, RepositoryRef, Result,
+    },
     repository::{fingerprint, Repository, Service},
 };
 use std::{collections::hash_map::DefaultHasher, hash::Hasher};
@@ -17,6 +19,12 @@ pub struct StageReview {
     unstage: bool,
     fingerprint: String,
     pub preview: FileDiff,
+}
+
+pub struct TerminalBranch {
+    pub reference: RepositoryRef,
+    pub current: bool,
+    pub counts: Option<(u64, u64)>,
 }
 
 impl StageReview {
@@ -36,9 +44,18 @@ pub struct CommitReview {
     head: Option<String>,
     index: Vec<u8>,
     identity: Option<CommitIdentity>,
+    amend_status: Option<String>,
 }
 
 impl CommitReview {
+    pub fn can_amend(&self) -> bool {
+        self.amend_status.is_some()
+    }
+
+    pub fn head(&self) -> Option<&str> {
+        self.head.as_deref()
+    }
+
     pub fn head_ref(&self) -> Option<&str> {
         self.head_ref.as_deref()
     }
@@ -68,6 +85,45 @@ impl StashReview {
 }
 
 impl Repository {
+    pub fn terminal_branches(&self) -> Result<Vec<TerminalBranch>> {
+        let state = self.state()?;
+        state
+            .refs
+            .into_iter()
+            .filter(|r| matches!(r.kind.as_str(), "local" | "remote"))
+            .map(|reference| {
+                let counts = state
+                    .session
+                    .head
+                    .as_ref()
+                    .map(|head| {
+                        let text = self.check_text(&[
+                            "rev-list",
+                            "--left-right",
+                            "--count",
+                            &format!("{}...{head}", reference.commit_id),
+                            "--",
+                        ])?;
+                        let values: Vec<u64> = text
+                            .split_whitespace()
+                            .map(str::parse)
+                            .collect::<std::result::Result<_, _>>()
+                            .map_err(|_| Error::new("gitParse", "Invalid branch counts"))?;
+                        match values.as_slice() {
+                            [ahead, behind] => Ok((*ahead, *behind)),
+                            _ => Err(Error::new("gitParse", "Invalid branch counts")),
+                        }
+                    })
+                    .transpose()?;
+                Ok(TerminalBranch {
+                    current: state.session.head_ref.as_deref() == Some(&reference.full_name),
+                    reference,
+                    counts,
+                })
+            })
+            .collect()
+    }
+
     fn terminal_stash_entries(&self) -> Result<Vec<(String, bool)>> {
         let status = self.status_entries()?;
         if status.entries.iter().any(|entry| entry.conflicted) {
@@ -225,8 +281,23 @@ impl Repository {
     ) -> Result<CommitReview> {
         crate::mutate::validate_identity(identity.as_ref())?;
         let (head, head_ref) = self.terminal_head()?;
+        let mut amend_status = match &head {
+            Some(head)
+                if self.commit_edit_eligibility(head)?.can_edit_message
+                    && self
+                        .commit(head)
+                        .is_ok_and(|c| c.summary.parents.len() <= 1) =>
+            {
+                self.status().ok().map(|s| s.fingerprint)
+            }
+            _ => None,
+        };
         let index = self.terminal_index(&[])?;
         let files = self.diff_files(&DiffSpec::Staged)?;
+        // An unavailable worktree review disables amend, not an ordinary index-only commit.
+        if amend_status.is_some() && self.status().ok().map(|s| s.fingerprint) != amend_status {
+            amend_status = None;
+        }
         if self.terminal_head()? != (head.clone(), head_ref.clone())
             || self.terminal_index(&[])? != index
         {
@@ -239,21 +310,47 @@ impl Repository {
             index,
             files,
             identity,
+            amend_status,
         })
     }
 }
 
 impl Service {
-    pub fn terminal_stage(&self, handle: &str, review: StageReview) -> Result<()> {
+    pub fn terminal_stash_action(
+        &self,
+        handle: &str,
+        action: crate::remote_dto::StashAction,
+        expected_operation: &str,
+    ) -> Result<crate::remote_dto::ActionOutput> {
         self.mutate_reviewed(handle, |repo| {
-            if repo.terminal_stage_fingerprint(&review.paths, review.unstage)? != review.fingerprint
-            {
+            if repo.operation_state()?.fingerprint != expected_operation {
                 return Err(stale());
             }
-            if review.unstage {
-                repo.unstage(&review.paths)
+            self.stash_action(handle, action)
+        })
+    }
+
+    pub fn terminal_stage(&self, handle: &str, review: StageReview) -> Result<()> {
+        self.terminal_stage_many(handle, vec![review])
+    }
+
+    pub fn terminal_stage_many(&self, handle: &str, reviews: Vec<StageReview>) -> Result<()> {
+        self.mutate_reviewed(handle, |repo| {
+            let unstage = reviews.first().ok_or_else(stale)?.unstage;
+            let mut paths = Vec::new();
+            for review in reviews {
+                if review.unstage != unstage
+                    || repo.terminal_stage_fingerprint(&review.paths, unstage)?
+                        != review.fingerprint
+                {
+                    return Err(stale());
+                }
+                paths.extend(review.paths);
+            }
+            if unstage {
+                repo.unstage(&paths)
             } else {
-                repo.stage(&review.paths)
+                repo.stage(&paths)
             }
         })
     }
@@ -286,14 +383,52 @@ impl Service {
         review: CommitReview,
         message: &str,
     ) -> Result<(CreatedCommit, Option<bool>)> {
+        self.terminal_save(handle, review, message, false)
+    }
+
+    pub fn terminal_amend(
+        &self,
+        handle: &str,
+        review: CommitReview,
+        message: &str,
+    ) -> Result<(CreatedCommit, Option<bool>)> {
+        self.terminal_save(handle, review, message, true)
+    }
+
+    fn terminal_save(
+        &self,
+        handle: &str,
+        review: CommitReview,
+        message: &str,
+        amend: bool,
+    ) -> Result<(CreatedCommit, Option<bool>)> {
         self.mutate_reviewed(handle, |repo| {
             if review.handle != handle
-                || repo.terminal_head()? != (review.head, review.head_ref)
+                || repo.terminal_head()? != (review.head.clone(), review.head_ref.clone())
                 || repo.terminal_index(&[])? != review.index
             {
                 return Err(stale());
             }
-            let commit = repo.create_commit(message, review.identity.as_ref())?;
+            let commit = if amend {
+                let head = review.head.as_deref().ok_or_else(stale)?;
+                if !repo.commit_edit_eligibility(head)?.can_edit_message {
+                    return Err(stale());
+                }
+                self.amend_commit_with_identity(
+                    handle,
+                    message,
+                    review.identity.as_ref(),
+                    head,
+                    review.head_ref.as_deref(),
+                    review.amend_status.as_deref().ok_or_else(stale)?,
+                    crate::mutate::AmendOptions {
+                        require_unpushed: true,
+                        ..Default::default()
+                    },
+                )?
+            } else {
+                repo.create_commit(message, review.identity.as_ref())?
+            };
             let matches = repo
                 .check(&["ls-tree", "-r", "-z", &commit.oid])
                 .ok()

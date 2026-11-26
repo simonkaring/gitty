@@ -5,14 +5,16 @@ use crossterm::event::{
 };
 use gitty_core::{
     askpass::{self, AskpassContext, AskpassRegistry},
+    branch_delete::{BranchBatchDeleteItem, BranchBatchDeleteRequest},
     dto::{
         CommitDetail, CommitIdentity, CommitSummary, DiffFile, DiffSpec, FileDiff, HistoryPage,
-        RepositoryLocation, RepositoryState, Result, StatusEntry,
+        RepositoryLocation, RepositoryState, Result, SearchQuery, SearchResult, StatusEntry,
     },
+    operation_dto::{GitAction, OperationRequest},
     remote::{TerminalRemoteReview, TerminalSync},
     remote_dto::{StashAction, StashEntry, SyncInfo},
     repository::{Repository, Service},
-    terminal::{CommitReview, StageReview, StashReview},
+    terminal::{CommitReview, StageReview, StashReview, TerminalBranch},
     Error,
 };
 use ratatui::DefaultTerminal;
@@ -27,13 +29,15 @@ use std::{
     time::Duration,
 };
 
+mod keys;
 mod settings;
 mod theme;
 mod view;
+use keys::{Command, Keymap};
 use settings::{Profile, Settings};
 use view::{render, safe};
 
-const WRITES: bool = cfg!(target_os = "macos");
+const WRITES: bool = cfg!(unix);
 const PAGE: usize = 100;
 /// Columns at which panes sit side by side instead of stacking.
 const WIDE: u16 = 110;
@@ -216,8 +220,13 @@ enum Job {
     Working,
     StageReview(String, bool),
     Stage(StageReview),
+    StageAllReview(Vec<String>, bool),
+    StageAll(Vec<StageReview>),
+    Hunk(HunkReview),
+    DiscardReview(String),
+    Discard(DiscardReview),
     CommitReview(Option<CommitIdentity>),
-    Save(CommitReview, String),
+    Save(CommitReview, String, bool),
     Sync,
     RemoteReview(TerminalSync, String, Option<String>),
     Remote(TerminalRemoteReview),
@@ -225,15 +234,27 @@ enum Job {
     StashReview,
     Stash(StashReview),
     Pop(String),
+    Branches(bool),
+    OperationReview(GitAction),
+    Operation(OperationRequest),
+    DeleteReview(String),
+    Delete(BranchBatchDeleteRequest),
+    Stashes(Option<String>, bool),
+    InspectStash(StashEntry, bool),
+    StoredStashReview(StashEntry, StashVerb),
+    StoredStash(StoredStashReview),
+    Search(u64, String, Arc<AtomicBool>),
 }
 
 enum Reply {
-    Opened(Snapshot, HistoryPage),
+    Opened(Snapshot, HistoryPage, Arc<Repository>),
     History(Option<Snapshot>, HistoryPage),
     Commit(CommitDetail, Vec<DiffFile>, bool),
     Diff(String, FileDiff, bool),
     Working(Vec<StatusEntry>),
     StageReview(StageReview),
+    StageAllReview(Vec<StageReview>),
+    DiscardReview(DiscardReview),
     CommitReview(CommitReview),
     Sync(SyncInfo),
     RemoteReview(TerminalRemoteReview),
@@ -249,6 +270,13 @@ enum Reply {
         Result<(Snapshot, HistoryPage)>,
     ),
     Verified(TerminalRemoteReview, Option<String>, Option<String>),
+    Branches(Vec<TerminalBranch>, bool),
+    OperationReview(OperationRequest),
+    DeleteReview(BranchBatchDeleteRequest),
+    Stashes(Vec<StashEntry>, Option<String>, bool),
+    InspectStash(CommitDetail, Vec<DiffFile>, StashEntry, bool),
+    StoredStashReview(StoredStashReview),
+    Search(u64, Result<SearchResult>),
 }
 
 struct Prompt {
@@ -319,7 +347,11 @@ fn worker(
                     service.close(handle)?;
                 }
                 active = Some((session.handle, session.bare));
-                return Ok(Reply::Opened(snapshot, page));
+                return Ok(Reply::Opened(
+                    snapshot,
+                    page,
+                    service.repo(&active.as_ref().unwrap().0)?,
+                ));
             }
             let (handle, bare) = active
                 .as_ref()
@@ -347,6 +379,181 @@ fn worker(
                     Reply::Diff(key, repo.diff(&spec, &path)?, open)
                 }
                 Job::Working => Reply::Working(repo.status_entries()?.entries),
+                Job::Branches(open) => Reply::Branches(repo.terminal_branches()?, open),
+                Job::OperationReview(action) => {
+                    let before = repo.operation_state()?;
+                    let state = repo.state()?;
+                    if repo.operation_state()?.fingerprint != before.fingerprint {
+                        return Err(Error::new(
+                            "staleOperation",
+                            "Repository changed during review.",
+                        ));
+                    }
+                    Reply::OperationReview(OperationRequest {
+                        action,
+                        expected_head: state.session.head,
+                        expected_head_ref: state.session.head_ref,
+                        expected_operation: before.fingerprint,
+                    })
+                }
+                Job::Operation(review) if WRITES => {
+                    let done = match review.action {
+                        GitAction::CreateBranch { .. } => "Branch created.",
+                        GitAction::RenameBranch { .. } => "Branch renamed.",
+                        _ => "Checked out branch.",
+                    };
+                    Reply::Wrote {
+                        outcome: service.run_operation(handle, review, None).map(|r| {
+                            r.notice.unwrap_or_else(|| {
+                                if r.operation.conflicts.is_empty() {
+                                    done.into()
+                                } else {
+                                    "Branch action left conflicts; inspect working changes.".into()
+                                }
+                            })
+                        }),
+                        committed: false,
+                        refresh: snapshot(),
+                    }
+                }
+                Job::DeleteReview(reference) => {
+                    let state = repo.state()?;
+                    let entry = state
+                        .refs
+                        .iter()
+                        .find(|r| r.full_name == reference)
+                        .ok_or_else(|| Error::new("staleOperation", "Branch no longer exists."))?;
+                    let (branch, local) = if let Some(name) = reference.strip_prefix("refs/heads/")
+                    {
+                        (name.to_owned(), true)
+                    } else if let Some(name) = reference
+                        .strip_prefix("refs/remotes/origin/")
+                        .filter(|n| *n != "HEAD")
+                    {
+                        (name.to_owned(), false)
+                    } else {
+                        return Err(Error::new(
+                            "unsupportedOperation",
+                            "Deletion supports local and origin branches.",
+                        ));
+                    };
+                    let push_url = if local {
+                        None
+                    } else {
+                        Some(
+                            repo.remotes()?
+                                .into_iter()
+                                .find(|r| r.name == "origin")
+                                .ok_or_else(|| Error::new("noRemote", "origin is not configured."))?
+                                .push_url,
+                        )
+                    };
+                    Reply::DeleteReview(BranchBatchDeleteRequest {
+                        branches: vec![BranchBatchDeleteItem {
+                            branch,
+                            expected_local_oid: local.then(|| entry.commit_id.clone()),
+                            expected_origin_oid: (!local).then(|| entry.commit_id.clone()),
+                        }],
+                        expected_head: state.session.head,
+                        expected_head_ref: state.session.head_ref,
+                        expected_push_url: push_url,
+                        delete_local: local,
+                        delete_origin: !local,
+                        force_local: vec![],
+                    })
+                }
+                Job::Delete(review) if WRITES => {
+                    let remote = review.delete_origin;
+                    let outcome = service
+                        .delete_branches(handle, review, registry.as_deref())
+                        .and_then(|result| {
+                            for branch in result.branches {
+                                for target in [branch.local, branch.origin].into_iter().flatten() {
+                                    if target.status != "deleted" {
+                                        return Err(target.error.unwrap_or_else(|| {
+                                            Error::new(
+                                                "mutationUnverified",
+                                                target.note.unwrap_or_else(|| {
+                                                    format!("Deletion: {}", target.status)
+                                                }),
+                                            )
+                                        }));
+                                    }
+                                }
+                            }
+                            Ok("Branch deleted.".into())
+                        })
+                        .map_err(|e| if remote { remote_error(e) } else { e });
+                    Reply::Wrote {
+                        outcome,
+                        committed: false,
+                        refresh: snapshot(),
+                    }
+                }
+                Job::Stashes(selected, open) => Reply::Stashes(repo.stashes()?, selected, open),
+                Job::InspectStash(entry, untracked) => {
+                    let mut detail = repo.commit(&entry.oid)?;
+                    if untracked {
+                        let oid = detail.summary.parents.get(2).ok_or_else(|| {
+                            Error::new("noUntracked", "This stash has no saved untracked files.")
+                        })?;
+                        detail = repo.commit(oid)?;
+                    }
+                    let spec = DiffSpec::Commit {
+                        oid: detail.summary.id.clone(),
+                        parent: None,
+                    };
+                    let files = repo.diff_files(&spec)?;
+                    Reply::InspectStash(detail, files, entry, untracked)
+                }
+                Job::StoredStashReview(entry, verb) => {
+                    let before = repo.operation_state()?;
+                    let entry = repo
+                        .stashes()?
+                        .into_iter()
+                        .find(|s| s.oid == entry.oid)
+                        .ok_or_else(|| {
+                            Error::new("staleStash", "The selected stash no longer exists.")
+                        })?;
+                    let state = repo.state()?;
+                    if repo.operation_state()?.fingerprint != before.fingerprint {
+                        return Err(Error::new(
+                            "staleOperation",
+                            "Repository changed during review.",
+                        ));
+                    }
+                    Reply::StoredStashReview(StoredStashReview {
+                        entry,
+                        verb,
+                        restore_index: false,
+                        operation: before.fingerprint,
+                        destination: state
+                            .session
+                            .head_ref
+                            .or(state.session.head)
+                            .unwrap_or_default(),
+                    })
+                }
+                Job::StoredStash(review) if WRITES => Reply::Wrote {
+                    outcome: service
+                        .terminal_stash_action(handle, review.action(), &review.operation)
+                        .map(|_| format!("Stash {} completed.", review.verb.label())),
+                    committed: false,
+                    refresh: snapshot(),
+                },
+                Job::Search(id, text, cancel) => Reply::Search(
+                    id,
+                    repo.search_cancellable(
+                        SearchQuery {
+                            text,
+                            branch: None,
+                            since: None,
+                            until: None,
+                            path: None,
+                        },
+                        cancel,
+                    ),
+                ),
                 Job::StageReview(path, unstage) => {
                     Reply::StageReview(repo.terminal_review_stage(&path, unstage)?)
                 }
@@ -361,15 +568,104 @@ fn worker(
                         refresh: snapshot(),
                     }
                 }
+                Job::StageAllReview(paths, unstage) => Reply::StageAllReview(
+                    paths
+                        .iter()
+                        .map(|path| repo.terminal_review_stage(path, unstage))
+                        .collect::<Result<_>>()?,
+                ),
+                Job::StageAll(reviews) if WRITES => Reply::Wrote {
+                    outcome: service
+                        .terminal_stage_many(handle, reviews)
+                        .map(|()| "Updated the reviewed list.".into()),
+                    committed: false,
+                    refresh: snapshot(),
+                },
+                Job::Hunk(review) if WRITES => {
+                    let outcome = match review.kind {
+                        HunkKind::Stage => service.stage_hunk(
+                            handle,
+                            &review.preview.path,
+                            review.index,
+                            &review.fingerprint,
+                            review.lines,
+                        ),
+                        HunkKind::Unstage => service.unstage_hunk(
+                            handle,
+                            &review.preview.path,
+                            review.index,
+                            &review.fingerprint,
+                            review.lines,
+                        ),
+                        HunkKind::Discard => service.discard_hunk(
+                            handle,
+                            &review.preview.path,
+                            review.index,
+                            &review.fingerprint,
+                        ),
+                    }
+                    .map(|()| format!("{} completed.", review.kind.verb()));
+                    Reply::Wrote {
+                        outcome,
+                        committed: false,
+                        refresh: snapshot(),
+                    }
+                }
+                Job::DiscardReview(path) => {
+                    let status = repo.status()?;
+                    let entry =
+                        status
+                            .entries
+                            .iter()
+                            .find(|e| e.path == path)
+                            .ok_or_else(|| {
+                                Error::new(
+                                    "staleOperation",
+                                    "File changed; refresh and review again.",
+                                )
+                            })?;
+                    let preview = repo.diff(
+                        &if entry.untracked {
+                            DiffSpec::Untracked
+                        } else {
+                            DiffSpec::Unstaged
+                        },
+                        &path,
+                    )?;
+                    if repo.status()?.fingerprint != status.fingerprint {
+                        return Err(Error::new(
+                            "staleOperation",
+                            "File changed; refresh and review again.",
+                        ));
+                    }
+                    Reply::DiscardReview(DiscardReview {
+                        fingerprint: status.fingerprint,
+                        untracked: entry.untracked,
+                        delete_confirmed: false,
+                        preview,
+                    })
+                }
+                Job::Discard(review) if WRITES => Reply::Wrote {
+                    outcome: service
+                        .discard(handle, &[review.preview.path], &review.fingerprint)
+                        .map(|()| "Discarded the reviewed file changes.".into()),
+                    committed: false,
+                    refresh: snapshot(),
+                },
                 Job::CommitReview(identity) => {
                     Reply::CommitReview(repo.terminal_review_commit_with_identity(identity)?)
                 }
-                Job::Save(review, message) if WRITES => {
-                    let outcome = service.terminal_commit(handle, review, &message);
+                Job::Save(review, message, amend) if WRITES => {
+                    let outcome = if amend {
+                        service.terminal_amend(handle, review, &message)
+                    } else {
+                        service.terminal_commit(handle, review, &message)
+                    };
                     let committed = outcome.is_ok();
                     let outcome = outcome.map(|(commit, matches)| {
                         format!(
-                            "Committed {}{}",
+                            "{} {}{}",
+                            if amend { "Amended" } else { "Committed" },
                             commit.oid.get(..7).unwrap_or(&commit.oid),
                             match matches {
                                 Some(true) => "",
@@ -488,6 +784,10 @@ enum View {
     Settings,
     Profiles,
     ProfileEdit,
+    Branches,
+    BranchName,
+    Stashes,
+    Search,
 }
 
 struct ProfileEditor {
@@ -510,9 +810,114 @@ impl ProfileEditor {
 
 enum Confirm {
     Stage(StageReview),
+    StageAll(Vec<StageReview>),
+    Hunk(HunkReview),
+    Discard(DiscardReview),
     Remote(TerminalRemoteReview),
     Stash(StashReview),
     Pop(StashEntry),
+    Operation(OperationRequest),
+    Delete(BranchBatchDeleteRequest),
+    StoredStash(StoredStashReview),
+}
+
+struct BranchEditor {
+    source: String,
+    rename: bool,
+    name: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StashVerb {
+    Apply,
+    Pop,
+    Drop,
+}
+
+impl StashVerb {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Apply => "apply",
+            Self::Pop => "pop",
+            Self::Drop => "drop",
+        }
+    }
+}
+
+struct StoredStashReview {
+    entry: StashEntry,
+    verb: StashVerb,
+    restore_index: bool,
+    operation: String,
+    destination: String,
+}
+
+impl StoredStashReview {
+    fn action(&self) -> StashAction {
+        let oid = self.entry.oid.clone();
+        match self.verb {
+            StashVerb::Apply => StashAction::Apply {
+                oid,
+                restore_index: self.restore_index,
+            },
+            StashVerb::Pop => StashAction::Pop {
+                oid,
+                restore_index: self.restore_index,
+            },
+            StashVerb::Drop => StashAction::Drop { oid },
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HunkKind {
+    Stage,
+    Unstage,
+    Discard,
+}
+
+impl HunkKind {
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Stage => "Stage",
+            Self::Unstage => "Unstage",
+            Self::Discard => "Discard",
+        }
+    }
+}
+
+struct HunkReview {
+    index: usize,
+    fingerprint: String,
+    lines: Option<Vec<usize>>,
+    kind: HunkKind,
+    preview: FileDiff,
+}
+
+struct DiscardReview {
+    fingerprint: String,
+    untracked: bool,
+    delete_confirmed: bool,
+    preview: FileDiff,
+}
+
+fn hunk_row(diff: &FileDiff, index: usize) -> usize {
+    diff.hunks
+        .iter()
+        .take(index)
+        .map(|h| h.lines.len() + 2)
+        .sum()
+}
+
+fn diff_position(diff: &FileDiff, row: usize) -> Option<(usize, Option<usize>)> {
+    let mut start = 0;
+    for (index, hunk) in diff.hunks.iter().enumerate() {
+        if row <= start + hunk.lines.len() {
+            return Some((index, row.checked_sub(start + 1)));
+        }
+        start += hunk.lines.len() + 2;
+    }
+    None
 }
 
 /// Toolbar buttons; each one opens a review before anything runs.
@@ -550,6 +955,10 @@ enum Tone {
 }
 
 struct App {
+    keymap: Keymap,
+    help: bool,
+    help_scroll: usize,
+    config_error: Option<String>,
     jobs: mpsc::SyncSender<Job>,
     busy: bool,
     writing: bool,
@@ -586,11 +995,13 @@ struct App {
     working: usize,
     remote: usize,
     scroll: usize,
+    line_anchor: Option<usize>,
     staged: bool,
     detail: Option<(CommitDetail, Vec<DiffFile>)>,
     entries: Vec<StatusEntry>,
     diff: Option<FileDiff>,
     review: Option<CommitReview>,
+    amend: bool,
     message: String,
     /// Drafts and uncertain push checks survive switching away from a worktree.
     inactive: HashMap<String, (String, Option<TerminalRemoteReview>)>,
@@ -612,11 +1023,27 @@ struct App {
     profile_editor: Option<ProfileEditor>,
     /// Columns the diff is panned to the right.
     hscroll: usize,
+    branches: Vec<TerminalBranch>,
+    branch: usize,
+    branch_editor: Option<BranchEditor>,
+    stash: usize,
+    stash_detail: Option<(StashEntry, bool)>,
+    search_text: String,
+    search_id: u64,
+    search_cancel: Option<Arc<AtomicBool>>,
+    search_repo: Option<Arc<Repository>>,
+    matches: Vec<String>,
+    match_index: usize,
+    search_target: Option<String>,
 }
 
 impl App {
     fn new(jobs: mpsc::SyncSender<Job>) -> Self {
         Self {
+            keymap: Keymap::default(),
+            help: false,
+            help_scroll: 0,
+            config_error: None,
             jobs,
             busy: false,
             writing: false,
@@ -648,11 +1075,13 @@ impl App {
             working: 0,
             remote: 0,
             scroll: 0,
+            line_anchor: None,
             staged: false,
             detail: None,
             entries: Vec::new(),
             diff: None,
             review: None,
+            amend: false,
             message: String::new(),
             inactive: HashMap::new(),
             sync: None,
@@ -671,6 +1100,18 @@ impl App {
             profile_selection: 0,
             profile_editor: None,
             hscroll: 0,
+            branches: vec![],
+            branch: 0,
+            branch_editor: None,
+            stash: 0,
+            stash_detail: None,
+            search_text: String::new(),
+            search_id: 0,
+            search_cancel: None,
+            search_repo: None,
+            matches: vec![],
+            match_index: 0,
+            search_target: None,
         }
     }
 
@@ -678,7 +1119,17 @@ impl App {
         let switching = matches!(job, Job::Open(_));
         let write = matches!(
             job,
-            Job::Stage(_) | Job::Save(..) | Job::Remote(_) | Job::Stash(_) | Job::Pop(_)
+            Job::Stage(_)
+                | Job::StageAll(_)
+                | Job::Hunk(_)
+                | Job::Discard(_)
+                | Job::Save(..)
+                | Job::Remote(_)
+                | Job::Stash(_)
+                | Job::Pop(_)
+                | Job::Operation(_)
+                | Job::Delete(_)
+                | Job::StoredStash(_)
         );
         if self.busy || (write && self.locked) {
             return;
@@ -741,6 +1192,8 @@ impl App {
         fresh.config = std::mem::take(&mut self.config);
         fresh.config_path = self.config_path.take();
         fresh.config_unreadable = self.config_unreadable;
+        fresh.config_error = self.config_error.take();
+        fresh.keymap = self.keymap.clone();
         fresh.inactive = std::mem::take(&mut self.inactive);
         if let Some(from) = self.root().map(str::to_owned) {
             if !self.message.is_empty() || self.uncertain.is_some() {
@@ -760,6 +1213,14 @@ impl App {
             fresh.save_config(message);
         } else {
             fresh.say(Tone::Good, message);
+        }
+        if let Some(error) = &fresh.config_error {
+            fresh.say(
+                Tone::Bad,
+                format!(
+                    "Settings: {error}. Using defaults; existing file will not be overwritten."
+                ),
+            );
         }
         *self = fresh;
     }
@@ -821,8 +1282,18 @@ impl App {
     }
 
     fn paste(&mut self, text: &str) {
+        if self.help {
+            return;
+        }
         let (field, limit, multiline) = match self.view {
             View::Composer => (&mut self.message, 65536, true),
+            View::Search => (&mut self.search_text, 4096, false),
+            View::BranchName => {
+                let Some(editor) = &mut self.branch_editor else {
+                    return;
+                };
+                (&mut editor.name, 1024, false)
+            }
             View::Repositories if self.repo_selection == 0 => (&mut self.repo_path, 32768, false),
             View::ProfileEdit => {
                 let Some(editor) = &mut self.profile_editor else {
@@ -888,6 +1359,7 @@ impl App {
             return;
         };
         self.back = self.view;
+        self.line_anchor = None;
         if self.diff_key.as_deref() == Some(diff_key(&spec, &path).as_str()) {
             self.view = View::Diff;
             self.scroll = 0;
@@ -900,6 +1372,21 @@ impl App {
     fn follow(&mut self) {
         if self.busy || self.quit {
             return;
+        }
+        if let Some(target) = &self.search_target {
+            if let Some(i) = self.commits.iter().position(|c| &c.id == target) {
+                self.history = i;
+                self.search_target = None;
+            } else if let Some(cursor) = self.cursor.clone() {
+                self.send(Job::History(Some(cursor)));
+                return;
+            } else {
+                self.search_target = None;
+                self.say(
+                    Tone::Info,
+                    "Search match is no longer in this history; search again.",
+                );
+            }
         }
         if self.view == View::History && self.history + 30 >= self.commits.len() {
             if let Some(cursor) = self.cursor.clone() {
@@ -979,7 +1466,13 @@ impl App {
             self.locked = false;
         } else if self.generation != page.generation || self.cursor == page.cursor {
             self.cursor = None;
-            self.say(Tone::Info, "History changed; press r to refresh.");
+            self.say(
+                Tone::Info,
+                format!(
+                    "History changed; press {} to refresh.",
+                    self.keymap.label("refresh")
+                ),
+            );
             return;
         }
         let state = self.state.as_ref();
@@ -1001,9 +1494,14 @@ impl App {
         self.writing = false;
         self.switching = false;
         match reply {
-            Ok(Reply::Opened(snapshot, page)) => self.opened(snapshot, page),
+            Ok(Reply::Opened(snapshot, page, repo)) => {
+                self.cancel_search();
+                self.opened(snapshot, page);
+                self.search_repo = Some(repo);
+            }
             Ok(Reply::History(snapshot, page)) => self.page(snapshot, page),
             Ok(Reply::Commit(detail, files, open)) => {
+                self.stash_detail = None;
                 self.detail = Some((detail, files));
                 if open {
                     self.file = 0;
@@ -1011,7 +1509,68 @@ impl App {
                     self.view = View::Files;
                 }
             }
+            Ok(Reply::Branches(branches, open)) => {
+                self.branches = branches;
+                self.branch = self.branch.min(self.branches.len().saturating_sub(1));
+                if open {
+                    self.view = View::Branches;
+                }
+            }
+            Ok(Reply::OperationReview(review)) => {
+                self.confirm = Some(Confirm::Operation(review));
+                self.scroll = 0;
+                self.view = View::Confirm;
+            }
+            Ok(Reply::DeleteReview(review)) => {
+                self.confirm = Some(Confirm::Delete(review));
+                self.scroll = 0;
+                self.view = View::Confirm;
+            }
+            Ok(Reply::Stashes(stashes, selected, open)) => {
+                self.stashes = stashes;
+                self.stash = selected
+                    .and_then(|oid| self.stashes.iter().position(|s| s.oid == oid))
+                    .unwrap_or(self.stash)
+                    .min(self.stashes.len().saturating_sub(1));
+                if open {
+                    self.view = View::Stashes;
+                }
+            }
+            Ok(Reply::InspectStash(detail, files, entry, untracked)) => {
+                self.detail = Some((detail, files));
+                self.stash_detail = Some((entry, untracked));
+                self.file = 0;
+                self.scroll = 0;
+                self.view = View::Files;
+            }
+            Ok(Reply::StoredStashReview(review)) => {
+                self.confirm = Some(Confirm::StoredStash(review));
+                self.scroll = 0;
+                self.view = View::Confirm;
+            }
+            Ok(Reply::Search(id, result)) if id == self.search_id => match result {
+                Ok(result) => {
+                    self.matches = result.commits.into_iter().map(|c| c.id).collect();
+                    self.match_index = 0;
+                    self.search_target = self.matches.first().cloned();
+                    self.say(
+                        Tone::Info,
+                        format!(
+                            "Search: {} matches{}.",
+                            self.matches.len(),
+                            if result.truncated {
+                                " (first 500; refine the query)"
+                            } else {
+                                ""
+                            }
+                        ),
+                    );
+                }
+                Err(error) => self.say(Tone::Bad, error_text(error)),
+            },
+            Ok(Reply::Search(..)) => {}
             Ok(Reply::Diff(key, diff, open)) => {
+                self.line_anchor = None;
                 self.diff = Some(diff);
                 self.diff_key = Some(key);
                 self.hscroll = 0;
@@ -1037,8 +1596,20 @@ impl App {
                 self.hscroll = 0;
                 self.view = View::Confirm;
             }
+            Ok(Reply::StageAllReview(reviews)) => {
+                self.confirm = Some(Confirm::StageAll(reviews));
+                self.scroll = 0;
+                self.view = View::Confirm;
+            }
+            Ok(Reply::DiscardReview(review)) => {
+                self.confirm = Some(Confirm::Discard(review));
+                self.scroll = 0;
+                self.hscroll = 0;
+                self.view = View::Confirm;
+            }
             Ok(Reply::CommitReview(review)) => {
                 self.review = Some(review);
+                self.amend = false;
                 self.view = View::Composer;
                 self.scroll = 0;
             }
@@ -1061,6 +1632,7 @@ impl App {
                 committed,
                 refresh,
             }) => {
+                self.cancel_search();
                 if committed {
                     self.message.clear();
                 }
@@ -1072,15 +1644,22 @@ impl App {
                 match refresh {
                     Ok((snapshot, page)) => {
                         self.page(Some(snapshot), page);
-                        if self.view == View::Working && !self.quit {
-                            self.send(Job::Working);
+                        if !self.quit {
+                            match self.view {
+                                View::Working => self.send(Job::Working),
+                                View::Branches => self.send(Job::Branches(false)),
+                                View::Stashes => self.send(Job::Stashes(None, false)),
+                                _ => {}
+                            }
                         }
                     }
                     Err(_) => {
                         self.locked = true;
                         self.tone = Tone::Bad;
-                        self.notice
-                            .push_str(" Refresh failed; press r before writing again.");
+                        self.notice.push_str(&format!(
+                            " Refresh failed; press {} before writing again.",
+                            self.keymap.label("refresh")
+                        ));
                     }
                 }
             }
@@ -1101,8 +1680,10 @@ impl App {
                     Err(_) => {
                         self.locked = true;
                         self.tone = Tone::Bad;
-                        self.notice
-                            .push_str(" Refresh failed; press r before writing again.");
+                        self.notice.push_str(&format!(
+                            " Refresh failed; press {} before writing again.",
+                            self.keymap.label("refresh")
+                        ));
                     }
                 }
             }
@@ -1160,7 +1741,7 @@ impl App {
             return Some("Actions are read-only on this platform.");
         }
         if self.locked {
-            return Some("Refresh with r before another action.");
+            return Some("Refresh before another action.");
         }
         match action {
             Action::Fetch | Action::Pull | Action::Push if self.sync_remote().is_none() => {
@@ -1168,7 +1749,7 @@ impl App {
             }
             Action::Pull if !upstream => Some("This branch has no upstream to pull from."),
             Action::Push if self.uncertain.is_some() => {
-                Some("Verify the last push first: open Sync (m) and press v.")
+                Some("Verify the last push in Sync before pushing again.")
             }
             Action::Push if sync.and_then(|s| s.branch.as_ref()).is_none() => {
                 Some("Switch to a branch before pushing.")
@@ -1226,9 +1807,13 @@ impl App {
 
     /// Clicking selects; a second click on the same item within a moment opens it.
     fn click(&mut self, column: u16, row: u16) {
-        if self.writing
+        if self.help
+            || self.writing
             || self.switching
-            || matches!(self.view, View::Composer | View::Confirm | View::Publish)
+            || matches!(
+                self.view,
+                View::Composer | View::Confirm | View::Publish | View::BranchName | View::Search
+            )
         {
             return;
         }
@@ -1257,25 +1842,25 @@ impl App {
         });
         self.last_click = Some((now, hit));
         match hit {
-            Hit::Tab(0) => self.key(Key::Char('h'), false, 1),
-            Hit::Tab(1) => self.key(Key::Char('w'), false, 1),
-            Hit::Tab(2) => self.key(Key::Char('m'), false, 1),
-            Hit::Tab(3) => self.key(Key::Char(','), false, 1),
-            Hit::Tab(_) => self.key(Key::Char('o'), false, 1),
-            Hit::Staged(staged) if staged != self.staged => self.key(Key::Tab, false, 1),
+            Hit::Tab(0) => self.command(Command::History, 1),
+            Hit::Tab(1) => self.command(Command::Working, 1),
+            Hit::Tab(2) => self.command(Command::Remote, 1),
+            Hit::Tab(3) => self.command(Command::Settings, 1),
+            Hit::Tab(_) => self.command(Command::Repositories, 1),
+            Hit::Staged(staged) if staged != self.staged => self.command(Command::Next, 1),
             Hit::Staged(_) => {}
             Hit::Remote(i) => self.remote = i,
-            Hit::ProfilePage => self.key(Key::Tab, false, 1),
+            Hit::ProfilePage => self.command(Command::Next, 1),
             Hit::Repository(i) => {
                 self.repo_selection = i;
                 if double && i != 0 {
-                    self.key(Key::Enter, false, 1);
+                    self.command(Command::Accept, 1);
                 }
             }
             Hit::Profile(i) => {
                 self.profile_selection = i;
                 if double {
-                    self.key(Key::Enter, false, 1);
+                    self.command(Command::Accept, 1);
                 }
             }
             Hit::ProfileField(i) => {
@@ -1292,7 +1877,7 @@ impl App {
                     _ => self.working = i,
                 }
                 if double {
-                    self.key(Key::Enter, false, 1);
+                    self.command(Command::Accept, 1);
                 } else {
                     self.follow();
                 }
@@ -1310,14 +1895,130 @@ impl App {
         })
     }
 
+    fn cancel_search(&mut self) {
+        self.search_id = self.search_id.wrapping_add(1);
+        if let Some(cancel) = self.search_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        if let Some(repo) = &self.search_repo {
+            repo.cancel_search();
+        }
+        if matches!(self.next, Some(Job::Search(..))) {
+            self.next = None;
+        }
+        self.matches.clear();
+        self.search_target = None;
+    }
+
+    fn branch_name(&mut self, source: String, rename: bool) {
+        self.back = self.view;
+        self.branch_editor = Some(BranchEditor {
+            source,
+            rename,
+            name: String::new(),
+        });
+        self.view = View::BranchName;
+    }
+
+    fn working_diff(&self) -> bool {
+        self.view == View::Diff
+            && self.back == View::Working
+            && self.working_target().is_some_and(|(spec, path)| {
+                matches!(spec, DiffSpec::Staged | DiffSpec::Unstaged)
+                    && self.diff_key.as_deref() == Some(diff_key(&spec, &path).as_str())
+            })
+    }
+
+    fn selected_lines(&self) -> Option<Vec<usize>> {
+        let anchor = self.line_anchor?;
+        let diff = self.diff.as_ref()?;
+        let (index, _) = diff_position(diff, self.scroll)?;
+        let start = hunk_row(diff, index) + 1;
+        Some(
+            diff.hunks[index]
+                .lines
+                .iter()
+                .enumerate()
+                .filter_map(|(i, line)| {
+                    ((anchor.min(self.scroll)..=anchor.max(self.scroll)).contains(&(start + i))
+                        && matches!(line.kind.as_str(), "add" | "remove"))
+                    .then_some(i)
+                })
+                .collect(),
+        )
+    }
+
+    fn review_hunk(&mut self, discard: bool) {
+        if !self.working_diff() || (discard && self.staged) {
+            return;
+        }
+        let Some(diff) = &self.diff else { return };
+        let Some(fingerprint) = diff
+            .hunk_action
+            .as_ref()
+            .and_then(|a| a.fingerprint.clone())
+        else {
+            let reason = diff
+                .hunk_action
+                .as_ref()
+                .and_then(|a| a.reason.clone())
+                .unwrap_or_else(|| "Use the whole-file action for this diff.".into());
+            self.say(Tone::Info, reason);
+            return;
+        };
+        let Some((index, _)) = diff_position(diff, self.scroll) else {
+            return;
+        };
+        let lines = if discard { None } else { self.selected_lines() };
+        if lines.as_ref().is_some_and(Vec::is_empty) {
+            self.say(Tone::Info, "Select added or removed lines first.");
+            return;
+        }
+        let mut preview = self.diff.take().unwrap();
+        preview.hunks = vec![preview.hunks.remove(index)];
+        if let Some(lines) = &lines {
+            preview.hunks[0].lines = std::mem::take(&mut preview.hunks[0].lines)
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, line)| lines.contains(&i).then_some(line))
+                .collect();
+        }
+        self.diff_key = None;
+        self.requested = None;
+        self.confirm = Some(Confirm::Hunk(HunkReview {
+            index,
+            fingerprint,
+            lines,
+            kind: if discard {
+                HunkKind::Discard
+            } else if self.staged {
+                HunkKind::Unstage
+            } else {
+                HunkKind::Stage
+            },
+            preview,
+        }));
+        self.back = View::Working;
+        self.view = View::Confirm;
+        self.scroll = 0;
+        self.hscroll = 0;
+        self.line_anchor = None;
+    }
+
     fn key(&mut self, key: Key, ctrl: bool, height: usize) {
-        if (key == Key::Char('q')
-            && !matches!(
-                self.view,
-                View::Composer | View::Publish | View::Repositories | View::ProfileEdit
-            ))
-            || (ctrl && key == Key::Char('c'))
-        {
+        let command = if self.help {
+            self.keymap.lookup(keys::HELP, key, ctrl)
+        } else {
+            self.keymap.command(self, key, ctrl)
+        };
+        if let Some(command) = command {
+            self.command(command, height);
+        }
+    }
+
+    fn command(&mut self, key: Command, height: usize) {
+        if key == Command::Quit {
+            self.cancel_search();
             self.quit = true;
             return;
         }
@@ -1325,9 +2026,35 @@ impl App {
         if self.writing || self.switching {
             return;
         }
-        if key == Key::Esc {
+        if self.help {
+            match key {
+                Command::Help | Command::Cancel => self.help = false,
+                Command::Up => self.help_scroll = self.help_scroll.saturating_sub(1),
+                Command::Down => self.help_scroll = self.help_scroll.saturating_add(1),
+                Command::PageUp => self.help_scroll = self.help_scroll.saturating_sub(height),
+                Command::PageDown => self.help_scroll = self.help_scroll.saturating_add(height),
+                _ => {}
+            }
+            return;
+        }
+        if key == Command::Help {
+            self.help = true;
+            self.help_scroll = 0;
+            return;
+        }
+        if key == Command::Cancel {
+            if self.view == View::Search
+                || (self.view == View::History && self.search_cancel.is_some())
+            {
+                self.cancel_search();
+                self.view = View::History;
+                self.say(Tone::Info, "Search cancelled.");
+                return;
+            }
             self.view = match self.view {
                 View::Diff | View::Confirm => self.back,
+                View::BranchName => self.back,
+                View::Files if self.stash_detail.is_some() => View::Stashes,
                 View::Publish => View::Remote,
                 View::Profiles => View::Settings,
                 View::ProfileEdit => {
@@ -1343,7 +2070,7 @@ impl App {
             self.follow();
             return;
         }
-        if matches!(key, Key::Left | Key::Right)
+        if matches!(key, Command::Left | Command::Right)
             && matches!(
                 self.view,
                 View::Diff | View::Files | View::Working | View::Confirm
@@ -1351,11 +2078,13 @@ impl App {
         {
             let diff = match (self.view, &self.confirm) {
                 (View::Confirm, Some(Confirm::Stage(review))) => Some(&review.preview),
+                (View::Confirm, Some(Confirm::Hunk(review))) => Some(&review.preview),
+                (View::Confirm, Some(Confirm::Discard(review))) => Some(&review.preview),
                 (View::Confirm, _) => None,
                 _ => self.diff.as_ref(),
             };
             let limit = diff.map_or(0, view::widest).saturating_sub(8);
-            self.hscroll = if key == Key::Left {
+            self.hscroll = if key == Command::Left {
                 self.hscroll.saturating_sub(8)
             } else {
                 (self.hscroll + 8).min(limit.next_multiple_of(8))
@@ -1363,14 +2092,63 @@ impl App {
             return;
         }
         match self.view {
+            View::BranchName | View::Search => {
+                match key {
+                    Command::Accept if self.view == View::Search => {
+                        let text = self.search_text.clone();
+                        self.cancel_search();
+                        if !text.trim().is_empty() {
+                            let cancel = Arc::new(AtomicBool::new(false));
+                            self.search_cancel = Some(cancel.clone());
+                            self.request(Job::Search(self.search_id, text, cancel));
+                            self.say(Tone::Info, "Searching history… Esc cancels.");
+                        }
+                        self.view = View::History;
+                    }
+                    Command::Accept => {
+                        if let Some(editor) = &self.branch_editor {
+                            let action = if editor.rename {
+                                GitAction::RenameBranch {
+                                    branch: editor.source.clone(),
+                                    name: editor.name.clone(),
+                                }
+                            } else {
+                                GitAction::CreateBranch {
+                                    name: editor.name.clone(),
+                                    start_point: editor.source.clone(),
+                                    checkout: false,
+                                }
+                            };
+                            self.request(Job::OperationReview(action));
+                        }
+                    }
+                    Command::Erase => {
+                        if self.view == View::Search {
+                            self.search_text.pop();
+                        } else if let Some(editor) = &mut self.branch_editor {
+                            editor.name.pop();
+                        }
+                    }
+                    Command::Clear => {
+                        if self.view == View::Search {
+                            self.search_text.clear();
+                        } else if let Some(editor) = &mut self.branch_editor {
+                            editor.name.clear();
+                        }
+                    }
+                    Command::Text(c) if !c.is_control() => self.paste(&c.to_string()),
+                    _ => {}
+                }
+                return;
+            }
             View::Repositories => {
                 match key {
-                    Key::Up => self.repo_selection = self.repo_selection.saturating_sub(1),
-                    Key::Down => {
+                    Command::Up => self.repo_selection = self.repo_selection.saturating_sub(1),
+                    Command::Down => {
                         self.repo_selection =
                             (self.repo_selection + 1).min(self.config.recent.len())
                     }
-                    Key::Enter => {
+                    Command::Accept => {
                         let path = if self.repo_selection == 0 {
                             self.repo_path.clone()
                         } else {
@@ -1382,13 +2160,12 @@ impl App {
                             self.send(Job::Open(path));
                         }
                     }
-                    Key::Backspace if self.repo_selection == 0 => {
+                    Command::Erase if self.repo_selection == 0 => {
                         self.repo_path.pop();
                     }
-                    Key::Char('u') if ctrl && self.repo_selection == 0 => self.repo_path.clear(),
-                    Key::Char(c)
-                        if !ctrl
-                            && !c.is_control()
+                    Command::Clear if self.repo_selection == 0 => self.repo_path.clear(),
+                    Command::Text(c)
+                        if !c.is_control()
                             && self.repo_selection == 0
                             && self.repo_path.len() + c.len_utf8() <= 32768 =>
                     {
@@ -1400,17 +2177,17 @@ impl App {
             }
             View::Profiles => {
                 match key {
-                    Key::Up | Key::Char('k') => {
+                    Command::Up => {
                         self.profile_selection = self.profile_selection.saturating_sub(1)
                     }
-                    Key::Down | Key::Char('j') => {
+                    Command::Down => {
                         self.profile_selection =
                             (self.profile_selection + 1).min(self.config.profiles.len())
                     }
-                    Key::Tab | Key::BackTab => self.view = View::Settings,
-                    Key::Char('n') => self.edit_profile(true),
-                    Key::Char('e') => self.edit_profile(false),
-                    Key::Delete if self.profile_selection > 0 => {
+                    Command::Next | Command::Previous => self.view = View::Settings,
+                    Command::New => self.edit_profile(true),
+                    Command::Edit => self.edit_profile(false),
+                    Command::Delete if self.profile_selection > 0 => {
                         let profile = self.config.profiles.remove(self.profile_selection - 1);
                         self.config.assignments.retain(|_, id| *id != profile.id);
                         self.profile_selection =
@@ -1419,7 +2196,7 @@ impl App {
                             "Profile deleted. Its repositories will use Git defaults.",
                         );
                     }
-                    Key::Enter => {
+                    Command::Accept => {
                         if let Some(root) = self.root().map(str::to_owned) {
                             if let Some(i) = self.profile_selection.checked_sub(1) {
                                 self.config
@@ -1441,14 +2218,14 @@ impl App {
             View::ProfileEdit => {
                 if let Some(editor) = &mut self.profile_editor {
                     match key {
-                        Key::Tab | Key::Down => editor.field = (editor.field + 1) % 3,
-                        Key::BackTab | Key::Up => editor.field = (editor.field + 2) % 3,
-                        Key::Enter => self.save_profile(),
-                        Key::Backspace => {
+                        Command::Next => editor.field = (editor.field + 1) % 3,
+                        Command::Previous => editor.field = (editor.field + 2) % 3,
+                        Command::Accept => self.save_profile(),
+                        Command::Erase => {
                             editor.values[editor.field].pop();
                         }
-                        Key::Char('u') if ctrl => editor.values[editor.field].clear(),
-                        Key::Char(c) if !ctrl && !c.is_control() => {
+                        Command::Clear => editor.values[editor.field].clear(),
+                        Command::Text(c) if !c.is_control() => {
                             let field = &mut editor.values[editor.field];
                             if field.len() + c.len_utf8() <= [80, 120, 254][editor.field] {
                                 field.push(c);
@@ -1461,34 +2238,37 @@ impl App {
             }
             View::Composer => {
                 match key {
-                    Key::F(2) if WRITES && !self.busy => {
+                    Command::SaveCommit if WRITES && !self.busy => {
                         if let Some(review) = self.review.take() {
                             self.view = View::History;
-                            self.send(Job::Save(review, self.message.clone()));
+                            self.send(Job::Save(review, self.message.clone(), self.amend));
                         }
                     }
-                    Key::Backspace => {
+                    Command::Amend if self.review.as_ref().is_some_and(CommitReview::can_amend) => {
+                        self.amend = !self.amend;
+                    }
+                    Command::Erase => {
                         self.message.pop();
                     }
-                    Key::Enter => self.message.push('\n'),
-                    Key::Char(c) if !ctrl && self.message.len() + c.len_utf8() <= 65536 => {
+                    Command::Accept => self.message.push('\n'),
+                    Command::Text(c) if self.message.len() + c.len_utf8() <= 65536 => {
                         self.message.push(c)
                     }
-                    Key::PageDown => {
+                    Command::PageDown => {
                         let last = self
                             .review
                             .as_ref()
                             .map_or(0, |review| review.files().len().saturating_sub(1));
                         self.scroll = self.scroll.saturating_add(height / 2).min(last);
                     }
-                    Key::PageUp => self.scroll = self.scroll.saturating_sub(height / 2),
+                    Command::PageUp => self.scroll = self.scroll.saturating_sub(height / 2),
                     _ => {}
                 }
                 return;
             }
             View::Publish => {
                 match key {
-                    Key::Enter => {
+                    Command::Accept => {
                         if let Some(remote) = self
                             .sync
                             .as_ref()
@@ -1503,10 +2283,10 @@ impl App {
                             ));
                         }
                     }
-                    Key::Backspace => {
+                    Command::Erase => {
                         self.publish.pop();
                     }
-                    Key::Char(c) if !ctrl && self.publish.len() + c.len_utf8() <= 1024 => {
+                    Command::Text(c) if self.publish.len() + c.len_utf8() <= 1024 => {
                         self.publish.push(c)
                     }
                     _ => {}
@@ -1515,23 +2295,54 @@ impl App {
             }
             View::Confirm => {
                 match key {
-                    Key::Up | Key::Char('k') => self.scroll = self.scroll.saturating_sub(1),
-                    Key::Down | Key::Char('j') => self.scroll = self.scroll.saturating_add(1),
-                    Key::PageUp => self.scroll = self.scroll.saturating_sub(height),
-                    Key::PageDown => self.scroll = self.scroll.saturating_add(height),
+                    Command::Up => self.scroll = self.scroll.saturating_sub(1),
+                    Command::Down => self.scroll = self.scroll.saturating_add(1),
+                    Command::PageUp => self.scroll = self.scroll.saturating_sub(height),
+                    Command::PageDown => self.scroll = self.scroll.saturating_add(height),
                     // A write never queues behind a read; press Enter again once it ends.
-                    Key::Char('u') => {
+                    Command::IncludeUntracked => {
                         if let Some(Confirm::Stash(review)) = &mut self.confirm {
                             review.include_untracked = !review.include_untracked;
                         }
                     }
-                    Key::Enter if !self.busy => {
+                    Command::AllowDelete => {
+                        if let Some(Confirm::Discard(review)) = &mut self.confirm {
+                            review.delete_confirmed = !review.delete_confirmed;
+                        }
+                    }
+                    Command::RestoreIndex => {
+                        if let Some(Confirm::StoredStash(review)) = &mut self.confirm {
+                            if review.verb != StashVerb::Drop {
+                                review.restore_index = !review.restore_index;
+                            }
+                        }
+                    }
+                    Command::Accept if WRITES && !self.busy => {
+                        if matches!(&self.confirm, Some(Confirm::Discard(r)) if r.untracked && !r.delete_confirmed)
+                        {
+                            self.say(
+                                Tone::Info,
+                                format!(
+                                    "Press {} to explicitly allow deleting this untracked file.",
+                                    self.keymap.label("allow_delete")
+                                ),
+                            );
+                            return;
+                        }
                         self.view = self.back;
                         match self.confirm.take() {
                             Some(Confirm::Stage(review)) => self.send(Job::Stage(review)),
+                            Some(Confirm::StageAll(reviews)) => self.send(Job::StageAll(reviews)),
+                            Some(Confirm::Hunk(review)) => self.send(Job::Hunk(review)),
+                            Some(Confirm::Discard(review)) => self.send(Job::Discard(review)),
                             Some(Confirm::Remote(review)) => self.send(Job::Remote(review)),
                             Some(Confirm::Stash(review)) => self.send(Job::Stash(review)),
                             Some(Confirm::Pop(entry)) => self.send(Job::Pop(entry.oid)),
+                            Some(Confirm::Operation(review)) => self.send(Job::Operation(review)),
+                            Some(Confirm::Delete(review)) => self.send(Job::Delete(review)),
+                            Some(Confirm::StoredStash(review)) => {
+                                self.send(Job::StoredStash(review))
+                            }
                             None => {}
                         }
                     }
@@ -1543,7 +2354,15 @@ impl App {
         }
         let worktree = self.state.as_ref().is_some_and(|s| !s.session.bare);
         match key {
-            Key::Char('o') => {
+            Command::Branches if self.state.is_some() => {
+                self.request(Job::Branches(true));
+                return;
+            }
+            Command::Stashes if worktree => {
+                self.request(Job::Stashes(None, true));
+                return;
+            }
+            Command::Repositories => {
                 if self.busy {
                     self.say(
                         Tone::Info,
@@ -1557,26 +2376,27 @@ impl App {
                 }
                 return;
             }
-            Key::Char('h') => {
+            Command::History => {
                 self.view = View::History;
                 self.next = None;
                 self.follow();
                 return;
             }
-            Key::Char('r') => {
+            Command::Refresh => {
+                self.cancel_search();
                 self.view = View::History;
                 self.request(Job::History(None));
                 return;
             }
-            Key::Char('w') if worktree => {
+            Command::Working if worktree => {
                 self.request(Job::Working);
                 return;
             }
-            Key::Char('m') => {
+            Command::Remote => {
                 self.request(Job::Sync);
                 return;
             }
-            Key::Char(',') => {
+            Command::Settings => {
                 if self.busy {
                     return;
                 }
@@ -1585,18 +2405,18 @@ impl App {
                 self.next = None;
                 return;
             }
-            Key::Char('c') if WRITES && !self.locked && worktree => {
+            Command::Commit if WRITES && !self.locked && worktree => {
                 self.request(Job::CommitReview(
                     self.selected_profile().map(Profile::identity),
                 ));
                 return;
             }
-            Key::Char('z') => return self.action(Action::Stash),
-            Key::Char('Z') => return self.action(Action::Pop),
+            Command::Stash => return self.action(Action::Stash),
+            Command::Pop => return self.action(Action::Pop),
             // The sync view applies these to its selected remote instead.
-            Key::Char('f') if self.view != View::Remote => return self.action(Action::Fetch),
-            Key::Char('l') if self.view != View::Remote => return self.action(Action::Pull),
-            Key::Char('p') if self.view != View::Remote => return self.action(Action::Push),
+            Command::Fetch if self.view != View::Remote => return self.action(Action::Fetch),
+            Command::Pull if self.view != View::Remote => return self.action(Action::Pull),
+            Command::Push if self.view != View::Remote => return self.action(Action::Push),
             _ => {}
         }
         // History rows are two lines tall.
@@ -1606,12 +2426,12 @@ impl App {
             height
         } as isize;
         let move_by = match key {
-            Key::Up | Key::Char('k') => -1,
-            Key::Down | Key::Char('j') => 1,
-            Key::PageUp => -page,
-            Key::PageDown => page,
-            Key::Home | Key::Char('g') => isize::MIN / 2,
-            Key::End | Key::Char('G') => isize::MAX / 2,
+            Command::Up => -1,
+            Command::Down => 1,
+            Command::PageUp => -page,
+            Command::PageDown => page,
+            Command::Home => isize::MIN / 2,
+            Command::End => isize::MAX / 2,
             _ => 0,
         };
         fn shift(index: &mut usize, by: isize, len: usize) {
@@ -1619,10 +2439,34 @@ impl App {
         }
         match self.view {
             View::History => {
+                if key == Command::Search {
+                    self.view = View::Search;
+                    return;
+                }
+                if matches!(key, Command::NextMatch | Command::PreviousMatch)
+                    && !self.matches.is_empty()
+                {
+                    self.match_index = if key == Command::NextMatch {
+                        (self.match_index + 1) % self.matches.len()
+                    } else {
+                        (self.match_index + self.matches.len() - 1) % self.matches.len()
+                    };
+                    self.search_target = Some(self.matches[self.match_index].clone());
+                }
+                if key == Command::CreateHere && WRITES && !self.locked && worktree {
+                    if let Some(commit) = self.commits.get(self.history) {
+                        self.branch_name(commit.id.clone(), false);
+                    }
+                    return;
+                }
                 shift(&mut self.history, move_by, self.commits.len());
-                if key == Key::Enter {
+                if key == Command::Accept {
                     if let Some(commit) = self.commits.get(self.history) {
                         let id = commit.id.clone();
+                        if self.stashes.iter().any(|s| s.oid == id) {
+                            self.request(Job::Stashes(Some(id), true));
+                            return;
+                        }
                         if self.detail.as_ref().map(|(d, _)| &d.summary.id) == Some(&id) {
                             self.file = 0;
                             self.scroll = 0;
@@ -1634,27 +2478,96 @@ impl App {
                 }
             }
             View::Files => {
+                if key == Command::StashFiles {
+                    if let Some((entry, untracked)) = &self.stash_detail {
+                        self.request(Job::InspectStash(entry.clone(), !untracked));
+                        return;
+                    }
+                }
                 let len = self.detail.as_ref().map_or(0, |(_, files)| files.len());
                 shift(&mut self.file, move_by, len);
-                if key == Key::Enter {
+                if key == Command::MessageUp {
+                    self.scroll = self.scroll.saturating_sub(1);
+                } else if key == Command::MessageDown {
+                    self.scroll = self.scroll.saturating_add(1);
+                } else if key == Command::Accept {
                     self.open_diff(self.file_target());
                 }
             }
+            View::Branches => {
+                shift(&mut self.branch, move_by, self.branches.len());
+                if WRITES && !self.locked {
+                    if let Some(branch) = self.branches.get(self.branch) {
+                        let reference = branch.reference.full_name.clone();
+                        match key {
+                            Command::Accept => {
+                                self.back = View::Branches;
+                                self.request(Job::OperationReview(GitAction::SwitchBranch {
+                                    branch: reference,
+                                    carry_changes: false,
+                                }));
+                            }
+                            Command::New => self.branch_name(reference, false),
+                            Command::Edit => self.branch_name(reference, true),
+                            Command::Delete => {
+                                self.back = View::Branches;
+                                self.request(Job::DeleteReview(reference));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            View::Stashes => {
+                shift(&mut self.stash, move_by, self.stashes.len());
+                if let Some(entry) = self.stashes.get(self.stash).cloned() {
+                    if key == Command::Accept {
+                        self.request(Job::InspectStash(entry, false));
+                    } else if WRITES && !self.locked {
+                        let verb = match key {
+                            Command::ApplyStash => Some(StashVerb::Apply),
+                            Command::PopStash => Some(StashVerb::Pop),
+                            Command::Delete => Some(StashVerb::Drop),
+                            _ => None,
+                        };
+                        if let Some(verb) = verb {
+                            self.back = View::Stashes;
+                            self.request(Job::StoredStashReview(entry, verb));
+                        }
+                    }
+                }
+            }
             View::Working => {
-                if key == Key::Tab {
+                if key == Command::Next {
                     self.staged = !self.staged;
                     self.working = 0;
                 }
                 let len = self.working_rows().count();
                 shift(&mut self.working, move_by, len);
-                if key == Key::Enter {
+                if key == Command::Accept {
                     self.open_diff(self.working_target());
-                } else if key == Key::Char('s') && WRITES && !self.locked {
+                } else if key == Command::Stage && WRITES && !self.locked {
                     let entry = self.working_rows().nth(self.working);
                     if let Some(entry) = entry.filter(|e| !e.conflicted && !e.path.ends_with('/')) {
                         let path = entry.path.clone();
                         self.back = View::Working;
                         self.request(Job::StageReview(path, self.staged));
+                    }
+                } else if key == Command::StageAll && WRITES && !self.locked {
+                    let paths: Vec<_> = self.working_rows().map(|e| e.path.clone()).collect();
+                    if !paths.is_empty() {
+                        self.back = View::Working;
+                        self.request(Job::StageAllReview(paths, self.staged));
+                    }
+                } else if key == Command::Discard && WRITES && !self.locked && !self.staged {
+                    let path = self
+                        .working_rows()
+                        .nth(self.working)
+                        .filter(|e| !e.conflicted && !e.path.ends_with('/'))
+                        .map(|e| e.path.clone());
+                    if let Some(path) = path {
+                        self.back = View::Working;
+                        self.request(Job::DiscardReview(path));
                     }
                 }
             }
@@ -1662,15 +2575,60 @@ impl App {
                 let len = self
                     .diff
                     .as_ref()
-                    .map_or(0, |diff| diff.hunks.iter().map(|h| h.lines.len() + 1).sum());
+                    .map_or(0, |diff| hunk_row(diff, diff.hunks.len()).saturating_sub(1));
                 shift(&mut self.scroll, move_by, len);
-                if key == Key::Tab {
+                if self.working_diff() {
+                    if let Some(diff) = &self.diff {
+                        if let Some(anchor) = self.line_anchor {
+                            if let Some((index, _)) = diff_position(diff, anchor) {
+                                let start = hunk_row(diff, index) + 1;
+                                self.scroll = self.scroll.clamp(
+                                    start,
+                                    start + diff.hunks[index].lines.len().saturating_sub(1),
+                                );
+                            }
+                        }
+                        if matches!(key, Command::NextHunk | Command::PreviousHunk) {
+                            let next = if key == Command::NextHunk {
+                                (0..diff.hunks.len()).find(|&i| hunk_row(diff, i) > self.scroll)
+                            } else {
+                                (0..diff.hunks.len())
+                                    .rev()
+                                    .find(|&i| hunk_row(diff, i) < self.scroll)
+                            };
+                            if let Some(index) = next {
+                                self.scroll = hunk_row(diff, index);
+                                self.line_anchor = None;
+                            }
+                        }
+                        if key == Command::SelectLines {
+                            if self.line_anchor.is_some() {
+                                self.line_anchor = None;
+                            } else if let Some((index, line)) = diff_position(diff, self.scroll) {
+                                if line.is_none() {
+                                    if let Some(i) = diff.hunks[index]
+                                        .lines
+                                        .iter()
+                                        .position(|l| matches!(l.kind.as_str(), "add" | "remove"))
+                                    {
+                                        self.scroll = hunk_row(diff, index) + 1 + i;
+                                    }
+                                }
+                                self.line_anchor = Some(self.scroll);
+                            }
+                        }
+                    }
+                    if WRITES && !self.locked && matches!(key, Command::Stage | Command::Discard) {
+                        self.review_hunk(key == Command::Discard);
+                    }
+                }
+                if key == Command::Next {
                     self.view = self.back;
                 }
             }
             View::Settings => {
                 shift(&mut self.settings, move_by, theme::themes().len());
-                if matches!(key, Key::Tab | Key::BackTab) {
+                if matches!(key, Command::Next | Command::Previous) {
                     self.profile_selection = self
                         .selected_profile()
                         .and_then(|selected| {
@@ -1681,7 +2639,7 @@ impl App {
                         })
                         .map_or(0, |i| i + 1);
                     self.view = View::Profiles;
-                } else if key == Key::Enter {
+                } else if key == Command::Accept {
                     self.theme = self.settings;
                     let name = theme::themes()[self.theme].name;
                     self.config.set_theme(self.theme);
@@ -1691,19 +2649,19 @@ impl App {
             View::Remote => {
                 if let Some(sync) = &self.sync {
                     shift(&mut self.remote, move_by, sync.remotes.len());
-                    if WRITES && key == Key::Char('v') {
+                    if WRITES && key == Command::Verify {
                         if let Some(review) = self.uncertain.clone() {
                             self.request(Job::Verify(review));
                         }
                     } else if WRITES && !self.locked {
                         if let Some(remote) = sync.remotes.get(self.remote).cloned() {
                             let kind = match key {
-                                Key::Char('f') => Some(TerminalSync::Fetch),
-                                Key::Char('l') => Some(TerminalSync::Pull),
-                                Key::Char('p') if self.uncertain.is_none() => {
+                                Command::Fetch => Some(TerminalSync::Fetch),
+                                Command::Pull => Some(TerminalSync::Pull),
+                                Command::Push if self.uncertain.is_none() => {
                                     Some(TerminalSync::Push)
                                 }
-                                Key::Char('b') if self.uncertain.is_none() => {
+                                Command::Publish if self.uncertain.is_none() => {
                                     self.publish = sync.branch.clone().unwrap_or_default();
                                     self.view = View::Publish;
                                     None
@@ -1816,8 +2774,14 @@ pub fn run(args: &[String]) -> Result<()> {
     app.config_path = settings::config_path();
     if let Some(file) = &app.config_path {
         match Settings::load(file) {
-            Ok(config) => app.config = config,
-            Err(_) => app.config_unreadable = true,
+            Ok(config) => {
+                app.keymap = Keymap::new(&config.keys).map_err(|e| invalid(&e))?;
+                app.config = config;
+            }
+            Err(error) => {
+                app.config_unreadable = true;
+                app.config_error = Some(error.to_string());
+            }
         }
     }
     app.theme = app.config.theme();
@@ -1919,12 +2883,12 @@ fn event_loop(
                     MouseEventKind::Down(MouseButton::Left) => app.click(mouse.column, mouse.row),
                     MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
                         let key = if mouse.kind == MouseEventKind::ScrollDown {
-                            Key::Down
+                            Command::Down
                         } else {
-                            Key::Up
+                            Command::Up
                         };
                         for _ in 0..3 {
-                            app.key(key, false, height);
+                            app.command(key, height);
                         }
                     }
                     _ => continue,
@@ -1939,50 +2903,58 @@ fn event_loop(
             }
         }
         if let Event::Key(key) = event {
-            if key.kind == KeyEventKind::Release
-                || (key.kind == KeyEventKind::Repeat
-                    && matches!(key.code, Key::Enter | Key::F(2) | Key::Delete))
-            {
+            if key.kind == KeyEventKind::Release {
                 continue;
             }
             redraw = true;
             let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            let command = app.keymap.lookup(
+                if prompt.is_some() {
+                    keys::PROMPT
+                } else {
+                    1 << app.view as u32
+                },
+                key.code,
+                ctrl,
+            );
+            if key.kind == KeyEventKind::Repeat
+                && matches!(
+                    command,
+                    Some(Command::Accept | Command::SaveCommit | Command::Delete)
+                )
+            {
+                continue;
+            }
             if let (Some(current), Some(registry)) = (&mut prompt, registry) {
-                match key.code {
-                    Key::Enter | Key::Esc => {
-                        let answer =
-                            (key.code == Key::Enter).then(|| std::mem::take(&mut current.answer));
+                match command {
+                    Some(Command::Accept | Command::Cancel) => {
+                        let answer = (command == Some(Command::Accept))
+                            .then(|| std::mem::take(&mut current.answer));
                         let _ = registry.reply(current.id, answer);
                         prompt = None;
                     }
-                    Key::Char('c') if ctrl => {
+                    Some(Command::Quit) => {
                         app.quit = true;
                         registry.cancel_all();
                         prompt = None;
                     }
-                    Key::Char(c)
-                        if !ctrl
-                            && !c.is_control()
-                            && current.answer.len() + c.len_utf8() <= 4096 =>
-                    {
-                        current.answer.push(c)
-                    }
-                    Key::Backspace => {
+                    Some(Command::Erase) => {
                         current.answer.pop();
                     }
-                    _ => {}
+                    _ => {
+                        if let Key::Char(c) = key.code {
+                            if !ctrl
+                                && !c.is_control()
+                                && current.answer.len() + c.len_utf8() <= 4096
+                            {
+                                current.answer.push(c);
+                            }
+                        }
+                    }
                 }
             } else if !app.quit {
-                if app.view == View::Files && matches!(key.code, Key::Char('[' | ']')) {
-                    app.scroll = if key.code == Key::Char('[') {
-                        app.scroll.saturating_sub(1)
-                    } else {
-                        app.scroll.saturating_add(1)
-                    };
-                } else {
-                    let height = usize::from(terminal.size()?.height.saturating_sub(4)).max(1);
-                    app.key(key.code, ctrl, height);
-                }
+                let height = usize::from(terminal.size()?.height.saturating_sub(4)).max(1);
+                app.key(key.code, ctrl, height);
                 if app.quit {
                     if let Some(registry) = registry {
                         registry.cancel_all();
@@ -1998,6 +2970,68 @@ fn event_loop(
 mod tests {
     use super::*;
     use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    #[ignore = "set GITTY_TUI_BENCH_REPO; run scripts/bench-tui.py"]
+    fn terminal_benchmark() {
+        let path = std::env::var("GITTY_TUI_BENCH_REPO").expect("set GITTY_TUI_BENCH_REPO");
+        let (jobs, incoming) = mpsc::sync_channel(1);
+        let (outgoing, replies) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            worker(incoming, outgoing, None, Arc::new(AtomicBool::new(false))).unwrap()
+        });
+        let mut app = App::new(jobs);
+        let started = std::time::Instant::now();
+        app.send(Job::Open(path.clone()));
+        app.reply(replies.recv_timeout(Duration::from_secs(120)).unwrap());
+        assert!(app.state.is_some(), "{}", app.notice);
+        let open_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let paging = std::time::Instant::now();
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        let mut pages = 1;
+        let mut layout_ms = 0.0;
+        let mut checkpoints = Vec::new();
+        while app.cursor.is_some() || app.busy {
+            if !app.busy {
+                app.history = app.commits.len().saturating_sub(1);
+                app.follow();
+            }
+            let reply = replies
+                .recv_timeout(Duration::from_secs(120))
+                .unwrap()
+                .unwrap();
+            let layout = std::time::Instant::now();
+            app.reply(Ok(reply));
+            app.history = app.commits.len().saturating_sub(1);
+            terminal.draw(|frame| render(frame, &app, None)).unwrap();
+            layout_ms += layout.elapsed().as_secs_f64() * 1000.0;
+            pages += 1;
+            if app.commits.len() % 50_000 < PAGE {
+                checkpoints.push(serde_json::json!({
+                    "commits": app.commits.len(), "elapsed_ms": paging.elapsed().as_secs_f64() * 1000.0,
+                }));
+            }
+        }
+        let paging_ms = paging.elapsed().as_secs_f64() * 1000.0;
+        let rss = std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|s| {
+                s.lines()
+                    .find_map(|l| l.strip_prefix("VmHWM:"))
+                    .and_then(|v| v.split_whitespace().next()?.parse::<u64>().ok())
+            });
+        let result = serde_json::json!({
+            "repo": path, "commits": app.commits.len(), "pages": pages,
+            "open_ms": open_ms, "paging_ms": paging_ms, "layout_render_ms": layout_ms,
+            "peak_rss_kib": rss, "checkpoints": checkpoints,
+        });
+        println!("{result}");
+        if let Ok(out) = std::env::var("GITTY_TUI_BENCH_OUT") {
+            std::fs::write(out, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
+        }
+        drop(app);
+        worker.join().unwrap();
+    }
 
     fn commit(id: &str, parents: &[&str]) -> CommitSummary {
         CommitSummary {
@@ -2285,5 +3319,556 @@ mod tests {
         assert_eq!(git(&["rev-parse", "HEAD"]), merge);
         assert_eq!(std::fs::read(dir.path().join(".git/index")).unwrap(), index);
         assert_eq!(std::fs::read(dir.path().join("file")).unwrap(), b"base\n");
+    }
+
+    #[cfg(unix)]
+    struct WriteFixture {
+        root: tempfile::TempDir,
+        app: App,
+        replies: mpsc::Receiver<Result<Reply>>,
+        worker: std::thread::JoinHandle<()>,
+    }
+
+    #[cfg(unix)]
+    impl WriteFixture {
+        fn new() -> Self {
+            let root = tempfile::tempdir().unwrap();
+            let (jobs, incoming) = mpsc::sync_channel(1);
+            let (outgoing, replies) = mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                worker(incoming, outgoing, None, Arc::new(AtomicBool::new(false))).unwrap()
+            });
+            let mut f = Self {
+                root,
+                app: App::new(jobs),
+                replies,
+                worker,
+            };
+            f.git(&["init", "-q", "-b", "main"]);
+            f.git(&["config", "user.name", "TUI Test"]);
+            f.git(&["config", "user.email", "tui@example.invalid"]);
+            f.git(&["config", "commit.gpgsign", "false"]);
+            f.git(&["config", "core.hooksPath", ".git/hooks"]);
+            f.git(&["config", "core.autocrlf", "false"]);
+            f.write("file", &Self::base());
+            f.git(&["add", "file"]);
+            f.git(&["commit", "-qm", "base"]);
+            f.app
+                .send(Job::Open(f.root.path().to_string_lossy().into_owned()));
+            f.settle();
+            f
+        }
+
+        fn base() -> String {
+            (0..60).map(|i| format!("line {i:02}\n")).collect()
+        }
+
+        fn git(&self, args: &[&str]) -> String {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(self.root.path())
+                .args(args)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap()
+        }
+
+        fn write(&self, path: &str, text: &str) {
+            std::fs::write(self.root.path().join(path), text).unwrap();
+        }
+
+        fn settle(&mut self) {
+            while self.app.busy {
+                self.app
+                    .reply(self.replies.recv_timeout(Duration::from_secs(10)).unwrap());
+            }
+        }
+
+        fn key(&mut self, key: Key) {
+            self.app.key(key, false, 18);
+            self.settle();
+        }
+
+        fn screen(&mut self, expected: &str) {
+            for width in [80, 120] {
+                let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+                self.app.wide = width >= WIDE;
+                terminal
+                    .draw(|frame| render(frame, &self.app, None))
+                    .unwrap();
+                let text: String = terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .map(|c| c.symbol())
+                    .collect();
+                assert!(text.contains(expected), "{text}");
+            }
+            self.app.wide = false;
+        }
+
+        fn finish(self) {
+            drop(self.app);
+            self.worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn terminal_hunks_and_lines_use_reviewed_indices_and_refuse_stale_content() {
+        let mut f = WriteFixture::new();
+        let base = WriteFixture::base();
+        let changed = base
+            .replace("line 02\n", "first edit\n")
+            .replace("line 45\n", "second edit\n");
+        f.write("file", &changed);
+        f.key(Key::Char('w'));
+        f.key(Key::Enter);
+        f.screen("hunk 1/2");
+        f.key(Key::Char('n'));
+        assert_eq!(
+            diff_position(f.app.diff.as_ref().unwrap(), f.app.scroll)
+                .unwrap()
+                .0,
+            1
+        );
+        f.key(Key::Char('N'));
+        f.key(Key::Char('v'));
+        f.key(Key::Down);
+        f.key(Key::Char('s'));
+        assert!(
+            matches!(&f.app.confirm, Some(Confirm::Hunk(r)) if r.index == 0 && r.lines.as_ref().unwrap().len() == 2)
+        );
+        f.screen("Stage 2 selected lines in hunk 1");
+        f.write("file", &(changed.clone() + "external\n"));
+        f.key(Key::Enter);
+        assert!(
+            f.app.notice.contains("diff or index changed"),
+            "{}",
+            f.app.notice
+        );
+        assert_eq!(f.git(&["diff", "--cached"]), "");
+        assert!(f.app.view == View::Working);
+        f.write("file", &changed);
+        f.key(Key::Enter);
+        f.key(Key::Char('v'));
+        f.key(Key::Down);
+        f.key(Key::Char('s'));
+        f.key(Key::Enter);
+        assert_eq!(
+            f.git(&["show", ":file"]),
+            base.replace("line 02\n", "first edit\n")
+        );
+        assert_eq!(
+            std::fs::read_to_string(f.root.path().join("file")).unwrap(),
+            changed
+        );
+        f.key(Key::Tab);
+        f.key(Key::Enter);
+        f.key(Key::Char('v'));
+        f.key(Key::Down);
+        f.key(Key::Char('s'));
+        f.screen("Unstage 2 selected lines");
+        f.key(Key::Enter);
+        assert_eq!(f.git(&["show", ":file"]), base);
+        f.key(Key::Tab);
+        f.key(Key::Enter);
+        f.key(Key::Char('n'));
+        f.key(Key::Char('s'));
+        f.key(Key::Enter);
+        assert_eq!(
+            f.git(&["show", ":file"]),
+            base.replace("line 45\n", "second edit\n")
+        );
+        f.finish();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn terminal_stage_all_validates_every_file_before_writing() {
+        let mut f = WriteFixture::new();
+        f.write("file", "changed\n");
+        f.write("new", "new\n");
+        f.key(Key::Char('w'));
+        f.key(Key::Char('S'));
+        f.screen("Stage all · 2 reviewed files");
+        assert_eq!(f.git(&["diff", "--cached"]), "");
+        f.write("new", "changed after review\n");
+        f.key(Key::Enter);
+        assert!(f.app.notice.contains("Repository changed"));
+        assert_eq!(f.git(&["diff", "--cached"]), "");
+        f.key(Key::Char('S'));
+        f.key(Key::Enter);
+        assert_eq!(f.git(&["diff", "--cached", "--name-only"]), "file\nnew\n");
+        f.key(Key::Tab);
+        f.key(Key::Char('S'));
+        f.screen("Unstage all · 2 reviewed files");
+        f.key(Key::Enter);
+        assert_eq!(f.git(&["diff", "--cached"]), "");
+        assert_eq!(
+            std::fs::read_to_string(f.root.path().join("new")).unwrap(),
+            "changed after review\n"
+        );
+        f.finish();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn terminal_discard_reviews_exact_loss_and_requires_untracked_confirmation() {
+        let mut f = WriteFixture::new();
+        let staged = WriteFixture::base().replace("line 25\n", "staged\n");
+        f.write("file", &staged);
+        f.git(&["add", "file"]);
+        let changed = staged
+            .replace("line 02\n", "first\n")
+            .replace("line 45\n", "second\n");
+        f.write("file", &changed);
+        f.key(Key::Char('w'));
+        f.key(Key::Enter);
+        f.key(Key::Char('n'));
+        f.key(Key::Char('d'));
+        f.screen("Discard hunk 2");
+        assert_eq!(
+            std::fs::read_to_string(f.root.path().join("file")).unwrap(),
+            changed
+        );
+        f.key(Key::Enter);
+        assert_eq!(
+            std::fs::read_to_string(f.root.path().join("file")).unwrap(),
+            staged.replace("line 02\n", "first\n")
+        );
+        assert_eq!(f.git(&["show", ":file"]), staged);
+        f.key(Key::Char('d'));
+        f.screen("Discard file");
+        f.write("file", "external edit\n");
+        f.key(Key::Enter);
+        assert!(f.app.notice.contains("working tree changed"));
+        assert_eq!(
+            std::fs::read_to_string(f.root.path().join("file")).unwrap(),
+            "external edit\n"
+        );
+        f.key(Key::Char('d'));
+        f.key(Key::Enter);
+        assert_eq!(
+            std::fs::read_to_string(f.root.path().join("file")).unwrap(),
+            staged
+        );
+        f.write("untracked", "delete only after D\n");
+        f.key(Key::Char('w'));
+        f.key(Key::Char('d'));
+        f.screen("D allow deletion");
+        f.key(Key::Enter);
+        assert!(f.app.view == View::Confirm);
+        assert!(f.root.path().join("untracked").exists());
+        f.key(Key::Char('D'));
+        f.key(Key::Enter);
+        assert!(!f.root.path().join("untracked").exists());
+        f.finish();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn terminal_amend_keeps_draft_and_rechecks_head_index_and_eligibility() {
+        let mut f = WriteFixture::new();
+        let before = f.git(&["rev-parse", "HEAD"]);
+        f.app.message = "amended draft".into();
+        f.key(Key::Char('c'));
+        assert!(f.app.review.as_ref().unwrap().can_amend());
+        f.key(Key::F(3));
+        f.screen("Amend ");
+        f.key(Key::F(3));
+        assert_eq!(f.app.message, "amended draft");
+        f.key(Key::F(3));
+        f.write("file", "external index edit\n");
+        f.git(&["add", "file"]);
+        f.key(Key::F(2));
+        assert!(f.app.notice.contains("Repository changed"));
+        assert_eq!(f.app.message, "amended draft");
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), before);
+        f.key(Key::Char('c'));
+        f.key(Key::F(3));
+        f.git(&["update-ref", "refs/remotes/origin/main", before.trim()]);
+        f.key(Key::F(2));
+        assert!(f.app.notice.contains("Repository changed"));
+        assert_eq!(f.app.message, "amended draft");
+        f.key(Key::Char('c'));
+        assert!(!f.app.review.as_ref().unwrap().can_amend());
+        f.key(Key::F(3));
+        assert!(!f.app.amend);
+        f.key(Key::Esc);
+        f.git(&["update-ref", "-d", "refs/remotes/origin/main"]);
+        f.key(Key::Char('c'));
+        f.key(Key::F(3));
+        let old_tree = f.git(&["rev-parse", "HEAD^{tree}"]);
+        let moved = f.git(&["commit-tree", old_tree.trim(), "-m", "external HEAD"]);
+        f.git(&["update-ref", "refs/heads/main", moved.trim()]);
+        f.key(Key::F(2));
+        assert!(f.app.notice.contains("Repository changed"));
+        assert_eq!(f.app.message, "amended draft");
+        assert_eq!(f.git(&["rev-parse", "HEAD"]), moved);
+        f.key(Key::Char('c'));
+        f.key(Key::F(3));
+        f.key(Key::F(2));
+        assert!(f.app.notice.starts_with("Amended"), "{}", f.app.notice);
+        assert!(f.app.message.is_empty());
+        assert_eq!(f.git(&["rev-list", "--count", "HEAD"]), "1\n");
+        assert_eq!(f.git(&["log", "-1", "--format=%s"]), "amended draft\n");
+        assert_eq!(f.git(&["show", "HEAD:file"]), "external index edit\n");
+        // A completed merge has no amend toggle either.
+        let tree = f.git(&["rev-parse", "HEAD^{tree}"]);
+        let side = f.git(&["commit-tree", tree.trim(), "-m", "side"]);
+        let head = f.git(&["rev-parse", "HEAD"]);
+        let merge = f.git(&[
+            "commit-tree",
+            tree.trim(),
+            "-p",
+            head.trim(),
+            "-p",
+            side.trim(),
+            "-m",
+            "merge",
+        ]);
+        f.git(&["update-ref", "refs/heads/main", merge.trim()]);
+        f.key(Key::Char('c'));
+        assert!(!f.app.review.as_ref().unwrap().can_amend());
+        f.finish();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn terminal_branch_reviews_create_checkout_rename_delete_and_refuse_stale_state() {
+        let mut f = WriteFixture::new();
+        f.key(Key::Char('C'));
+        f.app.paste("topic");
+        f.key(Key::Enter);
+        f.screen("Create branch");
+        f.key(Key::Enter);
+        assert_eq!(f.git(&["symbolic-ref", "HEAD"]), "refs/heads/main\n");
+        assert_eq!(
+            f.git(&["rev-parse", "topic"]),
+            f.git(&["rev-parse", "HEAD"])
+        );
+        f.key(Key::Char('B'));
+        f.screen("ahead/behind HEAD");
+        f.key(Key::Down);
+        f.key(Key::Enter);
+        f.screen("Checkout branch");
+        f.write("file", "stale checkout\n");
+        f.key(Key::Enter);
+        assert!(f.app.notice.contains("Repository changed"));
+        assert_eq!(f.git(&["symbolic-ref", "HEAD"]), "refs/heads/main\n");
+        f.git(&["restore", "--worktree", "file"]);
+        f.key(Key::Enter);
+        f.key(Key::Enter);
+        assert_eq!(f.git(&["symbolic-ref", "HEAD"]), "refs/heads/topic\n");
+        f.key(Key::Char('e'));
+        f.app.paste("renamed");
+        f.key(Key::Enter);
+        f.screen("Rename branch");
+        f.write("file", "stale rename\n");
+        f.key(Key::Enter);
+        assert!(f.app.notice.contains("Repository changed"));
+        assert_eq!(f.git(&["symbolic-ref", "HEAD"]), "refs/heads/topic\n");
+        f.git(&["restore", "--worktree", "file"]);
+        f.key(Key::Char('e'));
+        f.app.paste("renamed");
+        f.key(Key::Enter);
+        f.key(Key::Enter);
+        assert_eq!(f.git(&["symbolic-ref", "HEAD"]), "refs/heads/renamed\n");
+        f.key(Key::Home);
+        f.key(Key::Enter);
+        f.key(Key::Enter);
+        assert_eq!(f.git(&["symbolic-ref", "HEAD"]), "refs/heads/main\n");
+        f.key(Key::Down);
+        f.key(Key::Char('d'));
+        f.screen("Delete branch");
+        let head = f.git(&["rev-parse", "HEAD"]);
+        let tree = f.git(&["rev-parse", "HEAD^{tree}"]);
+        let moved = f.git(&["commit-tree", tree.trim(), "-m", "external"]);
+        f.git(&["update-ref", "refs/heads/renamed", moved.trim()]);
+        f.key(Key::Enter);
+        assert!(f.app.notice.contains("changed"), "{}", f.app.notice);
+        assert_eq!(f.git(&["rev-parse", "renamed"]), moved);
+        f.git(&["update-ref", "refs/heads/renamed", head.trim()]);
+        f.key(Key::Char('d'));
+        f.key(Key::Enter);
+        assert_eq!(f.git(&["branch", "--list", "renamed"]), "");
+        f.finish();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn terminal_stashes_inspect_untracked_apply_index_drop_and_pop() {
+        let mut f = WriteFixture::new();
+        f.write("file", "stash staged\n");
+        f.git(&["add", "file"]);
+        f.write("untracked", "stash untracked\n");
+        f.git(&["stash", "push", "-u", "-m", "review stash"]);
+        let oid = f.git(&["rev-parse", "refs/stash"]);
+        f.key(Key::Char('r'));
+        f.app.history = f
+            .app
+            .commits
+            .iter()
+            .position(|c| c.id == oid.trim())
+            .unwrap();
+        f.key(Key::Enter);
+        assert!(f.app.view == View::Stashes);
+        f.screen("review stash");
+        f.key(Key::Enter);
+        f.screen("Stash tracked files");
+        f.key(Key::Char('u'));
+        f.screen("Stash untracked files");
+        f.key(Key::Enter);
+        f.screen("stash untracked");
+        f.key(Key::Esc);
+        f.key(Key::Esc);
+        f.key(Key::Char('a'));
+        f.screen("Stash apply");
+        f.key(Key::Char('i'));
+        f.screen("Restore index: yes");
+        f.key(Key::Enter);
+        assert_eq!(f.git(&["show", ":file"]), "stash staged\n");
+        assert_eq!(
+            std::fs::read_to_string(f.root.path().join("untracked")).unwrap(),
+            "stash untracked\n"
+        );
+        assert_eq!(f.git(&["rev-parse", "refs/stash"]), oid);
+        f.key(Key::Char('d'));
+        f.screen("Stash drop");
+        f.key(Key::Enter);
+        assert_eq!(f.git(&["stash", "list"]), "");
+        assert!(f.root.path().join("untracked").exists());
+        f.git(&["stash", "push", "-u", "-m", "pop me"]);
+        f.key(Key::Char('t'));
+        f.key(Key::Char('P'));
+        f.key(Key::Enter);
+        assert_eq!(f.git(&["stash", "list"]), "");
+        assert_eq!(
+            std::fs::read_to_string(f.root.path().join("file")).unwrap(),
+            "stash staged\n"
+        );
+        f.finish();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn terminal_search_reveals_old_matches_and_ignores_cancelled_replies() {
+        let mut f = WriteFixture::new();
+        let tree = f.git(&["rev-parse", "HEAD^{tree}"]);
+        let mut head = f.git(&["rev-parse", "HEAD"]);
+        let mut old = String::new();
+        for i in 0..PAGE + 5 {
+            head = f.git(&[
+                "commit-tree",
+                tree.trim(),
+                "-p",
+                head.trim(),
+                "-m",
+                if i == 0 || i == PAGE + 4 {
+                    "needle"
+                } else {
+                    "filler"
+                },
+            ]);
+            if i == 0 {
+                old = head.trim().to_owned();
+            }
+        }
+        f.git(&["update-ref", "refs/heads/main", head.trim()]);
+        f.key(Key::Char('r'));
+        assert_eq!(f.app.commits.len(), PAGE);
+        f.key(Key::Char('/'));
+        f.app.paste("needle");
+        f.screen("Search history");
+        f.key(Key::Enter);
+        assert_eq!(f.app.matches.len(), 2);
+        assert_eq!(f.app.commits[f.app.history].id, head.trim());
+        f.key(Key::Char('n'));
+        assert_eq!(f.app.commits[f.app.history].id, old);
+        assert!(f.app.commits.len() > PAGE);
+        f.key(Key::Char('N'));
+        assert_eq!(f.app.commits[f.app.history].id, head.trim());
+        f.key(Key::Char('/'));
+        f.app.search_text = "base".into();
+        f.app.key(Key::Enter, false, 18);
+        let old_id = f.app.search_id;
+        f.app.key(Key::Esc, false, 18);
+        f.settle();
+        assert!(f.app.search_cancel.is_none());
+        assert!(f.app.matches.is_empty());
+        assert_ne!(f.app.search_id, old_id);
+        assert_eq!(f.app.notice, "Search cancelled.");
+        f.finish();
+    }
+
+    #[test]
+    fn terminal_branch_refresh_preserves_typing_and_queues_the_review() {
+        let (jobs, rx) = mpsc::sync_channel(1);
+        let mut app = App::new(jobs);
+        app.view = View::Branches;
+        app.busy = true;
+        app.branch_name("refs/heads/main".into(), true);
+        app.paste("renamed");
+        app.key(Key::Enter, false, 18);
+        assert!(rx.try_recv().is_err());
+        app.reply(Ok(Reply::Branches(vec![], false)));
+        assert!(app.view == View::BranchName);
+        assert_eq!(app.branch_editor.as_ref().unwrap().name, "renamed");
+        assert!(matches!(rx.try_recv().unwrap(),
+            Job::OperationReview(GitAction::RenameBranch { name, .. }) if name == "renamed"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn terminal_remapped_stage_and_help_still_require_review() {
+        let mut f = WriteFixture::new();
+        f.app.keymap =
+            Keymap::new(&keys::KeyConfig::Map([("stage".into(), "x".into())].into())).unwrap();
+        f.write("file", "review me\n");
+        f.key(Key::Char('w'));
+        f.key(Key::Char('?'));
+        f.screen("Keys for this view");
+        f.screen("[stage]");
+        f.key(Key::Char('x'));
+        assert!(f.app.help);
+        assert_eq!(f.git(&["diff", "--cached"]), "");
+        f.key(Key::Esc);
+        f.key(Key::Char('s'));
+        assert!(f.app.view == View::Working);
+        f.key(Key::Char('x'));
+        assert!(f.app.view == View::Confirm);
+        assert_eq!(f.git(&["diff", "--cached"]), "");
+        f.key(Key::Char('x'));
+        assert!(f.app.view == View::Confirm);
+        f.key(Key::Enter);
+        assert_eq!(f.git(&["show", ":file"]), "review me\n");
+        f.finish();
+    }
+
+    #[test]
+    fn terminal_invalid_key_settings_cannot_be_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tui.json");
+        let original = r#"{"keys":{"stage":"Enter"},"theme":"keep-me"}"#;
+        std::fs::write(&path, original).unwrap();
+        let error = Settings::load(&path).err().unwrap();
+        let (jobs, _) = mpsc::sync_channel(1);
+        let mut app = App::new(jobs);
+        app.config_path = Some(path.clone());
+        app.config_unreadable = true;
+        app.config_error = Some(error.to_string());
+        app.save_config("Changed theme.");
+        assert!(app.notice.contains("In memory only"));
+        assert!(app.config_error.unwrap().contains("Conflicting keys"));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), original);
     }
 }

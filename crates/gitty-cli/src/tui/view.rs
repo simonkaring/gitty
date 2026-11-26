@@ -1,8 +1,11 @@
 //! Rendering only: every function reads `App` and draws; none of them change state.
 use super::theme::{self, t};
-use super::{Action, App, Confirm, GraphCell, Hit, Prompt, Tone, View, WRITES};
+use super::{
+    Action, App, Confirm, GraphCell, Hit, HunkKind, Prompt, StashVerb, Tone, View, WRITES,
+};
 use gitty_core::{
     dto::{CommitDetail, DiffFile, FileDiff, StatusEntry},
+    operation_dto::GitAction,
     remote::TerminalSync,
 };
 use ratatui::{
@@ -245,6 +248,8 @@ pub(super) fn render(frame: &mut Frame, app: &App, prompt: Option<&Prompt>) {
         View::Confirm => app.back,
         View::Composer => View::History,
         View::Publish => View::Remote,
+        View::BranchName => app.back,
+        View::Search => View::History,
         view => view,
     };
     match base {
@@ -252,6 +257,8 @@ pub(super) fn render(frame: &mut Frame, app: &App, prompt: Option<&Prompt>) {
         View::Working => working(frame, body, app),
         View::Diff => full_diff(frame, body, app),
         View::Remote => sync(frame, body, app),
+        View::Branches => branches(frame, body, app),
+        View::Stashes => stashes(frame, body, app),
         View::Repositories => repositories(frame, body, app),
         View::Settings => settings(frame, body, app),
         View::Profiles | View::ProfileEdit => profiles(frame, body, app),
@@ -269,7 +276,11 @@ pub(super) fn render(frame: &mut Frame, app: &App, prompt: Option<&Prompt>) {
         View::Composer => composer(frame, app),
         View::Confirm => confirm(frame, app),
         View::Publish => publish(frame, app),
+        View::BranchName | View::Search => input(frame, app),
         _ => {}
+    }
+    if app.help {
+        help(frame, app);
     }
     if let Some(prompt) = prompt {
         credentials(frame, prompt);
@@ -347,15 +358,17 @@ fn header(frame: &mut Frame, area: Rect, app: &App) {
     }
     let mut tabs = Vec::new();
     for (i, (name, short, key)) in [
-        ("History", "h", "h"),
-        ("Changes", "w", "w"),
-        ("Sync", "m", "m"),
-        ("Settings", ",", ","),
-        ("Repos", "o", "o"),
+        ("History", "h", "history"),
+        ("Changes", "w", "working"),
+        ("Sync", "m", "remote"),
+        ("Settings", ",", "settings"),
+        ("Repos", "o", "repositories"),
     ]
     .into_iter()
     .enumerate()
     {
+        let key = clip(&app.keymap.label(key), 3);
+        let short = if key.len() == 1 { key.as_str() } else { short };
         let start: usize = right.iter().map(|s: &Span| s.content.width()).sum();
         if area.width < 70 {
             right.push(Span::styled(
@@ -407,11 +420,11 @@ fn toolbar(frame: &mut Frame, area: Rect, app: &App) {
             .map_or(String::new(), |n| format!(" {n}"))
     };
     let buttons = [
-        (Action::Fetch, "↻ Fetch".to_string(), "f"),
+        (Action::Fetch, "↻ Fetch".to_string(), "fetch"),
         (
             Action::Pull,
             format!("↓ Pull{}", count(sync.and_then(|s| s.behind))),
-            "l",
+            "pull",
         ),
         (
             Action::Push,
@@ -420,25 +433,26 @@ fn toolbar(frame: &mut Frame, area: Rect, app: &App) {
             } else {
                 "↑ Publish".to_string()
             },
-            "p",
+            "push",
         ),
-        (Action::Stash, "▾ Stash".to_string(), "z"),
+        (Action::Stash, "▾ Stash".to_string(), "stash"),
         (
             Action::Pop,
             format!("▴ Pop{}", count(Some(app.stashes.len() as u64))),
-            "Z",
+            "pop",
         ),
     ];
     // Each button is its label, the ` key ` hint and a one-column gap.
     let mut fitted = Vec::new();
     let mut total = 0;
     for (action, label, key) in buttons {
+        let key = app.keymap.label(key);
         let label = format!(" {label} ");
         let width = label.width() as u16;
-        if total + width + 3 + 2 > area.width {
+        if total + width + key.width() as u16 + 4 > area.width {
             break;
         }
-        total += width + 4;
+        total += width + key.width() as u16 + 3;
         fitted.push((action, label, key, width));
     }
     let mut x = area.x + area.width.saturating_sub(total.saturating_sub(1)) / 2;
@@ -462,7 +476,7 @@ fn toolbar(frame: &mut Frame, area: Rect, app: &App) {
             fg(if enabled { t().muted } else { t().border }),
         ));
         spans.push(pad(1));
-        x += width + 4;
+        x += width + key.width() as u16 + 3;
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -511,106 +525,39 @@ fn status_line(app: &App) -> Option<Line<'static>> {
 }
 
 fn footer(app: &App, prompt: bool, width: usize) -> Line<'static> {
-    let stage = if app.staged { "unstage" } else { "stage" };
-    let mut keys: Vec<(&str, &str)> = if prompt {
-        vec![
-            ("enter", "send"),
-            ("esc", "cancel"),
-            ("ctrl-c", "cancel & quit"),
-        ]
-    } else {
-        match app.view {
-            View::History => vec![
-                ("o", "repos"),
-                ("↑↓", "move"),
-                ("enter", "open"),
-                ("w", "changes"),
-                ("c", "commit"),
-                ("m", "sync"),
-                ("r", "refresh"),
-                ("q", "quit"),
-            ],
-            View::Files if app.wide => {
-                vec![("↑↓", "files"), ("enter", "full diff"), ("esc", "back")]
-            }
-            View::Files => vec![
-                ("↑↓", "files"),
-                ("enter", "diff"),
-                ("[ ]", "scroll message"),
-                ("esc", "back"),
-            ],
-            View::Working => vec![
-                ("↑↓", "move"),
-                ("tab", "staged ⇄ unstaged"),
-                ("enter", "diff"),
-                ("s", stage),
-                ("c", "commit"),
-                ("esc", "back"),
-            ],
-            View::Settings => vec![
-                ("tab", "profiles"),
-                ("↑↓", "preview"),
-                ("enter", "apply"),
-                ("esc", "back"),
-            ],
-            View::Repositories => vec![
-                ("enter", "open"),
-                ("↑↓", "recent"),
-                ("esc", "back"),
-                ("ctrl-c", "quit"),
-            ],
-            View::Profiles => vec![
-                ("enter", "assign"),
-                ("n", "new"),
-                ("e", "edit"),
-                ("del", "delete"),
-                ("esc", "back"),
-            ],
-            View::ProfileEdit => vec![("tab", "next field"), ("enter", "save"), ("esc", "cancel")],
-            View::Diff => vec![
-                ("↑↓ pgup pgdn", "scroll"),
-                ("←→", "pan"),
-                ("g G", "top · end"),
-                ("esc", "back"),
-            ],
-            View::Composer => vec![
-                ("F2", "commit"),
-                ("enter", "new line"),
-                ("pgup pgdn", "files"),
-                ("esc", "keep draft"),
-            ],
-            View::Remote if app.uncertain.is_some() => {
-                vec![("v", "verify push"), ("f", "fetch"), ("esc", "back")]
-            }
-            View::Remote => {
-                let upstream = app.sync.as_ref().is_some_and(|s| s.upstream.is_some());
-                let mut keys = vec![("↑↓", "remote"), ("f", "fetch")];
-                if upstream {
-                    keys.extend([("l", "pull"), ("p", "push")]);
-                } else {
-                    keys.push(("b", "publish"));
-                }
-                keys.push(("esc", "back"));
-                keys
-            }
-            View::Publish => vec![("enter", "review"), ("esc", "cancel")],
-            View::Confirm if matches!(&app.confirm, Some(Confirm::Stash(r)) if r.entries().iter().any(|e| e.1)) =>
-            {
-                vec![
-                    ("enter", "stash"),
-                    ("u", "untracked"),
-                    ("↑↓", "scroll"),
-                    ("esc", "cancel"),
-                ]
-            }
-            View::Confirm => vec![("enter", "confirm"), ("↑↓", "scroll"), ("esc", "cancel")],
-        }
-    };
+    if app.help && !prompt {
+        return hints(&[("esc", "close help")], width);
+    }
+    let shown = app.keymap.shown(app, prompt);
+    let mut keys: Vec<_> = shown
+        .iter()
+        .map(|(b, k)| (k.as_str(), b.label(app)))
+        .collect();
     if !WRITES {
-        keys.retain(|(key, _)| !matches!(*key, "c" | "s" | "l" | "p" | "b" | "v" | "f"));
         keys.push(("", "read-only"));
     }
     hints(&keys, width)
+}
+
+fn help(frame: &mut Frame, app: &App) {
+    let area = frame.area();
+    let rect = modal(frame, 100, area.height.saturating_sub(2));
+    let block = dialog("Keys for this view").title_bottom(" Esc closes · navigation keys scroll ");
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    let shown = app.keymap.shown(app, false);
+    let start = app.help_scroll.min(shown.len().saturating_sub(1));
+    let lines: Vec<_> = shown
+        .iter()
+        .skip(start)
+        .map(|(binding, keys)| {
+            Line::from(vec![
+                Span::styled(format!("{keys:<18}"), bold(t().accent)),
+                Span::raw(format!("{}  [{}]", binding.label(app), binding.name)),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 /// Draws one graph row. HEAD is a ringed node and merges are hollow, so the shape of the
@@ -754,6 +701,18 @@ fn history(frame: &mut Frame, area: Rect, app: &App) {
         (area, None)
     };
     let mut title = String::from("History");
+    if app.search_cancel.is_some() {
+        title.push_str(&format!(
+            " · Search {} · {}/{}",
+            safe(&app.search_text),
+            if app.matches.is_empty() {
+                0
+            } else {
+                app.match_index + 1
+            },
+            app.matches.len()
+        ));
+    }
     if !app.commits.is_empty() {
         title.push_str(&format!(
             " · {}{}",
@@ -813,6 +772,8 @@ fn history(frame: &mut Frame, area: Rect, app: &App) {
                 let selected = i == app.history;
                 let mut spans = vec![if selected {
                     Span::styled("▌", fg(t().accent))
+                } else if app.matches.contains(&commit.id) {
+                    Span::styled("*", bold(t().yellow))
                 } else {
                     pad(1)
                 }];
@@ -1063,7 +1024,17 @@ fn inspect(frame: &mut Frame, area: Rect, app: &App) {
             .scroll((app.scroll.min(u16::MAX as usize) as u16, 0)),
         top,
     );
-    let block = panel(format!("Files · {}", files.len()), true);
+    let title = app.stash_detail.as_ref().map_or_else(
+        || format!("Files · {}", files.len()),
+        |(_, untracked)| {
+            format!(
+                "Stash {} files · {}",
+                if *untracked { "untracked" } else { "tracked" },
+                files.len()
+            )
+        },
+    );
+    let block = panel(title, true);
     let inner = block.inner(bottom);
     frame.render_widget(block, bottom);
     if files.is_empty() {
@@ -1110,6 +1081,137 @@ fn working_label(entry: &StatusEntry, staged: bool) -> (&'static str, Color) {
         &entry.worktree_status
     };
     status_style(code.get(..1).unwrap_or("."))
+}
+
+fn branches(frame: &mut Frame, area: Rect, app: &App) {
+    let block = panel("Branches · ahead/behind HEAD (local refs)", true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if app.branches.is_empty() {
+        empty(
+            frame,
+            inner,
+            "No branches yet · create one from a commit in history",
+            t().muted,
+        );
+        return;
+    }
+    let start = window(
+        &app.tops[1],
+        app.branch,
+        app.branches.len(),
+        usize::from(inner.height),
+    );
+    let lines: Vec<_> = app
+        .branches
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(usize::from(inner.height))
+        .map(|(i, branch)| {
+            let counts = branch
+                .counts
+                .map_or("↑? ↓?".into(), |(a, b)| format!("↑{a} ↓{b}"));
+            let text = format!(
+                "{} {} {}  {counts}",
+                if branch.current { "*" } else { " " },
+                if branch.reference.kind == "local" {
+                    "local "
+                } else {
+                    "remote"
+                },
+                safe(&branch.reference.name)
+            );
+            Line::styled(
+                clip(&text, usize::from(inner.width)),
+                if i == app.branch {
+                    bold(t().text).bg(t().select)
+                } else {
+                    fg(t().muted)
+                },
+            )
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn stashes(frame: &mut Frame, area: Rect, app: &App) {
+    let block = panel(format!("Stashes · {}", app.stashes.len()), true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if app.stashes.is_empty() {
+        empty(frame, inner, "No stashes", t().muted);
+        return;
+    }
+    let start = window(
+        &app.tops[1],
+        app.stash,
+        app.stashes.len(),
+        usize::from(inner.height),
+    );
+    let lines: Vec<_> = app
+        .stashes
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(usize::from(inner.height))
+        .map(|(i, stash)| {
+            Line::styled(
+                clip(
+                    &format!(
+                        "{}  {}  {}",
+                        safe(&stash.selector),
+                        stash.oid.get(..7).unwrap_or(&stash.oid),
+                        safe(&stash.message)
+                    ),
+                    usize::from(inner.width),
+                ),
+                if i == app.stash {
+                    bold(t().text).bg(t().select)
+                } else {
+                    fg(t().muted)
+                },
+            )
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn input(frame: &mut Frame, app: &App) {
+    let (title, source, value) = if app.view == View::Search {
+        (
+            "Search history",
+            "Message, author, OID or ref".to_owned(),
+            app.search_text.as_str(),
+        )
+    } else {
+        let Some(editor) = &app.branch_editor else {
+            return;
+        };
+        (
+            if editor.rename {
+                "Rename branch"
+            } else {
+                "Create branch"
+            },
+            format!("From: {}", safe(&editor.source)),
+            editor.name.as_str(),
+        )
+    };
+    let rect = modal(frame, 76, 10);
+    let block = dialog(title);
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    let value = clip_left(&safe(value), usize::from(inner.width.saturating_sub(2)));
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::styled(source, fg(t().muted)),
+            Line::raw(""),
+            Line::styled(format!("{value}▏"), bold(t().text)),
+        ])
+        .wrap(Wrap { trim: false }),
+        inner,
+    );
 }
 
 fn working(frame: &mut Frame, area: Rect, app: &App) {
@@ -1167,8 +1269,8 @@ fn working(frame: &mut Frame, area: Rect, app: &App) {
     if rows.is_empty() {
         let (text, color) = match (app.entries.is_empty(), app.staged) {
             (true, _) => ("✓ Working tree clean", t().green),
-            (false, true) => ("Nothing staged · tab to switch, s to stage", t().muted),
-            (false, false) => ("Everything is staged · c to commit", t().green),
+            (false, true) => ("Nothing staged · switch lists to stage changes", t().muted),
+            (false, false) => ("Everything is staged · ready to commit", t().green),
         };
         empty(frame, inner, text, color);
     } else {
@@ -1242,6 +1344,15 @@ fn diff_panel(
             Span::styled(format!(" +{add}"), fg(t().green)),
             Span::styled(format!(" −{del} "), fg(t().red)),
         ];
+        if app.working_diff() {
+            if let Some((index, _)) = super::diff_position(diff, app.scroll) {
+                let label = app.selected_lines().map_or_else(
+                    || format!(" hunk {}/{} ", index + 1, diff.hunks.len()),
+                    |lines| format!(" {} lines selected ", lines.len()),
+                );
+                title.insert(0, Span::styled(label, bold(t().accent)));
+            }
+        }
         if app.hscroll > 0 {
             title.insert(
                 0,
@@ -1254,7 +1365,42 @@ fn diff_panel(
     frame.render_widget(block, area);
     match diff {
         Some(diff) => {
-            let lines = diff_lines(diff, usize::from(inner.width), app.hscroll);
+            let selecting = app.working_diff();
+            let mut lines = diff_lines(
+                diff,
+                usize::from(inner.width).saturating_sub(usize::from(selecting)),
+                app.hscroll,
+            );
+            if selecting {
+                for (row, line) in lines.iter_mut().enumerate() {
+                    let selected = app.line_anchor.is_some_and(|anchor| {
+                        (anchor.min(app.scroll)..=anchor.max(app.scroll)).contains(&row)
+                            && super::diff_position(diff, row).is_some_and(|(h, i)| {
+                                i.is_some_and(|i| {
+                                    matches!(diff.hunks[h].lines[i].kind.as_str(), "add" | "remove")
+                                })
+                            })
+                    });
+                    line.spans.insert(
+                        0,
+                        Span::styled(
+                            if row == app.scroll {
+                                "▌"
+                            } else if selected {
+                                "*"
+                            } else {
+                                " "
+                            },
+                            bold(t().accent),
+                        ),
+                    );
+                    if selected {
+                        for span in &mut line.spans {
+                            span.style = span.style.add_modifier(Modifier::UNDERLINED);
+                        }
+                    }
+                }
+            }
             if lines.is_empty() {
                 let text = if diff.binary {
                     "Binary file — no text preview".to_string()
@@ -1563,7 +1709,7 @@ fn sync(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(vec![
             Span::styled("! ", bold(t().yellow)),
             Span::styled(
-                "The last push could not be confirmed. Press v to check the destination before pushing again.",
+                format!("The last push could not be confirmed. Press {} to check the destination before pushing again.", app.keymap.label("verify")),
                 fg(t().yellow),
             ),
         ]));
@@ -1571,18 +1717,18 @@ fn sync(frame: &mut Frame, area: Rect, app: &App) {
         let action = |k: &str, label: &str| {
             vec![
                 Span::styled(
-                    format!(" {k} "),
+                    format!(" {} ", app.keymap.label(k)),
                     Style::new().fg(t().on_accent).bg(t().accent),
                 ),
                 Span::styled(format!(" {label}    "), fg(t().muted)),
             ]
         };
-        let mut actions = vec![action("f", "Fetch")];
+        let mut actions = vec![action("fetch", "Fetch")];
         if sync.upstream.is_some() {
-            actions.push(action("l", "Pull (fast-forward)"));
-            actions.push(action("p", "Push"));
+            actions.push(action("pull", "Pull (fast-forward)"));
+            actions.push(action("push", "Push"));
         } else if sync.branch.is_some() {
-            actions.push(action("b", "Publish"));
+            actions.push(action("publish", "Publish"));
         }
         lines.push(Line::from(actions.concat()));
         lines.push(Line::raw(""));
@@ -1606,7 +1752,10 @@ fn settings(frame: &mut Frame, area: Rect, app: &App) {
         Layout::vertical([Constraint::Length(rows), Constraint::Min(0)]).areas(inner)
     };
     let mut lines = vec![
-        Line::styled("Tab → Commit Profiles", bold(t().accent)),
+        Line::styled(
+            format!("{} → Commit Profiles", app.keymap.label("profiles")),
+            bold(t().accent),
+        ),
         Line::styled("Theme", bold(t().muted)),
     ];
     if list.height > 0 {
@@ -1669,7 +1818,10 @@ fn settings(frame: &mut Frame, area: Rect, app: &App) {
             pad(1),
             Span::styled("◆ v1.0", bold(t().yellow)),
             pad(2),
-            Span::styled(" enter ", Style::new().fg(t().on_accent).bg(t().accent)),
+            Span::styled(
+                format!(" {} ", app.keymap.label("apply_setting")),
+                Style::new().fg(t().on_accent).bg(t().accent),
+            ),
         ]),
         Line::raw(""),
         Line::from(vec![
@@ -1704,6 +1856,24 @@ fn settings(frame: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::styled(
             format!("Saved to {}", safe(&path.to_string_lossy())),
             fg(t().faint),
+        ));
+    }
+    let keys = match &app.config.keys {
+        super::keys::KeyConfig::Preset(name) => name.as_str(),
+        super::keys::KeyConfig::Map(map) if map.is_empty() => "defaults",
+        _ => "custom",
+    };
+    lines.push(Line::styled(
+        format!(
+            "Keys: {keys} · edit keys in tui.json; {} for help",
+            app.keymap.label("help")
+        ),
+        fg(t().muted),
+    ));
+    if let Some(error) = &app.config_error {
+        lines.push(Line::styled(
+            format!("Settings unchanged: {}", safe(error)),
+            fg(t().red),
         ));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), sample);
@@ -1863,7 +2033,15 @@ fn composer(frame: &mut Frame, app: &App) {
         safe(h.strip_prefix("refs/heads/").unwrap_or(h))
     });
     let summary = app.message.lines().next().unwrap_or("").width();
-    let block = dialog(format!("Commit to {branch}")).title_bottom(
+    let title = if app.amend {
+        format!(
+            "Amend {} on {branch}",
+            review.head().unwrap_or("").get(..7).unwrap_or("")
+        )
+    } else {
+        format!("Commit to {branch}")
+    };
+    let block = dialog(title).title_bottom(
         Line::styled(
             format!(" summary {summary}/72 "),
             fg(if summary > 72 { t().yellow } else { t().faint }),
@@ -1953,6 +2131,152 @@ fn composer(frame: &mut Frame, app: &App) {
 
 fn confirm(frame: &mut Frame, app: &App) {
     match &app.confirm {
+        Some(Confirm::Operation(review)) => {
+            let (title, mut lines) = match &review.action {
+                GitAction::SwitchBranch { branch, .. } => (
+                    "Checkout branch",
+                    vec![
+                        format!("Destination: {branch}"),
+                        "Update HEAD, index and working files. Requires a clean worktree.".into(),
+                    ],
+                ),
+                GitAction::CreateBranch {
+                    name, start_point, ..
+                } => (
+                    "Create branch",
+                    vec![
+                        format!("Name: {name}"),
+                        format!("Starting point: {start_point}"),
+                        "Create the branch without checking it out.".into(),
+                    ],
+                ),
+                GitAction::RenameBranch { branch, name } => (
+                    "Rename branch",
+                    vec![
+                        format!("From: {branch}"),
+                        format!("New name: {name}"),
+                        "Rename the local ref, reflog and branch configuration.".into(),
+                    ],
+                ),
+                _ => return,
+            };
+            lines.push(format!(
+                "Reviewed HEAD: {} ({})",
+                review.expected_head_ref.as_deref().unwrap_or("detached"),
+                review.expected_head.as_deref().unwrap_or("unborn")
+            ));
+            text_review(frame, app, title, lines);
+        }
+        Some(Confirm::Delete(review)) => {
+            let mut lines = vec![];
+            for branch in &review.branches {
+                lines.push(format!(
+                    "Delete {} branch: {}",
+                    if review.delete_origin {
+                        "origin"
+                    } else {
+                        "local"
+                    },
+                    branch.branch
+                ));
+                lines.push(format!(
+                    "Reviewed commit: {}",
+                    branch
+                        .expected_local_oid
+                        .as_deref()
+                        .or(branch.expected_origin_oid.as_deref())
+                        .unwrap_or("")
+                ));
+            }
+            if let Some(url) = &review.expected_push_url {
+                lines.push(format!(
+                    "Push endpoint: {}",
+                    gitty_core::remote::endpoint_label(url)
+                ));
+                lines.push(
+                    "Remove refs/heads/<branch> from origin using the reviewed OID lease.".into(),
+                );
+            } else {
+                lines.push("Safe deletion only; unmerged branches are refused.".into());
+            }
+            text_review(frame, app, "Delete branch", lines);
+        }
+        Some(Confirm::StoredStash(review)) => {
+            let mut lines = vec![
+                format!("{}: {}", review.entry.selector, review.entry.message),
+                format!("Reviewed stash: {}", review.entry.oid),
+            ];
+            if review.verb == StashVerb::Drop {
+                lines.push("Permanently remove this entire stash, including its index and untracked files.".into());
+            } else {
+                lines.push(format!("Destination: {}", review.destination));
+                lines.push(format!(
+                    "Restore index: {} ({} toggles)",
+                    if review.restore_index { "yes" } else { "no" },
+                    app.keymap.label("restore_index"),
+                ));
+                lines.push(if review.verb == StashVerb::Pop {
+                    "Apply, then remove this stash only after successful restoration.".into()
+                } else {
+                    "Apply this stash and keep it in the list.".into()
+                });
+            }
+            text_review(frame, app, &format!("Stash {}", review.verb.label()), lines);
+        }
+        Some(Confirm::StageAll(reviews)) => {
+            let area = frame.area();
+            let rect = modal(frame, area.width * 17 / 20, area.height * 17 / 20);
+            let verb = if reviews.first().is_some_and(|r| r.is_unstage()) {
+                "Unstage"
+            } else {
+                "Stage"
+            };
+            let block = dialog(format!("{verb} all · {} reviewed files", reviews.len()));
+            let inner = block.inner(rect);
+            frame.render_widget(block, rect);
+            let lines: Vec<_> = reviews
+                .iter()
+                .flat_map(|r| r.paths())
+                .skip(app.scroll)
+                .map(|path| Line::raw(safe(path)))
+                .collect();
+            frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+        }
+        Some(Confirm::Hunk(review)) => {
+            let label = review.lines.as_ref().map_or_else(
+                || format!("hunk {}", review.index + 1),
+                |lines| {
+                    format!(
+                        "{} selected lines in hunk {}",
+                        lines.len(),
+                        review.index + 1
+                    )
+                },
+            );
+            let title = format!("{} {label}", review.kind.verb());
+            let warning = if review.kind == HunkKind::Discard {
+                "Permanently lose this entire unstaged hunk. Staged content stays."
+            } else {
+                "Only the changes shown below will be applied to the index."
+            };
+            patch_review(frame, app, &title, warning, &review.preview);
+        }
+        Some(Confirm::Discard(review)) => {
+            let warning = if review.untracked {
+                if review.delete_confirmed {
+                    format!(
+                        "Deletion allowed. {} permanently deletes this entire untracked file.",
+                        app.keymap.label("confirm")
+                    )
+                } else {
+                    format!("Permanently delete this entire untracked file. Press {} to allow deletion.", app.keymap.label("allow_delete"))
+                }
+            } else {
+                "Permanently lose all unstaged changes in this file. Restore its staged content."
+                    .into()
+            };
+            patch_review(frame, app, "Discard file", &warning, &review.preview);
+        }
         Some(Confirm::Stash(review)) => {
             let area = frame.area();
             let entries = review.entries();
@@ -1999,7 +2323,10 @@ fn confirm(frame: &mut Frame, app: &App) {
             if kept > 0 {
                 lines.push(Line::raw(""));
                 lines.push(Line::from(vec![
-                    Span::styled(" u ", Style::new().fg(t().on_accent).bg(t().muted)),
+                    Span::styled(
+                        format!(" {} ", app.keymap.label("include_untracked")),
+                        Style::new().fg(t().on_accent).bg(t().muted),
+                    ),
                     Span::styled(
                         if review.include_untracked {
                             " Untracked files are included"
@@ -2013,7 +2340,7 @@ fn confirm(frame: &mut Frame, app: &App) {
             lines.push(Line::raw(""));
             lines.push(Line::from(vec![
                 Span::styled(
-                    " enter ",
+                    format!(" {} ", app.keymap.label("confirm")),
                     Style::new()
                         .fg(t().on_accent)
                         .bg(t().accent)
@@ -2056,7 +2383,7 @@ fn confirm(frame: &mut Frame, app: &App) {
                     Line::raw(""),
                     Line::from(vec![
                         Span::styled(
-                            " enter ",
+                            format!(" {} ", app.keymap.label("confirm")),
                             Style::new()
                                 .fg(t().on_accent)
                                 .bg(t().accent)
@@ -2150,7 +2477,7 @@ fn confirm(frame: &mut Frame, app: &App) {
             lines.push(Line::raw(""));
             lines.push(Line::from(vec![
                 Span::styled(
-                    " enter ",
+                    format!(" {} ", app.keymap.label("confirm")),
                     Style::new()
                         .fg(t().on_accent)
                         .bg(t().accent)
@@ -2169,6 +2496,45 @@ fn confirm(frame: &mut Frame, app: &App) {
         }
         None => {}
     }
+}
+
+fn text_review(frame: &mut Frame, app: &App, title: &str, lines: Vec<String>) {
+    let area = frame.area();
+    let rect = modal(frame, 86, area.height * 4 / 5);
+    let block = dialog(title);
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    let lines: Vec<_> = lines.into_iter().map(|s| Line::raw(safe(&s))).collect();
+    frame.render_widget(
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .scroll((app.scroll.min(u16::MAX as usize) as u16, 0)),
+        inner,
+    );
+}
+
+fn patch_review(frame: &mut Frame, app: &App, title: &str, warning: &str, diff: &FileDiff) {
+    let area = frame.area();
+    let rect = modal(frame, area.width * 17 / 20, area.height * 17 / 20);
+    let block = dialog(title);
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    let mut lines = vec![
+        Line::styled(safe(&diff.path), bold(t().text)),
+        Line::styled(warning.to_owned(), fg(t().yellow)),
+        Line::raw(""),
+    ];
+    let patch = diff_lines(diff, usize::from(inner.width), app.hscroll);
+    if patch.is_empty() {
+        lines.push(Line::raw(if diff.binary {
+            "Binary file — no text preview"
+        } else {
+            "No text preview"
+        }));
+    } else {
+        lines.extend(patch.into_iter().skip(app.scroll));
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
 /// A one-line text field that shows the terminal's own cursor at its end.

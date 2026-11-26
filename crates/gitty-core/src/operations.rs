@@ -915,6 +915,7 @@ impl Repository {
         let preserves_changes = matches!(
             request.action,
             GitAction::CreateBranch { .. }
+                | GitAction::RenameBranch { .. }
                 | GitAction::Merge { .. }
                 | GitAction::SwitchBranch {
                     carry_changes: true,
@@ -949,6 +950,43 @@ impl Repository {
             "rebase.autoStash=false",
         ]);
         match request.action {
+            GitAction::RenameBranch { branch, name } => {
+                let branch = branch.strip_prefix("refs/heads/").unwrap_or(&branch);
+                if branch.starts_with("refs/") {
+                    return Err(Error::new(
+                        "invalidReference",
+                        "Rename requires a local branch.",
+                    ));
+                }
+                self.valid_name(branch, "heads")?;
+                self.valid_name(&name, "heads")?;
+                let source = format!("refs/heads/{branch}");
+                if !state.refs.iter().any(|r| r.full_name == source) {
+                    return Err(Error::new(
+                        "invalidReference",
+                        "The local branch does not exist.",
+                    ));
+                }
+                if state
+                    .refs
+                    .iter()
+                    .any(|r| r.full_name == format!("refs/heads/{name}"))
+                {
+                    return Err(Error::new(
+                        "branchExists",
+                        "The new branch name already exists.",
+                    ));
+                }
+                if state.session.head_ref.as_deref() != Some(&source)
+                    && self.branch_checked_out(&source)?
+                {
+                    return Err(Error::new(
+                        "branchInUse",
+                        "This branch is checked out in another worktree.",
+                    ));
+                }
+                a.extend(args(&["branch", "-m", "--", branch, &name]));
+            }
             GitAction::CreateBranch {
                 name,
                 start_point,

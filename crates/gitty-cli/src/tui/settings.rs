@@ -1,3 +1,4 @@
+use super::keys::{KeyConfig, Keymap};
 use super::theme;
 use gitty_core::dto::CommitIdentity;
 use serde::{Deserialize, Serialize};
@@ -35,6 +36,7 @@ impl Profile {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub(super) struct Settings {
+    pub keys: KeyConfig,
     theme: String,
     pub recent: Vec<String>,
     pub profiles: Vec<Profile>,
@@ -84,6 +86,7 @@ impl Settings {
             .assignments
             .retain(|_, id| config.profiles.iter().any(|p| p.id == *id));
         config.recent.truncate(20);
+        Keymap::new(&config.keys).map_err(io::Error::other)?;
         Ok(config)
     }
 
@@ -120,6 +123,31 @@ pub(super) fn config_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn key_settings_round_trip_and_invalid_settings_are_preserved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tui.json");
+        for keys in [r#""vim""#, r#"{"stage":"x","commit":"Ctrl-s"}"#] {
+            std::fs::write(&path, format!(r#"{{"keys":{keys}}}"#)).unwrap();
+            let config = Settings::load(&path).unwrap();
+            config.save(Some(&path)).unwrap();
+            let loaded = Settings::load(&path).unwrap();
+            assert_eq!(
+                serde_json::to_value(config.keys).unwrap(),
+                serde_json::to_value(loaded.keys).unwrap()
+            );
+        }
+        for text in [
+            r#"{"keys":{"stage":"Enter"}}"#,
+            r#"{"keys":false}"#,
+            "{broken",
+        ] {
+            std::fs::write(&path, text).unwrap();
+            assert!(Settings::load(&path).is_err());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        }
+    }
 
     #[test]
     fn theme_only_config_upgrades_and_profiles_round_trip_by_worktree_root() {

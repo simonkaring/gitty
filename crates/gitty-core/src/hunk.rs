@@ -1,4 +1,4 @@
-//! Complete-hunk index edits. Only Git-generated raw bytes become patches;
+//! Reviewed hunk edits. Only Git-generated raw bytes become patches;
 //! lossy display strings and client-supplied text never enter a write.
 use crate::{
     dto::*,
@@ -293,6 +293,7 @@ impl Repository {
         expected: &str,
         reverse: bool,
         line_indices: Option<&[usize]>,
+        discard: bool,
     ) -> Result<()> {
         let validated = validate_mutation_path(path)?;
         if validated != path {
@@ -305,7 +306,7 @@ impl Repository {
                 "Resolve this file before staging hunks.",
             ));
         }
-        let spec = if reverse {
+        let spec = if reverse && !discard {
             DiffSpec::Staged
         } else {
             DiffSpec::Unstaged
@@ -341,7 +342,7 @@ impl Repository {
         };
         // Catch index/worktree edits during preparation as well as since display.
         // This is NOT an atomic compare-and-swap with external Git processes:
-        // Service serializes Gitty writers only. Git apply acquires index.lock,
+        // Service serializes Gitty writers only. Cached apply acquires index.lock,
         // reads the then-current index, and checks context under its own lock.
         // An external non-overlapping edit in the remaining window is preserved;
         // incompatible context/lock failures are surfaced, never forced/retried.
@@ -358,9 +359,11 @@ impl Repository {
             "-c",
             "apply.ignoreWhitespace=no",
             "apply",
-            "--cached",
             "--whitespace=nowarn",
         ]);
+        if !discard {
+            a.push("--cached".into());
+        }
         if reverse {
             a.push("--reverse".into());
         }

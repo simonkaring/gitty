@@ -101,6 +101,23 @@ discarded); pop uses the existing OID-pinned stash action.[^terminal][^remote-wr
 
 [^terminal]: `terminal_review_stage`, `terminal_stage`, and `terminal_commit`.
 
+The TUI's stage/unstage-all validates every selected review before its single
+index mutation. Hunk and line reviews pass the displayed diff fingerprint;
+hunk discard reverses only that Git-generated hunk in the worktree, preserving
+the index. File discard uses the complete reviewed status fingerprint, with
+separate user confirmation for untracked deletion. Terminal amend also pins
+the reviewed status, rechecks edit eligibility under the mutation lock, and
+checks the resulting tree against the reviewed index. Merge commits are not
+offered for terminal amend.
+
+Terminal branch create, checkout and rename use the operation fingerprint,
+HEAD and symbolic ref through `run_operation`. Rename uses non-forced `branch
+-m`, refuses an existing destination and another worktree's branch, and keeps
+index/worktree content. Deletion uses the engine's reviewed branch OIDs and
+HEAD/ref; origin deletion also pins the push URL and lease. Stash-list
+apply/pop/drop rechecks the complete operation fingerprint under the lock before
+the OID-pinned `StashAction`; restoring staging is an explicit review choice.
+
 Preserve working files and unrelated index entries when staging/unstaging hunks.
 Discard deliberately destroys selected unstaged content; tracked files restore
 from the index. Submodules are refused because parent fingerprints do not review

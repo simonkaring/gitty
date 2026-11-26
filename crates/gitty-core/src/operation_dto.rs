@@ -68,6 +68,10 @@ pub enum GitAction {
         start_point: String,
         checkout: bool,
     },
+    RenameBranch {
+        branch: String,
+        name: String,
+    },
     SwitchBranch {
         branch: String,
         /// Carry staged/unstaged work to the target branch, merging it where

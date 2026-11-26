@@ -733,7 +733,7 @@ impl Repository {
         }
     }
 
-    fn branch_checked_out(&self, full_ref: &str) -> Result<bool> {
+    pub(crate) fn branch_checked_out(&self, full_ref: &str) -> Result<bool> {
         let worktrees = self.check_text(&["worktree", "list", "--porcelain"])?;
         Ok(worktrees
             .lines()

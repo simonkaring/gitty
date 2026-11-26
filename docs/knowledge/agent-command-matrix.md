@@ -48,7 +48,7 @@ Tauri usages named below. CLI coverage is intentionally not implied by registrat
 | `repository_amend_commit` | Guarded history rewrite | stdio method and one-shot `request` |
 | `repository_conflict_file` | Read conflict stages | stdio method and one-shot `request` |
 | `repository_resolve_conflict` | Fingerprinted conflict write | stdio method and one-shot `request` |
-| `repository_run_operation` | Guarded Git operation/sequencer | stdio method and one-shot `request`; editor-dependent behavior is noninteractive |
+| `repository_run_operation` | Guarded Git operation/sequencer, including local branch rename | stdio method and one-shot `request`; editor-dependent behavior is noninteractive |
 | `repository_delete_branch` / `repository_delete_branches` | Reviewed branch deletion | stdio methods and one-shot `request`; no account UI prompts |
 | `repository_worktrees` | Read worktree list | `repository_worktrees`; one-shot `request` |
 | `repository_worktree_review` / `repository_worktree_execute` | Token-reviewed worktree writes | stdio methods; portable `review`/`execute` reopens the repository and reacquires/revalidates the token |
@@ -62,6 +62,12 @@ Tauri usages named below. CLI coverage is intentionally not implied by registrat
 | `repository_ignore_path` | Worktree + `.gitignore` write | stdio method and one-shot `request` |
 
 ## Desktop, provider, and host commands
+
+Branch rename uses `action: {"kind":"renameBranch","branch":"refs/heads/old","name":"new"}`
+inside the ordinary operation request, with reviewed `expectedHead`,
+`expectedHeadRef`, and `expectedOperation`. It refuses stale reviews, invalid
+names, an existing destination, and branches checked out in another worktree.
+It never forces replacement of a destination branch.
 
 | Tauri command | Classification | Headless disposition |
 | --- | --- | --- |

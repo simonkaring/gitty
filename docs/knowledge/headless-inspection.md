@@ -59,7 +59,7 @@ loading pinned history pages and reading diffs on demand. Opening from a
 path or recent list replaces the worker session only after the candidate's
 initial snapshot loads. Drafts and unresolved push checks stay with their
 worktree while the app runs. It requires a terminal; Git writes are enabled
-only on macOS. It uses typed in-process reviews and scoped askpass without
+on macOS and Linux. It uses typed in-process reviews and scoped askpass without
 changing the one-shot or stdio contracts. TUI-local `tui.json` stores theme,
 recent roots, profiles, and worktree-root profile assignments separately from
 the desktop. The old theme-only file still loads; unreadable settings are

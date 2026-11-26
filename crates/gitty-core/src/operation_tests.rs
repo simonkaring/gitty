@@ -115,6 +115,110 @@ impl Fixture {
 }
 
 #[test]
+fn operations_rename_branch_preserves_work_and_config_and_refuses_stale_reviews() {
+    let f = Fixture::new();
+    f.git(&["config", "branch.main.description", "keep description"]);
+    f.write("file", "staged\n");
+    f.git(&["add", "file"]);
+    f.write("file", "working\n");
+    let index = f.git(&["ls-files", "--stage"]);
+    let head = f.git(&["rev-parse", "HEAD"]);
+    f.run(GitAction::RenameBranch {
+        branch: "refs/heads/main".into(),
+        name: "renamed".into(),
+    })
+    .unwrap();
+    assert_eq!(f.git(&["symbolic-ref", "HEAD"]), "refs/heads/renamed");
+    assert_eq!(f.git(&["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        f.git(&["config", "branch.renamed.description"]),
+        "keep description"
+    );
+    assert_eq!(f.git(&["ls-files", "--stage"]), index);
+    assert_eq!(
+        std::fs::read(f.dir.path().join("file")).unwrap(),
+        b"working\n"
+    );
+    f.git(&["branch", "other"]);
+    let request = f.request(GitAction::RenameBranch {
+        branch: "other".into(),
+        name: "new".into(),
+    });
+    f.write("file", "external\n");
+    assert_eq!(
+        f.service
+            .run_operation(&f.handle, request, None)
+            .unwrap_err()
+            .code,
+        "staleOperation"
+    );
+    assert_eq!(f.git(&["rev-parse", "other"]), head);
+    for (name, code) in [
+        ("renamed", "branchExists"),
+        ("../bad", "invalidReference"),
+        ("-bad", "invalidReference"),
+    ] {
+        assert_eq!(
+            f.run(GitAction::RenameBranch {
+                branch: "other".into(),
+                name: name.into()
+            })
+            .unwrap_err()
+            .code,
+            code
+        );
+    }
+    f.run(GitAction::RenameBranch {
+        branch: "other".into(),
+        name: "new".into(),
+    })
+    .unwrap();
+    assert_eq!(f.git(&["rev-parse", "new"]), head);
+    let linked = f.dir.path().join("linked");
+    f.git(&["worktree", "add", linked.to_str().unwrap(), "new"]);
+    assert_eq!(
+        f.run(GitAction::RenameBranch {
+            branch: "new".into(),
+            name: "elsewhere".into()
+        })
+        .unwrap_err()
+        .code,
+        "branchInUse"
+    );
+}
+
+#[test]
+fn operations_rename_branch_ref_change_and_request_schema_are_guarded() {
+    let f = Fixture::new();
+    f.git(&["branch", "source"]);
+    let request = f.request(GitAction::RenameBranch {
+        branch: "source".into(),
+        name: "target".into(),
+    });
+    let tree = f.git(&["rev-parse", "HEAD^{tree}"]);
+    let moved = f.git(&["commit-tree", &tree, "-m", "moved"]);
+    f.git(&["update-ref", "refs/heads/source", &moved]);
+    assert_eq!(
+        f.service
+            .run_operation(&f.handle, request, None)
+            .unwrap_err()
+            .code,
+        "staleOperation"
+    );
+    assert_eq!(f.git(&["rev-parse", "source"]), moved);
+    assert!(serde_json::from_str::<GitAction>(
+        r#"{"kind":"renameBranch","branch":"source","name":"target"}"#
+    )
+    .is_ok());
+    assert!(serde_json::from_str::<GitAction>(
+        r#"{"kind":"renameBranch","branch":"source","name":"target","force":true}"#
+    )
+    .is_err());
+    let schema = serde_json::to_string(&schemars::schema_for!(GitAction)).unwrap();
+    assert!(schema.contains("renameBranch"));
+}
+
+#[test]
 fn operations_merge_failed_destination_switch_never_merges_current_branch() {
     for stash_changes in [false, true] {
         let f = Fixture::new();

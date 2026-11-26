@@ -591,6 +591,28 @@ Commit pins HEAD/ref and the full staged-entry snapshot and checks the
 resulting tree after hooks run. Revalidation takes the Gitty mutation lock,
 not a transaction with external Git. Existing IPC and stdio requests do not
 acquire these new review parameters.
+TUI list writes validate every reviewed file before a single index mutation.
+Hunk/line writes use the existing diff fingerprints; in-process `discard_hunk`
+validates the unstaged diff and reverse-applies its original Git bytes to the
+worktree only. File discard retains its complete-status guard. Terminal amend
+additionally pins complete status and rechecks edit eligibility under the lock
+before `amend_commit_with_identity`, with the same post-hook tree comparison.
+The terminal does not offer amend for merge commits.
+
+Terminal branch create/checkout/rename submits the reviewed `OperationRequest`
+to `run_operation`; deletion uses `delete_branches` with the reviewed HEAD/ref,
+target OID and, for origin, push URL. Checkout is clean-worktree-only and
+deletion never implicitly forces. Stash-list apply/pop/drop pins its OID and
+the operation fingerprint (including HEAD, refs, index and worktree), with
+restore-index an explicit review toggle. Every attempt rereads repository state.
+
+`GitAction` also accepts `{"kind":"renameBranch","branch":"refs/heads/old","name":"new"}`.
+It uses the same `expectedHead`, `expectedHeadRef`, and `expectedOperation`
+review guard as branch creation. Only existing local branches can be renamed;
+the new name is validated and an existing target or a source checked out in
+another worktree is refused. Git's non-forced `branch -m` moves its reflog and
+configuration, preserving the index and working files. The JSON schema includes
+this action; the desktop has no rename control yet.
 
 This section describes the ordinary staging/commit API. Graph operations and
 targeted conflict resolutions have the additional contract documented below.

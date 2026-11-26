@@ -89,23 +89,27 @@ impl TerminalRemoteReview {
     }
 
     pub fn endpoint_label(&self) -> String {
-        // URLs can contain secrets outside userinfo as well, including in the path.
-        if let Ok(url) = url::Url::parse(&self.endpoint) {
-            if let Some(host) = url.host_str() {
-                return match url.port() {
-                    Some(port) => format!("{}://{host}:{port}/…", url.scheme()),
-                    None => format!("{}://{host}/…", url.scheme()),
-                };
-            }
-        }
-        if let Some((host, _)) = self.endpoint.split_once(':') {
-            let host = host.rsplit('@').next().unwrap_or_default();
-            if crate::dto::valid_ssh_word(host) && host.len() > 1 {
-                return format!("SSH {host}:…");
-            }
-        }
-        "configured endpoint (hidden)".into()
+        endpoint_label(&self.endpoint)
     }
+}
+
+pub fn endpoint_label(endpoint: &str) -> String {
+    // URLs can contain secrets outside userinfo as well, including in the path.
+    if let Ok(url) = url::Url::parse(endpoint) {
+        if let Some(host) = url.host_str() {
+            return match url.port() {
+                Some(port) => format!("{}://{host}:{port}/…", url.scheme()),
+                None => format!("{}://{host}/…", url.scheme()),
+            };
+        }
+    }
+    if let Some((host, _)) = endpoint.split_once(':') {
+        let host = host.rsplit('@').next().unwrap_or_default();
+        if crate::dto::valid_ssh_word(host) && host.len() > 1 {
+            return format!("SSH {host}:…");
+        }
+    }
+    "configured endpoint (hidden)".into()
 }
 
 impl Service {

@@ -189,12 +189,12 @@ useful at 80 columns, and loading another page must not redraw existing lanes.
 
 ## Status
 
-All milestones are implemented in `gitty-cli tui`. Writes are enabled only on
-macOS; Linux and Windows builds are read-only until terminal isolation, cleanup,
-and askpass are verified there. Not yet exercised: real terminal pinentry
+All milestones are implemented in `gitty-cli tui`. Writes are enabled on macOS
+and Linux; Windows builds are read-only until console isolation, cleanup, and
+askpass are verified there. Not yet exercised: real terminal pinentry
 signing, Git Credential Manager, SSH passphrase prompts, and an interactive
 manual session in a non-PTY-emulated terminal.
 
 Run the local smoke test with `cargo build -p gitty-cli && python3 scripts/test-tui.py`.
-It uses a macOS pseudo-terminal and disposable repositories; it does not
-establish Linux/Windows write support or cover real-host SSH and signing prompts.
+It uses a macOS or Linux pseudo-terminal and disposable repositories; it does
+not establish Windows write support or cover real-host SSH and signing prompts.

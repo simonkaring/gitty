@@ -106,6 +106,39 @@ fn lines() -> String {
 }
 
 #[test]
+fn discard_hunk_keeps_index_and_other_hunks_and_refuses_stale_reviews() {
+    let base = lines();
+    let f = Fixture::new("file", base.as_bytes());
+    let staged = base.replace("line 25\n", "staged edit\n");
+    f.write("file", staged.as_bytes());
+    git(f.root.path(), &["add", "file"]);
+    let changed = staged
+        .replace("line 02\n", "first\nextra\n")
+        .replace("line 45\n", "second\n");
+    f.write("file", changed.as_bytes());
+    let diff = f.diff("file", false);
+    let fp = diff.hunk_action.unwrap().fingerprint.unwrap();
+    let stale = changed.replace("line 50\n", "external\n");
+    f.write("file", stale.as_bytes());
+    let error = f
+        .service
+        .discard_hunk(&f.handle, "file", 1, &fp)
+        .unwrap_err();
+    assert_eq!(error.code, "staleDiff");
+    assert_eq!(
+        fs::read(f.root.path().join("file")).unwrap(),
+        stale.as_bytes()
+    );
+    f.write("file", changed.as_bytes());
+    f.service.discard_hunk(&f.handle, "file", 1, &fp).unwrap();
+    assert_eq!(f.indexed("file"), staged.as_bytes());
+    assert_eq!(
+        fs::read(f.root.path().join("file")).unwrap(),
+        staged.replace("line 02\n", "first\nextra\n").as_bytes()
+    );
+}
+
+#[test]
 fn stage_and_commit_only_selected_hunk_preserves_worktree_and_other_staged_edits() {
     let base = lines();
     let f = Fixture::new("file", base.as_bytes());

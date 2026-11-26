@@ -689,6 +689,7 @@ impl Service {
                 fingerprint,
                 false,
                 line_indices.as_deref(),
+                false,
             )
         })
     }
@@ -701,7 +702,25 @@ impl Service {
         line_indices: Option<Vec<usize>>,
     ) -> Result<()> {
         self.mutate(handle, |repo| {
-            repo.change_hunk(path, hunk_index, fingerprint, true, line_indices.as_deref())
+            repo.change_hunk(
+                path,
+                hunk_index,
+                fingerprint,
+                true,
+                line_indices.as_deref(),
+                false,
+            )
+        })
+    }
+    pub fn discard_hunk(
+        &self,
+        handle: &str,
+        path: &str,
+        hunk_index: usize,
+        fingerprint: &str,
+    ) -> Result<()> {
+        self.mutate(handle, |repo| {
+            repo.change_hunk(path, hunk_index, fingerprint, true, None, true)
         })
     }
     /// Cancels the session's in-flight search. Idle or already-closed sessions are
@@ -1334,10 +1353,18 @@ impl Repository {
     /// At most one search runs per session: starting one cancels the previous, which
     /// fails with the `cancelled` code (as does closing the session).
     pub fn search(&self, query: SearchQuery) -> Result<SearchResult> {
+        self.search_cancellable(query, Arc::new(AtomicBool::new(false)))
+    }
+
+    /// The caller can cancel before registration as well as during the Git walk.
+    pub fn search_cancellable(
+        &self,
+        query: SearchQuery,
+        flag: Arc<AtomicBool>,
+    ) -> Result<SearchResult> {
         if query.text.len() > 4096 {
             return Err(Error::new("invalidQuery", "Search text is too long"));
         }
-        let flag = Arc::new(AtomicBool::new(false));
         let previous = lock(&self.search)?.replace(flag.clone());
         if let Some(previous) = previous {
             previous.store(true, Ordering::Relaxed);
