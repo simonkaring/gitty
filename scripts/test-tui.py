@@ -375,11 +375,21 @@ def main(root, auth):
         key(b"\r")
         expect(b"Operation paused:")
         assert git(repo, "diff", "--name-only", "--diff-filter=U") == b"file.txt"
-        key(b"\x1b[18~")  # F7
-        expect(b"Abort operation")
+        key(b"X")
+        expect(b"Conflicts")
         key(b"\r")
-        expect(b"Operation aborted.")
+        expect(b"Both sides")
+        key(b"2")
+        expect(b"Resolve conflict")
+        key(b"\r")
+        expect(b"Conflict resolved and staged.")
         assert git(repo, "diff", "--name-only", "--diff-filter=U") == b""
+        assert (repo / "file.txt").read_text() == "incoming merge\n"
+        key(b"\x1b[15~")  # F5
+        expect(b"Continue operation")
+        key(b"\r")
+        expect(b"Operation continued.")
+        assert len(git(repo, "rev-list", "--parents", "-1", "HEAD").split()) == 3
         git(repo, "branch", "plan-base")
         for name in ["drop-me", "reword-me", "keep-me"]:
             (repo / name).write_text(name + "\n")

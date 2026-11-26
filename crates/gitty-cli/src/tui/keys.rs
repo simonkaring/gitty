@@ -72,6 +72,9 @@ pub(super) enum Command {
     PlanUp,
     PlanDown,
     SaveMessage,
+    Conflicts,
+    Ours,
+    Theirs,
     Text(char),
 }
 
@@ -128,6 +131,28 @@ pub(super) static TABLE: &[Binding] = &[
         "open"
     ),
     binding!("checkout", "Enter", v(View::Branches), Accept, "checkout"),
+    binding!(
+        "open_conflict",
+        "Enter",
+        v(View::Conflicts),
+        Accept,
+        "inspect"
+    ),
+    binding!(
+        "conflict_view",
+        "Tab",
+        v(View::Conflict),
+        Next,
+        "both/ours/theirs"
+    ),
+    binding!("conflict_ours", "1", v(View::Conflict), Ours, "take ours"),
+    binding!(
+        "conflict_theirs",
+        "2",
+        v(View::Conflict),
+        Theirs,
+        "take theirs"
+    ),
     binding!("confirm", "Enter", v(View::Confirm), Accept, "confirm"),
     binding!(
         "review",
@@ -408,6 +433,7 @@ pub(super) static TABLE: &[Binding] = &[
         "stash local work"
     ),
     binding!("branches", "B", BROWSE, Branches, "branches"),
+    binding!("conflicts", "X", BROWSE, Conflicts, "conflicts"),
     binding!(
         "interactive_rebase",
         "I",

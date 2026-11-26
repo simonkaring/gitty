@@ -168,6 +168,11 @@ instructions and reordering, followed by an immutable review. EditorRegistry
 supplies reword/squash messages through an in-TUI editor, including cancellation,
 expiry and shutdown cleanup. Unit tests cover stale plans and editing during a
 write; the PTY smoke drops and rewords commits through the actual helper bridge.
+Item 3 implemented: a conflict list and both/ours/theirs inspection with the
+engine's contextual labels. Whole-file side/deletion choices open a review and
+pass the displayed conflict fingerprint to `resolve_conflict`. Real-Git tests
+cover both sides, stale working content, and explicit merge continuation; the
+PTY smoke now resolves its merge conflict in the TUI and continues the merge.
 
 gitui doesn't have these yet; the engine already has most of them.
 

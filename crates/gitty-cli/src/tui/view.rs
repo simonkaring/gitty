@@ -5,7 +5,7 @@ use super::{
 };
 use gitty_core::{
     dto::{CommitDetail, DiffFile, FileDiff, StatusEntry},
-    operation_dto::GitAction,
+    operation_dto::{ConflictFile, ConflictResolution, ConflictVersion, GitAction},
     remote::TerminalSync,
 };
 use ratatui::{
@@ -279,6 +279,19 @@ pub(super) fn render(frame: &mut Frame, app: &App, prompt: Option<&Prompt>) {
         View::Branches => branches(frame, body, app),
         View::Stashes => stashes(frame, body, app),
         View::RebasePlan => rebase_plan(frame, body, app),
+        View::Conflicts => conflicts(frame, body, app),
+        View::Conflict => {
+            if let Some(file) = &app.conflict {
+                let label = ["Both sides", "Ours", "Theirs"][app.conflict_side];
+                let block = panel(format!("Conflict · {} · {label}", safe(&file.path)), true);
+                frame.render_widget(
+                    Paragraph::new(conflict_lines(file, app.conflict_side))
+                        .block(block)
+                        .scroll((app.scroll.min(u16::MAX as usize) as u16, 0)),
+                    body,
+                );
+            }
+        }
         View::Repositories => repositories(frame, body, app),
         View::Settings => settings(frame, body, app),
         View::Profiles | View::ProfileEdit => profiles(frame, body, app),
@@ -1235,6 +1248,76 @@ fn input(frame: &mut Frame, app: &App) {
         .wrap(Wrap { trim: false }),
         inner,
     );
+}
+
+fn conflicts(frame: &mut Frame, area: Rect, app: &App) {
+    let files = app
+        .operation
+        .as_ref()
+        .map(|o| o.conflicts.as_slice())
+        .unwrap_or_default();
+    let block = panel(format!("Conflicts · {}", files.len()), true);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if files.is_empty() {
+        empty(frame, inner, "No unresolved conflicts", t().green);
+        return;
+    }
+    let start = window(
+        &app.tops[1],
+        app.conflict_index,
+        files.len(),
+        usize::from(inner.height),
+    );
+    let lines: Vec<_> = files
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(usize::from(inner.height))
+        .map(|(i, path)| {
+            Line::styled(
+                safe(path),
+                if i == app.conflict_index {
+                    bold(t().text).bg(t().select)
+                } else {
+                    fg(t().muted)
+                },
+            )
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn version_lines(label: &str, version: Option<&ConflictVersion>) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::styled(safe(label), bold(t().accent))];
+    match version {
+        None => lines.push(Line::raw("(Absent / deleted)")),
+        Some(version) => {
+            lines.push(Line::styled(
+                format!("{} · mode {}", version.oid, version.mode),
+                fg(t().muted),
+            ));
+            match &version.content {
+                Some(content) => lines.extend(content.lines().map(|line| Line::raw(safe(line)))),
+                None => lines.push(Line::raw("(Binary or content exceeds preview bounds)")),
+            }
+        }
+    }
+    lines
+}
+
+pub(super) fn conflict_lines(file: &ConflictFile, side: usize) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    if side != 2 {
+        lines.extend(version_lines(&file.ours_label, file.ours.as_ref()));
+    }
+    if side == 0 {
+        lines.push(Line::raw(""));
+    }
+    if side != 1 {
+        lines.extend(version_lines(&file.theirs_label, file.theirs.as_ref()));
+    }
+    lines
 }
 
 fn rebase_plan(frame: &mut Frame, area: Rect, app: &App) {
@@ -2228,6 +2311,24 @@ fn composer(frame: &mut Frame, app: &App) {
 
 fn confirm(frame: &mut Frame, app: &App) {
     match &app.confirm {
+        Some(Confirm::Resolve(file, resolution)) => {
+            let (label, version) = match resolution {
+                ConflictResolution::Ours => (file.ours_label.as_str(), file.ours.as_ref()),
+                ConflictResolution::Theirs => (file.theirs_label.as_str(), file.theirs.as_ref()),
+                _ => ("Delete the file", None),
+            };
+            let mut lines = vec![
+                format!("File: {}", file.path),
+                format!("Resolution: {label}"),
+                "Replace this file's working resolution and stage the selected version.".into(),
+            ];
+            lines.extend(
+                version_lines(label, version)
+                    .iter()
+                    .map(ToString::to_string),
+            );
+            text_review(frame, app, "Resolve conflict", lines);
+        }
         Some(Confirm::Operation(review)) => {
             let (title, mut lines) = match &review.action {
                 GitAction::InteractiveRebase { onto, steps } => {

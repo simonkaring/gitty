@@ -12,7 +12,8 @@ use gitty_core::{
     },
     editor::{self, EditorRegistry},
     operation_dto::{
-        GitAction, OperationKind, OperationRequest, OperationState, RebaseInstruction, RebaseStep,
+        ConflictFile, ConflictResolution, GitAction, OperationKind, OperationRequest,
+        OperationState, RebaseInstruction, RebaseStep,
     },
     remote::{TerminalRemoteReview, TerminalSync},
     remote_dto::{StashAction, StashEntry, SyncInfo},
@@ -249,6 +250,9 @@ enum Job {
     StoredStash(StoredStashReview),
     Search(u64, String, Arc<AtomicBool>),
     RebasePlan(String),
+    Conflicts(bool),
+    Conflict(String),
+    Resolve(ConflictFile, ConflictResolution),
 }
 
 enum Reply {
@@ -283,6 +287,8 @@ enum Reply {
     StoredStashReview(StoredStashReview),
     Search(u64, Result<SearchResult>),
     RebasePlan(OperationRequest, HashMap<String, String>),
+    Conflicts(OperationState, bool),
+    Conflict(ConflictFile),
 }
 
 struct Prompt {
@@ -448,6 +454,15 @@ fn worker(
                 }
                 Job::Working => Reply::Working(repo.status_entries()?.entries),
                 Job::Branches(open) => Reply::Branches(repo.terminal_branches()?, open),
+                Job::Conflicts(open) => Reply::Conflicts(repo.operation_state()?, open),
+                Job::Conflict(path) => Reply::Conflict(repo.conflict_file(&path)?),
+                Job::Resolve(file, resolution) if WRITES => Reply::Wrote {
+                    outcome: service
+                        .resolve_conflict(handle, &file.path, &file.fingerprint, resolution)
+                        .map(|()| "Conflict resolved and staged.".into()),
+                    committed: false,
+                    refresh: snapshot(),
+                },
                 Job::RebasePlan(source) => {
                     let (review, subjects) = rebase_plan(&repo, &source)?;
                     Reply::RebasePlan(review, subjects)
@@ -877,6 +892,8 @@ enum View {
     Stashes,
     Search,
     RebasePlan,
+    Conflicts,
+    Conflict,
     Message,
 }
 
@@ -899,6 +916,7 @@ impl ProfileEditor {
 }
 
 enum Confirm {
+    Resolve(ConflictFile, ConflictResolution),
     Stage(StageReview),
     StageAll(Vec<StageReview>),
     Hunk(HunkReview),
@@ -1046,6 +1064,9 @@ enum Tone {
 }
 
 struct App {
+    conflict: Option<ConflictFile>,
+    conflict_index: usize,
+    conflict_side: usize,
     editor: Option<Arc<EditorRegistry>>,
     editor_message: Option<EditorMessage>,
     editor_back: View,
@@ -1138,6 +1159,9 @@ struct App {
 impl App {
     fn new(jobs: mpsc::SyncSender<Job>) -> Self {
         Self {
+            conflict: None,
+            conflict_index: 0,
+            conflict_side: 0,
             editor: None,
             editor_message: None,
             editor_back: View::History,
@@ -1235,6 +1259,7 @@ impl App {
                 | Job::Operation(_)
                 | Job::Delete(_)
                 | Job::StoredStash(_)
+                | Job::Resolve(..)
         );
         if self.busy || (write && self.locked) {
             return;
@@ -1630,6 +1655,21 @@ impl App {
                     self.view = View::Branches;
                 }
             }
+            Ok(Reply::Conflicts(operation, open)) => {
+                self.conflict_index = self
+                    .conflict_index
+                    .min(operation.conflicts.len().saturating_sub(1));
+                self.operation = Some(operation);
+                if open {
+                    self.view = View::Conflicts;
+                }
+            }
+            Ok(Reply::Conflict(file)) => {
+                self.conflict = Some(file);
+                self.conflict_side = 0;
+                self.scroll = 0;
+                self.view = View::Conflict;
+            }
             Ok(Reply::RebasePlan(review, subjects)) => {
                 self.plan = Some(review);
                 self.plan_subjects = subjects;
@@ -1772,6 +1812,7 @@ impl App {
                                 View::Working => self.send(Job::Working),
                                 View::Branches => self.send(Job::Branches(false)),
                                 View::Stashes => self.send(Job::Stashes(None, false)),
+                                View::Conflicts => self.send(Job::Conflicts(false)),
                                 _ => {}
                             }
                         }
@@ -2212,6 +2253,7 @@ impl App {
             }
             self.view = match self.view {
                 View::Diff | View::Confirm => self.back,
+                View::Conflict => View::Conflicts,
                 View::BranchName => self.back,
                 View::Files if self.stash_detail.is_some() => View::Stashes,
                 View::Publish => View::Remote,
@@ -2560,6 +2602,9 @@ impl App {
                             Some(Confirm::Stash(review)) => self.send(Job::Stash(review)),
                             Some(Confirm::Pop(entry)) => self.send(Job::Pop(entry.oid)),
                             Some(Confirm::Operation(review)) => self.send(Job::Operation(review)),
+                            Some(Confirm::Resolve(file, resolution)) => {
+                                self.send(Job::Resolve(file, resolution))
+                            }
                             Some(Confirm::Delete(review)) => self.send(Job::Delete(review)),
                             Some(Confirm::StoredStash(review)) => {
                                 self.send(Job::StoredStash(review))
@@ -2628,6 +2673,10 @@ impl App {
             }
         }
         match key {
+            Command::Conflicts if worktree => {
+                self.request(Job::Conflicts(true));
+                return;
+            }
             Command::Branches if self.state.is_some() => {
                 self.request(Job::Branches(true));
                 return;
@@ -2712,6 +2761,49 @@ impl App {
             *index = index.saturating_add_signed(by).min(len.saturating_sub(1));
         }
         match self.view {
+            View::Conflicts => {
+                let files = self
+                    .operation
+                    .as_ref()
+                    .map(|o| o.conflicts.as_slice())
+                    .unwrap_or_default();
+                shift(&mut self.conflict_index, move_by, files.len());
+                if key == Command::Accept {
+                    if let Some(path) = files.get(self.conflict_index) {
+                        self.request(Job::Conflict(path.clone()));
+                    }
+                }
+            }
+            View::Conflict => {
+                let len = self
+                    .conflict
+                    .as_ref()
+                    .map_or(0, |f| view::conflict_lines(f, self.conflict_side).len());
+                shift(&mut self.scroll, move_by, len);
+                if key == Command::Next {
+                    self.conflict_side = (self.conflict_side + 1) % 3;
+                    self.scroll = 0;
+                }
+                if WRITES && !self.locked && matches!(key, Command::Ours | Command::Theirs) {
+                    if let Some(file) = self.conflict.take() {
+                        let resolution = if key == Command::Ours {
+                            if file.ours.is_some() {
+                                ConflictResolution::Ours
+                            } else {
+                                ConflictResolution::Delete
+                            }
+                        } else if file.theirs.is_some() {
+                            ConflictResolution::Theirs
+                        } else {
+                            ConflictResolution::Delete
+                        };
+                        self.confirm = Some(Confirm::Resolve(file, resolution));
+                        self.back = View::Conflicts;
+                        self.view = View::Confirm;
+                        self.scroll = 0;
+                    }
+                }
+            }
             View::History => {
                 if key == Command::Search {
                     self.view = View::Search;
@@ -2819,7 +2911,16 @@ impl App {
                 let len = self.working_rows().count();
                 shift(&mut self.working, move_by, len);
                 if key == Command::Accept {
-                    self.open_diff(self.working_target());
+                    let conflict = self
+                        .working_rows()
+                        .nth(self.working)
+                        .filter(|e| e.conflicted)
+                        .map(|e| e.path.clone());
+                    if let Some(path) = conflict {
+                        self.request(Job::Conflict(path));
+                    } else {
+                        self.open_diff(self.working_target());
+                    }
                 } else if key == Command::Stage && WRITES && !self.locked {
                     let entry = self.working_rows().nth(self.working);
                     if let Some(entry) = entry.filter(|e| !e.conflicted && !e.path.ends_with('/')) {
@@ -4382,5 +4483,61 @@ mod tests {
         assert!(app.view == View::History);
         assert!(!app.quit);
         assert!(app.writing);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn terminal_conflict_sides_refuse_stale_content_then_continue_merge() {
+        for (key, expected) in [('1', "ours\n"), ('2', "theirs\n")] {
+            let mut f = WriteFixture::new();
+            f.git(&["switch", "-c", "side"]);
+            f.write("file", "theirs\n");
+            f.git(&["commit", "-qam", "side"]);
+            f.git(&["switch", "main"]);
+            f.write("file", "ours\n");
+            f.git(&["commit", "-qam", "main"]);
+            f.key(Key::Char('B'));
+            f.app.branch = f
+                .app
+                .branches
+                .iter()
+                .position(|b| b.reference.name == "side")
+                .unwrap();
+            f.key(Key::Char('M'));
+            f.key(Key::Enter);
+            assert_eq!(f.app.operation.as_ref().unwrap().kind, OperationKind::Merge);
+            f.key(Key::Char('X'));
+            f.key(Key::Enter);
+            f.screen("Both sides");
+            f.key(Key::Tab);
+            assert_eq!(f.app.conflict_side, 1);
+            f.key(Key::Char(key));
+            f.screen("Resolve conflict");
+            f.write("file", "external resolution\n");
+            f.key(Key::Enter);
+            assert!(f.app.notice.contains("changed"), "{}", f.app.notice);
+            assert_eq!(
+                std::fs::read_to_string(f.root.path().join("file")).unwrap(),
+                "external resolution\n"
+            );
+            assert!(!f.git(&["ls-files", "--unmerged"]).is_empty());
+            f.key(Key::Enter);
+            f.key(Key::Char(key));
+            f.key(Key::Enter);
+            assert_eq!(f.git(&["show", ":file"]), expected);
+            assert!(f.git(&["ls-files", "--unmerged"]).is_empty());
+            assert_eq!(f.app.operation.as_ref().unwrap().kind, OperationKind::Merge);
+            f.key(Key::F(5));
+            f.screen("Continue operation");
+            f.key(Key::Enter);
+            assert_eq!(f.app.operation.as_ref().unwrap().kind, OperationKind::None);
+            assert_eq!(
+                f.git(&["rev-list", "--parents", "-1", "HEAD"])
+                    .split_whitespace()
+                    .count(),
+                3
+            );
+            f.finish();
+        }
     }
 }

@@ -96,6 +96,11 @@ and Enter opens the final review. Git's reword/squash prompts open the TUI
 message editor: Ctrl-U clears, Enter inserts a newline, `F2` saves, and Esc
 cancels the editor. Cancellation leaves Git's operation state available for
 reviewed continuation or abort; no external editor takes over the terminal.
+`X` lists conflicts; Enter inspects a file (also available from Working changes).
+Tab cycles both sides/ours/theirs, using Git's operation-specific side labels.
+`1`/`2` review taking the entire ours/theirs version, or its deletion if absent.
+The engine rechecks the displayed conflict fingerprint before replacing and
+staging the file. Resolve every file, then separately review continuation.
 
 Press `?` for the current view's bindings and action names; use `F1` while
 typing so `?` remains ordinary text. Help, the footer and keyboard dispatch
