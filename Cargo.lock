@@ -1544,6 +1544,7 @@ dependencies = [
  "rfd",
  "tauri",
  "tauri-build",
+ "tempfile",
 ]
 
 [[package]]
