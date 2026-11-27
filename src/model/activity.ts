@@ -23,6 +23,7 @@ const REDACT_KEY_REGEX = /token|password|secret|credential/i;
 const QUIET_COMMANDS = new Set([
   'app_start_dragging',
   'list_provider_accounts',
+  'provider_github_commit_profiles',
   'provider_oauth_poll',
   'provider_pull_requests',
   'provider_repositories',

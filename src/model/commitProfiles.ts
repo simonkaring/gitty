@@ -3,6 +3,10 @@ import { repositoryStorageKey } from './ssh';
 
 export interface CommitProfile { id: string; name: string; email: string }
 export const MAX_COMMIT_PROFILES = 20;
+export const providerAccountEvents = new EventTarget();
+export function isGithubCommitProfile(id: string): boolean {
+  return /^github-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id);
+}
 
 export function validateCommitProfile(value: unknown): CommitProfile {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid commit profile.');

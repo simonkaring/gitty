@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Icons } from './icons';
 import { errorMessage, isDesktopHost, native } from '../model/native';
 import type { ProviderAccount as Account } from '../model/providerRepositories';
+import { providerAccountEvents } from '../model/commitProfiles';
 import githubIcon from '../assets/providers/github.svg';
 import gitlabIcon from '../assets/providers/gitlab.svg';
 import azureDevopsIcon from '../assets/providers/azure-devops.svg';
@@ -13,7 +14,7 @@ const providers: Record<Provider, string> = {
   github: 'GitHub', gitlab: 'GitLab', azureDevops: 'Azure DevOps', bitbucket: 'Bitbucket Cloud',
 };
 const providerInfo = {
-  github: { host: 'github.com', icon: githubIcon, description: 'Repositories & pull requests' },
+  github: { host: 'github.com', icon: githubIcon, description: 'Repositories, HTTPS push & pull requests' },
   gitlab: { host: 'gitlab.com', icon: gitlabIcon, description: 'Repositories & merge requests' },
   azureDevops: { host: 'dev.azure.com', icon: azureDevopsIcon, description: 'Repositories & pull requests' },
   bitbucket: { host: 'bitbucket.org', icon: bitbucketIcon, description: 'Pull requests · API token' },
@@ -62,6 +63,7 @@ export function IntegrationsSettings() {
         if (!active) return;
         if (result.account) {
           setAccounts(previous => [...previous, result.account!]);
+          if (result.account.provider === 'github') providerAccountEvents.dispatchEvent(new Event('change'));
           setDevice(null); setBusy(false); setError('');
         } else {
           timer = setTimeout(() => void poll(), result.interval * 1000);
@@ -101,6 +103,7 @@ export function IntegrationsSettings() {
     try {
       const account = await native<Account>('provider_connect_token', { provider, username: username.trim(), token });
       setAccounts(previous => [...previous, account]);
+      if (account.provider === 'github') providerAccountEvents.dispatchEvent(new Event('change'));
       setToken(''); setUsername('');
     } catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
@@ -111,6 +114,7 @@ export function IntegrationsSettings() {
     try {
       await native('provider_disconnect', { id });
       setAccounts(previous => previous.filter(account => account.id !== id));
+      if (accounts.some(account => account.id === id && account.provider === 'github')) providerAccountEvents.dispatchEvent(new Event('change'));
     } catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   }

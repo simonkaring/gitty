@@ -323,25 +323,27 @@ impl CloneCredential {
     }
 
     pub(crate) fn configure(&self, command: &mut Command) {
+        command.envs(self.config_env());
+    }
+
+    pub(crate) fn config_env(&self) -> Vec<(String, String)> {
         // Process-local config, not argv or repository config. Reset configured
         // headers first and scope authorization to this exact repository URL.
         let key = format!("http.{}.extraHeader", self.source);
         let config = [
-            ("http.extraHeader", ""),
-            (key.as_str(), ""),
-            (key.as_str(), self.authorization.as_str()),
+            ("http.extraHeader", String::new()),
+            (key.as_str(), String::new()),
+            (
+                key.as_str(),
+                format!("Authorization: {}", self.authorization),
+            ),
         ];
-        command.env("GIT_CONFIG_COUNT", config.len().to_string());
-        for (i, (key, value)) in config.iter().enumerate() {
-            command.env(format!("GIT_CONFIG_KEY_{i}"), key).env(
-                format!("GIT_CONFIG_VALUE_{i}"),
-                if i == 2 {
-                    format!("Authorization: {value}")
-                } else {
-                    value.to_string()
-                },
-            );
+        let mut env = vec![("GIT_CONFIG_COUNT".into(), config.len().to_string())];
+        for (i, (key, value)) in config.into_iter().enumerate() {
+            env.push((format!("GIT_CONFIG_KEY_{i}"), key.to_string()));
+            env.push((format!("GIT_CONFIG_VALUE_{i}"), value));
         }
+        env
     }
 
     pub(crate) fn redact(&self, message: &str) -> String {
@@ -350,6 +352,44 @@ impl CloneCredential {
             .replace(&self.authorization, "[redacted]")
             .replace(self.authorization.split_once(' ').unwrap().1, "[redacted]")
     }
+}
+
+pub(crate) fn github_push_credential(
+    accounts: &AccountStore,
+    source: &str,
+    effective_email: impl FnOnce() -> Result<Option<String>>,
+) -> Result<Option<CloneCredential>> {
+    let valid_url = clone_url(source, Provider::Github).is_ok_and(|url| {
+        url.as_str() == source
+            && url.path().bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_' | b'.')
+            })
+    });
+    if !valid_url {
+        return Ok(None);
+    }
+    let accounts_list = accounts.list()?;
+    let github_accounts: Vec<_> = accounts_list
+        .iter()
+        .filter(|account| account.provider == Provider::Github)
+        .collect();
+    if github_accounts.is_empty() {
+        return Ok(None);
+    }
+    // Opt-in: an account is used only when the effective email is its no-reply address.
+    let email = effective_email()?;
+    let mut matching = github_accounts.into_iter().filter(|account| {
+        account
+            .github_commit_email
+            .as_deref()
+            .zip(email.as_deref())
+            .is_some_and(|(profile, effective)| profile.eq_ignore_ascii_case(effective))
+    });
+    let (Some(account), None) = (matching.next(), matching.next()) else {
+        return Ok(None);
+    };
+    let (account, token) = accounts.credential(&account.id)?;
+    CloneCredential::new(source, &account, token).map(Some)
 }
 
 pub fn clone_credential(
@@ -464,6 +504,50 @@ mod tests {
     }
 
     #[test]
+    fn github_accounts_require_a_matching_effective_email() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("accounts.json");
+        let email = "123+alice@users.noreply.github.com";
+        std::fs::write(&path, json!([
+            {"id":uuid::Uuid::new_v4().to_string(),"provider":"github","username":"alice","githubCommitEmail":email},
+            {"id":uuid::Uuid::new_v4().to_string(),"provider":"github","username":"bob","githubCommitEmail":"456+bob@users.noreply.github.com"}
+        ]).to_string()).unwrap();
+        let store = AccountStore::new(path.clone());
+        let github = "https://github.com/team/project.git";
+        assert_eq!(store.github_commit_profiles().unwrap()[0].email, email);
+        assert!(
+            github_push_credential(&store, github, || Ok(Some("ada@example.org".into())))
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            github_push_credential(&store, github, || Ok(Some(email.into())))
+                .err()
+                .unwrap()
+                .code,
+            "credentialStore"
+        );
+        assert!(github_push_credential(
+            &store,
+            "https://github.com.evil.test/team/project.git",
+            || panic!("must not read Git identity")
+        )
+        .unwrap()
+        .is_none());
+        std::fs::write(
+            &path,
+            json!([{"id":uuid::Uuid::new_v4().to_string(),"provider":"github","username":"alice","githubCommitEmail":email}]).to_string(),
+        )
+        .unwrap();
+        assert!(
+            github_push_credential(&store, github, || Ok(Some("ada@example.org".into())))
+                .unwrap()
+                .is_none(),
+            "a sole account is used only when the effective email matches"
+        );
+    }
+
+    #[test]
     fn clone_credentials_are_scoped_ephemeral_and_redacted() {
         for (provider, oauth, source, scheme) in [
             (
@@ -496,6 +580,7 @@ mod tests {
                 provider,
                 username: "user".into(),
                 oauth,
+                github_commit_email: None,
             };
             let credential = CloneCredential::new(source, &account, "test-secret".into()).unwrap();
             let mut command = Command::new("git");

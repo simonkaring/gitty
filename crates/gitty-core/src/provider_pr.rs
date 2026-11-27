@@ -270,6 +270,7 @@ pub(crate) fn verify_token(provider: Provider, username: &str, token: &str) -> R
         provider,
         username: username.into(),
         oauth: false,
+        github_commit_email: None,
     };
     let client = client()?;
     let result = response_json(

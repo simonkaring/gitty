@@ -993,6 +993,18 @@ exactly-full final page is reported truncated); Bitbucket when the envelope has 
   the TUI may query that exact ref at the reviewed push URL without changing
   local refs. That lookup describes the server's current state, not whether
   a previous push landed. These reviews are not new IPC or stdio methods.
+- Desktop native branch pushes and publishes to a single credential-free
+  GitHub.com HTTPS push URL use the connected GitHub account whose cached
+  no-reply address uniquely matches the effective `user.email`. Without a match,
+  or when account metadata or its credential cannot be read, Git authenticates
+  normally.
+  `provider_github_commit_profiles` resolves and caches GitHub no-reply addresses
+  using the authenticated account's numeric ID and login.
+  The token is supplied as a URL-scoped header in Git's process config,
+  with TLS verification enabled, redirects and credential fallback disabled.
+  Local hooks still run and inherit Git's process environment; use connected
+  credentials in repositories whose local hooks you trust. GitHub authorizes
+  the push independently of the commit author and committer.
 - Background fetch remains noninteractive (`credential.interactive=false` plus
   `GCM_INTERACTIVE=false`) and can use existing credentials and SSH agents.
   Explicit clone/fetch/pull/push (and origin branch deletion) allow helper

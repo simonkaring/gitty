@@ -1,7 +1,8 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { attachRipple } from './ripple';
 import { BUILTIN_THEMES, MAX_CUSTOM_THEMES, themeTokens, validateTheme, type ThemeDefinition } from './themes';
-import { MAX_COMMIT_PROFILES, validateCommitProfile, type CommitProfile } from './commitProfiles';
+import { isGithubCommitProfile, MAX_COMMIT_PROFILES, providerAccountEvents, validateCommitProfile, type CommitProfile } from './commitProfiles';
+import { isDesktopHost, native } from './native';
 export type { ThemeDefinition } from './themes';
 export type { DesignFamily } from './themes';
 
@@ -61,7 +62,7 @@ export function validateSettings(value: unknown): Settings {
   if (!Array.isArray(s.commitProfiles) || s.commitProfiles.length > MAX_COMMIT_PROFILES) throw new Error('Invalid commit profiles.');
   const commitProfiles = s.commitProfiles.map(validateCommitProfile);
   if (new Set(commitProfiles.map(profile => profile.id)).size !== commitProfiles.length) throw new Error('Duplicate commit profile IDs.');
-  if (!s.repositoryCommitProfiles || typeof s.repositoryCommitProfiles !== 'object' || Array.isArray(s.repositoryCommitProfiles) || Object.keys(s.repositoryCommitProfiles).length > 100 || Object.entries(s.repositoryCommitProfiles).some(([key, id]) => key.length > 4096 || typeof id !== 'string' || !commitProfiles.some(profile => profile.id === id))) throw new Error('Invalid repository commit profile selection.');
+  if (!s.repositoryCommitProfiles || typeof s.repositoryCommitProfiles !== 'object' || Array.isArray(s.repositoryCommitProfiles) || Object.keys(s.repositoryCommitProfiles).length > 100 || Object.entries(s.repositoryCommitProfiles).some(([key, id]) => key.length > 4096 || typeof id !== 'string' || (!isGithubCommitProfile(id) && !commitProfiles.some(profile => profile.id === id)))) throw new Error('Invalid repository commit profile selection.');
   if (new Set(customThemes.map(t => t.id)).size !== customThemes.length) throw new Error('Duplicate theme IDs.');
   const themes = [...BUILTIN_THEMES, ...customThemes];
   if (!themes.some(t => t.id === s.themeId) || !themes.some(t => t.id === s.lightThemeId && t.mode === 'light') || !themes.some(t => t.id === s.darkThemeId && t.mode === 'dark')) throw new Error('Missing or incompatible theme selection.');
@@ -110,6 +111,7 @@ export function resolveTheme(settings: Settings, dark: boolean): ThemeDefinition
 }
 interface SettingsContextValue {
   settings: Settings; theme: ThemeDefinition; themes: ThemeDefinition[];
+  githubCommitProfiles: CommitProfile[]; githubCommitProfilesLoaded: boolean;
   updateSettings: (patch: Partial<Settings> | ((current: Settings) => Partial<Settings>)) => void;
   openSettings: (section?: 'Commit profiles' | 'Integrations') => void; closeSettings: () => void; isSettingsOpen: boolean; settingsSection: 'Commit profiles' | 'Integrations' | null;
   previewTheme: (theme: ThemeDefinition | null) => void;
@@ -120,6 +122,21 @@ const Context = createContext<SettingsContextValue | null>(null);
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const [initial] = useState(() => { try { return readSettings(window.localStorage); } catch { return { settings: DEFAULT_SETTINGS, error: 'Local storage is unavailable. Preferences will last for this session.' }; } });
   const [settings, setSettings] = useState(initial.settings);
+  const [githubCommitProfiles, setGithubCommitProfiles] = useState<CommitProfile[]>([]);
+  const [githubCommitProfilesLoaded, setGithubCommitProfilesLoaded] = useState(() => !isDesktopHost());
+  useEffect(() => {
+    if (!isDesktopHost()) return;
+    let request = 0;
+    const load = () => {
+      const revision = ++request;
+      void native<CommitProfile[]>('provider_github_commit_profiles').then(profiles => {
+        if (revision === request) setGithubCommitProfiles(profiles);
+      }).catch(() => {}).finally(() => { if (revision === request) setGithubCommitProfilesLoaded(true); });
+    };
+    load();
+    providerAccountEvents.addEventListener('change', load);
+    return () => { request++; providerAccountEvents.removeEventListener('change', load); };
+  }, []);
   const current = useRef(settings);
   const [storageError, setStorageError] = useState(initial.error);
   const [isSettingsOpen, setOpen] = useState(false);
@@ -158,6 +175,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     updateSettings({ paneWidths });
     try { for (const [key, width] of Object.entries(paneWidths)) localStorage.setItem(`gitty:${key}-width`, String(width)); } catch { setStorageError('Pane sizes reset for this session; storage is unavailable.'); }
   };
-  return <Context.Provider value={{ settings, theme, themes: [...BUILTIN_THEMES, ...settings.customThemes], updateSettings, isSettingsOpen, settingsSection, openSettings: section => { setSettingsSection(section ?? null); setOpen(true); }, closeSettings: () => { setOpen(false); previewTheme(null); }, previewTheme, storageError, retryPersistence: () => persist(current.current), resetWorkspace }}>{children}</Context.Provider>;
+  return <Context.Provider value={{ settings, githubCommitProfiles, githubCommitProfilesLoaded, theme, themes: [...BUILTIN_THEMES, ...settings.customThemes], updateSettings, isSettingsOpen, settingsSection, openSettings: section => { setSettingsSection(section ?? null); setOpen(true); }, closeSettings: () => { setOpen(false); previewTheme(null); }, previewTheme, storageError, retryPersistence: () => persist(current.current), resetWorkspace }}>{children}</Context.Provider>;
 }
 export function useSettings(): SettingsContextValue { const value = useContext(Context); if (!value) throw new Error('useSettings requires SettingsProvider.'); return value; }

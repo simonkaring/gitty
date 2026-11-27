@@ -4,7 +4,7 @@ import type { CommitDetail, DiffSpec, FileDiff, RepositoryMutation, RepositorySe
 import { errorMessage, isDemoHandle, native, statusGroups, type WorkingGroup } from '../model/native';
 import { clearSubmittedDraft, commitMessage, discardableEntries, draftFromCommitMessage, draftKey, operationPaths, readDraft, saveDraft, type CommitDraft, type MutationOutcome } from '../model/workflow';
 import { useSettings } from '../model/settings';
-import { commitProfileRepositoryKey } from '../model/commitProfiles';
+import { commitProfileRepositoryKey, isGithubCommitProfile } from '../model/commitProfiles';
 import { DiscardDialog } from './DiscardDialog';
 import { FileContextMenu, type FileMenuTarget } from './FileContextMenu';
 import { WorkingFileWindow } from './WorkingFileWindow';
@@ -73,18 +73,23 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
   const [outcome, setOutcome] = useState<MutationOutcome | null>(null);
   useEffect(() => { if (!mutationBlocked) setOutcome(value => value?.refreshError ? { ...value, refreshError: undefined } : value); }, [revision, mutationBlocked]);
   const [success, setSuccess] = useState('');
-  const { settings, updateSettings, openSettings } = useSettings();
+  const { settings, githubCommitProfiles = [], githubCommitProfilesLoaded = true, updateSettings, openSettings } = useSettings();
   const profileKey = commitProfileRepositoryKey(session);
-  const selectedProfile = settings.commitProfiles.find(profile => profile.id === settings.repositoryCommitProfiles[profileKey]);
+  const profileId = settings.repositoryCommitProfiles[profileKey] ?? '';
+  const selectedProfile = [...settings.commitProfiles, ...githubCommitProfiles].find(profile => profile.id === profileId);
+  const unavailableProfile = isGithubCommitProfile(profileId) && !selectedProfile;
   const identity = selectedProfile ? { name: selectedProfile.name, email: selectedProfile.email } : undefined;
-  const identityName = selectedProfile?.name ?? 'Repository default';
+  const unavailableLabel = githubCommitProfilesLoaded ? 'GitHub profile unavailable' : 'Loading GitHub profile…';
+  const identityName = selectedProfile?.name ?? (unavailableProfile ? unavailableLabel : 'Repository default');
   const identityControl = <details className="composer-identity" open={ui.identityOpen}>
     <summary title={selectedProfile ? `${selectedProfile.name} <${selectedProfile.email}>` : 'Uses the repository’s own Git identity'} onClick={event => { event.preventDefault(); updateUi(current => ({ ...current, identityOpen: !current.identityOpen })); }}>
       <Icons.User size={12} aria-hidden="true" /><span className="composer-identity-role">{amending ? 'Committer' : 'Commit as'}</span>{' '}<span className="composer-identity-name">{identityName}</span><Icons.ChevronDown size={12} className="composer-identity-chevron" aria-hidden="true" />
     </summary>
-    <div className="composer-identity-panel"><label htmlFor={`${composerId}-identity`}>{amending ? 'Committer profile' : 'Commit as'}</label><select id={`${composerId}-identity`} value={selectedProfile?.id ?? ''} disabled={!!operation || busy || mutationBlocked} onChange={event => { const id = event.target.value; updateSettings(current => { const selections = { ...current.repositoryCommitProfiles }; if (id) selections[profileKey] = id; else delete selections[profileKey]; return { repositoryCommitProfiles: selections }; }); }}>
+    <div className="composer-identity-panel"><label htmlFor={`${composerId}-identity`}>{amending ? 'Committer profile' : 'Commit as'}</label><select id={`${composerId}-identity`} value={unavailableProfile ? profileId : selectedProfile?.id ?? ''} disabled={!!operation || busy || mutationBlocked} onChange={event => { const id = event.target.value; updateSettings(current => { const selections = { ...current.repositoryCommitProfiles }; if (id) selections[profileKey] = id; else delete selections[profileKey]; return { repositoryCommitProfiles: selections }; }); }}>
       <option value="">Repository Git identity (default)</option>
       {settings.commitProfiles.map(profile => <option key={profile.id} value={profile.id}>{profile.name} · {profile.email}</option>)}
+      {githubCommitProfiles.map(profile => <option key={profile.id} value={profile.id}>GitHub: {profile.name} · {profile.email}</option>)}
+      {unavailableProfile && <option value={profileId} disabled>{unavailableLabel}</option>}
     </select><button type="button" className="text-button" onClick={() => openSettings('Commit profiles')}>Manage profiles…</button></div>
   </details>;
   const pending = useRef(false);
@@ -301,7 +306,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
             </div>
           </section>; })}
         </div>
-        <form className={`commit-composer${ui.composerCollapsed ? ' is-collapsed' : ''}`} aria-label="Commit composer" onSubmit={event => { event.preventDefault(); if (!composerDraft.subject.trim() || groups.conflict.length) return; if (amending && amendReady && status && session.head) void perform({ kind: 'amend', message: commitMessage(composerDraft), identity, expectedHead: session.head, expectedHeadRef: session.headRef, expectedStatusFingerprint: status.fingerprint }); else if (!amending && stagedCount) void perform({ kind: 'commit', message: commitMessage(composerDraft), identity }); }}>
+        <form className={`commit-composer${ui.composerCollapsed ? ' is-collapsed' : ''}`} aria-label="Commit composer" onSubmit={event => { event.preventDefault(); if (!composerDraft.subject.trim() || groups.conflict.length || unavailableProfile) return; if (amending && amendReady && status && session.head) void perform({ kind: 'amend', message: commitMessage(composerDraft), identity, expectedHead: session.head, expectedHeadRef: session.headRef, expectedStatusFingerprint: status.fingerprint }); else if (!amending && stagedCount) void perform({ kind: 'commit', message: commitMessage(composerDraft), identity }); }}>
           <div className="composer-heading">
             <h2><Icons.GitCommitHorizontal size={16} />{amending ? 'Rewrite last commit' : 'Create commit'}</h2>
             <span>{stagedCount} staged</span>
@@ -324,7 +329,7 @@ export function WorkingChanges({ session, status, revision, busy, mutationBlocke
             <label htmlFor={`${composerId}-body`}>Description <span>optional</span></label>
             <textarea id={`${composerId}-body`} name="body" placeholder="Add context: why was this change needed?" rows={2} value={composerDraft.body} disabled={!!operation || (amending && !amendDraft)} onChange={event => edit({ ...composerDraft, body: event.target.value })} />
             <div className="composer-footer">
-              <button className="primary-button commit-button" data-working={operation.startsWith('Rewriting') || operation.startsWith('Creating')} type="submit" disabled={blocked || (!amending && !stagedCount) || (amending && !amendReady) || !composerDraft.subject.trim() || !!groups.conflict.length}>
+              <button className="primary-button commit-button" data-working={operation.startsWith('Rewriting') || operation.startsWith('Creating')} type="submit" disabled={blocked || unavailableProfile || (!amending && !stagedCount) || (amending && !amendReady) || !composerDraft.subject.trim() || !!groups.conflict.length}>
                 <Icons.GitCommitHorizontal size={16} />{operation.startsWith('Rewriting') ? 'Amending…' : operation.startsWith('Creating') ? 'Committing…' : amending ? 'Rewrite last commit' : 'Commit staged changes'}
               </button>
             </div>

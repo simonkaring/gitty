@@ -35,6 +35,15 @@ pub struct ProviderAccount {
     pub username: String,
     #[serde(default)]
     pub oauth: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_commit_email: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct GithubCommitProfile {
+    pub id: String,
+    pub name: String,
+    pub email: String,
 }
 
 pub struct AccountStore {
@@ -86,6 +95,45 @@ impl AccountStore {
     pub fn list(&self) -> Result<Vec<ProviderAccount>> {
         let _guard = lock(&self.lock)?;
         self.read()
+    }
+
+    pub fn github_commit_profiles(&self) -> Result<Vec<GithubCommitProfile>> {
+        let mut profiles = Vec::new();
+        for account in self
+            .list()?
+            .into_iter()
+            .filter(|account| account.provider == Provider::Github)
+        {
+            let email = match account.github_commit_email {
+                Some(email) => email,
+                None => {
+                    let Ok((_, token)) = self.credential(&account.id) else {
+                        continue;
+                    };
+                    let Ok(email) =
+                        crate::provider_oauth::github_commit_email(&token, &account.username)
+                    else {
+                        continue;
+                    };
+                    let _guard = lock(&self.lock)?;
+                    let mut accounts = self.read()?;
+                    let Some(current) =
+                        accounts.iter_mut().find(|current| current.id == account.id)
+                    else {
+                        continue;
+                    };
+                    current.github_commit_email = Some(email.clone());
+                    self.save(&accounts)?;
+                    email
+                }
+            };
+            profiles.push(GithubCommitProfile {
+                id: format!("github-{}", account.id),
+                name: account.username,
+                email,
+            });
+        }
+        Ok(profiles)
     }
 
     pub fn connect_token(
@@ -150,6 +198,7 @@ impl AccountStore {
             provider,
             username,
             oauth,
+            github_commit_email: None,
         };
         Self::key(&account.id)?.set_password(&token).map_err(|_| {
             Error::new(
@@ -240,6 +289,7 @@ mod tests {
                 provider: Provider::Github,
                 username: "alice".into(),
                 oauth: false,
+                github_commit_email: None,
             }])
             .unwrap();
         let data = std::fs::read_to_string(&store.path).unwrap();

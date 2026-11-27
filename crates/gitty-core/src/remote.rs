@@ -4,6 +4,8 @@ use crate::{
     dto::{Error, RepositoryLocation, Result},
     mutate::report,
     process::{self, args, Output},
+    provider_accounts::AccountStore,
+    provider_repositories::github_push_credential,
     remote_dto::{ActionOutput, PullMode, RemoteAction, SyncInfo},
     repository::{resolve, Repository, Service},
 };
@@ -37,15 +39,27 @@ impl Service {
         action: RemoteAction,
         askpass: Option<&crate::askpass::AskpassRegistry>,
     ) -> Result<ActionOutput> {
+        self.remote_action_with_accounts(handle, action, askpass, None)
+    }
+
+    pub fn remote_action_with_accounts(
+        &self,
+        handle: &str,
+        action: RemoteAction,
+        askpass: Option<&crate::askpass::AskpassRegistry>,
+        accounts: Option<&AccountStore>,
+    ) -> Result<ActionOutput> {
         if matches!(action, RemoteAction::BackgroundFetch) {
             // Only moves refs/remotes/* and adds missing tags; Git's own ref locks suffice, and a slow
             // network must not block local writes such as switching branches.
             let repo = self.repo(handle)?;
             return crate::process::without_read_deadline(|| {
-                repo.remote_action(action, askpass, false)
+                repo.remote_action(action, askpass, false, None)
             });
         }
-        self.mutate(handle, |repo| repo.remote_action(action, askpass, false))
+        self.mutate(handle, |repo| {
+            repo.remote_action(action, askpass, false, accounts)
+        })
     }
 }
 
@@ -155,7 +169,7 @@ impl Service {
                     set_upstream: review.kind == TerminalSync::Publish,
                 },
             };
-            repo.remote_action(action, askpass, true)
+            repo.remote_action(action, askpass, true, None)
         })
     }
 }
@@ -532,6 +546,7 @@ impl Repository {
         action: RemoteAction,
         askpass: Option<&crate::askpass::AskpassRegistry>,
         reviewed: bool,
+        accounts: Option<&AccountStore>,
     ) -> Result<ActionOutput> {
         let wsl = matches!(self.location(), RepositoryLocation::Wsl { .. });
         // Network authentication happens on the remote host: Gitty must not try to
@@ -595,15 +610,6 @@ impl Repository {
             None
         };
 
-        let account_url = if pushes {
-            self.check_text(&["remote", "get-url", "--push", "--", &remote])?
-        } else {
-            self.check_text(&["remote", "get-url", "--", &remote])?
-        };
-        // Provider API accounts do not override the user's Git authentication.
-        let mut helper_args = Vec::new();
-        crate::credentials::configure(&mut helper_args, self.location(), account_url.trim_end())?;
-
         let prompt_context = || {
             crate::askpass::AskpassContext::new(
                 &self.session.name,
@@ -628,23 +634,30 @@ impl Repository {
             (true, false, Some(registry)) => Some(registry.start_operation_with(prompt_context())),
             _ => None,
         };
-        let network = || match (&wsl_bridge, askpass) {
-            (Some((path, guard)), Some(registry)) => {
-                network_args_wsl(path, registry, guard.token())
-            }
-            _ => {
-                let (mut args, env) = network_args(interactive, native_bridge.as_ref());
-                args.extend(helper_args.clone());
-                if wsl && interactive {
-                    allow_credential_helper_ui(&mut args);
+        let network = || -> Result<_> {
+            Ok(match (&wsl_bridge, askpass) {
+                (Some((path, guard)), Some(registry)) => {
+                    network_args_wsl(path, registry, guard.token())
                 }
-                (args, env)
-            }
+                _ => {
+                    let (mut args, env) = network_args(interactive, native_bridge.as_ref());
+                    let url = if pushes {
+                        self.check_text(&["remote", "get-url", "--push", "--", &remote])?
+                    } else {
+                        self.check_text(&["remote", "get-url", "--", &remote])?
+                    };
+                    crate::credentials::configure(&mut args, self.location(), url.trim_end())?;
+                    if wsl && interactive {
+                        allow_credential_helper_ui(&mut args);
+                    }
+                    (args, env)
+                }
+            })
         };
 
         match &action {
             RemoteAction::Fetch { .. } | RemoteAction::BackgroundFetch => {
-                let (mut a, env) = network();
+                let (mut a, env) = network()?;
                 a.extend(args(&SAFE_FETCH));
                 a.extend(args(&["--", &remote]));
                 // Ignore configured fetch refspecs (including mirror mappings
@@ -690,8 +703,31 @@ impl Repository {
                 }
                 let destination = branch.or(tracking_branch).unwrap_or(source);
                 self.remote_branch_name(destination)?;
-                self.push_destination(&remote)?;
-                let (mut a, env) = network();
+                let endpoint = self.push_destination(&remote)?;
+                // Any account problem falls back to normal Git authentication.
+                let credential = accounts.filter(|_| !wsl && !ssh).and_then(|accounts| {
+                    github_push_credential(accounts, &endpoint, || self.sync_config("user.email"))
+                        .ok()
+                        .flatten()
+                });
+                let (mut a, mut env) = if credential.is_some() {
+                    network_args(false, None)
+                } else {
+                    network()?
+                };
+                if let Some(credential) = &credential {
+                    // Never fall back to another account or follow a redirect with this token.
+                    a.extend(args(&[
+                        "-c",
+                        "credential.helper=",
+                        "-c",
+                        &format!("http.{endpoint}.followRedirects=false"),
+                        "-c",
+                        &format!("http.{endpoint}.sslVerify=true"),
+                    ]));
+                    env.push(("GIT_ALLOW_PROTOCOL".into(), "https".into()));
+                    env.extend(credential.config_env());
+                }
                 a.extend(args(&SAFE_PUSH));
                 if *set_upstream {
                     a.push("--set-upstream".into());
@@ -701,7 +737,20 @@ impl Repository {
                     &remote,
                     &format!("refs/heads/{source}:refs/heads/{destination}"),
                 ]));
-                let output = self.write(&a, &env, &[], 0)?;
+                let mut output = self.write(&a, &env, &[], 0).map_err(|mut error| {
+                    if let Some(credential) = &credential {
+                        error.message = credential.redact(&error.message);
+                    }
+                    error
+                })?;
+                if let Some(credential) = &credential {
+                    output.stdout = credential
+                        .redact(&String::from_utf8_lossy(&output.stdout))
+                        .into_bytes();
+                    output.stderr = credential
+                        .redact(&String::from_utf8_lossy(&output.stderr))
+                        .into_bytes();
+                }
                 if reviewed && !output.success {
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     let destination = format!("refs/heads/{destination}");
@@ -728,7 +777,7 @@ impl Repository {
             } => {
                 let (reference, value) = self.tag_target(tag, expected_oid)?;
                 self.push_destination(&remote)?;
-                let (mut a, env) = network();
+                let (mut a, env) = network()?;
                 a.extend(args(&SAFE_PUSH));
                 let refspec = if matches!(action, RemoteAction::DeleteRemoteTag { .. }) {
                     // Absent or different on the remote: refused, nothing is deleted.
@@ -762,7 +811,7 @@ impl Repository {
                     )
                 })?;
                 self.remote_branch_name(branch)?;
-                let (mut fetch, env) = network();
+                let (mut fetch, env) = network()?;
                 fetch.extend(args(&SAFE_FETCH));
                 fetch.extend(args(&[
                     "--",
@@ -803,7 +852,7 @@ impl Repository {
                 let expected_head = self.head_commit()?;
                 // Fetch precisely one branch, then integrate its pinned object ID.
                 // No merge/rebase ever runs after an uncertain or failed fetch.
-                let (mut fetch, env) = network();
+                let (mut fetch, env) = network()?;
                 let private_ref = format!("refs/gitty/pull/{}", uuid::Uuid::new_v4());
                 fetch.extend(args(&SAFE_FETCH));
                 fetch.extend(args(&[

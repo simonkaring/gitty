@@ -14,7 +14,7 @@ type Section = typeof sections[number];
 
 export function SettingsDialog({ demo = false, onToggleDemo, demoBusy = false }: { demo?: boolean; onToggleDemo?: () => void; demoBusy?: boolean } = {}) {
   const api = useSettings();
-  const { settings, theme, themes, updateSettings } = api;
+  const { settings, githubCommitProfiles = [], theme, themes, updateSettings } = api;
   const [section, setSection] = useState<Section>('Appearance');
   const [draft, setDraft] = useState<ThemeDefinition | null>(null);
   const [profileDraft, setProfileDraft] = useState<CommitProfile | null>(null);
@@ -120,7 +120,8 @@ export function SettingsDialog({ demo = false, onToggleDemo, demoBusy = false }:
       </section>
       <section hidden={section !== 'Commit profiles'} aria-labelledby="profiles-heading"><h3 id="profiles-heading">Commit profiles</h3><p>Save names and email addresses to choose from when committing. “Commit as” selections are remembered per worktree on this device; use a repository’s toolbar → Git identity… to explicitly apply a profile to its Git config.</p>
         {settings.commitProfiles.map(profile => <div className="commit-profile-row" key={profile.id}><span><strong>{profile.name}</strong><small>{profile.email}</small></span><button className="secondary-button" onClick={() => { setProfileDraft({ ...profile }); setError(''); }}>Edit</button><button className="secondary-button" onClick={() => deleteProfile(profile.id)}>Delete</button></div>)}
-        {!settings.commitProfiles.length && <p>No saved profiles. Gitty uses each repository’s configured Git identity by default.</p>}
+        {githubCommitProfiles.map(profile => <div className="commit-profile-row" key={profile.id}><span><strong>{profile.name} · GitHub</strong><small>{profile.email}</small></span></div>)}
+        {!settings.commitProfiles.length && !githubCommitProfiles.length && <p>No profiles available. Gitty uses each repository’s configured Git identity by default.</p>}
         {!profileDraft && <button className="secondary-button" disabled={settings.commitProfiles.length >= MAX_COMMIT_PROFILES} onClick={() => { setProfileDraft({ id: `profile-${crypto.randomUUID()}`, name: '', email: '' }); setError(''); }}>Add profile</button>}
         {profileDraft && <div className="profile-editor"><label className="settings-field">Name<input autoComplete="name" maxLength={120} value={profileDraft.name} onChange={e => setProfileDraft({ ...profileDraft, name: e.target.value })} /></label><label className="settings-field">Email<input type="email" autoComplete="email" maxLength={254} value={profileDraft.email} onChange={e => setProfileDraft({ ...profileDraft, email: e.target.value })} /></label><div className="settings-actions"><button className="primary-button" onClick={saveProfile}>Save profile</button><button className="secondary-button" onClick={() => { setProfileDraft(null); setError(''); }}>Cancel</button></div></div>}
       </section>

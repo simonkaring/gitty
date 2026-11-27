@@ -534,6 +534,38 @@ fn remote_ipc_shape_and_missing_upstream() {
 }
 
 #[test]
+fn connected_accounts_never_block_pushes() {
+    let f = Fixture::new();
+    let path = f._data.path().join("accounts.json");
+    let accounts = crate::provider_accounts::AccountStore::new(path.clone());
+    let push = || {
+        f.service.remote_action_with_accounts(
+            &f.handle,
+            serde_json::from_value(json!({"kind":"push","setUpstream":true})).unwrap(),
+            None,
+            Some(&accounts),
+        )
+    };
+    let bare = f.bare_remote();
+    std::fs::write(&path, "broken").unwrap();
+    assert!(push().is_ok(), "non-GitHub pushes ignore account metadata");
+    f.git(&[
+        "remote",
+        "set-url",
+        "--push",
+        "origin",
+        "https://github.com/team/project.git",
+    ]);
+    f.git(&[
+        "config",
+        "--add",
+        "remote.origin.pushurl",
+        bare.path().to_str().unwrap(),
+    ]);
+    assert_eq!(push().unwrap_err().code, "multiplePushUrls");
+}
+
+#[test]
 fn remote_fetch_counts_fast_forward_pull_and_push() {
     let f = Fixture::new();
     let bare = f.bare_remote();

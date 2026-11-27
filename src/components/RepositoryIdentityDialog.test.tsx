@@ -9,8 +9,9 @@ const avatars = vi.hoisted(() => ({
   mode: 'initials' as 'initials' | 'gravatar',
   url: vi.fn(async (_email: string) => 'https://gravatar.com/avatar/mock'),
 }));
+const github = vi.hoisted(() => ({ id: 'github-12345678-1234-1234-1234-123456789abc', name: 'octocat', email: '123+octocat@users.noreply.github.com' }));
 vi.mock('../model/native', () => ({ native: invoke, errorMessage: (e: Error) => e.message }));
-vi.mock('../model/settings', () => ({ useSettings: () => ({ settings: { authorAvatarMode: avatars.mode, commitProfiles: [{ id: 'profile-1', name: 'Repo Author', email: 'repo@example.org' }] }, openSettings: vi.fn() }) }));
+vi.mock('../model/settings', () => ({ useSettings: () => ({ settings: { authorAvatarMode: avatars.mode, commitProfiles: [{ id: 'profile-1', name: 'Repo Author', email: 'repo@example.org' }] }, githubCommitProfiles: [github], openSettings: vi.fn() }) }));
 vi.mock('../model/gravatar', () => ({ gravatarUrl: avatars.url, gravatarImageFailed: () => false, markGravatarImageFailed: vi.fn() }));
 
 it('uses the effective email for Gravatar only when enabled and falls back to initials', async () => {
@@ -37,13 +38,13 @@ it('uses the effective email for Gravatar only when enabled and falls back to in
   } finally { avatars.mode = 'initials'; await act(async () => { root.unmount(); }); }
 });
 
-it('previews the effective identity, then rereads it after explicitly applying a profile', async () => {
+it.each([{ id: 'profile-1', name: 'Repo Author', email: 'repo@example.org' }, github])('rereads the effective identity after applying $name', async ({ id, name, email }) => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.setAttribute('open', ''); } });
   const identity = { local: { name: 'Old Name', email: 'old@example.org' }, effective: { name: 'Old Name', email: 'worktree@example.org' }, effectiveSources: { name: 'repository', email: 'worktree' } };
   invoke.mockReset().mockResolvedValue(identity);
   const onApply = vi.fn(async () => {
-    invoke.mockResolvedValue({ ...identity, local: { name: 'Repo Author', email: 'repo@example.org' }, effective: { ...identity.effective, name: 'Repo Author' } });
+    invoke.mockResolvedValue({ ...identity, local: { name, email }, effective: { ...identity.effective, name } });
   });
   const host = document.createElement('div');
   document.body.append(host);
@@ -63,11 +64,11 @@ it('previews the effective identity, then rereads it after explicitly applying a
     expect(preview.hidden).toBe(true);
     await act(async () => { trigger.click(); });
     const select = host.querySelector('select')!;
-    await act(async () => { select.value = 'profile-1'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    await act(async () => { select.value = id; select.dispatchEvent(new Event('change', { bubbles: true })); });
     expect(onApply).not.toHaveBeenCalled();
     await act(async () => { ([...host.querySelectorAll('button')].find(button => button.textContent === 'Apply to repository') as HTMLButtonElement).click(); });
-    expect(onApply).toHaveBeenCalledWith({ name: 'Repo Author', email: 'repo@example.org' }, identity.local);
+    expect(onApply).toHaveBeenCalledWith({ name, email }, identity.local);
     expect(invoke).toHaveBeenCalledTimes(3);
-    expect(preview.textContent).toContain('Repo Author · worktree@example.org');
+    expect(preview.textContent).toContain(`${name} · worktree@example.org`);
   } finally { await act(async () => { root.unmount(); }); host.remove(); }
 });

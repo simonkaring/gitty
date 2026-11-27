@@ -147,6 +147,31 @@ fn tokens(value: &Value) -> Result<Tokens> {
 }
 
 fn username(provider: Provider, token: &str) -> Result<String> {
+    let (user, field) = user(provider, token)?;
+    Ok(text(&user, field)?.into())
+}
+
+pub(crate) fn github_commit_email(token: &str, username: &str) -> Result<String> {
+    let (user, field) = user(Provider::Github, token)?;
+    let login = text(&user, field)?;
+    if !login.eq_ignore_ascii_case(username)
+        || !login
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err(Error::new(
+            "invalidAccount",
+            "Reconnect the GitHub account to update its username.",
+        ));
+    }
+    let id = user["id"]
+        .as_u64()
+        .filter(|id| *id > 0)
+        .ok_or_else(|| Error::new("invalidAccount", "GitHub did not return an account ID."))?;
+    Ok(format!("{id}+{login}@users.noreply.github.com"))
+}
+
+fn user(provider: Provider, token: &str) -> Result<(Value, &'static str)> {
     let (url, field) = match provider {
         Provider::Github => ("https://api.github.com/user", "login"),
         Provider::Gitlab => ("https://gitlab.com/api/v4/user", "username"),
@@ -167,7 +192,7 @@ fn username(provider: Provider, token: &str) -> Result<String> {
             "Sign-in succeeded but account access was denied. Check provider permissions.",
         ));
     }
-    Ok(text(&json(response)?, field)?.into())
+    Ok((json(response)?, field))
 }
 
 fn verification_uri(provider: Provider, uri: &str) -> Result<String> {

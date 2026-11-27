@@ -79,6 +79,14 @@ async fn list_provider_accounts(
 }
 
 #[tauri::command]
+async fn provider_github_commit_profiles(
+    state: tauri::State<'_, Accounts>,
+) -> Result<Vec<provider_accounts::GithubCommitProfile>> {
+    let accounts = state.inner().clone();
+    blocking(move || accounts.github_commit_profiles()).await
+}
+
+#[tauri::command]
 async fn provider_connect_token(
     state: tauri::State<'_, Accounts>,
     provider: provider_accounts::Provider,
@@ -233,12 +241,14 @@ async fn repository_sync_info(
 async fn repository_remote_action(
     state: tauri::State<'_, Shared>,
     registry: tauri::State<'_, Arc<crate::askpass::AskpassRegistry>>,
+    accounts: tauri::State<'_, Accounts>,
     handle: String,
     action: RemoteAction,
 ) -> Result<ActionOutput> {
-    let registry = Some(registry.inner().clone());
+    let registry = registry.inner().clone();
+    let accounts = accounts.inner().clone();
     with_service(state, move |s| {
-        s.remote_action(&handle, action, registry.as_deref())
+        s.remote_action_with_accounts(&handle, action, Some(&registry), Some(&accounts))
     })
     .await
 }
@@ -818,6 +828,7 @@ pub fn run() {
             app_start_dragging,
             app_launch_path,
             list_provider_accounts,
+            provider_github_commit_profiles,
             provider_connect_token,
             provider_oauth_start,
             provider_oauth_poll,
