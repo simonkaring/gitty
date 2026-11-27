@@ -354,11 +354,13 @@ impl CloneCredential {
     }
 }
 
-pub(crate) fn github_push_credential(
+/// Connected GitHub accounts to try for a push, the one whose no-reply address
+/// is the effective `user.email` first. Accounts whose token cannot be read are skipped.
+pub(crate) fn github_push_credentials(
     accounts: &AccountStore,
     source: &str,
     effective_email: impl FnOnce() -> Result<Option<String>>,
-) -> Result<Option<CloneCredential>> {
+) -> Result<Vec<CloneCredential>> {
     let valid_url = clone_url(source, Provider::Github).is_ok_and(|url| {
         url.as_str() == source
             && url.path().bytes().all(|byte| {
@@ -366,30 +368,30 @@ pub(crate) fn github_push_credential(
             })
     });
     if !valid_url {
-        return Ok(None);
+        return Ok(Vec::new());
     }
-    let accounts_list = accounts.list()?;
-    let github_accounts: Vec<_> = accounts_list
-        .iter()
+    let mut github: Vec<_> = accounts
+        .list()?
+        .into_iter()
         .filter(|account| account.provider == Provider::Github)
         .collect();
-    if github_accounts.is_empty() {
-        return Ok(None);
+    if github.len() > 1 {
+        let email = effective_email()?;
+        github.sort_by_key(|account| {
+            !account
+                .github_commit_email
+                .as_deref()
+                .zip(email.as_deref())
+                .is_some_and(|(profile, effective)| profile.eq_ignore_ascii_case(effective))
+        });
     }
-    // Opt-in: an account is used only when the effective email is its no-reply address.
-    let email = effective_email()?;
-    let mut matching = github_accounts.into_iter().filter(|account| {
-        account
-            .github_commit_email
-            .as_deref()
-            .zip(email.as_deref())
-            .is_some_and(|(profile, effective)| profile.eq_ignore_ascii_case(effective))
-    });
-    let (Some(account), None) = (matching.next(), matching.next()) else {
-        return Ok(None);
-    };
-    let (account, token) = accounts.credential(&account.id)?;
-    CloneCredential::new(source, &account, token).map(Some)
+    Ok(github
+        .iter()
+        .filter_map(|account| {
+            let (account, token) = accounts.credential(&account.id).ok()?;
+            CloneCredential::new(source, &account, token).ok()
+        })
+        .collect())
 }
 
 pub fn clone_credential(
@@ -504,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn github_accounts_require_a_matching_effective_email() {
+    fn github_push_candidates_skip_unreadable_tokens_and_foreign_urls() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("accounts.json");
         let email = "123+alice@users.noreply.github.com";
@@ -515,36 +517,30 @@ mod tests {
         let store = AccountStore::new(path.clone());
         let github = "https://github.com/team/project.git";
         assert_eq!(store.github_commit_profiles().unwrap()[0].email, email);
+        // These accounts have no stored token, so neither can be tried.
         assert!(
-            github_push_credential(&store, github, || Ok(Some("ada@example.org".into())))
+            github_push_credentials(&store, github, || Ok(Some(email.into())))
                 .unwrap()
-                .is_none()
+                .is_empty()
         );
-        assert_eq!(
-            github_push_credential(&store, github, || Ok(Some(email.into())))
-                .err()
-                .unwrap()
-                .code,
-            "credentialStore"
-        );
-        assert!(github_push_credential(
+        assert!(github_push_credentials(
             &store,
             "https://github.com.evil.test/team/project.git",
             || panic!("must not read Git identity")
         )
         .unwrap()
-        .is_none());
+        .is_empty());
         std::fs::write(
             &path,
-            json!([{"id":uuid::Uuid::new_v4().to_string(),"provider":"github","username":"alice","githubCommitEmail":email}]).to_string(),
+            json!([{"id":uuid::Uuid::new_v4().to_string(),"provider":"github","username":"alice"}])
+                .to_string(),
         )
         .unwrap();
-        assert!(
-            github_push_credential(&store, github, || Ok(Some("ada@example.org".into())))
-                .unwrap()
-                .is_none(),
-            "a sole account is used only when the effective email matches"
-        );
+        assert!(github_push_credentials(&store, github, || panic!(
+            "a sole account needs no email"
+        ))
+        .unwrap()
+        .is_empty());
     }
 
     #[test]

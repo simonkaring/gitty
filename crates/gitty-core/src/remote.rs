@@ -5,7 +5,7 @@ use crate::{
     mutate::report,
     process::{self, args, Output},
     provider_accounts::AccountStore,
-    provider_repositories::github_push_credential,
+    provider_repositories::{github_push_credentials, CloneCredential},
     remote_dto::{ActionOutput, PullMode, RemoteAction, SyncInfo},
     repository::{resolve, Repository, Service},
 };
@@ -704,39 +704,59 @@ impl Repository {
                 let destination = branch.or(tracking_branch).unwrap_or(source);
                 self.remote_branch_name(destination)?;
                 let endpoint = self.push_destination(&remote)?;
-                // Any account problem falls back to normal Git authentication.
-                let credential = accounts.filter(|_| !wsl && !ssh).and_then(|accounts| {
-                    github_push_credential(accounts, &endpoint, || self.sync_config("user.email"))
-                        .ok()
-                        .flatten()
-                });
-                let (mut a, mut env) = if credential.is_some() {
-                    network_args(false, None)
-                } else {
-                    network()?
+                let refspec = format!("refs/heads/{source}:refs/heads/{destination}");
+                let destination_ref = format!("refs/heads/{destination}");
+                let command = |credential: Option<&CloneCredential>, dry_run: bool| -> Result<_> {
+                    let (mut a, env) = match credential {
+                        Some(credential) => {
+                            let (mut a, mut env) = network_args(false, None);
+                            // Never fall back to another account or follow a redirect with this token.
+                            a.extend(args(&[
+                                "-c",
+                                "credential.helper=",
+                                "-c",
+                                &format!("http.{endpoint}.followRedirects=false"),
+                                "-c",
+                                &format!("http.{endpoint}.sslVerify=true"),
+                            ]));
+                            env.push(("GIT_ALLOW_PROTOCOL".into(), "https".into()));
+                            env.extend(credential.config_env());
+                            (a, env)
+                        }
+                        None => network()?,
+                    };
+                    a.extend(args(&SAFE_PUSH));
+                    if dry_run {
+                        a.extend(args(&["--dry-run", "--no-verify"]));
+                    } else if *set_upstream {
+                        a.push("--set-upstream".into());
+                    }
+                    a.extend(args(&["--", &remote, &refspec]));
+                    Ok((a, env))
                 };
-                if let Some(credential) = &credential {
-                    // Never fall back to another account or follow a redirect with this token.
-                    a.extend(args(&[
-                        "-c",
-                        "credential.helper=",
-                        "-c",
-                        &format!("http.{endpoint}.followRedirects=false"),
-                        "-c",
-                        &format!("http.{endpoint}.sslVerify=true"),
-                    ]));
-                    env.push(("GIT_ALLOW_PROTOCOL".into(), "https".into()));
-                    env.extend(credential.config_env());
-                }
-                a.extend(args(&SAFE_PUSH));
-                if *set_upstream {
-                    a.push("--set-upstream".into());
-                }
-                a.extend(args(&[
-                    "--",
-                    &remote,
-                    &format!("refs/heads/{source}:refs/heads/{destination}"),
-                ]));
+                // Use the first connected account GitHub lets through to ref
+                // negotiation (a hook-free dry run); otherwise normal Git authentication.
+                let credentials = accounts
+                    .filter(|_| !wsl && !ssh)
+                    .and_then(|accounts| {
+                        github_push_credentials(accounts, &endpoint, || {
+                            self.sync_config("user.email")
+                        })
+                        .ok()
+                    })
+                    .unwrap_or_default();
+                let credential = credentials.into_iter().find(|credential| {
+                    command(Some(credential), true)
+                        .and_then(|(a, env)| self.write(&a, &env, &[], 0))
+                        .is_ok_and(|output| {
+                            crate::branch_delete::porcelain_status(
+                                &String::from_utf8_lossy(&output.stdout),
+                                &destination_ref,
+                            )
+                            .is_some()
+                        })
+                });
+                let (a, env) = command(credential.as_ref(), false)?;
                 let mut output = self.write(&a, &env, &[], 0).map_err(|mut error| {
                     if let Some(credential) = &credential {
                         error.message = credential.redact(&error.message);
@@ -753,8 +773,7 @@ impl Repository {
                 }
                 if reviewed && !output.success {
                     let stdout = String::from_utf8_lossy(&output.stdout);
-                    let destination = format!("refs/heads/{destination}");
-                    if crate::branch_delete::porcelain_status(&stdout, &destination)
+                    if crate::branch_delete::porcelain_status(&stdout, &destination_ref)
                         .is_some_and(|(flag, _)| flag == "!")
                     {
                         return Err(Error::new(

@@ -994,10 +994,11 @@ exactly-full final page is reported truncated); Bitbucket when the envelope has 
   local refs. That lookup describes the server's current state, not whether
   a previous push landed. These reviews are not new IPC or stdio methods.
 - Desktop native branch pushes and publishes to a single credential-free
-  GitHub.com HTTPS push URL use the connected GitHub account whose cached
-  no-reply address uniquely matches the effective `user.email`. Without a match,
-  or when account metadata or its credential cannot be read, Git authenticates
-  normally.
+  GitHub.com HTTPS push URL try each connected GitHub account with
+  `push --dry-run --no-verify`, the account whose cached no-reply address
+  matches the effective `user.email` first. The first account that reaches ref
+  negotiation (GitHub requires write access for it) performs the real push.
+  When none does, or account metadata cannot be read, Git authenticates normally.
   `provider_github_commit_profiles` resolves and caches GitHub no-reply addresses
   using the authenticated account's numeric ID and login.
   The token is supplied as a URL-scoped header in Git's process config,
