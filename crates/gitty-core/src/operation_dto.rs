@@ -107,6 +107,11 @@ pub enum GitAction {
         oid: String,
         message: Option<String>,
     },
+    DeleteTag {
+        name: String,
+        /// Commit the tag peels to when the user chose it.
+        expected_oid: String,
+    },
     Continue,
     Skip,
     Abort,

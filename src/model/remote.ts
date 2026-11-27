@@ -2,14 +2,17 @@
  * backend agent. Reads (`repository_sync_info`, `repository_stashes`) are
  * local-only: ahead/behind counts come from locally known remote-tracking
  * refs and never touch the network. Only `repository_remote_action` (fetch,
- * pull, push, backgroundFetch) performs network I/O. */
+ * pull, push, backgroundFetch, pushTag, deleteRemoteTag) performs network I/O. */
 export interface SyncInfo { branch: string | null; upstream: string | null; ahead: number | null; behind: number | null; remotes: string[] }
 export type PullMode = 'ffOnly' | 'merge' | 'rebase';
 export type RemoteActionRequest =
   | { kind: 'fetch'; remote?: string; branch?: string }
   | { kind: 'backgroundFetch'; remote?: string }
   | { kind: 'pull'; remote?: string; branch?: string; pullMode?: PullMode; target?: string }
-  | { kind: 'push'; remote?: string; branch?: string; source?: string; setUpstream?: boolean };
+  | { kind: 'push'; remote?: string; branch?: string; source?: string; setUpstream?: boolean }
+  /** `expectedOid` is the commit the tag peels to; a moved tag is refused. */
+  | { kind: 'pushTag'; remote: string; tag: string; expectedOid: string }
+  | { kind: 'deleteRemoteTag'; remote: string; tag: string; expectedOid: string };
 export interface RemoteActionResult { output: string }
 export interface StashEntry { oid: string; selector: string; message: string }
 export type StashActionRequest =
@@ -81,6 +84,8 @@ export function remoteSuccessMessage(action: RemoteActionRequest, output: string
   if (action.kind === 'fetch' || action.kind === 'backgroundFetch') {
     return action.remote ? `Fetched updates from ${action.remote}.` : 'Fetched remote updates.';
   }
+  if (action.kind === 'pushTag') return /^=\t/m.test(output) ? `Tag ${action.tag} is already on ${action.remote}.` : `Pushed tag ${action.tag} to ${action.remote}.`;
+  if (action.kind === 'deleteRemoteTag') return `Deleted tag ${action.tag} on ${action.remote}.`;
   if (action.kind === 'push') {
     const branch = action.branch ?? currentBranch;
     if (!action.setUpstream && (/^=\t[^\n]*\t\[up to date\]\s*$/m.test(output) || /^Everything up[- ]to[- ]date\.?\s*$/im.test(output))) {

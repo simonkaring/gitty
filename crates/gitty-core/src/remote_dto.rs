@@ -50,6 +50,19 @@ pub enum RemoteAction {
         #[serde(default)]
         set_upstream: bool,
     },
+    /// Push one local tag without overwriting a different tag on the remote.
+    PushTag {
+        remote: String,
+        tag: String,
+        /// Commit the tag peels to when the user chose it.
+        expected_oid: String,
+    },
+    /// Delete one remote tag, only while it still matches the local tag.
+    DeleteRemoteTag {
+        remote: String,
+        tag: String,
+        expected_oid: String,
+    },
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]

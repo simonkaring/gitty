@@ -18,6 +18,7 @@ export const RemoteStashDialog = lazyView(() => import('./RemoteStashDialog').th
 export const BranchDeleteDialog = lazyView(() => import('./BranchDeleteDialog').then(m => ({ default: m.BranchDeleteDialog })));
 export const BranchFolderDeleteDialog = lazyView(() => import('./BranchFolderDeleteDialog').then(m => ({ default: m.BranchFolderDeleteDialog })));
 export const OriginResetDialog = lazyView(() => import('./OriginResetDialog').then(m => ({ default: m.OriginResetDialog })));
+export const TagDeleteDialog = lazyView(() => import('./TagDeleteDialog').then(m => ({ default: m.TagDeleteDialog })));
 export const CommandPalette = lazyView(() => import('./CommandPalette').then(m => ({ default: m.CommandPalette })));
 export const SettingsDialog = lazyView(() => import('./Settings').then(m => ({ default: m.SettingsDialog })));
 export const RepositoryBrowser = lazyView(() => import('./RepositoryBrowser').then(m => ({ default: m.RepositoryBrowser })), <p className="muted" role="status">Loading repositories…</p>);

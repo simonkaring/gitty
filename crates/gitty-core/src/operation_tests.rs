@@ -3394,6 +3394,25 @@ fn find_exit_one_with_output_is_tolerated_but_other_failures_are_not() {
 }
 
 #[test]
+fn deleting_a_tag_checks_its_commit_and_keeps_working_changes() {
+    let f = Fixture::new();
+    let head = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["tag", "-a", "-m", "release", "v1"]);
+    f.write("untracked", "work in progress\n");
+    let delete = |oid: &str| GitAction::DeleteTag {
+        name: "v1".into(),
+        expected_oid: oid.into(),
+    };
+    assert_eq!(
+        f.run(delete(&"0".repeat(head.len()))).unwrap_err().code,
+        "staleOperation"
+    );
+    f.run(delete(&head)).unwrap();
+    assert!(f.git(&["tag", "--list", "v1"]).is_empty());
+    assert!(f.dir.path().join("untracked").exists());
+}
+
+#[test]
 fn creating_a_tag_with_a_dirty_worktree_gets_a_tag_specific_refusal() {
     let f = Fixture::new();
     f.write("untracked", "work in progress\n");

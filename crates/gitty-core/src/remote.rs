@@ -8,13 +8,14 @@ use crate::{
     repository::{resolve, Repository, Service},
 };
 
-/// No configured refspecs, tags, pruning or FETCH_HEAD: only the refspecs each
-/// caller names after `-- <remote>` can move.
-const SAFE_FETCH: [&str; 8] = [
+/// No configured refspecs, pruning or FETCH_HEAD: only the refspecs each caller
+/// names after `-- <remote>` can move. Git's default tag auto-follow may add
+/// missing tags that point into fetched history; it never changes or deletes
+/// an existing local tag.
+const SAFE_FETCH: [&str; 7] = [
     "fetch",
     "--no-all",
     "--no-recurse-submodules",
-    "--no-tags",
     "--no-prune",
     "--no-prune-tags",
     "--no-write-fetch-head",
@@ -37,7 +38,7 @@ impl Service {
         askpass: Option<&crate::askpass::AskpassRegistry>,
     ) -> Result<ActionOutput> {
         if matches!(action, RemoteAction::BackgroundFetch) {
-            // Only moves refs/remotes/*; Git's own ref locks suffice, and a slow
+            // Only moves refs/remotes/* and adds missing tags; Git's own ref locks suffice, and a slow
             // network must not block local writes such as switching branches.
             let repo = self.repo(handle)?;
             return crate::process::without_read_deadline(|| {
@@ -438,6 +439,31 @@ impl Repository {
         Ok(())
     }
 
+    /// `(refs/tags/<tag>, its unpeeled object)`, refused unless the tag still
+    /// peels to the commit the user chose.
+    pub(crate) fn tag_target(&self, tag: &str, expected_oid: &str) -> Result<(String, String)> {
+        let reference = format!("refs/tags/{tag}");
+        if tag.is_empty()
+            || tag.starts_with(['-', '+'])
+            || tag.len() > 1024
+            || tag.chars().any(char::is_control)
+            || !self.check(&["check-ref-format", &reference])?.success
+        {
+            return Err(Error::new("invalidReference", "Choose a valid tag name."));
+        }
+        let value = crate::repository::string(
+            self.location(),
+            &["rev-parse", "--verify", "--end-of-options", &reference],
+        )?;
+        if resolve(self.location(), &reference)? != expected_oid {
+            return Err(Error::new(
+                "staleOperation",
+                format!("Tag {tag} changed; refresh and try again."),
+            ));
+        }
+        Ok((reference, value))
+    }
+
     /// The single push URL of a non-mirror remote; even an explicit refspec does
     /// not neutralize `remote.*.mirror`.
     pub(crate) fn push_destination(&self, remote: &str) -> Result<String> {
@@ -546,7 +572,16 @@ impl Repository {
             RemoteAction::Fetch { remote, branch }
             | RemoteAction::Pull { remote, branch, .. }
             | RemoteAction::Push { remote, branch, .. } => (remote.as_deref(), branch.as_deref()),
+            RemoteAction::PushTag { remote, .. } | RemoteAction::DeleteRemoteTag { remote, .. } => {
+                (Some(remote.as_str()), None)
+            }
         };
+        let pushes = matches!(
+            action,
+            RemoteAction::Push { .. }
+                | RemoteAction::PushTag { .. }
+                | RemoteAction::DeleteRemoteTag { .. }
+        );
         let interactive = !matches!(action, RemoteAction::BackgroundFetch);
         let remote = self.choose_remote(remote, configured_remote.as_deref(), &info.remotes)?;
         if let Some(branch) = branch {
@@ -560,7 +595,7 @@ impl Repository {
             None
         };
 
-        let account_url = if matches!(action, RemoteAction::Push { .. }) {
+        let account_url = if pushes {
             self.check_text(&["remote", "get-url", "--push", "--", &remote])?
         } else {
             self.check_text(&["remote", "get-url", "--", &remote])?
@@ -683,6 +718,28 @@ impl Repository {
                         "Push result could not be verified.",
                     ));
                 }
+                network_result(output, wsl && interactive)
+            }
+            RemoteAction::PushTag {
+                tag, expected_oid, ..
+            }
+            | RemoteAction::DeleteRemoteTag {
+                tag, expected_oid, ..
+            } => {
+                let (reference, value) = self.tag_target(tag, expected_oid)?;
+                self.push_destination(&remote)?;
+                let (mut a, env) = network();
+                a.extend(args(&SAFE_PUSH));
+                let refspec = if matches!(action, RemoteAction::DeleteRemoteTag { .. }) {
+                    // Absent or different on the remote: refused, nothing is deleted.
+                    a.push(format!("--force-with-lease={reference}:{value}"));
+                    format!(":{reference}")
+                } else {
+                    // --no-force refuses replacing a different tag of the same name.
+                    format!("{reference}:{reference}")
+                };
+                a.extend(args(&["--", &remote, &refspec]));
+                let output = self.write(&a, &env, &[], 0)?;
                 network_result(output, wsl && interactive)
             }
             RemoteAction::Pull {
@@ -1037,7 +1094,8 @@ fn action_verb(action: &RemoteAction) -> &'static str {
     match action {
         RemoteAction::Fetch { .. } | RemoteAction::BackgroundFetch => "fetch",
         RemoteAction::Pull { .. } => "pull",
-        RemoteAction::Push { .. } => "push",
+        RemoteAction::Push { .. } | RemoteAction::PushTag { .. } => "push",
+        RemoteAction::DeleteRemoteTag { .. } => "delete tag on",
     }
 }
 

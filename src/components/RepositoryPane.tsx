@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Icons } from './icons';
 import type { PaletteCommand } from './CommandPalette';
 import { useGraphLayout } from '../graph/useGraphLayout';
-import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
+import type { CommitSummary, HistoryPage, RepositoryLocation, RepositoryRef, RepositoryState, RepositoryStatus, SearchResult, RepositoryMutation } from '../model/repository';
 import { isCancelledSearch } from '../model/searchFlow';
 import { appendHistoryPage, errorMessage, graphCommit, isDemoHandle, native, readNativeSnapshot, subscribeNative, WORKING_ID } from '../model/native';
 import { HistoryGraph, type GraphAnchor, type GraphHandle } from './HistoryGraph';
@@ -15,7 +15,7 @@ import { writeAndRefresh, type MutationOutcome } from '../model/workflow';
 import { remoteAndRefresh } from '../model/remoteFlow';
 import type { OperationState } from '../model/operations';
 import type { ActionContext } from './OperationDialog';
-import { ActivityLogDialog, BranchDeleteDialog, BranchFolderDeleteDialog, CommandPalette, ConflictEditor, OperationDialog, OriginResetDialog, PullRequestDialog, RemoteStashDialog } from './lazyDialogs';
+import { ActivityLogDialog, BranchDeleteDialog, BranchFolderDeleteDialog, CommandPalette, ConflictEditor, OperationDialog, OriginResetDialog, PullRequestDialog, RemoteStashDialog, TagDeleteDialog } from './lazyDialogs';
 import { GraphContextMenu, type MenuTarget } from './GraphContextMenu';
 import { RepositoryToolbar } from './RepositoryToolbar';
 import { PublishDialog } from './PublishDialog';
@@ -153,6 +153,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   const [blockedSwitch, setBlockedSwitch] = useState<{ branch: string; ref: string; oid: string; reason: string } | null>(null);
   const switchPending = useRef(false);
   const [originReset, setOriginReset] = useState<string | null>(null);
+  const [deleteTag, setDeleteTag] = useState<RepositoryRef | null>(null);
   const [conflictPath, setConflictPath] = useState<string | null>(null);
   const [prSource, setPrSource] = useState<string | null>(null);
   const [pickOrder, setPickOrder] = useState<string[]>([]);
@@ -217,7 +218,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
   // dialog-open state so the two can't drift apart. Any in-flight write
   // (operationWrite/remoteWrite) is owned by this component, not by the
   // dialog, so it keeps running and its result still lands on this tab.
-  useEffect(() => { if (!active) { setActionContext(null); setMenuTarget(null); setPublishInfo(null); setDeleteBranch(null); setFolderMenu(null); setDeleteFolder(null); setBlockedSwitch(null); setOriginReset(null); setConflictPath(null); setPrSource(null); setStashOpen(false); } }, [active]);
+  useEffect(() => { if (!active) { setActionContext(null); setMenuTarget(null); setPublishInfo(null); setDeleteBranch(null); setFolderMenu(null); setDeleteFolder(null); setBlockedSwitch(null); setOriginReset(null); setDeleteTag(null); setConflictPath(null); setPrSource(null); setStashOpen(false); } }, [active]);
   const close = (handle: string) => native('repository_close', { handle }).catch(() => {});
   useEffect(() => () => { epoch.current++; revealToken.current++; if (session.current) void close(session.current.session.handle); session.current = null; }, []);
   function installHistory(items: CommitSummary[], next: string | null, paging = false) {
@@ -229,7 +230,7 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     const token = ++epoch.current; revealToken.current++; setBusy(true); setError(''); lock.current = true;
     const old = session.current; session.current = null; setState(null); setStatus(null); installHistory([], null); setBase(''); setTarget(''); setSelected(''); setActiveDiff(null); setFolderOpen({});
     commitGraphLock.current = false; setCommitGraphBusy(false);
-    setOperation(null); setActionContext(null); setMenuTarget(null); setPublishInfo(null); setDeleteBranch(null); setFolderMenu(null); setDeleteFolder(null); setOriginReset(null); setConflictPath(null); setPrSource(null); setPickOrder([]); setBlocked(false);
+    setOperation(null); setActionContext(null); setMenuTarget(null); setPublishInfo(null); setDeleteBranch(null); setFolderMenu(null); setDeleteFolder(null); setOriginReset(null); setDeleteTag(null); setConflictPath(null); setPrSource(null); setPickOrder([]); setBlocked(false);
     if (old) void close(old.session.handle);
     let opened: RepositoryState | null = null;
     try {
@@ -915,10 +916,11 @@ export function RepositoryPane({ paletteOpen = false, onOpenPalette = () => {}, 
     </main>}
     <footer className="statusbar"><span><button type="button" className="text-button" onClick={() => setActivityLogOpen(true)}><Icons.ScrollText size={13} /> Activity</button><span className="live-dot" /><span className="workspace-status">{mutationBusy ? 'Updating repository…' : isDemoHandle(state?.session.handle) ? 'Demo workspace · changes are simulated in memory' : 'Local workspace · automatic refresh'}</span></span><span className="status-keys"><span className="scale-control"><button className="icon-button sm" aria-label="Zoom out" disabled={scale === SCALES[0]} onClick={() => stepScale(-1)}><Icons.ZoomOut size={13} /></button><select className="scale-value" aria-label="Interface zoom" value={scale} onChange={event => changeScale(Number(event.target.value))}>{SCALES.map(s => <option key={s} value={s}>{s}%</option>)}</select><button className="icon-button sm" aria-label="Zoom in" disabled={scale === SCALES[SCALES.length - 1]} onClick={() => stepScale(1)}><Icons.ZoomIn size={13} /></button></span><button className="text-button" disabled={!state} onClick={() => search.current?.focus()}><Icons.Search size={13} /><span className="footer-search-label">History</span><kbd>/</kbd></button><CommandSearchButton onClick={onOpenPalette} /></span></footer>
     {activityLogOpen && <ActivityLogDialog onClose={() => setActivityLogOpen(false)} />}
-     {state && menuTarget && <GraphContextMenu target={menuTarget} state={state} busy={mutationBusy || mutationBlocked} hasTrackedChanges={status?.entries.some(entry => !entry.untracked)} onClose={() => setMenuTarget(null)} onOperation={context => { setMenuTarget(null); setActionContext(context); }} onSwitchBranch={ref => { setMenuTarget(null); void switchBranch(ref); }} onShowDetails={oid => { reveal(oid); setInspectorOpen(true); setMenuTarget(null); }} onSetBase={oid => setComparison(oid, 'base')} onSetTarget={oid => setComparison(oid, 'target')} onCompare={compareWithCurrent} onPullRequest={ref => { setMenuTarget(null); setPrSource(ref); }} onRemoteAction={action => void runMenuRemote(action)} onPush={ref => void pushFromMenu(ref)} onResetToOrigin={ref => { setMenuTarget(null); setOriginReset(ref); }} onDeleteBranch={(fullName, scope) => { setMenuTarget(null); const target = branchDeleteTargets(state, fullName); setDeleteBranch(target ? { target, scope } : null); }} onCopy={(value, label) => void copyMenuValue(value, label)} onStash={action => { setMenuTarget(null); void stashAction(action); }} />}
+     {state && menuTarget && <GraphContextMenu target={menuTarget} state={state} busy={mutationBusy || mutationBlocked} hasTrackedChanges={status?.entries.some(entry => !entry.untracked)} onClose={() => setMenuTarget(null)} onOperation={context => { setMenuTarget(null); setActionContext(context); }} onSwitchBranch={ref => { setMenuTarget(null); void switchBranch(ref); }} onShowDetails={oid => { reveal(oid); setInspectorOpen(true); setMenuTarget(null); }} onSetBase={oid => setComparison(oid, 'base')} onSetTarget={oid => setComparison(oid, 'target')} onCompare={compareWithCurrent} onPullRequest={ref => { setMenuTarget(null); setPrSource(ref); }} onRemoteAction={action => void runMenuRemote(action)} onPush={ref => void pushFromMenu(ref)} onResetToOrigin={ref => { setMenuTarget(null); setOriginReset(ref); }} onDeleteBranch={(fullName, scope) => { setMenuTarget(null); const target = branchDeleteTargets(state, fullName); setDeleteBranch(target ? { target, scope } : null); }} onDeleteTag={fullName => { setMenuTarget(null); setDeleteTag(state.refs.find(ref => ref.fullName === fullName && ref.kind === 'tag') ?? null); }} onCopy={(value, label) => void copyMenuValue(value, label)} onStash={action => { setMenuTarget(null); void stashAction(action); }} />}
      {state && folderMenu && <BranchFolderMenu target={folderMenu} state={state} busy={mutationBusy || mutationBlocked} onClose={() => setFolderMenu(null)} onDelete={(folder, scope) => { setFolderMenu(null); setDeleteFolder({ folder, scope, targets: folderDeleteTargets(state, folder, scope) }); }} />}
      {state && deleteFolder && <BranchFolderDeleteDialog key={`${state.session.handle}:${deleteFolder.folder.kind}:${deleteFolder.folder.path}:${deleteFolder.scope}`} state={state} folder={deleteFolder.folder} scope={deleteFolder.scope} targets={deleteFolder.targets} onClose={() => setDeleteFolder(null)} onComplete={finishFolderDelete} onDelete={deleteBranchesWrite} />}
      {state && deleteBranch && <BranchDeleteDialog key={`${state.session.handle}:${deleteBranch.target.branch}:${deleteBranch.scope}`} state={state} target={deleteBranch.target} scope={deleteBranch.scope} onClose={() => setDeleteBranch(null)} onComplete={finishBranchDelete} onDelete={deleteBranchWrite} />}
+     {state && deleteTag && <TagDeleteDialog key={`${state.session.handle}:${deleteTag.fullName}`} handle={state.session.handle} tag={deleteTag} hasOrigin={state.remotes.includes('origin')} busy={mutationBusy || mutationBlocked} onRemoteWrite={remoteWrite} onWrite={operationWrite} onClose={() => setDeleteTag(null)} onComplete={notice => { setDeleteTag(null); setNotice(notice); }} />}
      {state && originReset && <OriginResetDialog key={`${state.session.handle}:${originReset}`} handle={state.session.handle} branch={originReset} busy={mutationBusy || mutationBlocked} onWrite={operationWrite} onClose={() => setOriginReset(null)} onComplete={() => { setOriginReset(null); setNotice(`Reset ${originReset.replace(/^refs\/remotes\/origin\//, '')} to ${originReset.replace(/^refs\/remotes\//, '')}.`); }} />}
     {state && publishInfo && <PublishDialog remotes={publishInfo.remotes} branch={publishInfo.branch ?? ''} onPublish={async (remote, branch) => { const action: RemoteActionRequest = { kind: 'push', remote, branch, ...(publishInfo.branch ? { source: publishInfo.branch } : {}), setUpstream: true }; const output = await remoteWrite('repository_remote_action', { action }); setNotice(remoteSuccessMessage(action, output)); }} onClose={() => setPublishInfo(null)} />}
     {state && actionContext && <OperationDialog key={state.session.handle} state={state} operation={operation} context={actionContext} commits={commits} busy={mutationBusy || mutationBlocked} onWrite={operationWrite} onClose={() => setActionContext(null)} onCompare={compareWithCurrent} onPullRequest={source => { setPrSource(source); setActionContext(null); }} />}

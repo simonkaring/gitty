@@ -7,7 +7,7 @@ import type { CommitSummary, RepositoryState } from '../model/repository';
 import { actionReason, moveCommit } from '../model/operationUi';
 import { captureOperation } from '../model/operationFlow';
 
-type DialogActionKind = Exclude<GitAction['kind'], 'resetToOrigin' | 'renameBranch'>;
+type DialogActionKind = Exclude<GitAction['kind'], 'resetToOrigin' | 'renameBranch' | 'deleteTag'>;
 export interface ActionContext { oid: string; ref?: string; destination?: string; initial?: DialogActionKind; commits?: string[] }
 export type OperationWrite = (command: string, args: Record<string, unknown>) => Promise<void>;
 
@@ -141,7 +141,7 @@ function revisionLabel(value: string): string {
 function OperationSummary({ request, commits }: { request: OperationRequest; commits: CommitSummary[] }) {
   const { action } = request;
   const current = request.expectedHeadRef ? revisionLabel(request.expectedHeadRef) : 'Detached HEAD';
-  const titles: Record<GitAction['kind'], string> = { renameBranch: 'Rename branch', resetToOrigin: 'Reset to origin', merge: 'Merge branches', rebase: 'Rebase branch', interactiveRebase: 'Interactive rebase', cherryPick: 'Cherry-pick commits', createBranch: 'Create branch', switchBranch: 'Switch branch', createTag: 'Create tag', continue: 'Continue operation', skip: 'Skip current commit', abort: 'Abort operation' };
+  const titles: Record<GitAction['kind'], string> = { renameBranch: 'Rename branch', resetToOrigin: 'Reset to origin', merge: 'Merge branches', rebase: 'Rebase branch', interactiveRebase: 'Interactive rebase', cherryPick: 'Cherry-pick commits', createBranch: 'Create branch', switchBranch: 'Switch branch', createTag: 'Create tag', deleteTag: 'Delete tag', continue: 'Continue operation', skip: 'Skip current commit', abort: 'Abort operation' };
   return <section aria-label="Operation summary"><h3>{titles[action.kind]}</h3>
     {action.kind === 'merge' && action.message && <><p>Commit message:</p><pre className="operation-review">{action.message}</pre></>}
     {action.kind === 'merge' && action.stashChanges && <p>Local changes: <strong>Stash before merging and restore staging afterward.</strong> If the merge or restoration needs attention, the saved work remains in Stashes for recovery.</p>}

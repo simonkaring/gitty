@@ -8,7 +8,7 @@ import type { BranchDeleteScope } from '../model/branchDelete';
 
 export interface MenuTarget { context: ActionContext; x: number; y: number; trigger: HTMLElement }
 
-export function GraphContextMenu({ target, state, busy, hasTrackedChanges = false, onOperation, onSwitchBranch, onShowDetails, onSetBase, onSetTarget, onCompare, onPullRequest, onRemoteAction, onPush, onResetToOrigin, onCopy, onDeleteBranch, onStash, onClose }: {
+export function GraphContextMenu({ target, state, busy, hasTrackedChanges = false, onOperation, onSwitchBranch, onShowDetails, onSetBase, onSetTarget, onCompare, onPullRequest, onRemoteAction, onPush, onResetToOrigin, onCopy, onDeleteBranch, onDeleteTag, onStash, onClose }: {
   target: MenuTarget; state: RepositoryState; busy: boolean;
   hasTrackedChanges?: boolean;
   onOperation: (context: ActionContext) => void; onSwitchBranch: (ref: string) => void; onShowDetails: (oid: string) => void;
@@ -17,6 +17,7 @@ export function GraphContextMenu({ target, state, busy, hasTrackedChanges = fals
   onResetToOrigin: (originRef: string) => void;
   onCopy: (value: string, label: string) => void; onClose: () => void;
   onDeleteBranch: (fullName: string, scope: BranchDeleteScope) => void;
+  onDeleteTag?: (fullName: string) => void;
   onStash: (action: StashActionRequest) => void;
 }) {
   const { menu, position } = useContextMenu(target, onClose);
@@ -81,6 +82,10 @@ export function GraphContextMenu({ target, state, busy, hasTrackedChanges = fals
     {!current && !isStash && (ref?.kind === 'local' || context.oid !== state.session.head) && <>{ref?.kind === 'local' && state.session.headRef && relation && <>{relation[0] > 0 ? <button role="menuitem" onClick={() => operation('merge', state.session.headRef!, ref.fullName)}>Merge {ref.name} into {headName}… · {relation[0]} commit{relation[0] === 1 ? '' : 's'} to bring in</button> : <button role="menuitem" disabled>{ref.name} already includes {headName}</button>}{relation[1] > 0 ? <button role="menuitem" onClick={() => operation('merge', ref.fullName, state.session.headRef!)}>Merge {headName} into {ref.name}… · {relation[1]} commit{relation[1] === 1 ? '' : 's'} to bring in</button> : <button role="menuitem" disabled>{headName} already includes {ref.name}</button>}</>}{ref?.kind === 'remote' && state.session.headRef && relation && (relation[0] > 0 ? <button role="menuitem" onClick={() => operation('merge', state.session.headRef!, ref.fullName)}>Merge {ref.name} into {headName}… · {relation[0]} commit{relation[0] === 1 ? '' : 's'} to bring in</button> : <button role="menuitem" disabled>{ref.name} has no commits to bring into {headName}</button>)}<button role="menuitem" onClick={() => operation('rebase')}>Rebase current onto this…</button><button role="menuitem" onClick={() => operation('cherryPick')}>Cherry-pick {ref ? 'tip commit' : 'commit'}…</button></>}
     {!isStash && <button role="menuitem" onClick={() => operation('createBranch')}>Create branch here…</button>}
     {!isStash && <button role="menuitem" onClick={() => operation('createTag')}>Create tag here…</button>}
+    {ref?.kind === 'tag' && <>
+      {state.remotes.includes('origin') && <button role="menuitem" disabled={busy || demo} title={demo ? 'Push is unavailable in the demo.' : undefined} onClick={() => onRemoteAction({ kind: 'pushTag', remote: 'origin', tag: ref.name, expectedOid: ref.commitId })}>Push tag {ref.name} to origin</button>}
+      {onDeleteTag && <button role="menuitem" disabled={busy || demo} title={demo ? 'Tag deletion is unavailable in the demo.' : undefined} onClick={() => onDeleteTag(ref.fullName)}>Delete tag {ref.name}…</button>}
+    </>}
     {ref?.kind === 'local' && <button role="menuitem" onClick={() => onPullRequest(ref.fullName)}>Create pull request…</button>}
     {ref?.kind === 'local' && <>
       <button role="menuitem" disabled={busy || demo || current} title={current ? 'Switch to another branch first.' : demo ? 'Branch deletion is unavailable in the demo.' : undefined} onClick={() => onDeleteBranch(localRef!, 'local')}>Delete local branch…{current ? ' (current branch)' : demo ? ' (unavailable in demo)' : ''}</button>

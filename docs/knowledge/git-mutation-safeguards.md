@@ -36,6 +36,8 @@ sources:
     resource: ../../src/components/RemoteStashDialog.tsx
   - id: origin-reset-dialog
     resource: ../../src/components/OriginResetDialog.tsx
+  - id: tag-delete-dialog
+    resource: ../../src/components/TagDeleteDialog.tsx
   - id: graph-drops
     resource: ../../src/components/HistoryGraph.tsx
   - id: graph-drop-tests
@@ -208,6 +210,16 @@ targets go out as one leased non-atomic push with per-ref porcelain outcomes.
 See the [batch contract](../../src-tauri/BACKEND.md#batch-branch-deletion) and the
 `batch_*` regressions in `branch_delete_tests.rs`.[^branch-delete][^branch-delete-ui][^branch-folder-dialog]
 
+Tag menus push one tag to origin (`RemoteAction::PushTag`) with the ordinary
+no-force push, so a different same-name remote tag is refused, and delete a tag
+after confirmation. Both pin the commit the tag peeled to in the menu. Optional
+origin deletion runs first (`DeleteRemoteTag`) with a lease on the local tag
+object, so a missing or different remote tag is kept; local deletion is the
+`deleteTag` graph operation (`update-ref -d` against the resolved object) and
+leaves working changes alone; after a partial failure the retry is local-only.
+Fetches keep Git's tag auto-follow, which only creates missing tags pointing
+into fetched history and never changes or prunes local tags.[^remote-writes][^operations][^tag-delete-dialog][^remote-tests]
+
 Origin reset is an explicitly confirmed destructive graph action for a same-named
 local branch, offered from both the local and origin branch menus. Review shows the
 fetched tip, local-only commit count and (for the checked-out branch) tracked change
@@ -258,6 +270,7 @@ publication shares the mutation lock, and queued writes recheck handle validity.
 [^stashes]: Unique merge-work stash identity, index restoration and OID-pinned apply/drop.
 [^stash-dialog]: Explicit staging restoration choice for manual recovery.
 [^origin-reset-dialog]: Captured origin reset review, destructive confirmation and no automatic retry.
+[^tag-delete-dialog]: Origin-then-local tag deletion with a partial-outcome message.
 [^graph-drops]: Shared graph/sidebar drop eligibility and source/destination construction.
 [^graph-drop-tests]: Branch direction, destination eligibility and current-target cherry-pick regressions.
 [^remote-writes]: Explicit push source/destination resolution and existing no-force preflight.
